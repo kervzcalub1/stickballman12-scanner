@@ -21,6 +21,7 @@ import { shopifyAllVariants, shopifyProductsLive, shopifyProductIdsForSkus, shop
 import {
   listSheinLinks, saveSheinLinks, createSheinLiveRun, updateSheinLiveRun, getSheinLiveRun, latestSheinLiveRun, markStaleSheinRuns,
   addSheinLiveItems, sheinOpenNotDeducted, getSetting, sheinLastWalkFacts, sheinPushQueueAdd, sheinPushQueueDone, sheinPushQueueList, sheinShelfRecords, saveSheinShelf,
+  listingInflightSpus,
 } from './db.js';
 import { sheinAiMatch, sheinAiConfigured } from './shein-ai.js';
 import { readSync } from './shein-orders.js';
@@ -29,6 +30,9 @@ import { candidatesFor, verifyAiLink } from '../../src/lib/sheinFix.js';
 import { styleFromTitle } from '../../src/lib/ebayReprice.js';
 
 export const MODES = ['dry', 'stock', 'full'];
+// The walk's mode for one SHEIN product: a SHEIN Listings edit in flight (any state) only takes the
+// seller-SKU edits away (full → stock). Stock is NEVER skipped — skipping it is an oversell.
+export const walkModeFor = (flight, mode) => (flight && mode === 'full' ? 'stock' : mode);
 // Everything the step touches outside itself — swappable in tests (e2e/shein-live.spec.js).
 export const IO = {
   sheinSpuInfo, sheinStock, sheinInReview, sheinSellerSkusTaken, sheinSetSellerSkus, sheinSetStock,
@@ -332,8 +336,13 @@ async function runWalk(run, { ai }) {
     for (let i = 0; i < spus.length; i++) {
       if (await stopped()) return finish(id, 'stopped', counts);
       ctx.decisions = await decisionsMap();
+      // SHEIN Listings has an edit of this product in flight (sending, possibly sent, or in SHEIN's
+      // review): one partialEdit at a time per product, so the walk changes NO seller SKU on it — but it
+      // ALWAYS sets stock (a sale must reach SHEIN; skipping stock is an oversell). No listing items → no change.
+      const flight = (await listingInflightSpus().catch(() => new Map())).get(spus[i]);
+      if (flight) counts.products_in_flight = (counts.products_in_flight || 0) + 1;
       try {
-        const r = await stepProduct(spus[i], ctx);
+        const r = await stepProduct(spus[i], { ...ctx, mode: walkModeFor(flight, mode) });
         add(counts, r.counts); counts.products += 1;
       } catch (e) {
         counts.products_failed += 1;
@@ -419,6 +428,17 @@ export async function pushSkus(skus) {
   const mine = new Set(skus);
   const spus = [...new Set(facts.filter((f) => mine.has(f.seller_sku)).map((f) => f.spu).filter(Boolean))];
   if (!spus.length) return { pushed: 0, why: 'not on SHEIN (or no walk yet)' };
+  return stockStepSpus(spus, facts);
+}
+// One stock-only step for these SHEIN products — SHEIN Listings calls it once SHEIN approves the
+// sizes it added (docs/context/shein-listings.md → Phase 2). Same switches as a Shopify push.
+export async function pushSpus(spus) {
+  const sync = await readSync();
+  if (sync.push !== 'on') return { pushed: 0, why: 'push is off' };
+  if (active) return { pushed: 0, why: 'a walk is running' };   // the walk will reach it
+  return stockStepSpus(spus, await sheinLastWalkFacts());
+}
+async function stockStepSpus(spus, facts) {
   const wh = pickTargetWarehouse(await sheinWarehouses());
   if (!wh.target) return { pushed: 0, why: 'no target warehouse' };
   // Who owns a duplicated seller SKU: whatever the last walk decided (not 'duplicate').

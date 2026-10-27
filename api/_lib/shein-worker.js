@@ -2,13 +2,15 @@
 //   · every minute — SHEIN orders changed since the last look → their pairs off Shopify
 //     (the backstop behind SHEIN's webhook), and any unit that failed is retried;
 //   · every 3 hours, when "Shopify → SHEIN" is on — a stock-only walk of every SHEIN
-//     product (the backstop behind Shopify's webhook, which Shopify doesn't guarantee).
+//     product (the backstop behind Shopify's webhook, which Shopify doesn't guarantee);
+//   · SHEIN Listings — the nightly listing snapshot at 03:00 EST + its job leases (shein-listing.js).
 // Production only by default: dev and prod share the SHEIN and Shopify accounts, and only one
 // of them may take a sale off Shopify. SHEIN_SYNC_WATCH=on|off overrides.
 import { dbConfigured, latestSheinLiveRun } from './db.js';
 import { sheinStatus, sheinConfigured } from './shein.js';
 import { pollOrders, actOnUnits, readSync } from './shein-orders.js';
 import { heartbeat, startWalk, walkActive, resumePushes } from './shein-live.js';
+import { listingTick } from './shein-listing.js';
 
 const EVERY_MS = 60 * 1000;
 const REWALK_MS = 3 * 3600 * 1000;
@@ -49,6 +51,9 @@ export async function sheinTick() {
         await startWalk({ mode: 'stock', by, ai: false }).catch((e) => console.error('[shein-sync] rewalk', e.message));
       }
     }
+    // SHEIN Listings (docs/context/shein-listings.md): job leases, the 03:00 EST nightly snapshot,
+    // the API-log prune. Read-only; its own try so it can never stop the sales sync above.
+    await listingTick().catch((e) => console.error('[shein-listing] tick', e.message));
   } catch (e) {
     console.error('[shein-sync] tick', e.message);
   } finally { busy = false; }

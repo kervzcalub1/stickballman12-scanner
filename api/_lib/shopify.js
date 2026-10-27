@@ -539,6 +539,60 @@ export async function shopifyProductsLive(productIds) {
   return { variants: out };
 }
 
+// SHEIN Listings (docs/context/shein-listings.md): every Shopify product with its variants, in the
+// normalized shape src/lib/sheinListings.js reads (listingHash, computeListings). Read through
+// productVariants (100 a page, like shopifyAllVariants) and grouped by product. Box weight and the
+// description aren't read yet — publishing new products (a later phase) needs them.
+const LISTING_PRODUCT_FIELDS = 'id title handle vendor productType tags status updatedAt mediaCount { count } featuredMedia { preview { image { url(transform: { maxWidth: 160 }) } } }';
+const LISTING_VARIANT_FIELDS = 'id sku title price compareAtPrice inventoryQuantity barcode selectedOptions { name value }';
+const listingVariant = (v) => ({
+  variantId: v.id, sku: String(v.sku || '').trim(), size: String((v.selectedOptions || []).find((o) => /size/i.test(o.name))?.value ?? v.title ?? '').trim(),
+  price: v.price ?? null, compareAt: v.compareAtPrice ?? null, qty: v.inventoryQuantity == null ? null : Number(v.inventoryQuantity), barcode: String(v.barcode || '').trim() || null, weightG: null,
+});
+const listingProduct = (p) => ({
+  productId: p.id, title: p.title || '', handle: p.handle || null, vendor: p.vendor || null, productType: p.productType || null, tags: p.tags || [],
+  status: p.status || null, updatedAt: p.updatedAt || null, image: p.featuredMedia?.preview?.image?.url || null,
+  imageCount: p.mediaCount?.count == null ? null : Number(p.mediaCount.count), style: styleFromTitle(p.title), variants: [],
+});
+export async function shopifyListingCatalogue() {
+  if (!shopifyConfigured()) return { error: 'Shopify is not configured on the server.', code: 'config' };
+  const byId = new Map();
+  let after = null;
+  for (let page = 0; page < 200; page++) {
+    const r = await gql(`query ListingCatalogue($after: String) { productVariants(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      edges { node { ${LISTING_VARIANT_FIELDS} product { ${LISTING_PRODUCT_FIELDS} } } }
+    } }`, { after });
+    if (!r.ok) return failure(r, 'read');
+    const conn = r.data?.productVariants;
+    for (const { node: v } of conn?.edges || []) {
+      if (!v.product?.id) continue;
+      if (!byId.has(v.product.id)) byId.set(v.product.id, listingProduct(v.product));
+      byId.get(v.product.id).variants.push(listingVariant(v));
+    }
+    if (!conn?.pageInfo?.hasNextPage) return { products: [...byId.values()] };
+    after = conn.pageInfo.endCursor;
+  }
+  return { products: [...byId.values()], truncated: true };
+}
+// One product, read RIGHT NOW (a products/update webhook re-reads before recomputing). null = gone.
+export async function shopifyListingProduct(productId) {
+  // SHEIN Listings Phase 4 (publish): the description, every photo with its size, the options.
+  const r = await gql(`query ListingProduct($id: ID!) { node(id: $id) { ... on Product { ${LISTING_PRODUCT_FIELDS}
+    descriptionHtml options { name values }
+    media(first: 20) { edges { node { ... on MediaImage { image { url width height altText } } } } }
+    variants(first: 100) { edges { node { ${LISTING_VARIANT_FIELDS} } } } } } }`, { id: productId });
+  if (!r.ok) return failure(r, 'read');
+  const p = r.data?.node;
+  if (!p?.id) return { product: null };
+  const out = listingProduct(p);
+  out.variants = (p.variants?.edges || []).map((e) => listingVariant(e.node));
+  out.descriptionHtml = p.descriptionHtml || '';
+  out.options = (p.options || []).map((o) => ({ name: o.name, values: o.values || [] }));
+  out.images = (p.media?.edges || []).map((e) => e.node?.image).filter((i) => i?.url).map((i) => ({ url: i.url, width: i.width ?? null, height: i.height ?? null, alt: i.altText || null }));
+  return { product: out };
+}
+
 // The Shopify variant(s) carrying this exact SKU right now (a SKU the catalogue read didn't
 // have may have been created since). Returns the product ids.
 export async function shopifyProductIdsForSkus(skus) {
@@ -614,6 +668,36 @@ export async function shopifySkuForInventoryItem(inventoryItemId) {
   const r = await gql(`query($id: ID!) { inventoryItem(id: $id) { sku variant { sku } } }`, { id });
   if (!r.ok) return null;
   return String(r.data?.inventoryItem?.variant?.sku || r.data?.inventoryItem?.sku || '').trim() || null;
+}
+// Webhook subscriptions, generalised (SHEIN Listings adds PRODUCTS_CREATE/UPDATE/DELETE to the same
+// URL; api/shopify/webhook.js branches on x-shopify-topic). Topics are GraphQL enum names.
+const TOPIC_RE = /^[A-Z_]+$/;
+export async function shopifyWebhookSubs(uri, topics) {
+  const list = (topics || []).filter((t) => TOPIC_RE.test(t));
+  if (!list.length) return { subs: [], mine: {} };
+  const r = await gql(`query { webhookSubscriptions(first: 100, topics: [${list.join(', ')}]) { edges { node { id topic uri } } } }`);
+  if (!r.ok) return failure(r, 'read');
+  const subs = (r.data?.webhookSubscriptions?.edges || []).map((e) => e.node);
+  const mine = {};
+  for (const t of list) { const hit = subs.find((s) => s.topic === t && s.uri === uri); if (hit) mine[t] = hit; }
+  return { subs, mine };
+}
+// Make sure every topic posts to `uri` (creates only what's missing). → { ok, ids: { TOPIC: id }, created: [TOPIC…] }
+export async function shopifyEnsureWebhooks(uri, topics) {
+  const cur = await shopifyWebhookSubs(uri, topics);
+  if (cur.error) return cur;
+  const ids = {}; const created = [];
+  for (const t of (topics || []).filter((x) => TOPIC_RE.test(x))) {
+    if (cur.mine[t]) { ids[t] = cur.mine[t].id; continue; }
+    const r = await gql(`mutation($topic: WebhookSubscriptionTopic!, $sub: WebhookSubscriptionInput!) {
+      webhookSubscriptionCreate(topic: $topic, webhookSubscription: $sub) { webhookSubscription { id uri } userErrors { field message } }
+    }`, { topic: t, sub: { uri } });
+    if (!r.ok) return failure(r, 'write');
+    const res = r.data?.webhookSubscriptionCreate;
+    if (res?.userErrors?.length) return { error: res.userErrors.map((e) => e.message).join(' | '), code: 'rejected' };
+    ids[t] = res?.webhookSubscription?.id; created.push(t);
+  }
+  return { ok: true, ids, created };
 }
 const WEBHOOK_TOPIC = 'INVENTORY_LEVELS_UPDATE';
 export async function shopifyInventoryWebhook(uri) {

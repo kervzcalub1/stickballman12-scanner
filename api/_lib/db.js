@@ -16,6 +16,8 @@ import { ROLL_VIN_RE, VIN_RE } from './vins.js';
 // box. Since 2026-10-23 that is the same alphanumeric rule (store-orders-plan §8b).
 import { trackKey as searchTrackKey, expectsAtOrderLevel, declaresPerBox, hasOrderedList } from '../../src/lib/postatus.js';
 import { presellUnitCost } from '../../src/lib/presellDetails.js';
+import { productAnswered } from '../../src/lib/sheinCutover.js';
+import { BLOCKERS as SHEIN_BLOCKERS } from '../../src/lib/sheinListings.js';
 // Registration now sends the canonical form of a number, so anything that MATCHES a
 // number has to canonicalise too — see normalizeTrackingNumber for why.
 import { normalizeTrackingNumber } from './tracking.js';
@@ -10717,8 +10719,684 @@ export async function recentSheinPushes(limit = 100) {
 }
 // The last walk's picture of SHEIN, per SHEIN SKU (for pushing one Shopify change).
 export async function sheinLastWalkFacts() {
-  return await db()`SELECT DISTINCT ON (shein_sku) spu, shein_sku, seller_sku, shein_size, reason FROM shein_live_items
+  const walk = await db()`SELECT DISTINCT ON (shein_sku) spu, shein_sku, seller_sku, shein_size, reason FROM shein_live_items
                      WHERE source = 'walk' AND shein_sku IS NOT NULL ORDER BY shein_sku, id DESC`;
+  // + the sizes SHEIN Listings ADDED (Phase 2, match 'published') that no walk has seen yet, so
+  // a Shopify change reaches them before the next walk. No such rows → exactly the walk's facts.
+  let published = [];
+  try {
+    published = await db()`SELECT spu, shein_sku, seller_sku, shein_size, 'ok' AS reason FROM shein_listing_variants
+      WHERE match = 'published' AND shein_sku IS NOT NULL AND spu IS NOT NULL AND seller_sku IS NOT NULL ORDER BY shein_sku`;
+  } catch { /* SHEIN Listings not migrated on this database */ }
+  const seen = new Set(walk.map((r) => String(r.shein_sku)));
+  return [...walk, ...published.filter((r) => !seen.has(String(r.shein_sku)))];
+}
+
+// ---- SHEIN Listings (docs/context/shein-listings.md) ------------------------------
+// Tables: shein_listing_cache, shein_api_log, shein_listing_products/_variants, shein_size_map,
+// shein_listing_jobs/_job_items. Filters use "optional parameter" predicates (x IS NULL OR …)
+// and sorts are branched with if/else — the shim can't nest sql fragments.
+
+export async function addSheinApiLog(r) {
+  await db()`INSERT INTO shein_api_log (job_id, item_id, spu, source, path, method, write, asset, dry, request, response, http_status, code, msg, trace_id, ms, by)
+    VALUES (${r.job_id}, ${r.item_id}, ${r.spu}, ${r.source}, ${r.path}, ${r.method}, ${!!r.write}, ${!!r.asset}, ${!!r.dry},
+            ${r.request == null ? null : JSON.stringify(r.request)}::jsonb, ${r.response == null ? null : JSON.stringify(r.response)}::jsonb,
+            ${r.http_status}, ${r.code}, ${r.msg}, ${r.trace_id}, ${r.ms}, ${r.by})`;
+}
+export async function listSheinApiLog({ job = null, spu = null, trace = null, writesOnly = false, limit = 200 } = {}) {
+  return await db()`SELECT * FROM shein_api_log
+    WHERE (${job}::bigint IS NULL OR job_id = ${job}::bigint) AND (${spu}::text IS NULL OR spu = ${spu}::text)
+      AND (${trace}::text IS NULL OR trace_id = ${trace}::text) AND (${!!writesOnly} = false OR write)
+    ORDER BY id DESC LIMIT ${limit}`;
+}
+export async function pruneSheinApiLog(days = 90) {
+  await db()`DELETE FROM shein_api_log WHERE at < now() - make_interval(days => ${days}::int)`;
+}
+
+export async function getListingCache(kind, key) {
+  const [r] = await db()`SELECT * FROM shein_listing_cache WHERE kind = ${kind} AND key = ${String(key)}`;
+  return r || null;
+}
+export async function listListingCache(kind, keys = null) {
+  if (keys) return await db()`SELECT * FROM shein_listing_cache WHERE kind = ${kind} AND key = ANY(${keys.map(String)}::text[])`;
+  return await db()`SELECT * FROM shein_listing_cache WHERE kind = ${kind}`;
+}
+export async function setListingCache(kind, key, payload, by = null) {
+  await db()`INSERT INTO shein_listing_cache (kind, key, payload, fetched_at, fetched_by) VALUES (${kind}, ${String(key)}, ${JSON.stringify(payload ?? null)}::jsonb, now(), ${by})
+    ON CONFLICT (kind, key) DO UPDATE SET payload = EXCLUDED.payload, fetched_at = now(), fetched_by = EXCLUDED.fetched_by`;
+}
+export async function pruneListingCache(kind, keepKeys) {
+  await db()`DELETE FROM shein_listing_cache WHERE kind = ${kind} AND key <> ALL(${keepKeys.map(String)}::text[])`;
+}
+
+/* jobs */
+export async function createListingJob({ kind, mode = 'dry', scope = {}, by = null, previewJobId = null }) {
+  try {
+    const [r] = await db()`INSERT INTO shein_listing_jobs (kind, mode, status, scope, started_by, phase, preview_job_id, confirmed_by)
+      VALUES (${kind}, ${mode}, 'queued', ${JSON.stringify(scope || {})}::jsonb, ${by}, 'queued', ${previewJobId}, ${previewJobId ? by : null}) RETURNING *`;
+    return r;
+  } catch (e) {
+    if (e.code === '23505') throw Object.assign(new Error('Another SHEIN listing job is already queued or running.'), { status: 409 });
+    throw e;
+  }
+}
+export async function getListingJob(id) {
+  const [r] = await db()`SELECT * FROM shein_listing_jobs WHERE id = ${id}`;
+  return r || null;
+}
+export async function activeListingJob() {
+  const [r] = await db()`SELECT * FROM shein_listing_jobs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1`;
+  return r || null;
+}
+export async function listListingJobs({ limit = 30, offset = 0, status = null, kind = null } = {}) {
+  return await db()`SELECT * FROM shein_listing_jobs WHERE (${status}::text IS NULL OR status = ${status}::text) AND (${kind}::text IS NULL OR kind = ${kind}::text)
+    ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}`;
+}
+export async function latestListingJobBy(kind, by) {
+  const [r] = await db()`SELECT * FROM shein_listing_jobs WHERE kind = ${kind} AND started_by = ${by} ORDER BY id DESC LIMIT 1`;
+  return r || null;
+}
+export async function markListingSnapshotAt() {
+  await db()`UPDATE shein_listing_products SET last_snapshot_at = now()`;
+}
+export async function countSheinApiLog(job) {
+  const [r] = await db()`SELECT count(*)::int AS n, count(*) FILTER (WHERE write)::int AS writes, count(*) FILTER (WHERE asset)::int AS assets FROM shein_api_log WHERE job_id = ${job}`;
+  return r || { n: 0, writes: 0, assets: 0 };
+}
+// Security H2: SHEIN transform-pic calls made on today's EST day (the daily photo-conversion cap).
+export async function countTransformPicToday() {
+  const [r] = await db()`SELECT count(*)::int AS n FROM shein_api_log
+    WHERE path = '/open-api/goods/transform-pic' AND (at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date`;
+  return r?.n || 0;
+}
+export async function latestListingJob(kind, status = null) {
+  const [r] = await db()`SELECT * FROM shein_listing_jobs WHERE kind = ${kind} AND (${status}::text IS NULL OR status = ${status}::text) ORDER BY id DESC LIMIT 1`;
+  return r || null;
+}
+// Claim the queued job (one at a time): running, leased to this process for 3 minutes.
+export async function claimListingJob(owner, leaseSec = 180) {
+  const [r] = await db()`UPDATE shein_listing_jobs SET status = 'running', lease_owner = ${owner}, lease_until = now() + make_interval(secs => ${leaseSec}::int),
+      started_at = COALESCE(started_at, now()), updated_at = now(), phase = COALESCE(NULLIF(phase, 'queued'), 'starting')
+    WHERE id = (SELECT id FROM shein_listing_jobs WHERE status = 'queued' ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`;
+  return r || null;
+}
+// Heartbeat + progress. Returns the row (stop_requested included), or null when the lease is lost.
+export async function touchListingJob(id, owner, { phase = null, total = null, done = null, current = null, counts = null, leaseSec = 180 } = {}) {
+  const [r] = await db()`UPDATE shein_listing_jobs SET lease_until = now() + make_interval(secs => ${leaseSec}::int), updated_at = now(),
+      phase = COALESCE(${phase}, phase), total = COALESCE(${total}, total), done = COALESCE(${done}, done), current = COALESCE(${current}, current),
+      counts = CASE WHEN ${counts == null ? null : JSON.stringify(counts)}::jsonb IS NULL THEN counts ELSE ${counts == null ? null : JSON.stringify(counts)}::jsonb END
+    WHERE id = ${id} AND lease_owner = ${owner} AND status = 'running' RETURNING *`;
+  return r || null;
+}
+export async function finishListingJob(id, owner, { status, phase = null, counts = null, error = null }) {
+  const [r] = await db()`UPDATE shein_listing_jobs SET status = ${status}, phase = COALESCE(${phase}, phase), error = ${error},
+      counts = CASE WHEN ${counts == null ? null : JSON.stringify(counts)}::jsonb IS NULL THEN counts ELSE ${counts == null ? null : JSON.stringify(counts)}::jsonb END,
+      finished_at = now(), updated_at = now(), lease_until = NULL, current = ''
+    WHERE id = ${id} AND (${owner}::text IS NULL OR lease_owner = ${owner}::text) RETURNING *`;
+  return r || null;
+}
+// A running job whose lease ran out (the process died / was redeployed) → interrupted.
+export async function markStaleListingJobs() {
+  return await db()`UPDATE shein_listing_jobs SET status = 'interrupted', updated_at = now(), finished_at = now(),
+      phase = 'Interrupted (the server restarted) — Resume carries on from the first unfinished product'
+    WHERE status = 'running' AND (lease_until IS NULL OR lease_until < now()) RETURNING id`;
+}
+export async function requestListingStop(id) {
+  const rows = await db()`UPDATE shein_listing_jobs SET stop_requested = true, updated_at = now() WHERE id = ${id} AND status IN ('queued','running') RETURNING *`;
+  return rows[0] || null;
+}
+export async function cancelQueuedListingJob(id) {
+  const rows = await db()`UPDATE shein_listing_jobs SET status = 'stopped', finished_at = now(), updated_at = now(), phase = 'Stopped before it started'
+    WHERE id = ${id} AND status = 'queued' RETURNING *`;
+  return rows[0] || null;
+}
+export async function resumeListingJob(id, by = null) {
+  try {
+    const [r] = await db()`UPDATE shein_listing_jobs SET status = 'queued', stop_requested = false, resumes = resumes + 1, finished_at = NULL, error = NULL,
+        phase = 'queued (resumed)', resumed_by = COALESCE(${by}, resumed_by),
+        confirmed_by = CASE WHEN kind = 'run' THEN confirmed_by ELSE COALESCE(${by}, confirmed_by) END, updated_at = now()
+      WHERE id = ${id} AND status IN ('interrupted','stopped','failed') RETURNING *`;
+    return r || null;
+  } catch (e) {
+    if (e.code === '23505') throw Object.assign(new Error('Another SHEIN listing job is already queued or running.'), { status: 409 });
+    throw e;
+  }
+}
+/* job items */
+export async function addListingJobItems(jobId, items) {
+  for (let i = 0; i < items.length; i += 500) {
+    const chunk = JSON.stringify(items.slice(i, i + 500));
+    await db()`INSERT INTO shein_listing_job_items (job_id, seq, spu, shopify_product_id, op)
+      SELECT ${jobId}, x.seq, x.spu, x.product, x.op FROM jsonb_to_recordset(${chunk}::jsonb) AS x(seq int, spu text, product text, op text)`;
+  }
+}
+export async function pendingListingItems(jobId, limit = 10) {
+  return await db()`SELECT * FROM shein_listing_job_items WHERE job_id = ${jobId} AND status IN ('pending','sending') ORDER BY seq, id LIMIT ${limit}`;
+}
+export async function markListingItems(ids, status, { error = null } = {}) {
+  if (!ids.length) return;
+  await db()`UPDATE shein_listing_job_items SET status = ${status}, error = ${error}, attempts = attempts + 1, updated_at = now() WHERE id = ANY(${ids}::bigint[])`;
+}
+export async function listingItemCounts(jobId) {
+  const rows = await db()`SELECT status, count(*)::int AS n FROM shein_listing_job_items WHERE job_id = ${jobId} GROUP BY status`;
+  return Object.fromEntries(rows.map((r) => [r.status, r.n]));
+}
+export async function listingItemSpus(jobId, status = 'done') {
+  return (await db()`SELECT spu FROM shein_listing_job_items WHERE job_id = ${jobId} AND status = ${status} AND spu IS NOT NULL ORDER BY seq`).map((r) => r.spu);
+}
+export async function listListingJobItems(jobId, { limit = 500, offset = 0, status = null } = {}) {
+  return await db()`SELECT * FROM shein_listing_job_items WHERE job_id = ${jobId} AND (${status}::text IS NULL OR status = ${status}::text) ORDER BY seq, id LIMIT ${limit} OFFSET ${offset}`;
+}
+export async function listingItemsForProduct(productId, spu, limit = 5) {
+  return await db()`SELECT i.*, j.kind, j.mode FROM shein_listing_job_items i JOIN shein_listing_jobs j ON j.id = i.job_id
+    WHERE (i.shopify_product_id = ${productId} OR (${spu}::text IS NOT NULL AND i.spu = ${spu}::text)) ORDER BY i.id DESC LIMIT ${limit}`;
+}
+
+/* Phase 2 — add sizes: preview / run items, SHEIN's review follow-up (docs/context/shein-listings.md) */
+// One item, any of its fields. A key present in `p` is written (null included); absent = kept.
+export async function updateListingItem(id, p) {
+  const has = (k) => Object.prototype.hasOwnProperty.call(p, k);
+  const j = (k) => (has(k) && p[k] != null ? JSON.stringify(p[k]) : null);
+  const [r] = await db()`UPDATE shein_listing_job_items SET
+      status = CASE WHEN ${has('status')} THEN ${p.status ?? null}::text ELSE status END,
+      spu = CASE WHEN ${has('spu')} THEN ${p.spu ?? null}::text ELSE spu END,
+      variant_ids = CASE WHEN ${has('variantIds')} THEN ${p.variantIds || []}::text[] ELSE variant_ids END,
+      body = CASE WHEN ${has('body')} THEN ${j('body')}::jsonb ELSE body END,
+      body_hash = CASE WHEN ${has('bodyHash')} THEN ${p.bodyHash ?? null}::text ELSE body_hash END,
+      plan = CASE WHEN ${has('plan')} THEN ${j('plan')}::jsonb ELSE plan END,
+      response = CASE WHEN ${has('response')} THEN ${j('response')}::jsonb ELSE response END,
+      version = CASE WHEN ${has('version')} THEN ${p.version ?? null}::text ELSE version END,
+      trace_id = CASE WHEN ${has('traceId')} THEN ${p.traceId ?? null}::text ELSE trace_id END,
+      error = CASE WHEN ${has('error')} THEN ${p.error == null ? null : String(p.error).slice(0, 2000)}::text ELSE error END,
+      blockers = CASE WHEN ${has('blockers')} THEN COALESCE(${j('blockers')}::jsonb, '[]'::jsonb) ELSE blockers END,
+      sku_codes = CASE WHEN ${has('skuCodes')} THEN ${j('skuCodes')}::jsonb ELSE sku_codes END,
+      -- an item SHEIN APPLIED ('done') frees its key: the same body later is a new intent (review P1)
+      idem_key = CASE WHEN ${has('idemKey')} THEN ${p.idemKey ?? null}::text WHEN ${p.status === 'done'} THEN NULL ELSE idem_key END,
+      document_state = CASE WHEN ${has('documentState')} THEN ${p.documentState ?? null}::int ELSE document_state END,
+      retries = CASE WHEN ${has('retries')} THEN ${p.retries ?? 0}::int ELSE retries END,
+      next_attempt_at = CASE WHEN ${has('nextInSec')} THEN (CASE WHEN ${p.nextInSec ?? null}::int IS NULL THEN NULL ELSE now() + make_interval(secs => ${p.nextInSec ?? 0}::int) END) ELSE next_attempt_at END,
+      sent_at = CASE WHEN ${!!p.sentNow} THEN now() ELSE sent_at END,
+      review_checked_at = CASE WHEN ${!!p.checkedNow} THEN now() ELSE review_checked_at END,
+      attempts = attempts + CASE WHEN ${!!p.attempt} THEN 1 ELSE 0 END,
+      updated_at = now()
+    WHERE id = ${id} RETURNING *`;
+  return r || null;
+}
+// Claim the send: 'sending' + the idempotency key, in one statement. Two items can never carry the
+// same product + op + body hash (UNIQUE idem_key) → { item } or { conflict: the other item }.
+export async function markListingItemSending(id, idemKey, { body, bodyHash, plan }) {
+  try {
+    const [r] = await db()`UPDATE shein_listing_job_items SET status = 'sending', idem_key = ${idemKey}, body = ${JSON.stringify(body)}::jsonb, body_hash = ${bodyHash},
+        plan = ${JSON.stringify(plan)}::jsonb, attempts = attempts + 1, error = NULL, updated_at = now()
+      WHERE id = ${id} RETURNING *`;
+    return { item: r || null };
+  } catch (e) {
+    if (e.code !== '23505') throw e;
+    const [o] = await db()`SELECT id, job_id, status FROM shein_listing_job_items WHERE idem_key = ${idemKey}`;
+    return { conflict: o || { id: null, job_id: null } };
+  }
+}
+export async function getListingItems(ids) {
+  return await db()`SELECT * FROM shein_listing_job_items WHERE id = ANY(${ids.map(Number)}::bigint[]) ORDER BY id`;
+}
+// The run of a dry run, in ONE statement: the job (queued), a copy of every sendable dry-run item
+// (same product, op, body, hash, plan) and the dry run marked used — so a worker can never claim a
+// run job whose items aren't there yet, and a dry run is run once. 409 while another job is active.
+export async function createRunJob({ previewJobId, by, scope = {} }) {
+  try {
+    const [r] = await db()`WITH prev AS (
+        SELECT id FROM shein_listing_jobs WHERE id = ${previewJobId} AND kind = 'preview' AND status = 'awaiting_confirm' FOR UPDATE
+      ), j AS (
+        INSERT INTO shein_listing_jobs (kind, mode, status, scope, started_by, confirmed_by, phase, preview_job_id)
+        SELECT 'run', 'run', 'queued', ${JSON.stringify(scope || {})}::jsonb, ${by}, ${by}, 'queued', prev.id FROM prev RETURNING *
+      ), items AS (
+        INSERT INTO shein_listing_job_items (job_id, seq, shopify_product_id, spu, op, variant_ids, status, body, body_hash, plan)
+        SELECT j.id, i.seq, i.shopify_product_id, i.spu, i.op, i.variant_ids, 'pending', i.body, i.body_hash, i.plan
+          FROM j, shein_listing_job_items i WHERE i.job_id = ${previewJobId} AND i.status = 'done' AND i.body IS NOT NULL RETURNING 1
+      ), used AS (
+        UPDATE shein_listing_jobs p SET status = 'done', phase = 'Confirmed — sent as job #' || j.id, updated_at = now() FROM j WHERE p.id = ${previewJobId} RETURNING p.id
+      )
+      SELECT j.*, (SELECT count(*) FROM items)::int AS item_count, (SELECT count(*) FROM used)::int AS used FROM j`;
+    return r || null;
+  } catch (e) {
+    if (e.code === '23505') throw Object.assign(new Error('Another SHEIN listing job is already queued or running.'), { status: 409 });
+    throw e;
+  }
+}
+// A run's next item: pending / sending (a crash), or deferred and due.
+export async function dueRunItems(jobId, limit = 1) {
+  return await db()`SELECT * FROM shein_listing_job_items WHERE job_id = ${jobId}
+      AND (status IN ('pending','sending') OR (status = 'deferred' AND (next_attempt_at IS NULL OR next_attempt_at <= now())))
+    ORDER BY seq, id LIMIT ${limit}`;
+}
+// Run jobs with work waiting: a deferred item now due (job finished), or cut off by a restart.
+export async function runJobsWithDueItems() {
+  return await db()`SELECT DISTINCT j.id, j.status FROM shein_listing_jobs j JOIN shein_listing_job_items i ON i.job_id = j.id
+    WHERE j.kind = 'run' AND ((j.status = 'done' AND i.status = 'deferred' AND (i.next_attempt_at IS NULL OR i.next_attempt_at <= now()))
+      OR (j.status = 'interrupted' AND i.status IN ('pending','sending','deferred')))
+    ORDER BY j.id`;
+}
+// done / interrupted → queued again (the runner picks up the due items; a lease as before).
+export async function requeueListingJob(id, phase) {
+  try {
+    const [r] = await db()`UPDATE shein_listing_jobs SET status = 'queued', stop_requested = false, finished_at = NULL, error = NULL, phase = ${phase},
+        resumes = resumes + CASE WHEN status = 'interrupted' THEN 1 ELSE 0 END, updated_at = now()
+      WHERE id = ${id} AND status IN ('done','interrupted') RETURNING *`;
+    return r || null;
+  } catch (e) {
+    if (e.code === '23505') return null;   // another job is active — the next tick tries again
+    throw e;
+  }
+}
+export async function setListingJobStatus(id, status, phase = null) {
+  const [r] = await db()`UPDATE shein_listing_jobs SET status = ${status}, phase = COALESCE(${phase}, phase), updated_at = now() WHERE id = ${id} RETURNING *`;
+  return r || null;
+}
+// Items SHEIN is reviewing, that we were sending, or that wait after a send we can't be sure of
+// (deferred + idem key): the live walk leaves those SPUs' seller SKUs alone (stock still goes), the
+// readiness shows their sizes In review, the follow-up polls the sent ones (any op).
+export async function listingInflight() {
+  try {
+    return await db()`SELECT i.id, i.job_id, i.spu, i.op, i.status, i.variant_ids, i.version, i.sent_at, i.review_checked_at, i.plan, i.sku_codes, i.shopify_product_id
+      FROM shein_listing_job_items i JOIN shein_listing_jobs j ON j.id = i.job_id
+     WHERE j.kind = 'run' AND (i.status IN ('sending','sent','in_review') OR (i.status = 'deferred' AND i.idem_key IS NOT NULL)) ORDER BY i.id`;   // a deferred item holding a key may have reached SHEIN
+  } catch { return []; }   // SHEIN Listings not migrated on this database
+}
+export async function listingInflightSpus() {
+  const out = new Map();
+  // a price item opens no document review — it never holds the walk's seller-SKU edits back (S10)
+  for (const r of await listingInflight()) if (r.spu && r.op !== 'price' && out.get(r.spu) !== 'sending') out.set(r.spu, r.status);
+  return out;
+}
+// Variants after SHEIN approved what we added: matched as 'published' to SHEIN's new SKU.
+// rows: [{ variantId, spu, skc, sheinSku, sellerSku, sheinSize, valueId }]
+export async function markVariantsPublished(rows) {
+  if (!rows.length) return;
+  const data = JSON.stringify(rows);
+  await db()`UPDATE shein_listing_variants v SET match = 'published', spu = x.spu, skc = x.skc, shein_sku = x.shein_sku, shein_seller_sku = x.seller_sku,
+      shein_size = x.shein_size, shein_size_value_id = x.value_id, synced_hash = v.target_hash, synced_fields = jsonb_build_object('sku', v.seller_sku, 'size', v.shopify_size,
+      'price', to_char(v.shopify_price, 'FM999999990.00'), 'compareAt', CASE WHEN v.shopify_compare_at IS NULL THEN NULL ELSE to_char(v.shopify_compare_at, 'FM999999990.00') END, 'barcode', v.shopify_barcode),
+      last_error = NULL, updated_at = now()
+    FROM jsonb_to_recordset(${data}::jsonb) AS x("variantId" text, spu text, skc text, shein_sku text, seller_sku text, shein_size text, value_id bigint)
+    WHERE v.row_key = x."variantId"`;
+}
+// Phase 3: SHEIN took our edit / price for these variants — the Shopify values they were judged on are
+// the new baseline ("synced"), and any earlier error is gone.
+export async function markVariantsSynced(variantIds) {
+  if (!variantIds.length) return;
+  await db()`UPDATE shein_listing_variants v SET synced_hash = v.target_hash, synced_fields = jsonb_build_object('sku', v.seller_sku, 'size', v.shopify_size,
+      'price', to_char(v.shopify_price, 'FM999999990.00'), 'compareAt', CASE WHEN v.shopify_compare_at IS NULL THEN NULL ELSE to_char(v.shopify_compare_at, 'FM999999990.00') END, 'barcode', v.shopify_barcode),
+      last_error = NULL, updated_at = now()
+    WHERE row_key = ANY(${variantIds}::text[])`;
+}
+// Products whose sizes have SHEIN's price off the D4 target (the auto price re-sync's dry run).
+export async function listingPriceOffProducts({ marketOnly = false, limit = 300 } = {}) {
+  const want = JSON.stringify(marketOnly ? [{ field: 'shein_price', source: 'market' }] : [{ field: 'shein_price' }]);
+  return (await db()`SELECT DISTINCT shopify_product_id FROM shein_listing_variants
+    WHERE status = 'out_of_date' AND diffs @> ${want}::jsonb AND shopify_product_id NOT LIKE 'shein:%' ORDER BY 1 LIMIT ${limit}`).map((r) => r.shopify_product_id);
+}
+// Our last attempt on these variants (rendered as Error with SHEIN's words until Shopify changes).
+export async function setVariantsLastError(variantIds, err) {
+  if (!variantIds.length) return;
+  await db()`UPDATE shein_listing_variants SET last_error = CASE WHEN ${err == null ? null : JSON.stringify(err)}::jsonb IS NULL THEN NULL
+      ELSE ${err == null ? null : JSON.stringify(err)}::jsonb || jsonb_build_object('hash', target_hash) END, updated_at = now()
+    WHERE row_key = ANY(${variantIds}::text[])`;
+}
+// SHEIN confirmed this size: our map row is verified, a custom value gets the id SHEIN gave it.
+export async function verifySizeMapById(id, attributeValueId = null) {
+  const [r] = await db()`UPDATE shein_size_map SET verified = true, attribute_value_id = COALESCE(${attributeValueId}::bigint, attribute_value_id) WHERE id = ${id} RETURNING *`;
+  return r || null;
+}
+export async function verifySizeMap({ category_id, attribute_id, size_key, attribute_value_id = null, custom_value = null, shein_label = null }, by) {
+  const [r] = await db()`INSERT INTO shein_size_map (category_id, attribute_id, size_key, attribute_value_id, custom_value, shein_label, source, set_by, set_at, verified)
+    VALUES (${category_id}, ${attribute_id}, ${size_key}, ${attribute_value_id}, ${custom_value}, ${shein_label}, 'exact', ${by}, now(), true)
+    ON CONFLICT (category_id, attribute_id, size_key) DO UPDATE SET verified = true,
+      attribute_value_id = COALESCE(EXCLUDED.attribute_value_id, shein_size_map.attribute_value_id)
+    RETURNING *`;
+  return r;
+}
+
+/* Phase 4 — publish brand-new products: the person-set maps (DB only) */
+export async function listCategoryMaps() { return await db()`SELECT * FROM shein_category_map ORDER BY shopify_product_type, size_group`; }
+export async function saveCategoryMap({ productType, sizeGroup, categoryId, productTypeId, categoryPath = null, suggestion = null }, by) {
+  const [r] = await db()`INSERT INTO shein_category_map (shopify_product_type, size_group, category_id, product_type_id, category_path, suggestion, set_by, set_at)
+    VALUES (${productType}, ${sizeGroup}, ${categoryId}, ${productTypeId}, ${categoryPath}, ${suggestion == null ? null : JSON.stringify(suggestion)}::jsonb, ${by}, now())
+    ON CONFLICT (shopify_product_type, size_group) DO UPDATE SET category_id = EXCLUDED.category_id, product_type_id = EXCLUDED.product_type_id,
+      category_path = EXCLUDED.category_path, suggestion = COALESCE(EXCLUDED.suggestion, shein_category_map.suggestion), set_by = EXCLUDED.set_by, set_at = now()
+    RETURNING *`;
+  return r;
+}
+export async function deleteCategoryMap(productType, sizeGroup) {
+  return (await db()`DELETE FROM shein_category_map WHERE shopify_product_type = ${productType} AND size_group = ${sizeGroup} RETURNING 1`).length;
+}
+export async function listAttrDefaults(productTypeId = null) {
+  return await db()`SELECT * FROM shein_attr_defaults WHERE (${productTypeId}::bigint IS NULL OR product_type_id = ${productTypeId}::bigint) ORDER BY product_type_id, attribute_id`;
+}
+export async function saveAttrDefault({ productTypeId, attributeId, valueIds = [], extraValues = [] }, by) {
+  const [r] = await db()`INSERT INTO shein_attr_defaults (product_type_id, attribute_id, scope, value_ids, extra_values, stale, set_by, set_at)
+    VALUES (${productTypeId}, ${attributeId}, 'product', ${valueIds}::bigint[], ${extraValues}::text[], false, ${by}, now())
+    ON CONFLICT (product_type_id, attribute_id, scope) DO UPDATE SET value_ids = EXCLUDED.value_ids, extra_values = EXCLUDED.extra_values, stale = false, set_by = EXCLUDED.set_by, set_at = now()
+    RETURNING *`;
+  return r;
+}
+export async function deleteAttrDefault(productTypeId, attributeId) {
+  return (await db()`DELETE FROM shein_attr_defaults WHERE product_type_id = ${productTypeId} AND attribute_id = ${attributeId} AND scope = 'product' RETURNING 1`).length;
+}
+export async function markAttrDefaultsStale(productTypeId, attributeIds) {
+  if (!attributeIds.length) return;
+  await db()`UPDATE shein_attr_defaults SET stale = true WHERE product_type_id = ${productTypeId} AND attribute_id = ANY(${attributeIds}::bigint[]) AND scope = 'product'`;
+}
+export async function listBrandMaps() { return await db()`SELECT * FROM shein_brand_map ORDER BY vendor`; }
+export async function saveBrandMap({ vendor, brandCode = null, brandName = null, noBrand = false }, by) {
+  const [r] = await db()`INSERT INTO shein_brand_map (vendor, brand_code, brand_name, no_brand, set_by, set_at) VALUES (${String(vendor).trim().toLowerCase()}, ${noBrand ? null : brandCode}, ${noBrand ? null : brandName}, ${!!noBrand}, ${by}, now())
+    ON CONFLICT (vendor) DO UPDATE SET brand_code = EXCLUDED.brand_code, brand_name = EXCLUDED.brand_name, no_brand = EXCLUDED.no_brand, set_by = EXCLUDED.set_by, set_at = now() RETURNING *`;
+  return r;
+}
+// Publishes SHEIN didn't confirm (review F1): failed + `publish_unconfirmed`, key kept — a person looks again.
+export async function listPublishUnconfirmed() {
+  return await db()`SELECT i.* FROM shein_listing_job_items i JOIN shein_listing_jobs j ON j.id = i.job_id
+    WHERE j.kind = 'run' AND i.op = 'publish' AND i.status = 'failed' AND i.blockers @> '[{"code":"publish_unconfirmed"}]'::jsonb ORDER BY i.id`;
+}
+export async function deleteBrandMap(vendor) { return (await db()`DELETE FROM shein_brand_map WHERE vendor = ${String(vendor).trim().toLowerCase()} RETURNING 1`).length; }
+// A product's Phase 4 choices (title override, SKC colour, PH photos) — DB only.
+export async function setListingPublishChoices(productId, { titleOverride, skcValueId, usePhPhotos }) {
+  const has = (v) => v !== undefined;
+  const [r] = await db()`UPDATE shein_listing_products SET
+      title_override = CASE WHEN ${has(titleOverride)} THEN ${titleOverride ?? null}::text ELSE title_override END,
+      skc_value_id = CASE WHEN ${has(skcValueId)} THEN ${skcValueId ?? null}::bigint ELSE skc_value_id END,
+      use_ph_photos = CASE WHEN ${has(usePhPhotos)} THEN ${!!usePhPhotos} ELSE use_ph_photos END, updated_at = now()
+    WHERE shopify_product_id = ${productId} RETURNING *`;
+  return r || null;
+}
+// An admin's explicit "Publish again" after SHEIN rejected the first publish (L5): recorded on the
+// product, and the refused item's key released so the next run may send.
+export async function markPublishAgain(productIds, by) {
+  const sql = db();
+  const [p] = await sql.transaction([
+    sql`UPDATE shein_listing_products SET publish_again_by = ${by}, publish_again_at = now() WHERE shopify_product_id = ANY(${productIds}::text[]) RETURNING shopify_product_id`,
+    sql`UPDATE shein_listing_job_items SET idem_key = NULL WHERE op = 'publish' AND status = 'failed' AND shopify_product_id = ANY(${productIds}::text[])`,
+  ]);
+  return p.map((r) => r.shopify_product_id);
+}
+// Right after SHEIN answered a publish: the product now has an SPU (in review until approved).
+export async function setListingPublished(productId, { spu, version, syncedHash = undefined }) {
+  await db()`UPDATE shein_listing_products SET spu = COALESCE(${spu}::text, spu), review_version = COALESCE(${version}::text, review_version), review_state = 1,
+      synced_hash = CASE WHEN ${syncedHash !== undefined} THEN ${syncedHash ?? null}::text ELSE synced_hash END, last_published_at = now(), updated_at = now()
+    WHERE shopify_product_id = ${productId}`;
+}
+// The last publish item for a product (the rejected-first-publish rule).
+export async function lastPublishItem(productId) {
+  const [r] = await db()`SELECT i.* FROM shein_listing_job_items i JOIN shein_listing_jobs j ON j.id = i.job_id
+    WHERE j.kind = 'run' AND i.op = 'publish' AND i.shopify_product_id = ${productId} ORDER BY i.id DESC LIMIT 1`;
+  return r || null;
+}
+// Latest dry-run item of a product per op (the drawer's server checklist).
+export async function lastPreviewItem(productId, op) {
+  const [r] = await db()`SELECT i.* FROM shein_listing_job_items i JOIN shein_listing_jobs j ON j.id = i.job_id
+    WHERE j.kind = 'preview' AND i.op = ${op} AND i.shopify_product_id = ${productId} AND i.plan IS NOT NULL ORDER BY i.id DESC LIMIT 1`;
+  return r || null;
+}
+// Products not on SHEIN per Shopify product type / per vendor (the category / brand map screens).
+export async function listingPublishTypeUsage() {
+  return await db()`SELECT COALESCE(product_type, '') AS product_type, count(*)::int AS n FROM shein_listing_products WHERE spu IS NULL AND shopify_product_id NOT LIKE 'shein:%' GROUP BY 1 ORDER BY 2 DESC`;
+}
+export async function listingVendorUsage() {
+  return await db()`SELECT lower(vendor) AS vendor, count(*)::int AS n FROM shein_listing_products WHERE vendor IS NOT NULL AND spu IS NULL GROUP BY 1 ORDER BY 2 DESC`;
+}
+export async function productPhotosForSku(sku, source = 'ph_edited') {
+  return await db()`SELECT angle, url, source FROM product_photos WHERE sku = ${String(sku || '').trim()} AND source = ${source}
+    ORDER BY CASE angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, created_at`;
+}
+
+/* products + variants */
+// What the compute carries over: person exclusions, the accepted baseline, last errors.
+export async function loadListingPrev() {
+  const [products, variants] = await Promise.all([
+    db()`SELECT shopify_product_id, excluded, excluded_by, excluded_at, shopify_hash, shopify_json, computed_hash, spu, review_version FROM shein_listing_products`,
+    db()`SELECT row_key, shein_sku, match, excluded, excluded_by, excluded_at, synced_hash, synced_fields, last_error FROM shein_listing_variants`,
+  ]);
+  return { products: new Map(products.map((r) => [r.shopify_product_id, r])), variants: new Map(variants.map((r) => [r.row_key, r])) };
+}
+// Upsert products with ALL their variants (a variant row a product no longer has is removed).
+// The caller passes only the products whose computed_hash changed.
+export async function saveListingProducts(rows, { snapshotAt = false } = {}) {
+  const sql = db();
+  let saved = 0;
+  for (let i = 0; i < rows.length; i += 40) {
+    const chunk = rows.slice(i, i + 40);
+    // settles: the row reads as an ANSWER now (Phase 5, src/lib/sheinCutover.js) — kept the first time only
+    const prods = JSON.stringify(chunk.map(({ variants, ...p }) => ({ ...p, settles: productAnswered(p, blockerLevel) })));
+    const vars = JSON.stringify(chunk.flatMap((p) => p.variants));
+    const ids = chunk.map((p) => p.shopify_product_id);
+    const keys = chunk.flatMap((p) => p.variants.map((v) => v.row_key));
+    await sql.transaction([
+      sql`INSERT INTO shein_listing_products (shopify_product_id, title, handle, vendor, product_type, tags, style, shopify_status, image_url, image_count,
+            shopify_hash, shopify_updated_at, shopify_json, spu, spu_count, spu_source, category_id, product_type_id, category_source, brand_code,
+            excluded, excluded_by, excluded_at, status, counts, blockers, review_state, review_reason, search_text, computed_hash, size_statuses, last_snapshot_at, updated_at,
+            first_seen_at, settled_at)
+          SELECT x.shopify_product_id, x.title, x.handle, x.vendor, x.product_type, COALESCE(x.tags, '{}'), x.style, x.shopify_status, x.image_url, x.image_count,
+            x.shopify_hash, x.shopify_updated_at, x.shopify_json, x.spu, COALESCE(x.spu_count, 0), x.spu_source, x.category_id, x.product_type_id, x.category_source, x.brand_code,
+            COALESCE(x.excluded, false), x.excluded_by, x.excluded_at, x.status, COALESCE(x.counts, '{}'), COALESCE(x.blockers, '[]'), x.review_state, x.review_reason,
+            x.search_text, x.computed_hash, x.size_statuses, CASE WHEN ${snapshotAt} THEN now() ELSE NULL END, now(),
+            now(), CASE WHEN COALESCE(x.settles, false) THEN now() ELSE NULL END
+          FROM jsonb_to_recordset(${prods}::jsonb) AS x(shopify_product_id text, title text, handle text, vendor text, product_type text, tags text[], style text, shopify_status text, image_url text, image_count int,
+  shopify_hash text, shopify_updated_at timestamptz, shopify_json jsonb, spu text, spu_count int, spu_source text, category_id bigint, product_type_id bigint,
+  category_source text, brand_code text, excluded boolean, excluded_by text, excluded_at timestamptz, status text, counts jsonb, blockers jsonb, review_state int,
+  review_reason text, search_text text, computed_hash text, size_statuses text[], settles boolean)
+        ON CONFLICT (shopify_product_id) DO UPDATE SET title = EXCLUDED.title, handle = EXCLUDED.handle, vendor = EXCLUDED.vendor, product_type = EXCLUDED.product_type,
+          tags = EXCLUDED.tags, style = EXCLUDED.style, shopify_status = EXCLUDED.shopify_status, image_url = EXCLUDED.image_url, image_count = EXCLUDED.image_count,
+          shopify_hash = EXCLUDED.shopify_hash, shopify_updated_at = EXCLUDED.shopify_updated_at, shopify_json = EXCLUDED.shopify_json, spu = EXCLUDED.spu,
+          spu_count = EXCLUDED.spu_count, spu_source = EXCLUDED.spu_source, category_id = EXCLUDED.category_id, product_type_id = EXCLUDED.product_type_id,
+          category_source = EXCLUDED.category_source, brand_code = EXCLUDED.brand_code, status = EXCLUDED.status, counts = EXCLUDED.counts, blockers = EXCLUDED.blockers,
+          review_state = EXCLUDED.review_state, review_reason = EXCLUDED.review_reason, search_text = EXCLUDED.search_text, computed_hash = EXCLUDED.computed_hash,
+          size_statuses = EXCLUDED.size_statuses,
+          settled_at = COALESCE(shein_listing_products.settled_at, EXCLUDED.settled_at),
+          last_snapshot_at = COALESCE(EXCLUDED.last_snapshot_at, shein_listing_products.last_snapshot_at), updated_at = now()`,
+      sql`DELETE FROM shein_listing_variants WHERE shopify_product_id = ANY(${ids}::text[]) AND row_key <> ALL(${keys}::text[])`,
+      sql`INSERT INTO shein_listing_variants (row_key, shopify_variant_id, shopify_product_id, seller_sku, shopify_size, size_key, shopify_price, shopify_compare_at,
+            shopify_qty, shopify_barcode, shopify_weight_g, spu, skc, shein_sku, shein_seller_sku, shein_size, shein_size_value_id, shein_size_custom, shein_price,
+            shein_mall_state, shein_shelf_status, shein_qty, match, status, blockers, diffs, notes, size_plan, target_hash, synced_hash, synced_fields, review_state,
+            excluded, excluded_by, excluded_at, last_error, sort, computed_at, updated_at)
+          SELECT x.row_key, x.shopify_variant_id, x.shopify_product_id, x.seller_sku, x.shopify_size, x.size_key, x.shopify_price, x.shopify_compare_at,
+            x.shopify_qty, x.shopify_barcode, x.shopify_weight_g, x.spu, x.skc, x.shein_sku, x.shein_seller_sku, x.shein_size, x.shein_size_value_id, x.shein_size_custom, x.shein_price,
+            x.shein_mall_state, x.shein_shelf_status, x.shein_qty, x.match, x.status, COALESCE(x.blockers, '[]'), COALESCE(x.diffs, '[]'), COALESCE(x.notes, '[]'), x.size_plan,
+            x.target_hash, x.synced_hash, x.synced_fields, x.review_state, COALESCE(x.excluded, false), x.excluded_by, x.excluded_at, x.last_error, COALESCE(x.sort, 0), now(), now()
+          FROM jsonb_to_recordset(${vars}::jsonb) AS x(row_key text, shopify_variant_id text, shopify_product_id text, seller_sku text, shopify_size text, size_key text,
+            shopify_price numeric, shopify_compare_at numeric, shopify_qty int, shopify_barcode text, shopify_weight_g int, spu text, skc text, shein_sku text,
+            shein_seller_sku text, shein_size text, shein_size_value_id bigint, shein_size_custom text, shein_price numeric, shein_mall_state int, shein_shelf_status text,
+            shein_qty int, match text, status text, blockers jsonb, diffs jsonb, notes jsonb, size_plan jsonb, target_hash text, synced_hash text, synced_fields jsonb,
+            review_state int, excluded boolean, excluded_by text, excluded_at timestamptz, last_error jsonb, sort int)
+        ON CONFLICT (row_key) DO UPDATE SET shopify_variant_id = EXCLUDED.shopify_variant_id, shopify_product_id = EXCLUDED.shopify_product_id, seller_sku = EXCLUDED.seller_sku,
+          shopify_size = EXCLUDED.shopify_size, size_key = EXCLUDED.size_key, shopify_price = EXCLUDED.shopify_price, shopify_compare_at = EXCLUDED.shopify_compare_at,
+          shopify_qty = EXCLUDED.shopify_qty, shopify_barcode = EXCLUDED.shopify_barcode, shopify_weight_g = EXCLUDED.shopify_weight_g, spu = EXCLUDED.spu, skc = EXCLUDED.skc,
+          shein_sku = EXCLUDED.shein_sku, shein_seller_sku = EXCLUDED.shein_seller_sku, shein_size = EXCLUDED.shein_size, shein_size_value_id = EXCLUDED.shein_size_value_id,
+          shein_size_custom = EXCLUDED.shein_size_custom, shein_price = EXCLUDED.shein_price, shein_mall_state = EXCLUDED.shein_mall_state,
+          shein_shelf_status = EXCLUDED.shein_shelf_status, shein_qty = EXCLUDED.shein_qty, match = EXCLUDED.match, status = EXCLUDED.status, blockers = EXCLUDED.blockers,
+          diffs = EXCLUDED.diffs, notes = EXCLUDED.notes, size_plan = EXCLUDED.size_plan, target_hash = EXCLUDED.target_hash, synced_hash = EXCLUDED.synced_hash,
+          synced_fields = EXCLUDED.synced_fields, review_state = EXCLUDED.review_state, sort = EXCLUDED.sort, computed_at = now(), updated_at = now()`,
+    ]);
+    saved += chunk.length;
+  }
+  return saved;
+}
+// Products (and their variants) a full snapshot no longer saw: gone from Shopify, or a SHEIN-only
+// SPU that is gone from SHEIN.
+export async function deleteListingProductsExcept(keepIds) {
+  const sql = db();
+  await sql.transaction([
+    sql`DELETE FROM shein_listing_variants WHERE shopify_product_id <> ALL(${keepIds}::text[])`,
+    sql`DELETE FROM shein_listing_products WHERE shopify_product_id <> ALL(${keepIds}::text[])`,
+  ]);
+}
+// products/delete: off at once (the next snapshot removes the rows).
+export async function markListingProductDeleted(productId) {
+  const sql = db();
+  await sql.transaction([
+    sql`UPDATE shein_listing_products SET shopify_status = 'DELETED', status = 'excluded', updated_at = now() WHERE shopify_product_id = ${productId}`,
+    sql`UPDATE shein_listing_variants SET status = 'excluded', updated_at = now() WHERE shopify_product_id = ${productId} AND shopify_variant_id IS NOT NULL`,
+  ]);
+}
+export async function setListingExcluded({ productIds = [], variantKeys = [], excluded, by }) {
+  const sql = db();
+  const [p, v] = await sql.transaction([
+    sql`UPDATE shein_listing_products SET excluded = ${excluded}, excluded_by = ${excluded ? by : null}, excluded_at = ${excluded ? new Date().toISOString() : null}::timestamptz, updated_at = now()
+        WHERE shopify_product_id = ANY(${productIds}::text[]) RETURNING shopify_product_id`,
+    sql`UPDATE shein_listing_variants SET excluded = ${excluded}, excluded_by = ${excluded ? by : null}, excluded_at = ${excluded ? new Date().toISOString() : null}::timestamptz, updated_at = now()
+        WHERE row_key = ANY(${variantKeys}::text[]) AND shopify_variant_id IS NOT NULL RETURNING row_key`,
+  ]);
+  return { products: p.length, variants: v.length };
+}
+export async function listingVariantProductIds(rowKeys) {
+  return (await db()`SELECT DISTINCT shopify_product_id FROM shein_listing_variants WHERE row_key = ANY(${rowKeys}::text[])`).map((r) => r.shopify_product_id);
+}
+
+// The product list. status: '' = every product that isn't off; 'excluded' = the off ones; 'all'.
+// q matches title / style / handle / vendor / any seller SKU, SHEIN SKU, SKC or SPU (search_text).
+export async function listListingProducts({ status = '', blocker = null, q = null, brand = null, page = 1, pageSize = 50, sort = 'worst' } = {}) {
+  const st = status && status !== 'all' ? status : null;
+  const notOff = status === '' || status == null;
+  const like = q ? `%${String(q).toLowerCase().replace(/[%_\\]/g, (c) => `\\${c}`)}%` : null;
+  const bj = blocker ? JSON.stringify([{ code: blocker }]) : null;
+  const br = brand ? String(brand).toLowerCase() : null;
+  const limit = Math.max(1, Math.min(200, Number(pageSize) || 50));
+  const offset = (Math.max(1, Number(page) || 1) - 1) * limit;
+  const sql = db();
+  let rows;
+  if (sort === 'title') {
+    rows = await sql`SELECT *, count(*) OVER()::int AS total_rows FROM shein_listing_products
+      WHERE (${st}::text IS NULL OR (CASE WHEN ${st}::text IN ('excluded','unknown') OR size_statuses IS NULL THEN status = ${st}::text ELSE ${st}::text = ANY(size_statuses) AND status <> 'excluded' END))
+        AND (${notOff} = false OR status <> 'excluded')
+        AND (${like}::text IS NULL OR search_text LIKE ${like}::text) AND (${bj}::jsonb IS NULL OR blockers @> ${bj}::jsonb)
+        AND (${br}::text IS NULL OR lower(vendor) = ${br}::text)
+      ORDER BY lower(title), shopify_product_id LIMIT ${limit} OFFSET ${offset}`;
+  } else if (sort === 'updated') {
+    rows = await sql`SELECT *, count(*) OVER()::int AS total_rows FROM shein_listing_products
+      WHERE (${st}::text IS NULL OR (CASE WHEN ${st}::text IN ('excluded','unknown') OR size_statuses IS NULL THEN status = ${st}::text ELSE ${st}::text = ANY(size_statuses) AND status <> 'excluded' END))
+        AND (${notOff} = false OR status <> 'excluded')
+        AND (${like}::text IS NULL OR search_text LIKE ${like}::text) AND (${bj}::jsonb IS NULL OR blockers @> ${bj}::jsonb)
+        AND (${br}::text IS NULL OR lower(vendor) = ${br}::text)
+      ORDER BY shopify_updated_at DESC NULLS LAST, shopify_product_id LIMIT ${limit} OFFSET ${offset}`;
+  } else if (sort === 'coverage') {
+    rows = await sql`SELECT *, count(*) OVER()::int AS total_rows FROM shein_listing_products
+      WHERE (${st}::text IS NULL OR (CASE WHEN ${st}::text IN ('excluded','unknown') OR size_statuses IS NULL THEN status = ${st}::text ELSE ${st}::text = ANY(size_statuses) AND status <> 'excluded' END))
+        AND (${notOff} = false OR status <> 'excluded')
+        AND (${like}::text IS NULL OR search_text LIKE ${like}::text) AND (${bj}::jsonb IS NULL OR blockers @> ${bj}::jsonb)
+        AND (${br}::text IS NULL OR lower(vendor) = ${br}::text)
+      ORDER BY COALESCE((counts->>'on_shein')::numeric / NULLIF((counts->>'sizes')::numeric, 0), 1), lower(title) LIMIT ${limit} OFFSET ${offset}`;
+  } else {
+    rows = await sql`SELECT *, count(*) OVER()::int AS total_rows FROM shein_listing_products
+      WHERE (${st}::text IS NULL OR (CASE WHEN ${st}::text IN ('excluded','unknown') OR size_statuses IS NULL THEN status = ${st}::text ELSE ${st}::text = ANY(size_statuses) AND status <> 'excluded' END))
+        AND (${notOff} = false OR status <> 'excluded')
+        AND (${like}::text IS NULL OR search_text LIKE ${like}::text) AND (${bj}::jsonb IS NULL OR blockers @> ${bj}::jsonb)
+        AND (${br}::text IS NULL OR lower(vendor) = ${br}::text)
+      ORDER BY array_position(ARRAY['blocked','error','out_of_date','not_on_shein','shein_only','in_review','synced','excluded','unknown']::text[], status), lower(title), shopify_product_id
+      LIMIT ${limit} OFFSET ${offset}`;
+  }
+  return { rows: rows.map(({ total_rows, shopify_json, search_text, ...r }) => r), total: rows[0]?.total_rows || 0, page: Math.max(1, Number(page) || 1), pageSize: limit };
+}
+export async function listingSummary() {
+  const sql = db();
+  const [products, sizes, blockers, brands] = await Promise.all([
+    // a product counts under every status one of its counted sizes has (the tiles = the filter)
+    sql`SELECT s AS status, count(*)::int AS n FROM shein_listing_products p
+          CROSS JOIN LATERAL unnest(CASE WHEN p.status IN ('excluded','unknown') OR p.size_statuses IS NULL THEN ARRAY[p.status] ELSE p.size_statuses END) s GROUP BY s`,
+    sql`SELECT status, count(*)::int AS n, count(*) FILTER (WHERE COALESCE(shopify_qty, 0) > 0)::int AS in_stock FROM shein_listing_variants GROUP BY status`,
+    sql`SELECT b->>'code' AS code, count(*)::int AS sizes, count(DISTINCT v.shopify_product_id)::int AS products
+          FROM shein_listing_variants v CROSS JOIN LATERAL jsonb_array_elements(v.blockers) b
+         WHERE v.status <> 'excluded' GROUP BY 1 ORDER BY 2 DESC LIMIT 12`,
+    sql`SELECT vendor, count(*)::int AS n FROM shein_listing_products WHERE vendor IS NOT NULL AND status <> 'excluded' GROUP BY vendor ORDER BY n DESC, vendor LIMIT 60`,
+  ]);
+  const [all] = await sql`SELECT count(*) FILTER (WHERE status <> 'excluded')::int AS all, count(*) FILTER (WHERE status = 'excluded')::int AS off FROM shein_listing_products`;
+  return { products, sizes, blockers, brands, all: all?.all || 0, off: all?.off || 0 };
+}
+// Phase 5 — what the 4seller cut-over card is computed from (src/lib/sheinCutover.js). DB only.
+const blockerLevel = (code) => SHEIN_BLOCKERS[code]?.level || 'blocked';
+export async function listingCutoverFacts({ since = null, sheinControlled = [] } = {}) {
+  const sql = db();
+  const [newProducts, nightly, interrupted, sizes, byCode, snap] = await Promise.all([
+    since ? sql`SELECT shopify_product_id, title, style, status, first_seen_at, settled_at FROM shein_listing_products
+                 WHERE first_seen_at >= ${since}::timestamptz AND upper(COALESCE(shopify_status, '')) = 'ACTIVE' AND shopify_product_id NOT LIKE 'shein:%'
+                 ORDER BY first_seen_at` : [],
+    since ? sql`SELECT id, status, created_at, finished_at FROM shein_listing_jobs
+                 WHERE kind = 'snapshot' AND started_by LIKE 'auto (nightly%' AND created_at >= ${since}::timestamptz - interval '1 day' ORDER BY id` : [],
+    sql`SELECT id, kind, created_at, done, total, started_by FROM shein_listing_jobs WHERE status = 'interrupted' ORDER BY id`,
+    // in-stock Shopify sizes of ACTIVE shoes already on SHEIN that SHEIN doesn't sell (the SHEIN check's "sizes to add")
+    sql`SELECT count(*) FILTER (WHERE NOT v.excluded AND NOT p.excluded)::int AS to_add,
+               count(*) FILTER (WHERE NOT v.excluded AND NOT p.excluded AND (
+                 EXISTS (SELECT 1 FROM jsonb_array_elements(v.blockers) b WHERE b->>'code' = ANY(${sheinControlled}::text[]))
+                 OR EXISTS (SELECT 1 FROM jsonb_array_elements(p.blockers) b WHERE b->>'code' = ANY(${sheinControlled}::text[]))))::int AS shein_blocked,
+               count(*) FILTER (WHERE v.excluded OR p.excluded)::int AS left_off
+          FROM shein_listing_variants v JOIN shein_listing_products p ON p.shopify_product_id = v.shopify_product_id
+         WHERE p.spu IS NOT NULL AND v.shopify_variant_id IS NOT NULL AND v.shein_sku IS NULL AND COALESCE(v.shopify_qty, 0) > 0
+           AND upper(COALESCE(p.shopify_status, '')) = 'ACTIVE'`,
+    sql`SELECT b->>'code' AS code, count(*)::int AS sizes
+          FROM shein_listing_variants v JOIN shein_listing_products p ON p.shopify_product_id = v.shopify_product_id
+          CROSS JOIN LATERAL jsonb_array_elements(v.blockers) b
+         WHERE p.spu IS NOT NULL AND v.shopify_variant_id IS NOT NULL AND v.shein_sku IS NULL AND COALESCE(v.shopify_qty, 0) > 0
+           AND NOT v.excluded AND NOT p.excluded AND upper(COALESCE(p.shopify_status, '')) = 'ACTIVE' AND b->>'code' = ANY(${sheinControlled}::text[])
+         GROUP BY 1 ORDER BY 2 DESC`,
+    sql`SELECT id FROM shein_listing_jobs WHERE kind = 'snapshot' AND status = 'done' LIMIT 1`,
+  ]);
+  const s = sizes[0] || {};
+  return { newProducts, nightly, interrupted,
+    sizes: { snapshot: snap.length > 0, toAdd: s.to_add || 0, sheinBlocked: s.shein_blocked || 0, leftOff: s.left_off || 0, byCode } };
+}
+// The go-live card's live checks: tables / columns present, first finished read, first confirmed send.
+export async function listingGoliveFacts(tables, columns) {
+  const sql = db();
+  const [t, c, snap, run] = await Promise.all([
+    sql`SELECT n, to_regclass(n) IS NOT NULL AS ok FROM unnest(${tables}::text[]) AS n`,
+    sql`SELECT column_name FROM information_schema.columns WHERE table_name = 'shein_listing_products' AND column_name = ANY(${columns}::text[])`,
+    sql`SELECT id, finished_at FROM shein_listing_jobs WHERE kind = 'snapshot' AND status = 'done' ORDER BY id LIMIT 1`,
+    sql`SELECT id, created_at FROM shein_listing_jobs WHERE kind = 'run' ORDER BY id LIMIT 1`,
+  ]);
+  const have = new Set(c.map((r) => r.column_name));
+  return { tables: Object.fromEntries(t.map((r) => [r.n, !!r.ok])), columns: Object.fromEntries(columns.map((k) => [k, have.has(k)])),
+    firstSnapshot: snap[0] || null, firstRun: run[0] || null };
+}
+export async function getListingProduct(id) {
+  const [p] = await db()`SELECT * FROM shein_listing_products WHERE shopify_product_id = ${id}`;
+  if (!p) return null;
+  const variants = await db()`SELECT * FROM shein_listing_variants WHERE shopify_product_id = ${id} ORDER BY sort, row_key`;
+  return { product: p, variants };
+}
+
+/* size map */
+export async function listSizeMaps() {
+  return await db()`SELECT * FROM shein_size_map ORDER BY category_id, attribute_id, size_key`;
+}
+export async function saveSizeMap({ category_id = 0, attribute_id = 0, size_key, attribute_value_id = null, custom_value = null, shein_label = null, foot_length = null, source = 'person', note = null }, by) {
+  const [r] = await db()`INSERT INTO shein_size_map (category_id, attribute_id, size_key, attribute_value_id, custom_value, shein_label, foot_length, source, note, set_by, set_at, verified)
+    VALUES (${category_id}, ${attribute_id}, ${size_key}, ${attribute_value_id}, ${custom_value}, ${shein_label}, ${foot_length}, ${source}, ${note}, ${by}, now(), false)
+    ON CONFLICT (category_id, attribute_id, size_key) DO UPDATE SET attribute_value_id = EXCLUDED.attribute_value_id, custom_value = EXCLUDED.custom_value,
+      shein_label = EXCLUDED.shein_label, foot_length = EXCLUDED.foot_length, source = EXCLUDED.source, note = EXCLUDED.note, set_by = EXCLUDED.set_by, set_at = now(),
+      verified = CASE WHEN shein_size_map.attribute_value_id IS NOT DISTINCT FROM EXCLUDED.attribute_value_id AND shein_size_map.custom_value IS NOT DISTINCT FROM EXCLUDED.custom_value
+                      THEN shein_size_map.verified ELSE false END
+    RETURNING *`;
+  return r;
+}
+export async function deleteSizeMap(id) {
+  const rows = await db()`DELETE FROM shein_size_map WHERE id = ${id} RETURNING id`;
+  return rows.length;
+}
+// Every distinct (category, size) our Shopify sizes need on SHEIN, with what we'd send today.
+export async function listingSizeUsage() {
+  return await db()`SELECT COALESCE(p.category_id, 0)::bigint AS category_id, v.size_key, min(v.shopify_size) AS sample, count(*)::int AS sizes,
+      count(*) FILTER (WHERE v.match <> 'none')::int AS on_shein,
+      count(*) FILTER (WHERE v.blockers @> '[{"code":"size_needs_map"}]'::jsonb)::int AS needs_map,
+      count(*) FILTER (WHERE v.blockers @> '[{"code":"size_not_on_shein"}]'::jsonb)::int AS not_allowed,
+      count(*) FILTER (WHERE v.blockers @> '[{"code":"size_unreadable"}]'::jsonb)::int AS unreadable,
+      (array_agg(v.size_plan) FILTER (WHERE v.size_plan IS NOT NULL))[1] AS plan,
+      (array_agg(v.shein_size) FILTER (WHERE v.shein_size IS NOT NULL))[1] AS shein_size
+    FROM shein_listing_variants v JOIN shein_listing_products p ON p.shopify_product_id = v.shopify_product_id
+    WHERE v.shopify_variant_id IS NOT NULL AND v.status <> 'excluded'
+    GROUP BY 1, 2 ORDER BY 1, 2`;
+}
+// The last walk's SHEIN stock per SHEIN SKU (the listing snapshot doesn't re-read stock).
+export async function sheinLastWalkStock() {
+  const rows = await db()`SELECT DISTINCT ON (shein_sku) shein_sku, COALESCE(after_qty, before_qty) AS qty FROM shein_live_items
+    WHERE source = 'walk' AND shein_sku IS NOT NULL ORDER BY shein_sku, id DESC`;
+  return new Map(rows.map((r) => [String(r.shein_sku), r.qty == null ? null : Number(r.qty)]));
 }
 
 // ---- Undelivered tracking (docs/context/undelivered.md) ---------------------------

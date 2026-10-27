@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'shein-check', 'cancellations', 'inbound-issues'];
+export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'shein-check', 'shein-listings', 'cancellations', 'inbound-issues'];
 export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
 export const viewForPath = (p) => {
   const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
@@ -199,6 +199,9 @@ export const HOME_SECTIONS = [
   // connect the account without the superadmin-only PH workspace.
   { title: 'Marketplaces', adminOnly: true, accent: 'listing', cards: [
     { key: 'ebay', privKey: 'connect_integrations', icon: '🛒', title: 'eBay', sub: 'Orders & late shipments, sales report (CSV), listings, reprice, coupons — and connect the account' },
+    // No privKey: the page's endpoints are PH + admin only, so a non-admin holder of Connect
+    // integrations (e.g. a warehouse account) would land on a page that 403s.
+    { key: 'shein-listings', icon: '🏷️', title: 'SHEIN Listings', sub: 'Every Shopify shoe on SHEIN size by size — what’s listed, what isn’t and why; Ask SHEIN' },
     { key: 'shein-check', privKey: 'connect_integrations', icon: '🧭', title: 'SHEIN ↔ Shopify check', sub: 'Wrong sizes, SKUs gone from Shopify, more stock on SHEIN — export in, fix list out' },
   ] },
   { title: 'Administration', adminOnly: true, accent: 'orders', cards: [

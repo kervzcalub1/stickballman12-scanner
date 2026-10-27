@@ -10,6 +10,18 @@ import { applySecurity, rateLimit, send } from '../_lib/util.js';
 import { sheinOpenWebhook } from '../_lib/shein.js';
 import { processOrders, readSync } from '../_lib/shein-orders.js';
 import { dbConfigured } from '../_lib/db.js';
+import { listingReviewEvent, listingPriceAuditEvent } from '../_lib/shein-listing.js';
+
+// SHEIN Listings (docs/context/shein-listings.md → Phase 2): the product review pushes —
+// product_document_audit_status_notice { spu_name, skc_name, version, audit_state, failed_reason }
+// and product_document_receive_status_notice { spu_name, version, received_success, failed_reason }.
+// Swappable in tests.
+export const HOOK = { listingReviewEvent, listingPriceAuditEvent };
+// product_price_audit_status_notice { spu_name, skc_name, sku_code, site, audit_state 1 pass / 2 reject, audit_reason } (Phase 3).
+export const isPriceAuditEvent = (event, code = '') => /^product_price_audit_status_notice/i.test(String(code))
+  || (!!event?.sku_code && event?.audit_state != null && !event?.version && !event?.document_sn);
+export const isProductReviewEvent = (event, code = '') => !isPriceAuditEvent(event, code) && !!event?.spu_name
+  && (event.audit_state != null || event.received_success != null || /^product_document_(audit|receive)_status_notice/i.test(String(code)));
 
 
 async function rawBody(req, max = 256 * 1024) {
@@ -54,6 +66,24 @@ export default async function handler(req, res) {
   if (!event) { console.warn(`[shein/webhook] unverified push on ${path} (${req.headers['x-lt-eventcode'] || 'no event code'}) — ignored`); return send(res, 200, { ok: true, ignored: 'unverified' }); }
   const code = String(req.headers['x-lt-eventcode'] || '');
   send(res, 200, { ok: true });
+  // A price rise SHEIN reviewed (Phase 3) — never stock.
+  if (isPriceAuditEvent(event, code)) {
+    if (!dbConfigured()) return;
+    try {
+      const r = await HOOK.listingPriceAuditEvent(event);
+      console.log(`[shein/webhook] ${code || 'price audit'} ${event.sku_code} → ${r.handled} listing item(s)`);
+    } catch (e) { console.error('[shein/webhook] price audit', event.sku_code, e.message); }
+    return;
+  }
+  // A product review result (one of OUR listing edits approved / rejected) — never stock.
+  if (isProductReviewEvent(event, code)) {
+    if (!dbConfigured()) return;
+    try {
+      const r = await HOOK.listingReviewEvent(event, code);
+      console.log(`[shein/webhook] ${code || 'product review'} ${event.spu_name} → ${r.handled} listing item(s)${r.why ? ` (${r.why})` : ''}`);
+    } catch (e) { console.error('[shein/webhook] product review', event.spu_name, e.message); }
+    return;
+  }
   // After answering: only an order change moves stock.
   if (!dbConfigured() || !event.orderNo) { if (code) console.log(`[shein/webhook] ${code} (no order)`); return; }
   try {

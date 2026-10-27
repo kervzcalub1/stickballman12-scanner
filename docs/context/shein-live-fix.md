@@ -62,6 +62,15 @@ pushed, so a deploy/restart replays it on the worker's start (`resumePushes`). B
 push is on, a stock-only walk every 3 h — and **at once after a restart cut a walk off**
 (`walkDue`: status `interrupted`, once in a row, so a walk that kills the process can't loop).
 No echo loop: our own Shopify deduction changes nothing on SHEIN (see the math below).
+**SHEIN Listings Phase 2 hooks (2026-10-27, `docs/context/shein-listings.md` → Phase 2):** "the last
+walk's log" (`sheinLastWalkFacts`) also includes the sizes SHEIN Listings ADDED (`shein_listing_variants`
+`match 'published'`) that no walk has seen yet; `pushSpus([spu])` is the same stock-only step for one
+SHEIN product (run once when SHEIN approves added sizes; same switches as a push); and the walk
+**skips an SPU whose listing edit is being sent**, and for one SHEIN is **reviewing** a full walk only
+sets stock (no seller-SKU edit — one partialEdit per product at a time). No listing items → no change.
+The same URL also takes Shopify's `products/create|update|delete` for SHEIN Listings
+(`docs/context/shein-listings.md`); the handler branches on `x-shopify-topic`, and the
+`inventory_levels/update` path is unchanged (pinned in `e2e/shein-listings.spec.js`).
 
 ## 3. Fix every listing (`api/_lib/shein-live.js`, `src/lib/sheinLive.js`)
 Modes: **dry** (decide + log, write nothing) · **stock** · **full** (stock + seller SKUs).

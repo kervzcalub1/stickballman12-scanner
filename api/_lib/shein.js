@@ -17,7 +17,8 @@
 // Env: SHEIN_APP_ID, SHEIN_APP_SECRET, SHEIN_API_HOST (default https://openapi.sheincorp.com),
 // SHEIN_AUTH_URL (default https://openapi-sem.sheincorp.com/#/empower).
 import crypto from 'node:crypto';
-import { getSetting, setSetting } from './db.js';
+import { getSetting, setSetting, addSheinApiLog } from './db.js';
+import { isSheinWrite, isSheinAsset } from '../../src/lib/sheinListings.js';
 import { encryptSecret, decryptSecret, secretsConfigured } from './secrets.js';
 
 const appId = () => String(process.env.SHEIN_APP_ID || '').trim();
@@ -110,22 +111,59 @@ export async function sheinDisconnect(by) { await setSetting(AUTH_KEY, '', by); 
 
 // One signed call to the seller's account. Returns SHEIN's `info` (or the whole body).
 // `query` goes on the URL only — SHEIN signs the path without it.
-export async function sheinCall(path, body = {}, { method = 'POST', query = '' } = {}) {
+// `log` (SHEIN Listings, docs/context/shein-listings.md): { source, jobId, itemId, spu, by, dry } →
+// one shein_api_log row per call (path, SHEIN's code / msg / traceId, ms). A READ logs no body; a
+// WRITE logs the full request and answer. After the call `log.traceId` / `log.code` / `log.msg` hold
+// SHEIN's answer, and a thrown error carries `traceId` / `sheinCode` / `sheinMsg` / `httpStatus`.
+// Without `log` nothing changes for the existing callers (no row, same return, same error text).
+// `strict` (Phase 2's write): an answer without a `code` (an empty / non-JSON 200) is NOT a success —
+// it throws with `unknownAnswer` (we can't tell whether SHEIN took it; the caller looks before resending).
+export async function sheinCall(path, body = {}, { method = 'POST', query = '', log = null, strict = false, timeoutMs = 30_000 } = {}) {
   const auth = await readJson(AUTH_KEY);
   if (!auth?.openKeyId) throw Object.assign(new Error('SHEIN is not connected yet.'), { notConnected: true });
   const keyId = decryptSecret(auth.openKeyId);
   const secret = decryptSecret(auth.secretKey);
   const ts = String(Date.now());
-  const r = await fetch(`${apiHost()}${path}${query ? `?${query}` : ''}`, {
-    method,
-    headers: { 'Content-Type': 'application/json;charset=UTF-8', 'x-lt-appid': appId(), 'x-lt-openKeyId': keyId, 'x-lt-timestamp': ts,
-      'x-lt-signature': sheinSignature(keyId, secret, path, ts), language: 'en' },
-    body: method === 'GET' || method === 'DELETE' ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok || String(j.code ?? '0') !== '0') throw new Error(`SHEIN ${path}: ${j.msg || j.message || `HTTP ${r.status}`}`);
+  const t0 = Date.now();
+  let r; let j = {};
+  try {
+    r = await fetch(`${apiHost()}${path}${query ? `?${query}` : ''}`, {
+      method,
+      headers: { 'Content-Type': 'application/json;charset=UTF-8', 'x-lt-appid': appId(), 'x-lt-openKeyId': keyId, 'x-lt-timestamp': ts,
+        'x-lt-signature': sheinSignature(keyId, secret, path, ts), language: 'en' },
+      body: method === 'GET' || method === 'DELETE' ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    j = await r.json().catch(() => ({}));
+  } catch (e) {
+    if (log) await writeCallLog(log, { path, method, body, j: null, status: null, code: 'network', msg: String(e.message).slice(0, 500), trace: null, ms: Date.now() - t0 });
+    throw e;
+  }
+  const code = String(j.code ?? '0'); const msg = j.msg || j.message || null; const trace = j.traceId || r.headers?.get?.('x-trace-id') || null;
+  if (log) {
+    Object.assign(log, { traceId: trace, code, msg });
+    await writeCallLog(log, { path, method, body, j, status: r.status, code, msg, trace, ms: Date.now() - t0 });
+  }
+  if (strict && r.ok && (j.code == null || j.code === '')) {
+    throw Object.assign(new Error(`SHEIN ${path}: answered without a result code (HTTP ${r.status})`), { traceId: trace, httpStatus: r.status, unknownAnswer: true });
+  }
+  if (!r.ok || code !== '0') {
+    // `info` rides along: a coded refusal often names the reason only in info.pre_valid_result (review S4).
+    throw Object.assign(new Error(`SHEIN ${path}: ${j.msg || j.message || `HTTP ${r.status}`}`), { traceId: trace, sheinCode: code, sheinMsg: msg, httpStatus: r.status, info: j.info ?? null });
+  }
   return j.info ?? j.data ?? j;
+}
+
+// SHEIN Listings' log row. Never lets a logging failure break the call it describes.
+async function writeCallLog(log, { path, method, body, j, status, code, msg, trace, ms }) {
+  try {
+    const write = isSheinWrite(path); const asset = isSheinAsset(path);
+    await addSheinApiLog({
+      job_id: log.jobId ?? null, item_id: log.itemId ?? null, spu: log.spu ?? null, source: log.source ?? null, path, method, write, asset, dry: !!log.dry,
+      request: write ? body : null, response: write ? j : null, http_status: status, code, msg: msg == null ? null : String(msg).slice(0, 1000),
+      trace_id: trace, ms, by: log.by ?? null,
+    });
+  } catch (e) { console.error('[shein] api log', e.message); }
 }
 
 // The brands our SHEIN account may list under (the first read once connected).
@@ -255,6 +293,102 @@ export async function sheinDeleteLogs(skcs) {
   }
   return out;
 }
+
+/* ------------------------ SHEIN Listings (read-only) ------------------------ */
+// docs/shein-listing-api-reference.md has every field. Each takes the `log` context
+// (sheinCall's shein_api_log hook). Phase 0/1 call ONLY these — none changes anything on SHEIN.
+
+// Every SPU in the store (product/query, 50 a page) — the same list the live walk uses.
+export async function sheinAllSpusLogged(log, { max = 400 } = {}) {
+  const seen = new Set();
+  for (let p = 1; p <= max; p++) {
+    const page = listOf(await sheinCall('/open-api/openapi-business-backend/product/query', { pageNum: p, pageSize: 50 }, { log }), 'data');
+    for (const x of page) if (x?.spuName) seen.add(x.spuName);
+    if (page.length < 50) break;
+  }
+  return [...seen];
+}
+// searchProduct (doc 3001938): ≤ 10 SPUs a page, with categoryId, per-site shelf and the
+// promotion locks (activityLockList). `filter` = { spuNameList } or nothing (the whole store, paged).
+export async function sheinSearchProducts(filter, log, { pageNum = 1 } = {}) {
+  const info = await sheinCall('/open-api/goods/searchProduct', { pageNum, pageSize: 10, languageList: ['en'], ...filter }, { log });
+  return { data: listOf(info, 'data'), count: Number((Array.isArray(info) ? info[0] : info)?.meta?.count) || null };
+}
+// `languages` (≤ 5): the SPU name in every language the store keeps (a title edit re-sends the whole list).
+export const sheinSpuInfoLogged = (spuName, log, languages = ['en']) => sheinCall('/open-api/goods/spu-info', { spuName, languageList: languages }, { log });
+// Review state (≤ 10 SPUs a call) → Map(spuName → { version, skcList: [{ skcName, documentState, failedReason }] }).
+// An entry may be { spuName, version } to ask about one submission (Phase 2's review follow-up).
+export async function sheinDocStates(spus, log) {
+  const out = new Map();
+  const one = (x) => (x && typeof x === 'object' ? { spuName: String(x.spuName), ...(x.version ? { version: String(x.version) } : {}) } : { spuName: String(x) });
+  for (let i = 0; i < spus.length; i += 10) {
+    const info = await sheinCall('/open-api/goods/query-document-state', { spuList: spus.slice(i, i + 10).map(one) }, { log });
+    for (const d of listOf(info, 'data')) if (d?.spuName) out.set(String(d.spuName), d);
+  }
+  return out;
+}
+// May the store add custom values (e.g. "US 14.5W") per category + attribute? ≤ 200 categories a call.
+export async function sheinCustomPermissions(categoryIds, log) {
+  const out = [];
+  for (let i = 0; i < categoryIds.length; i += 200) {
+    const info = await sheinCall('/open-api/goods/get-custom-attribute-permission-config', { category_id_list: categoryIds.slice(i, i + 200) }, { log });
+    out.push(...listOf(info, 'data'));
+  }
+  return out;
+}
+// The store's attribute template per product type (≤ 10 a call): sizes incl. is_custom values.
+export async function sheinAttributeTemplates(productTypeIds, log) {
+  const out = [];
+  for (let i = 0; i < productTypeIds.length; i += 10) {
+    const info = await sheinCall('/open-api/goods/query-attribute-template', { product_type_id_list: productTypeIds.slice(i, i + 10) }, { log });
+    out.push(...listOf(info, 'data'));
+  }
+  return out;
+}
+
+/* --------------------- SHEIN Listings Phase 2 (add sizes) --------------------- */
+// docs/context/shein-listings.md → "Phase 2". The reads a dry run makes, each logged; and the
+// ONE write: partialEdit (doc 3002047), the whole body logged with SHEIN's answer + traceId.
+
+// Which of these seller SKUs already exist anywhere in the store (incl. products in review), logged.
+export async function sheinSkusTakenLogged(skus, log) {
+  const taken = new Set();
+  for (let i = 0; i < skus.length; i += 200) {
+    const info = await sheinCall('/open-api/goods/product/check-supplierSku-repeated', { supplierSkuList: skus.slice(i, i + 200) }, { log });
+    for (const x of Array.isArray(info) ? info : listOf(info, 'data')) if (x?.repeated) taken.add(String(x.supplierSku));
+  }
+  return taken;
+}
+// The store's publish rules for a category: support_sale_attribute_sort, default_language, … (doc 3002044).
+export const sheinFillStandardLogged = (categoryId, log) => sheinCall('/open-api/goods/query-publish-fill-in-standard', categoryId ? { category_id: Number(categoryId) } : {}, { log });
+// Our warehouses (read; type 1 = merchant), logged.
+export async function sheinWarehousesLogged(log) {
+  return listOf(await sheinCall('/open-api/msc/warehouse/list', {}, { method: 'GET', log }), 'list');
+}
+// The write. Returns SHEIN's `info` ({ success, version, skc_list, pre_valid_result, mcc_valid_result });
+// a refusal with a non-zero code throws (sheinCall) with traceId / sheinCode / sheinMsg / httpStatus.
+export const sheinPartialEditLogged = (body, log) => sheinCall('/open-api/goods/product/partialEdit', body, { log, strict: true, timeoutMs: 90_000 });
+// Phase 3's price write (doc 3001940): ≤ 100 { productCode (sku_code), currencyCode, shopPrice, site,
+// specialPrice (ALWAYS when the size has one — left out, SHEIN sets it to 0), riseReason } → info.data[]
+// { productCode, site, success, status 0 failed / 1 done / 2 in price review, message }.
+export const sheinPriceSaveLogged = (body, log) => sheinCall('/open-api/openapi-business-backend/product/price/save', body, { log, strict: true, timeoutMs: 60_000 });
+
+/* --------------------- SHEIN Listings Phase 4 (publish new products) --------------------- */
+// scratchpad spec phase4-spec.md §1. Reads (store gates, category tree, rules, brands, suggestion,
+// compliance), ONE asset call (transform-pic), ONE write (publishOrEdit — strict, 90 s).
+export const sheinPublishPermissionLogged = (brandCode, log) => sheinCall('/open-api/goods/product/check-publish-permission', {}, { method: 'GET', query: brandCode ? `brandCode=${encodeURIComponent(brandCode)}` : '', log });
+export const sheinPublishQuotaLogged = (brandCode, log) => sheinCall('/open-api/goods-publish-quotas/detail', brandCode ? { brand_code: brandCode } : {}, { log });
+export const sheinShelfQuotaLogged = (brandCode, log) => sheinCall('/open-api/goods/query-shelf-quota', brandCode ? { brand_code: brandCode } : {}, { log });
+export const sheinSiteListLogged = async (log) => listOf(await sheinCall('/open-api/goods/query-site-list', {}, { log }), 'data');
+export const sheinBrandListLogged = async (log) => listOf(await sheinCall('/open-api/goods/query-brand-list', {}, { log }), 'data');
+export const sheinCategoryTreeLogged = async (log) => listOf(await sheinCall('/open-api/goods/query-category-tree', {}, { log }), 'data');
+export const sheinAssocRulesLogged = async (req, log) => listOf(await sheinCall('/open-api/goods/get-associated-attribute-rules', { get_linked_rule_req_list: [req] }, { log }), 'data');
+export const sheinCategorySuggestLogged = async (url, productInfo, log) => listOf(await sheinCall('/open-api/goods/image-category-suggestion', { url, productInfo }, { log }), 'data');
+export const sheinComplianceLogged = async (skcNames, log) => listOf(await sheinCall('/open-api/goods-compliance-requirements/list', { pageNum: 1, pageSize: 200, skcNames }, { log }), 'data');
+// An ASSET call: our hosted JPEG → a SHEIN image URL. `transformed ""` + failure_reason = a refusal.
+export const sheinTransformPicLogged = (imageType, originalUrl, log) => sheinCall('/open-api/goods/transform-pic', { image_type: imageType, original_url: originalUrl }, { log });
+// The write: a brand-new product (no spu_name).
+export const sheinPublishLogged = (body, log) => sheinCall('/open-api/goods/product/publishOrEdit', body, { log, strict: true, timeoutMs: 90_000 });
 
 /* ------------------------------- webhooks ------------------------------- */
 // SHEIN's pushes (docs: system page 3b13b1c5…, "Webhook说明"): signed like our calls but with

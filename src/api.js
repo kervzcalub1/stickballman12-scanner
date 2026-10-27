@@ -337,6 +337,28 @@ export const api = {
   sheinLive: () => get('/api/shein/live'),
   sheinLiveAllItems: (runId) => get(`/api/shein/live?run=${encodeURIComponent(runId)}&all=1`),
   sheinLiveAction: (body) => post('/api/shein/live', body),
+  // SHEIN Listings (docs/context/shein-listings.md). Nothing here writes to SHEIN in Phase 1.
+  sheinListings: (params = {}) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
+    return get(`/api/shein/listings${qs ? `?${qs}` : ''}`);
+  },
+  sheinListingProduct: (id) => get(`/api/shein/listings?product=${encodeURIComponent(id)}`),
+  sheinListingProbe: () => get('/api/shein/listings?probe=1'),
+  sheinListingAction: (body) => post('/api/shein/listings', body),
+  sheinListingJobs: (page = 1) => get(`/api/shein/listing-jobs?page=${page}`),
+  sheinListingJob: (id, page = 1) => get(`/api/shein/listing-jobs?id=${encodeURIComponent(id)}&page=${page}`),
+  sheinListingJobAll: (id) => get(`/api/shein/listing-jobs?id=${encodeURIComponent(id)}&all=1`),
+  sheinSizeMaps: () => get('/api/shein/listing-maps?type=size'),
+  sheinSizeMapSave: (body) => post('/api/shein/listing-maps?type=size', { action: 'set', ...body }),
+  sheinSizeMapClear: (id) => post('/api/shein/listing-maps?type=size', { action: 'clear', id }),
+  // Phase 4 (publish new products): SHEIN's rules as cached (refresh=1 re-reads: admin / Connect
+  // integrations) and the person-set maps — category · attr · brand · box (DB only).
+  sheinListingMeta: (params = {}) => get(`/api/shein/listing-meta?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString()}`),
+  sheinPublishMaps: (type, params = {}) => get(`/api/shein/listing-maps?${new URLSearchParams({ type, ...params }).toString()}`),
+  sheinPublishMapSave: (type, body) => post(`/api/shein/listing-maps?type=${encodeURIComponent(type)}`, body),
+  // Phase 5 — the 4seller cut-over + go-live checklists (DB only; ticks: admin / Connect integrations).
+  sheinCutover: () => get('/api/shein/listing-cutover'),
+  sheinCutoverAction: (body) => post('/api/shein/listing-cutover', body),
   ebaySalesReport: (from, to) => get(`/api/ebay/sales-report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   ebayCouponCreate: (coupon) => post('/api/ebay/coupons', { action: 'create', coupon }),
   ebayCouponAction: (action, c) => post('/api/ebay/coupons', { action, promotionId: c.promotionId, code: c.couponCode, name: c.name }),

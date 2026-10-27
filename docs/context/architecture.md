@@ -171,7 +171,8 @@ The path is the page; anything that makes the page reproducible after a refresh 
 pasted link — an open record's id, a search, a filter, a tab, a date range — is a query
 param. Established keys: `po` `request` `b` `vin` `sku` `size` `q` `from` `to` `supplier`
 `status` `tab` `period` `anchor` `dm` `da` `st` `basis` `buyer` `p` `audit` `due`
-`intake` `done` `needs` `role` `a`. Read the URL as a pointer only (coerce ids, fall back
+`intake` `done` `needs` `role` `a`; SHEIN Listings adds `brand` `blocker` `product` `job` `sz`
+(`docs/context/shein-listings.md`). Read the URL as a pointer only (coerce ids, fall back
 on an unknown value, re-fetch the record). Never put drafts, scan carts, held edit locks,
 File handles, temp passwords, or anything whose restore spends money in it. `onAuthed`
 keeps a known landing path exactly as it was (query + Locations' drill path) so a deep

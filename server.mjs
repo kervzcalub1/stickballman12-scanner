@@ -85,6 +85,9 @@ app.use((req, res, next) => {
 });
 
 // `rawBody` is kept for webhooks that sign the exact bytes (Shopify's HMAC — api/shopify/webhook.js).
+// A Shopify products/update body (100 variants + a long description) can pass 256 KB — that route alone
+// takes up to 4 MB; the HMAC is still checked over these exact raw bytes (security review L4).
+app.use('/api/shopify/webhook', express.json({ limit: '4mb', verify: (req, _res, buf) => { req.rawBody = Buffer.from(buf); } }));
 app.use(express.json({ limit: '256kb', verify: (req, _res, buf) => { if (req.originalUrl?.startsWith('/api/shopify/webhook')) req.rawBody = Buffer.from(buf); } })); // handlers also fall back to raw-stream parsing
 
 // Resolve a request path to an api handler file, guarding against traversal so a

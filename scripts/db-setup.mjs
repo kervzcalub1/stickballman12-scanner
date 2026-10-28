@@ -2646,7 +2646,7 @@ await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_order ON shein_order_uni
 await sql(`
   CREATE TABLE IF NOT EXISTS shein_live_runs (
     id              BIGSERIAL PRIMARY KEY,
-    mode            TEXT NOT NULL,       -- dry | stock | full · shoe:dry | shoe:full = ONE product (its SPU in `current`)
+    mode            TEXT NOT NULL,       -- dry | stock | full · shoe:dry | shoe:full = ONE product (its SPU in current)
     status          TEXT NOT NULL,       -- running | done | stopped | failed | interrupted
     phase           TEXT,
     started_by      TEXT,

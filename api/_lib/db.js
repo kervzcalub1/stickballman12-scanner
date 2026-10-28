@@ -10683,8 +10683,15 @@ export async function getSheinLiveRun(id) {
   const [r] = await db()`SELECT * FROM shein_live_runs WHERE id = ${id}`;
   return r || null;
 }
+// The latest WALK (every product). A one-shoe run (mode 'shoe:dry' | 'shoe:full', its SPU in
+// `current`, from SHEIN Listings → Details → Fix this shoe) is never "the" run: it would hide the
+// walk on the live panel and reset the worker's 3-hour re-walk clock.
 export async function latestSheinLiveRun() {
-  const [r] = await db()`SELECT * FROM shein_live_runs ORDER BY id DESC LIMIT 1`;
+  const [r] = await db()`SELECT * FROM shein_live_runs WHERE mode NOT LIKE 'shoe:%' ORDER BY id DESC LIMIT 1`;
+  return r || null;
+}
+export async function latestShoeRun(spu) {
+  const [r] = await db()`SELECT * FROM shein_live_runs WHERE mode LIKE 'shoe:%' AND current = ${spu} ORDER BY id DESC LIMIT 1`;
   return r || null;
 }
 export async function requestSheinLiveStop(id) {
@@ -10717,10 +10724,11 @@ export async function countSheinLiveItems(runId) {
 export async function recentSheinPushes(limit = 100) {
   return await db()`SELECT * FROM shein_live_items WHERE source = 'push' ORDER BY id DESC LIMIT ${limit}`;
 }
-// The last walk's picture of SHEIN, per SHEIN SKU (for pushing one Shopify change).
+// The last walk's picture of SHEIN, per SHEIN SKU (for pushing one Shopify change). A one-shoe
+// run (source 'shoe') read that product fresh, so its rows count as the newest picture of it.
 export async function sheinLastWalkFacts() {
   const walk = await db()`SELECT DISTINCT ON (shein_sku) spu, shein_sku, seller_sku, shein_size, reason FROM shein_live_items
-                     WHERE source = 'walk' AND shein_sku IS NOT NULL ORDER BY shein_sku, id DESC`;
+                     WHERE source IN ('walk', 'shoe') AND shein_sku IS NOT NULL ORDER BY shein_sku, id DESC`;
   // + the sizes SHEIN Listings ADDED (Phase 2, match 'published') that no walk has seen yet, so
   // a Shopify change reaches them before the next walk. No such rows → exactly the walk's facts.
   let published = [];
@@ -11252,8 +11260,11 @@ export async function listingVariantProductIds(rowKeys) {
 
 // The product list. status: '' = every product that isn't off; 'excluded' = the off ones; 'all'.
 // q matches title / style / handle / vendor / any seller SKU, SHEIN SKU, SKC or SPU (search_text).
-export async function listListingProducts({ status = '', blocker = null, q = null, brand = null, page = 1, pageSize = 50, sort = 'worst' } = {}) {
+// shopify: 'active' = ACTIVE on Shopify with stock > 0 on a size not left off; 'inactive' = the rest
+// (draft / archived, or 0 pairs — the listing syncs skip them, 2026-10-28); null = both.
+export async function listListingProducts({ status = '', blocker = null, q = null, brand = null, shopify = null, page = 1, pageSize = 50, sort = 'worst' } = {}) {
   const st = status && status !== 'all' ? status : null;
+  const sh = ['active', 'inactive'].includes(shopify) ? shopify : null;
   const notOff = status === '' || status == null;
   const like = q ? `%${String(q).toLowerCase().replace(/[%_\\]/g, (c) => `\\${c}`)}%` : null;
   const bj = blocker ? JSON.stringify([{ code: blocker }]) : null;
@@ -11268,6 +11279,7 @@ export async function listListingProducts({ status = '', blocker = null, q = nul
         AND (${notOff} = false OR status <> 'excluded')
         AND (${like}::text IS NULL OR search_text LIKE ${like}::text) AND (${bj}::jsonb IS NULL OR blockers @> ${bj}::jsonb)
         AND (${br}::text IS NULL OR lower(vendor) = ${br}::text)
+        AND (${sh}::text IS NULL OR (${sh}::text = 'active') = (upper(COALESCE(shopify_status, '')) = 'ACTIVE' AND EXISTS (SELECT 1 FROM shein_listing_variants sv WHERE sv.shopify_product_id = shein_listing_products.shopify_product_id AND sv.shopify_variant_id IS NOT NULL AND NOT sv.excluded AND COALESCE(sv.shopify_qty, 0) > 0)))
       ORDER BY lower(title), shopify_product_id LIMIT ${limit} OFFSET ${offset}`;
   } else if (sort === 'updated') {
     rows = await sql`SELECT *, count(*) OVER()::int AS total_rows FROM shein_listing_products
@@ -11275,6 +11287,7 @@ export async function listListingProducts({ status = '', blocker = null, q = nul
         AND (${notOff} = false OR status <> 'excluded')
         AND (${like}::text IS NULL OR search_text LIKE ${like}::text) AND (${bj}::jsonb IS NULL OR blockers @> ${bj}::jsonb)
         AND (${br}::text IS NULL OR lower(vendor) = ${br}::text)
+        AND (${sh}::text IS NULL OR (${sh}::text = 'active') = (upper(COALESCE(shopify_status, '')) = 'ACTIVE' AND EXISTS (SELECT 1 FROM shein_listing_variants sv WHERE sv.shopify_product_id = shein_listing_products.shopify_product_id AND sv.shopify_variant_id IS NOT NULL AND NOT sv.excluded AND COALESCE(sv.shopify_qty, 0) > 0)))
       ORDER BY shopify_updated_at DESC NULLS LAST, shopify_product_id LIMIT ${limit} OFFSET ${offset}`;
   } else if (sort === 'coverage') {
     rows = await sql`SELECT *, count(*) OVER()::int AS total_rows FROM shein_listing_products
@@ -11282,6 +11295,7 @@ export async function listListingProducts({ status = '', blocker = null, q = nul
         AND (${notOff} = false OR status <> 'excluded')
         AND (${like}::text IS NULL OR search_text LIKE ${like}::text) AND (${bj}::jsonb IS NULL OR blockers @> ${bj}::jsonb)
         AND (${br}::text IS NULL OR lower(vendor) = ${br}::text)
+        AND (${sh}::text IS NULL OR (${sh}::text = 'active') = (upper(COALESCE(shopify_status, '')) = 'ACTIVE' AND EXISTS (SELECT 1 FROM shein_listing_variants sv WHERE sv.shopify_product_id = shein_listing_products.shopify_product_id AND sv.shopify_variant_id IS NOT NULL AND NOT sv.excluded AND COALESCE(sv.shopify_qty, 0) > 0)))
       ORDER BY COALESCE((counts->>'on_shein')::numeric / NULLIF((counts->>'sizes')::numeric, 0), 1), lower(title) LIMIT ${limit} OFFSET ${offset}`;
   } else {
     rows = await sql`SELECT *, count(*) OVER()::int AS total_rows FROM shein_listing_products
@@ -11289,10 +11303,62 @@ export async function listListingProducts({ status = '', blocker = null, q = nul
         AND (${notOff} = false OR status <> 'excluded')
         AND (${like}::text IS NULL OR search_text LIKE ${like}::text) AND (${bj}::jsonb IS NULL OR blockers @> ${bj}::jsonb)
         AND (${br}::text IS NULL OR lower(vendor) = ${br}::text)
+        AND (${sh}::text IS NULL OR (${sh}::text = 'active') = (upper(COALESCE(shopify_status, '')) = 'ACTIVE' AND EXISTS (SELECT 1 FROM shein_listing_variants sv WHERE sv.shopify_product_id = shein_listing_products.shopify_product_id AND sv.shopify_variant_id IS NOT NULL AND NOT sv.excluded AND COALESCE(sv.shopify_qty, 0) > 0)))
       ORDER BY array_position(ARRAY['blocked','error','out_of_date','not_on_shein','shein_only','in_review','synced','excluded','unknown']::text[], status), lower(title), shopify_product_id
       LIMIT ${limit} OFFSET ${offset}`;
   }
   return { rows: rows.map(({ total_rows, shopify_json, search_text, ...r }) => r), total: rows[0]?.total_rows || 0, page: Math.max(1, Number(page) || 1), pageSize: limit };
+}
+// The Shopify filter's chips: how many of the list (same status / blocker / search / brand) are
+// active-with-stock vs inactive-or-no-stock. DB only.
+export async function listingShopifyCounts({ status = '', blocker = null, q = null, brand = null } = {}) {
+  const st = status && status !== 'all' ? status : null;
+  const notOff = status === '' || status == null;
+  const like = q ? `%${String(q).toLowerCase().replace(/[%_\\]/g, (c) => `\\${c}`)}%` : null;
+  const bj = blocker ? JSON.stringify([{ code: blocker }]) : null;
+  const br = brand ? String(brand).toLowerCase() : null;
+  const [r] = await db()`SELECT count(*) FILTER (WHERE a)::int AS active, count(*) FILTER (WHERE NOT a)::int AS inactive FROM (
+      SELECT (upper(COALESCE(shopify_status, '')) = 'ACTIVE' AND EXISTS (SELECT 1 FROM shein_listing_variants sv WHERE sv.shopify_product_id = shein_listing_products.shopify_product_id
+                AND sv.shopify_variant_id IS NOT NULL AND NOT sv.excluded AND COALESCE(sv.shopify_qty, 0) > 0)) AS a
+        FROM shein_listing_products
+       WHERE (${st}::text IS NULL OR (CASE WHEN ${st}::text IN ('excluded','unknown') OR size_statuses IS NULL THEN status = ${st}::text ELSE ${st}::text = ANY(size_statuses) AND status <> 'excluded' END))
+         AND (${notOff} = false OR status <> 'excluded')
+         AND (${like}::text IS NULL OR search_text LIKE ${like}::text) AND (${bj}::jsonb IS NULL OR blockers @> ${bj}::jsonb)
+         AND (${br}::text IS NULL OR lower(vendor) = ${br}::text)) x`;
+  return { active: r?.active || 0, inactive: r?.inactive || 0 };
+}
+// Bulk edit before publishing: many products + their sizes in two queries (getListingProduct's shape).
+export async function getListingProductsMany(ids) {
+  if (!ids?.length) return [];
+  const sql = db();
+  const [ps, vs] = await Promise.all([
+    sql`SELECT * FROM shein_listing_products WHERE shopify_product_id = ANY(${ids}::text[])`,
+    sql`SELECT * FROM shein_listing_variants WHERE shopify_product_id = ANY(${ids}::text[]) ORDER BY shopify_product_id, sort, row_key`,
+  ]);
+  const by = new Map(ps.map((p) => [p.shopify_product_id, { product: p, variants: [] }]));
+  for (const v of vs) by.get(v.shopify_product_id)?.variants.push(v);
+  return ids.map((id) => by.get(id)).filter(Boolean);
+}
+// Bulk publish choices (DB only): colour / PH photos the same on every product; titles one per product
+// (titles: [[productId, title | null]]). → the product ids updated.
+export async function setListingPublishChoicesMany(productIds, { skcValueId, usePhPhotos } = {}, titles = []) {
+  const sql = db();
+  const has = (v) => v !== undefined;
+  const done = new Set();
+  if (productIds.length && (has(skcValueId) || has(usePhPhotos))) {
+    const rows = await sql`UPDATE shein_listing_products SET
+        skc_value_id = CASE WHEN ${has(skcValueId)} THEN ${skcValueId ?? null}::bigint ELSE skc_value_id END,
+        use_ph_photos = CASE WHEN ${has(usePhPhotos)} THEN ${!!usePhPhotos} ELSE use_ph_photos END, updated_at = now()
+      WHERE shopify_product_id = ANY(${productIds}::text[]) RETURNING shopify_product_id`;
+    for (const r of rows) done.add(r.shopify_product_id);
+  }
+  if (titles.length) {
+    const rows = await sql`UPDATE shein_listing_products p SET title_override = t.title, updated_at = now()
+      FROM unnest(${titles.map((x) => x[0])}::text[], ${titles.map((x) => x[1])}::text[]) AS t(id, title)
+      WHERE p.shopify_product_id = t.id RETURNING p.shopify_product_id`;
+    for (const r of rows) done.add(r.shopify_product_id);
+  }
+  return [...done];
 }
 export async function listingSummary() {
   const sql = db();
@@ -11395,7 +11461,7 @@ export async function listingSizeUsage() {
 // The last walk's SHEIN stock per SHEIN SKU (the listing snapshot doesn't re-read stock).
 export async function sheinLastWalkStock() {
   const rows = await db()`SELECT DISTINCT ON (shein_sku) shein_sku, COALESCE(after_qty, before_qty) AS qty FROM shein_live_items
-    WHERE source = 'walk' AND shein_sku IS NOT NULL ORDER BY shein_sku, id DESC`;
+    WHERE source IN ('walk', 'shoe') AND shein_sku IS NOT NULL ORDER BY shein_sku, id DESC`;
   return new Map(rows.map((r) => [String(r.shein_sku), r.qty == null ? null : Number(r.qty)]));
 }
 

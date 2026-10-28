@@ -1160,6 +1160,56 @@ const VIDEOS = [
     ],
   },
   {
+    // Recorded against the demo seed (a fake SHEIN + sample products), never live data: a dry run
+    // needs SHEIN, and this machine must never reach the real store. SOP_SHEIN_DEMO_JOBS names the
+    // seeded dry runs ({"add":id,"update":id}); the two dry-run buttons are answered with them.
+    id: 'ph-shein-listings', role: 'admin', title: 'SHEIN Listings — check, dry run, send', path: '/shein-listings',
+    async setup(page) {
+      const jobs = JSON.parse(process.env.SOP_SHEIN_DEMO_JOBS || '{}');
+      await page.route((u) => u.pathname === '/api/shein/listings', async (route) => {
+        const req = route.request();
+        const b = req.method() === 'POST' ? (req.postDataJSON() || {}) : {};
+        if (b.action !== 'preview') return route.continue();
+        const id = b.ops?.includes('price') ? jobs.update : jobs.add;
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, job: { id: String(id), kind: 'preview', status: 'done' } }) });
+      });
+    },
+    beats: [
+      { say: 'SHEIN Listings shows every Shopify shoe with its SHEIN status, size by size. It replaces 4seller for listings.' },
+      { say: 'The top card says SHEIN is connected, and when Shopify and SHEIN were last read.' },
+      { say: 'Re-read reads both again. It only reads, it never writes to SHEIN.', at: 'button:has-text("Re-read Shopify")' },
+      { say: 'Each tile is a status, and a filter. Synced means on SHEIN and matching Shopify.', at: '.shl-tiles [data-status="synced"]' },
+      { say: 'Needs update means it is on SHEIN, but the price, a size, or a seller SKU differs from Shopify.', at: '.shl-tiles [data-status="out_of_date"]' },
+      { say: 'Blocked means it cannot be sent until something is fixed. Tap it to see only those shoes.', click: '.shl-tiles [data-status="blocked"]' },
+      { say: 'Every blocked row says what is wrong in bold, and what to do next to it.', at: '.shl-product >> nth=0' },
+      { say: 'Tap the tile again to see every product.', click: '.shl-tiles [data-status="blocked"]' },
+      { say: 'Tap the size count to open a shoe size by size.', click: '.shl-product[data-product="gid://shopify/Product/7701"] .shl-caret' },
+      { say: 'Each size has its own status. A size SHEIN has no option for stays off SHEIN with the reason. We never pick the nearest size.', at: '.shl-product[data-product="gid://shopify/Product/7701"]', zoom: false },
+      { say: 'Details opens everything about one shoe.', click: '.shl-product[data-product="gid://shopify/Product/7701"] button:has-text("Details")' },
+      { say: 'Close it, and tick the shoes you want to work on.', click: '[aria-label="Close"]' },
+      { say: '', click: '.shl-product[data-product="gid://shopify/Product/7701"] .shl-chk input', hold: 600 },
+      { say: 'The bar at the bottom has three dry runs. Add missing sizes, Update prices and sizes, and Publish new products.', click: '.shl-product[data-product="gid://shopify/Product/7704"] .shl-chk input' },
+      { say: 'A dry run only reads. Press Add missing sizes.', click: '[data-dry="add"]' },
+      { say: 'It shows, for each shoe, exactly what would be sent.', waitFor: '[data-proof]', at: '[data-proof]' },
+      { say: 'And it proves nothing changed: zero SHEIN writes.' },
+      { say: 'Check every line. A size SHEIN does not offer is listed as skipped, with the reason.', at: '.shl-ditem >> nth=0', zoom: false },
+      { say: 'If it is right, someone with the Connect integrations privilege presses Add sizes. That is the send.', at: 'button:has-text("Add sizes to")' },
+      { say: 'It runs on the server, so closing the tab never stops it. SHEIN then reviews it, and the size reads In review until SHEIN answers.' },
+      { say: 'We will not send in this tutorial. Close the dry run.', click: '[aria-label="Close"]' },
+      { say: 'For a Needs update shoe, the second dry run changes SHEIN prices, sizes turned off, and wrong seller SKUs.', click: '.shl-tiles [data-status="out_of_date"]' },
+      { say: '', click: '.shl-product[data-product="gid://shopify/Product/7701"] .shl-chk input', hold: 600 },
+      { say: 'Press Update prices and sizes.', click: '[data-dry="update"]' },
+      { say: 'Each price shows SHEIN now, and the new price: market plus fifteen percent, rounded up, or the Shopify price.', waitFor: '[data-proof]', at: '[data-proof]' },
+      { say: 'Same rule. Check it, then the person who can send presses Update.' },
+      { say: '', click: '[aria-label="Close"]', hold: 500 },
+      { say: 'The Jobs tab lists every re-read, dry run and send, with its progress.', click: '.seg-btn:has-text("Jobs")' },
+      { say: 'The Setup tab holds what is set once: box sizes, the SHEIN category and brand, and the go-live and 4seller cut-over cards.', click: '.seg-btn:has-text("Setup")' },
+      { say: 'Box sizes are in inches and pounds. Over thirty inches or thirty pounds is refused as a typo.', at: '[data-setup="box"]', zoom: false },
+      { say: 'Stock is not done here. The live sync keeps SHEIN stock in step with Shopify.' },
+      { say: 'Remember: look, dry run, check, then send. Never change a size to make it fit.' },
+    ],
+  },
+  {
     id: 'po-create', role: 'ph_team', title: 'Create a purchase order', path: '/ph/purchase-orders',
     beats: [
       { say: 'A purchase order is how we tell a supplier what to send, and how we check what arrived.' },
@@ -1358,6 +1408,7 @@ async function lint(wanted) {
     const misses = [];
     try {
       await signIn(page, v.role);
+      if (v.setup) await v.setup(page);
       await page.goto(`${BASE}${v.path}`, { waitUntil: 'load' /* never 'networkidle': the live-update stream stays open */, timeout: 20_000 });
       await wait(page, 1200);
       for (const sel of v.prep || []) {
@@ -1452,6 +1503,8 @@ async function main() {
     const track = makeTrack(clips.slice(1)); // clips[0] is the title card
     try {
       await signIn(page, v.role);
+      // `setup` (optional) prepares the page before it loads — e.g. answers a call the demo can't make.
+      if (v.setup) await v.setup(page);
       await page.goto(`${BASE}${v.path}`, { waitUntil: 'load' /* never 'networkidle': the live-update stream stays open */, timeout: 20_000 });
       await wait(page, 1400);
       // `prep` runs BEFORE the first caption and is not narrated: it puts the screen into

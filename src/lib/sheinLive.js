@@ -114,7 +114,9 @@ export function indexRows(allRows) {
 //   skipped: [{ sheinSku, why }] — a link the rules found but may not be written now.
 // `heldBySku` = SHEIN's held stock per seller SKU, store-wide (indexRows().held);
 // `owners` / `holders` from the whole store; `target` = the warehouse stock goes to.
-export function planProduct({ rows, variants, decisions = {}, aiLinks = {}, owners = new Map(), holders = new Map(), heldBySku = new Map(), target = '', links = true }) {
+// parkDelisted (the one-shoe run only): a size a person took off SHEIN ("delist") that still carries a
+// live Shopify SKU gets that SKU parked, so the right SHEIN size can carry it (the full walk leaves it).
+export function planProduct({ rows, variants, decisions = {}, aiLinks = {}, owners = new Map(), holders = new Map(), heldBySku = new Map(), target = '', links = true, parkDelisted = false }) {
   // The owner of a duplicated SKU goes first, so the fix's "first one sells" picks it.
   const ordered = [...rows].sort((a, b) => Number(owners.get(b.sellerSku)?.sheinSku === b.sheinSku) - Number(owners.get(a.sellerSku)?.sheinSku === a.sheinSku) || a.line - b.line);
   const open = Object.fromEntries([...heldBySku]);
@@ -171,6 +173,16 @@ export function planProduct({ rows, variants, decisions = {}, aiLinks = {}, owne
         let park = `${e.supplierSku}-off`; let i = 2;
         while (taken.has(park)) park = `${e.supplierSku}-off${i++}`;
         edits.push({ skc: r.skc, skuCode: r.sheinSku, supplierSku: park, from: r.sellerSku, by: 'rule', why: 'frees', frees: e.supplierSku });
+      }
+    }
+    if (parkDelisted) {
+      const live = new Set((variants || []).map((v) => String(v.sku)));
+      for (const r of out) {
+        if (r.reason !== 'delist' || !r.sellerSku || !live.has(r.sellerSku) || edits.some((x) => x.skuCode === r.sheinSku)) continue;
+        const taken = new Set([...holders.keys(), ...edits.map((x) => x.supplierSku)]);
+        let park = `${r.sellerSku}-off`; let i = 2;
+        while (taken.has(park)) park = `${r.sellerSku}-off${i++}`;
+        edits.push({ skc: r.skc, skuCode: r.sheinSku, supplierSku: park, from: r.sellerSku, by: 'person', why: 'frees', frees: r.sellerSku });
       }
     }
   }

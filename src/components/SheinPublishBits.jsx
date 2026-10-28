@@ -18,7 +18,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { fmt, when, NEEDS_PRIV, BlockerSay, FixButton } from './SheinListingsBits.jsx';
-import { BOX_PLACEHOLDERS, sizeGroupOf, validateImperialBox, boxToImperial, boxFromImperial, cleanTitle, isKnownBrand } from '../lib/sheinPublish.js';
+import { BOX_PLACEHOLDERS, sizeGroupOf, validateImperialBox, boxToImperial, boxFromImperial, cleanTitle, isKnownBrand, favouriteLeaves } from '../lib/sheinPublish.js';
 
 export const GROUP_LABEL = {
   adult: 'Men’s / adult', women: 'Women’s (W)', youth: 'GS / youth (Y)', child: 'Kids · PS (10.5C and up)', toddler: 'Toddler · TD (up to 10C)',
@@ -55,7 +55,7 @@ function ReadButton({ canWrite, label, busyLabel = 'Reading SHEIN…', onRead, h
 
 /* ------------------------------- category ------------------------------- */
 // SHEIN only takes a product in a LAST-level category; the path is what a person searches.
-export function CategoryPicker({ productType, sizeGroup, productId = null, current = null, canWrite, onSaved, onCancel, onSignOut }) {
+export function CategoryPicker({ productType, sizeGroup, productId = null, current = null, canWrite, onSaved, onCancel, onSignOut, lede = null }) {
   const { d, err, reload } = useLoad(() => api.sheinPublishMaps('category'), [], onSignOut);
   const [sug, setSug] = useState(null);      // null = asking / not asked
   const [sugErr, setSugErr] = useState('');
@@ -74,6 +74,8 @@ export function CategoryPicker({ productType, sizeGroup, productId = null, curre
   const leaves = d?.leaves || null;
   const byId = useMemo(() => new Map((leaves || []).map((l) => [String(l.categoryId), l])), [leaves]);
   const suggested = (sug || []).map((s) => ({ ...s, leaf: byId.get(String(s.categoryId)) || null })).filter((s) => s.leaf);
+  // the team's most-used categories, found in SHEIN's own tree by their path (never a fixed id) — always on top
+  const favs = useMemo(() => (leaves ? favouriteLeaves(leaves) : []), [leaves]);
   const { matches, count } = useMemo(() => {
     if (!leaves) return { matches: [], count: 0 };
     const ws = q.toLowerCase().split(/\s+/).filter(Boolean);
@@ -104,7 +106,7 @@ export function CategoryPicker({ productType, sizeGroup, productId = null, curre
   };
   return (
     <div className="shl-pub-panel" data-panel="category">
-      <p className="xs shl-pub-lede">For every Shopify <b>“{productType || '(no product type)'}”</b> shoe in <b>{GROUP_LABEL[sizeGroup] || sizeGroup}</b>. Saved once on our side; nothing goes to SHEIN.</p>
+      <p className="xs shl-pub-lede">For every Shopify <b>“{productType || '(no product type)'}”</b> shoe in <b>{GROUP_LABEL[sizeGroup] || sizeGroup}</b>{lede ? <> — {lede}</> : ''}. Saved once on our side; nothing goes to SHEIN.</p>
       {err && <p className="error xs">{err}</p>}
       {!d && !err && <div className="shl-skel shl-skel-line" />}
       {d && !leaves && (
@@ -114,6 +116,12 @@ export function CategoryPicker({ productType, sizeGroup, productId = null, curre
       )}
       {leaves && (
         <>
+          {favs.length > 0 && (
+            <div className="shl-cat-fav" data-fav="">
+              <span className="muted xs shl-block">Frequently used:</span>
+              {favs.flatMap((f) => f.leaves.map((l) => <Opt key={`f${l.categoryId}`} l={l} tag={<span className="ebo-chip ok shl-cat-tag">{f.label}</span>} />))}
+            </div>
+          )}
           {productId && (
             <div className="shl-cat-sug">
               {sug === null && <span className="muted xs">Asking SHEIN for a suggestion from the photo…</span>}

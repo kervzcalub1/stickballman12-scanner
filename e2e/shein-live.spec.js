@@ -612,3 +612,95 @@ test.describe('SHEIN live — whole shoes off the shelf', () => {
     expect(f.calls.items[0].action).toContain('would DELIST this shoe');
   });
 });
+
+/* ------------------- one shoe (SHEIN Listings → Details → Fix this shoe) ------------------- */
+// docs/context/shein-live-fix.md → "One shoe". The walk's step for ONE product, without the store scan.
+test.describe('SHEIN live — one shoe', () => {
+  // The user's shoe (2026-10-28): SHEIN US7.5 carries our size 8's SKU (A8); our 7.5 (A75) is on SHEIN US7-8.
+  const VARS = [V('A75', '7.5', 0), V('A8', '8', 0), V('A9', '9', 0)];
+  const spu = SPU('spu1', [SKU('s78', 'A75', 'US7-8'), SKU('s75', 'A8', 'US7.5'), SKU('s9', 'A9', 'US9')]);
+  const stock = [['s78', 0], ['s75', 0], ['s9', 0]];
+  const scan = () => rowsFromSpu(spu, STOCK(stock), {});
+
+  test('a size a person took off SHEIN keeps its live seller SKU — unless parkDelisted (one shoe only): then it is parked so the right size can carry it', () => {
+    const r = scan();
+    const decisions = { s75: { shein_sku: 's75', decision: 'delist', link_sku: null, decided_by: 'Kervy' } };
+    const base = { rows: r, variants: VARS, decisions, owners: ownersFrom(r, VARS), holders: indexRows(r).holders, target: 'W1' };
+    const walk = planProduct(base);
+    expect(walk.rows.find((x) => x.sheinSku === 's75')).toMatchObject({ reason: 'delist', newQty: 0 });
+    expect(walk.edits).toEqual([]);   // the full walk is unchanged
+    const one = planProduct({ ...base, parkDelisted: true });
+    expect(one.edits).toEqual([{ skc: 'spu1-c', skuCode: 's75', supplierSku: 'A8-off', from: 'A8', by: 'person', why: 'frees', frees: 'A8' }]);
+    // a parked name already in use anywhere is skipped
+    const holders = indexRows([...r, { spu: 'spu9', sheinSku: 'z', sellerSku: 'A8-off' }]).holders;
+    expect(planProduct({ ...base, holders, parkDelisted: true }).edits[0].supplierSku).toBe('A8-off2');
+    // a SKU Shopify no longer has is not parked (nothing needs it), nor in stock mode
+    expect(planProduct({ ...base, variants: VARS.filter((v) => v.sku !== 'A8'), parkDelisted: true }).edits).toEqual([]);
+    expect(planProduct({ ...base, links: false, parkDelisted: true }).edits).toEqual([]);
+  });
+
+  test('step without a catalogue: the Shopify product SHEIN Listings matched is read live (productIds), and a person’s link to a SKU of ANOTHER product is looked up', async () => {
+    const { stepProduct } = await import('../api/_lib/shein-live.js');
+    const other = V('B9', '9', 3, 'P2', { productTitle: 'Other shoe', style: 'ZZ0000-001' });
+    const f = fakeIO({ spu, stock, shopify: [...VARS, other] });
+    const asked = [];
+    const live = f.io.shopifyProductsLive; f.io.shopifyProductsLive = async (ids) => { asked.push(...ids); return live(ids); };
+    const r = scan();
+    const ctx = { ...ctxFor(f.io, 'dry', r), source: 'shoe', productIds: ['P1'], parkDelisted: true,
+      decisions: { s75: { shein_sku: 's75', decision: 'delist', link_sku: null }, s9: { shein_sku: 's9', decision: 'link', link_sku: 'B9' } } };
+    const out = await stepProduct('spu1', ctx);
+    expect(asked).toEqual(expect.arrayContaining(['P1', 'P2']));
+    expect(f.calls.stock).toEqual([]); expect(f.calls.edits).toEqual([]);   // a dry run writes nothing
+    const by = Object.fromEntries(f.calls.items.map((i) => [i.shein_sku, i]));
+    expect(by.s75).toMatchObject({ source: 'shoe', reason: 'delist', wrote: 'dry' });
+    expect(by.s75.action).toContain('A8 → A8-off');
+    expect(by.s9).toMatchObject({ reason: 'pending_change', link_to: 'B9', link_by: 'person' });
+    expect(out.counts.sizes).toBe(3);
+  });
+
+  test('full: the park is sent to SHEIN and remembered as taken off', async () => {
+    const { stepProduct } = await import('../api/_lib/shein-live.js');
+    const f = fakeIO({ spu, stock, shopify: VARS });
+    const r = scan();
+    await stepProduct('spu1', { ...ctxFor(f.io, 'full', r), source: 'shoe', productIds: ['P1'], parkDelisted: true,
+      decisions: { s75: { shein_sku: 's75', decision: 'delist', link_sku: null } } });
+    expect(f.calls.edits.map((e) => [e.skuCode, e.supplierSku])).toEqual([['s75', 'A8-off']]);
+    expect(f.calls.links).toEqual([expect.objectContaining({ shein_sku: 's75', link_sku: null, decision: 'delist', seller_sku_was: 'A8' })]);
+  });
+
+  test('a one-shoe run is never “the” walk: the live panel and the 3-hour re-walk skip it; the drawer finds it by SPU', async () => {
+    const db = await import('../api/_lib/db.js');
+    const walk = await db.createSheinLiveRun({ mode: 'dry', by: 'e2e' });
+    const one = await db.createSheinLiveRun({ mode: 'shoe:dry', by: 'e2e' });
+    try {
+      await db.updateSheinLiveRun(one.id, { current: 'e2e-spu-one', status: 'done', finished: true });
+      await db.updateSheinLiveRun(walk.id, { status: 'done', finished: true });
+      expect((await db.latestSheinLiveRun()).id).toBe(walk.id);
+      expect((await db.latestShoeRun('e2e-spu-one')).id).toBe(one.id);
+      expect(await db.latestShoeRun('e2e-spu-none')).toBeNull();
+    } finally {
+      const { default: pg } = await import('pg');
+      const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+      await pool.query('DELETE FROM shein_live_runs WHERE id = ANY($1::bigint[])', [[walk.id, one.id]]).finally(() => pool.end());
+    }
+  });
+
+  test('the endpoint: dry run open to PH, Fix needs admin / Connect integrations; a bad SPU is refused before SHEIN is called', async ({ request }) => {
+    const { signToken } = await import('../api/_lib/util.js');
+    const ph = { Authorization: `Bearer ${signToken({ uid: 'e2e-ph', username: 'e2e_ph', name: 'E2E PH', role: 'ph_team' })}` };
+    const admin = { Authorization: `Bearer ${signToken({ uid: 'admin', username: 'admin', name: 'Alex', role: 'admin' })}` };
+    const wh = { Authorization: `Bearer ${signToken({ uid: 'e2e-wh', username: 'e2e_wh', name: 'E2E WH', role: 'warehouse' })}` };
+    expect((await request.get('/api/shein/live?shoe=spu1', { headers: wh })).status()).toBe(403);
+    expect((await request.get('/api/shein/live?shoe=bad%20spu!', { headers: ph })).status()).toBe(400);
+    const g = await request.get('/api/shein/live?shoe=e2e-spu-none', { headers: ph });
+    expect(g.status()).toBe(200);
+    expect(await g.json()).toMatchObject({ ok: true, run: null, items: [], links: [] });
+    let r = await request.post('/api/shein/live', { headers: ph, data: { action: 'shoe', spu: 'spu1', mode: 'full' } });
+    expect(r.status()).toBe(403);
+    expect((await r.json()).error).toContain('Connect integrations');
+    r = await request.post('/api/shein/live', { headers: ph, data: { action: 'shoe', spu: 'x y', mode: 'dry' } });
+    expect(r.status()).toBe(400);
+    r = await request.post('/api/shein/live', { headers: admin, data: { action: 'shoe', spu: 'spu1', mode: 'stock' } });
+    expect(r.status()).toBe(400);   // one shoe: dry or full only
+  });
+});

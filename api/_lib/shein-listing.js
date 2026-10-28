@@ -42,7 +42,7 @@ import { walkActive, pushSpus } from './shein-live.js';
 import {
   spuPayload, templateSizes, computeListings, normalizeWebhookProduct, listingHash, STATUS_ORDER, planAddSizes, summarizePlan, reviewVerdict, stableJson, blocker,
   planPrice, planEdit, sheinNewSizePrice,
-  sizeKey,
+  sizeKey, listingSyncGate,
 } from '../../src/lib/sheinListings.js';
 import { parseSize } from '../../src/lib/sheinCheck.js';
 import { estDate, PH_DATETIME } from '../../src/lib/format.js';
@@ -340,6 +340,21 @@ export async function readinessChecklist(row, variants = [], io = IO) {
   return fn(p, row, new Set(variants.filter((v) => v.excluded).map((v) => v.shopify_variant_id))).checklist;
 }
 
+// Bulk edit before publishing (2026-10-28): the same readiness for MANY products in one go — one context
+// (maps, cached rules, D6, market prices) → per product { checklist, category, titleMax, sizeGroup }.
+// rows = [{ product, variants }] (getListingProduct's shape). DB only, no SHEIN call.
+export async function readinessMany(rows, io = IO) {
+  const list = (rows || []).filter((r) => r?.product?.shopify_json);
+  const market = await io.marketTargets(list.map((r) => r.product.shopify_json)).catch(() => new Map());
+  const fn = await publishContext(await listSizeMaps(), market);
+  const out = new Map();
+  for (const r of list) {
+    const x = fn(r.product.shopify_json, r.product, new Set(r.variants.filter((v) => v.excluded).map((v) => v.shopify_variant_id)));
+    out.set(r.product.shopify_product_id, { checklist: x.checklist, category: x.category, titleMax: x.titleMaxRead ? x.titleMax : null, sizeGroup: x.sizeGroup });
+  }
+  return out;
+}
+
 // Recompute from what's stored (a size mapping saved, an exclude, a Shopify webhook): Shopify as
 // last read (shopify_json) with `replace` swapped in, SHEIN as the last snapshot read it. No SHEIN call.
 export async function recomputeStored({ replace = [], io = IO } = {}) {
@@ -351,6 +366,22 @@ export async function recomputeStored({ replace = [], io = IO } = {}) {
   const sizes = await readSizeLists(payloads, { io, fetch: false });
   const rows = await computeAndSave({ products: [...byId.values()], payloads, sizes, io });
   return { products: rows.length };
+}
+
+// One SHEIN product re-read (spu-info + searchProduct + document state, as the snapshot reads it)
+// and every product recomputed from the stored rows — after "Fix this shoe" (shein-live.js) changed
+// it. Reads only. No snapshot yet → nothing to refresh.
+export async function refreshListingSpu(spu, { by = null, io = IO } = {}) {
+  if (!(await latestListingJob('snapshot', 'done'))) return { refreshed: false, why: 'no snapshot yet' };
+  const log = { source: 'fix this shoe', spu, by, dry: true };
+  const info = await io.sheinSpuInfo(spu, log);
+  let search = null; let docs = new Map();
+  try { search = (await io.sheinSearchProducts({ spuNameList: [spu] }, log)).data.find((d) => String(d.spuName) === spu) || null; } catch (e) { if (fatal(e)) throw e; }
+  try { docs = await io.sheinDocStates([spu], log); } catch (e) { if (fatal(e)) throw e; }
+  const payload = info ? spuPayload(info, { search, docState: docs.get(spu), stock: await io.lastWalkStock().catch(() => new Map()) }) : null;
+  if (!payload) return { refreshed: false, why: 'SHEIN returned no product for this SPU' };
+  await setListingCache('spu', spu, payload, by);
+  return { refreshed: true, ...(await recomputeStored({ io })) };
 }
 
 /* ---------------------------------- probe ---------------------------------- */
@@ -566,6 +597,10 @@ async function buildItem(it, jctx, io, log) {
   if (shop?.error) throw Object.assign(new Error(`Shopify didn’t answer: ${shop.error}`), { httpStatus: 503 });
   if (!shop?.product) return { body: null, plan: { spu: spuName, blockers: [blocker('shopify_inactive', { status: 'DELETED' })], sizes: [], relinks: [], skipped: [], notes: [] } };
   const product = { ...shop.product, style: shop.product.style || d.product.style || styleFromTitle(shop.product.title) };
+  // 2026-10-28: the LISTING syncs skip a shoe Shopify has inactive or at 0 pairs (live read) — before any
+  // SHEIN call. The stock sync (shein-live.js) is separate and still sets SHEIN to 0.
+  const gate = listingSyncGate(product, new Set(d.variants.filter((v) => v.excluded).map((v) => v.shopify_variant_id)));
+  if (gate) return { body: null, plan: { ...(it.op === 'add_sku' ? { title: d.product.title || null } : { op: it.op }), spu: spuName, blockers: [gate], sizes: [], relinks: [], skipped: [], notes: [], prices: [], mallOn: [] } };
   const lg = log({ spu: spuName, itemId: it.id });
   const spu = await io.sheinSpuInfo(spuName, lg);
   const payload = spuPayload(spu);

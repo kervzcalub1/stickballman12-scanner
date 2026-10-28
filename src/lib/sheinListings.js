@@ -75,10 +75,10 @@ export const BLOCKERS = {
     action: { kind: 'open_match', label: 'Show the other product', href: '/ph/shein-check?tab=match' } },
   wrong_link: { level: 'blocked', scope: 'variant', applies: ['always'],
     title: (p) => `SHEIN ${p?.sheinSize || 'size'} carries this SKU${p?.size ? ` (Shopify size ${p.size})` : ''}.`,
-    fix: () => 'The live fix holds it at 0 and changes the SKU (swap / Match sizes).', action: { kind: 'open_match', label: 'Match sizes', href: '/ph/shein-check?tab=match' } },
+    fix: () => 'The live fix holds it at 0. Pick the SKU it should carry (Match sizes), then dry run this shoe.', action: { kind: 'open_match', label: 'Match sizes', here: true } },
   spu_spans_products: { level: 'blocked', scope: 'variant', applies: ['always'],
     title: (p) => `SHEIN product ${p?.spu || ''} carries sizes of ${p?.count || 2} Shopify products.`,
-    fix: () => 'Decide which Shopify product it belongs to on Match sizes.', action: { kind: 'open_match', label: 'Match sizes', href: '/ph/shein-check?tab=match' } },
+    fix: () => 'Decide which Shopify product it belongs to on Match sizes.', action: { kind: 'open_match', label: 'Match sizes', here: true } },
   // 10–19 · what a listing needs
   no_size_table_value: { level: 'blocked', scope: 'variant', applies: ['publish', 'add_sizes'],
     title: (p) => `No foot length for ${sz(p)} (SHEIN’s size chart needs one).`, fix: () => 'Add it on the Sizes tab.',
@@ -166,6 +166,12 @@ export const BLOCKERS = {
     title: (p) => `Will add ${p?.text || 'a custom size'} as a new size.`, fix: () => '', action: null },
   shopify_inactive: { level: 'note', scope: 'product', applies: ['always'],
     title: (p) => (!p?.status || p.status === 'DRAFT' ? 'Not listing — draft on Shopify.' : `Not listing — ${p.status[0]}${p.status.slice(1).toLowerCase()} on Shopify. Only active products are listed.`), fix: () => '', action: shopifyLink },
+  // 2026-10-28 (user): a Shopify shoe with NO stock (0 pairs across its listed sizes) is never sent by
+  // the LISTING syncs (publish / add sizes / update prices & sizes) — the dry run skips it with this.
+  // The STOCK sync is untouched: a shoe going to 0 still has SHEIN set to 0 (shein-live.js).
+  no_shopify_stock: { level: 'blocked', scope: 'product', applies: ['publish', 'edit', 'add_sizes'],
+    title: () => 'No Shopify stock — not sent to SHEIN.',
+    fix: () => 'Nothing to do: the listing syncs skip a shoe with 0 pairs on Shopify. Once it has stock, dry run it again. (The stock sync still keeps SHEIN at 0.)', action: null },
   // Added in the build (docs/shein-listings-plan.md → Build log).
   size_unchecked: { level: 'note', scope: 'variant', applies: ['publish', 'add_sizes'],
     title: (p) => (p?.reason === 'no_category' ? 'No SHEIN category yet, so this size can’t be checked against SHEIN’s list.' : `SHEIN’s size list for ${cat(p)} hasn’t been read yet.`),
@@ -177,7 +183,7 @@ export const BLOCKERS = {
   // Added in Phase 2 (add sizes — docs/shein-listings-plan.md → Build log).
   size_already_on_shein: { level: 'blocked', scope: 'variant', applies: ['add_sizes'],
     title: (p) => `SHEIN already has ${p?.sheinSize || 'this size'}${p?.sellerSku ? ` (seller SKU ${p.sellerSku})` : ''}.`,
-    fix: () => 'Change the SKU on that SHEIN size to this one (Match sizes) instead of adding a second one.', action: { kind: 'open_match', label: 'Match sizes', href: '/ph/shein-check?tab=match' } },
+    fix: () => 'Change the SKU on that SHEIN size to this one (Match sizes) instead of adding a second one.', action: { kind: 'open_match', label: 'Match sizes', here: true } },
   not_on_shein_product: { level: 'note', scope: 'product', applies: ['add_sizes'],
     title: () => 'This shoe isn’t on SHEIN yet, so there is no SHEIN product to add sizes to.', fix: () => 'Publishing new shoes comes in a later phase.', action: null },
   nothing_to_add: { level: 'note', scope: 'product', applies: ['add_sizes'],
@@ -245,6 +251,25 @@ export function renderBlocker(b) {
 }
 export const blocker = (code, params = {}, field = null) => ({ code, field, params });
 const isNote = (b) => ['note', 'review'].includes(BLOCKERS[b.code]?.level);
+
+// The LISTING syncs' gate (2026-10-28): a product is sent to SHEIN (publish, add sizes, update prices &
+// sizes) only when Shopify has it ACTIVE with stock > 0 across its sizes a person didn't leave off.
+// `product` = the live / stored Shopify product ({ status, variants:[{ variantId, qty }] }) → null (OK)
+// or the blocker that skips it: shopify_inactive (draft / archived / deleted) · no_shopify_stock.
+// The STOCK sync never calls this — a shoe at 0 must still be set to 0 on SHEIN.
+export function listingSyncGate(product, excluded = new Set()) {
+  if (!product) return blocker('shopify_inactive', { status: 'DELETED' });
+  const st = String(product.status || '').toUpperCase();
+  if (st !== 'ACTIVE') return blocker('shopify_inactive', { status: st || null });
+  const live = (product.variants || []).filter((v) => !excluded.has(v.variantId));
+  const total = live.reduce((n, v) => n + Math.max(0, Number(v.qty) || 0), 0);
+  return total > 0 ? null : blocker('no_shopify_stock', { sizes: live.length });
+}
+// The same rule on a stored list row (shopify_status + counts.sizes = in-stock sizes not left off):
+// what the page's "Active (in stock)" filter and the ticked-products bar use. SHEIN-only rows → false.
+export const rowSyncable = (p) => !!p && !String(p.shopify_product_id || '').startsWith('shein:')
+  && String(p.shopify_status || '').toUpperCase() === 'ACTIVE' && Number(p.counts?.sizes || 0) > 0;
+export const rowSyncWhy = (p) => (String(p?.shopify_status || '').toUpperCase() !== 'ACTIVE' ? 'not active on Shopify' : 'no Shopify stock');
 
 /* ---------------------------------- sizes ---------------------------------- */
 
@@ -1178,7 +1203,7 @@ export function summarizePlan(plan) {
   const lead = (pb) => (pb.length ? renderBlocker(pb[0]).title.replace(/\.$/, '') : '');
   if (plan.op === 'publish') {   // Phase 4
     const sz = plan.sizes || [];
-    const hard = (plan.blockers || []).filter((b) => !isNote(b));
+    const hard = (plan.blockers || []).filter((b) => !isNote(b) || b.code === 'shopify_inactive');   // inactive never publishes
     if (hard.length) return `Can’t publish yet: ${renderBlocker(hard[0]).title.replace(/\.$/, '')}${hard.length > 1 ? ` (+${hard.length - 1} more)` : ''}`;
     if (!sz.length) return lead([...(plan.blockers || []), ...(plan.notes || [])]) || 'Nothing to publish.';
     return [`Will publish “${plan.title?.text || ''}” with ${sz.length} size${sz.length === 1 ? '' : 's'}: ${sz.map((z) => `${z.sheinSize}${z.kind === 'custom' ? ' (custom)' : ''} ${usd(z.price)}`).join(', ')}`,

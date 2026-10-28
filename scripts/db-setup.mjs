@@ -2641,11 +2641,12 @@ await sql(`
 await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_sku ON shein_order_units (seller_sku)`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_order ON shein_order_units (order_no)`);
 // The live fix walk: one run = every SHEIN product, one at a time; one item = one SHEIN size
-// as the walk found and left it. `source` = walk | push (a single Shopify change pushed).
+// as the walk found and left it. `source` = walk | push (a single Shopify change pushed) | shoe
+// (SHEIN Listings → Details → Fix this shoe).
 await sql(`
   CREATE TABLE IF NOT EXISTS shein_live_runs (
     id              BIGSERIAL PRIMARY KEY,
-    mode            TEXT NOT NULL,       -- dry | stock | full
+    mode            TEXT NOT NULL,       -- dry | stock | full · shoe:dry | shoe:full = ONE product (its SPU in `current`)
     status          TEXT NOT NULL,       -- running | done | stopped | failed | interrupted
     phase           TEXT,
     started_by      TEXT,

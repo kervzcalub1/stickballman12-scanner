@@ -8,7 +8,7 @@
 // database. Phase 3 diffs show as "was …" (amber) → the new value. Phase 4: a Shopify shoe NOT on
 // SHEIN shows the server's 18-line publishing checklist instead (src/components/SheinPublishBits.jsx —
 // each ✕ with its fix inline) and one dry run, "Publish new product".
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
@@ -18,6 +18,7 @@ import { itemStatus } from '../lib/sheinListings.js';
 import { NEEDS_PRIV } from './SheinListingsBits.jsx';
 import { useFixes, UPDATE_OPS, isRise } from '../screens/SheinListingsProducts.jsx';
 import { PublishChecklist } from './SheinPublishBits.jsx';
+import { SheinShoeFix } from './SheinShoeFix.jsx';
 
 const CHECKS = [
   ['shopify', 'Active on Shopify', ['shopify_inactive']],
@@ -31,13 +32,22 @@ const CHECKS = [
 export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOut, active, connected, onDryRun, onOpenJob }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
+  const [setup, setSetup] = useState(null);   // a new shoe's LIVE readiness (GET ?publishSetup=) — the publish safety net
   async function load() {
-    try { setD(await api.sheinListingProduct(id)); setErr(''); }
-    catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
+    try {
+      const r = await api.sheinListingProduct(id); setD(r); setErr('');
+      if (r.product && !r.product.spu && !String(id).startsWith('shein:')) api.sheinPublishSetup([id]).then((x) => setSetup(x.products?.[0] || null)).catch(() => setSetup(null));
+      else setSetup(null);
+    } catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
   }
-  useEffect(() => { setD(null); setErr(''); }, [id]);
-  useLive(['shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_job_items'], load);
+  useEffect(() => { setD(null); setErr(''); setSetup(null); }, [id]);
+  useLive(['shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_job_items', 'shein_category_map', 'shein_brand_map', 'app_settings'], load);
   const { onFix, modal } = useFixes({ onAct, onSignOut, reload: load });
+  const [matchOpen, setMatchOpen] = useState(false);
+  const toMatch = () => { setMatchOpen(true); setTimeout(() => document.getElementById('shl-shoe-fix')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); };
+  const [fixFirst, setFixFirst] = useState(false);   // "Publish new product" pressed with ✕ lines left → the checklist, not the dry run
+  const listRef = useRef(null);
+  useEffect(() => { setFixFirst(false); }, [id]);
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape' && !modal) onClose(); };
     window.addEventListener('keydown', onKey);
@@ -64,7 +74,15 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
   const isShopify = p && !String(p.shopify_product_id).startsWith('shein:');
   const isNew = isShopify && !p.spu;   // Phase 4: not on SHEIN at all → publish it
   const why = !connected ? 'Connect SHEIN first' : active ? `Job #${active.id} is running — dry run when it finishes` : p?.excluded ? 'Marked “Don’t list on SHEIN”' : '';
-  const toFix = (d?.checklist || []).filter((l) => l.ok === false).length;
+  // from OUR records, re-read on every save (the drawer's checklist may be the last dry run's, which a fix doesn't change)
+  const toFixLines = (setup?.checklist || []).filter((l) => l.ok === false);
+  const toFix = toFixLines.length;
+  // the safety net (2026-10-28): a shoe with a ✕ on its checklist isn't dry-run by the publish button —
+  // the checklist is shown with what's left; a person can still re-check with a dry run (it sends nothing).
+  const publishClick = () => {
+    if (toFix > 0) { setFixFirst(true); listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+    onDryRun?.([p.shopify_product_id], ['publish']);
+  };
   // A shoe WE published: its latest publish send (in SHEIN's review, or refused / rejected → Publish again)
   const pubRun = !isNew && isShopify ? (d?.jobItems || []).find((i) => i.op === 'publish' && i.kind === 'run') || null : null;
   const pubRejected = pubRun?.status === 'failed' && (pubRun.blockers || []).some((b) => b.code === 'review_rejected');
@@ -94,7 +112,19 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
           {!d && !err && <>{[0, 1, 2, 3].map((i) => <div key={i} className="shl-skel shl-skel-row" />)}</>}
           {p && (
             <>
-              {isNew && d.checklist && <PublishChecklist d={d} canWrite={!!d.canWrite} busy={busy} onFix={onFix} onReload={load} onSignOut={onSignOut} onAct={onAct} />}
+              {isNew && d.checklist && (
+                <div ref={listRef}>
+                  {fixFirst && toFix > 0 && (
+                    <div className="shl-banner warn" role="status" data-fix-first="">
+                      <b>Fix {toFix === 1 ? 'this' : `these ${fmt(toFix)}`} first — nothing was sent or dry-run</b>
+                      <span className="xs">Still ✕: {toFixLines.map((l) => l.label).join(' · ')}. Each one has its fix below.</span>
+                      <span className="muted xs">Think our records are out of date? A dry run re-checks everything with SHEIN and sends nothing.{' '}
+                        <button type="button" className="btn ghost xs" data-act="dry-anyway" disabled={!!busy || !!why} onClick={() => { setFixFirst(false); onDryRun?.([p.shopify_product_id], ['publish']); }}>Dry run anyway</button></span>
+                    </div>
+                  )}
+                  <PublishChecklist d={d} canWrite={!!d.canWrite} busy={busy} onFix={onFix} onReload={load} onSignOut={onSignOut} onAct={onAct} />
+                </div>
+              )}
               {pubRun && ['in_review', 'failed', 'deferred'].includes(pubRun.status) && (
                 <section className="shl-d-sec" data-published={pubRun.status}>
                   <h4 className="shl-h4">Published from this page</h4>
@@ -116,7 +146,7 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                   <div key={c.key} className="shl-req">
                     <span className={c.ok ? 'shl-yes' : 'shl-no'} aria-label={c.ok ? 'OK' : 'Not OK'}>{c.ok ? '✓' : '✕'}</span>
                     <span>{c.ok ? c.label : <><BlockerSay b={c.first} />{c.sizes.length > 1 ? <span className="muted xs shl-block">Sizes: {c.sizes.join(', ')}</span> : null}</>}</span>
-                    <span>{!c.ok && c.first?.action && <FixButton action={c.first.action} shopifyUrl={p.shopifyUrl} busy={busy}
+                    <span>{!c.ok && c.first?.action && <FixButton action={c.first.action} shopifyUrl={p.shopifyUrl} busy={busy} onMatch={toMatch}
                       onAct={(k) => onFix(k, variants.find((v) => (v.blockers || []).some((b) => b.code === c.first.code)) || {}, c.first)} />}</span>
                   </div>
                 ))}
@@ -131,6 +161,10 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                   </div>
                 )}
               </section>}
+
+              {isShopify && !isNew && variants.some((v) => v.shein_sku) && (
+                <SheinShoeFix p={p} variants={variants} canWrite={!!d.canWrite} connected={connected} open={matchOpen} onSignOut={onSignOut} onReload={load} />
+              )}
 
               {isShopify && (
                 <section className="shl-d-sec">
@@ -194,8 +228,9 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
           {p && isShopify && <span className="muted xs shl-foot-lead">Dry run first — nothing is sent:</span>}
           {(isNew || republish) && (
             <button type="button" className="btn primary sm" disabled={!!busy || !!why} data-dry="publish"
-              title={why || `Dry run: what SHEIN would receive for this new product — category, brand, photos, sizes, prices. ${toFix ? `${toFix} line${toFix === 1 ? '' : 's'} still to fix; the dry run says why it can’t go yet.` : ''} Nothing is sent until someone confirms.`}
-              onClick={() => onDryRun?.([p.shopify_product_id], ['publish'])}>{busy === 'preview' ? 'Starting…' : 'Publish new product'}</button>
+              title={why || (toFix ? `${toFix} line${toFix === 1 ? '' : 's'} still to fix — this shows them first (nothing is sent or dry-run).` : 'Dry run: what SHEIN would receive for this new product — category, brand, photos, sizes, prices. Nothing is sent until someone confirms.')}
+              data-needs-fix={toFix || undefined}
+              onClick={isNew ? publishClick : () => onDryRun?.([p.shopify_product_id], ['publish'])}>{busy === 'preview' ? 'Starting…' : isNew && toFix ? `Fix ${fmt(toFix)} first` : 'Publish new product'}</button>
           )}
           {p && isShopify && !isNew && !republish && (
             <button type="button" className={`btn ${toUpdate.length && !toAddLive.length ? 'ghost' : 'primary'} sm`} disabled={!!busy || !!why || !toAdd.length} data-dry="add"

@@ -148,6 +148,13 @@ where the only button was the full dry run.
 - Store-wide facts (who else carries a SKU) come from the last walk's log (`factsCtx`, as a Shopify
   push); `sheinSellerSkusTaken` is still asked live before any edit. No catalogue: the Shopify product
   SHEIN Listings matched (`productIds`) and any person-linked SKU are read live.
+- **Same style, no catalogue (2026-10-28):** the step also reads the Shopify products of the shoe's
+  style code from SHEIN Listings' copy of Shopify (`listingProductIdsForStyle`: `style` or the title,
+  ≤ 10). Before, a shoe re-made under new SKUs (AL8 Women's) read as "gone": its dead sizes were never
+  relinked and the dry run said "would ask SHEIN to DELETE". Only the walk ever deleted; now a one-shoe
+  run says so instead ("… Fix this shoe never does").
+- Its seller-SKU edit carries the SHEIN details the product now lacks (`editAttrs`, see
+  `shein-listings.md`); none set for a required one → the edit waits, stock still goes.
 - `parkDelisted` (one shoe only): a size taken off whose seller SKU Shopify still has gets it renamed
   `<sku>-off`, so the right SHEIN size can carry it ("Add missing sizes"). The full walk is unchanged.
 - A SHEIN Listings send of the product in flight → stock only (`walkModeFor`). After the step, SHEIN

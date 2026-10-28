@@ -24,8 +24,8 @@ import {
   sheinPublishPermissionLogged, sheinPublishQuotaLogged, sheinShelfQuotaLogged, sheinSiteListLogged, sheinBrandListLogged, sheinCategoryTreeLogged,
   sheinAssocRulesLogged, sheinCategorySuggestLogged, sheinComplianceLogged, sheinTransformPicLogged, sheinPublishLogged,
 } from './shein.js';
-import { buildPublish, publishGates, readPublishAnswer, publishApproved, readBoxDefaults, fetchImage, hostOnR2 } from './shein-publish.js';
-import { publishReadiness } from '../../src/lib/sheinPublish.js';
+import { buildPublish, publishGates, readPublishAnswer, publishApproved, readBoxDefaults, fetchImage, hostOnR2, templateFor, assocRequired } from './shein-publish.js';
+import { publishReadiness, attributePatch, templateParts } from '../../src/lib/sheinPublish.js';
 import { shopifyListingCatalogue, shopifyListingProduct, shopifyConfigured, styleFromTitle } from './shopify.js';
 import {
   createListingJob, getListingJob, activeListingJob, claimListingJob, touchListingJob, finishListingJob, markStaleListingJobs, resumeListingJob,
@@ -590,6 +590,30 @@ const fillCache = async (categoryId, io, log) => {
   return info;
 };
 
+// The SHEIN details this product lacks that SHEIN now requires (attributePatch): its product type's
+// template (cached 7 days), the person's defaults, and the associated-attribute rules for the values
+// it would carry. Template unread → null (the edit goes as before, without details). Also the live
+// fix's seller-SKU edit (shein-live.js), which is the same partialEdit.
+export async function editAttrs(spu, { io = IO, log = null } = {}) {
+  const ptid = spu?.productTypeId == null ? null : Number(spu.productTypeId);
+  if (!ptid) return null;
+  const template = await templateFor(ptid, io, log).catch((e) => { if (fatal(e)) throw e; return null; });
+  if (!template?.attribute_infos) return null;
+  const parts = templateParts(template);
+  const defaults = await listAttrDefaults(ptid);
+  const product = new Map(parts.product.map((a) => [Number(a.attribute_id), a]));
+  const cur = new Map();
+  for (const x of spu?.productAttributeInfoList || []) {
+    const id = Number(x.attributeId); if (!product.has(id) || x.attributeValueId == null) continue;
+    const r = cur.get(id) || { attribute_id: id, value_ids: [] }; r.value_ids.push(Number(x.attributeValueId)); cur.set(id, r);
+  }
+  const have = new Set((spu?.productAttributeInfoList || []).map((x) => Number(x.attributeId)));
+  const fills = defaults.filter((d) => !have.has(Number(d.attribute_id)) && Number(product.get(Number(d.attribute_id))?.attribute_status) === 3);
+  const assoc = await assocRequired({ categoryId: Number(spu.categoryId), productTypeId: ptid, defaults: [...cur.values(), ...fills], parts, io, log })
+    .catch((e) => { if (fatal(e)) throw e; return []; });
+  return attributePatch({ spu, template, defaults, assoc });
+}
+
 // Read everything fresh and build ONE product's plan + body (the dry run and the run share it).
 async function buildItem(it, jctx, io, log) {
   if (it.op === 'publish') {   // Phase 4: a product NOT on SHEIN yet
@@ -626,8 +650,9 @@ async function buildItem(it, jctx, io, log) {
   const skus = [...new Set(cands.map((v) => String(live.get(v.shopify_variant_id)?.sku || v.seller_sku || '').trim()).filter(Boolean))];
   const taken = skus.length ? await io.sheinSkusTaken(skus, lg) : new Set();
   const market = await io.marketTargets([product]).catch(() => new Map());   // the same lookup as the readiness (S9)
+  const attrs = await editAttrs(spu, { io, log: lg });
   const { body, plan } = planAddSizes({ spu, product, stored: d.variants, maps: jctx.maps, sizes: tpl, permission: perm == null ? null : Number(perm), customValues: sizes.customValues,
-    sortSupported: fill?.support_sale_attribute_sort === true, fill, fillUnread, taken, market, warehouse: jctx.warehouse });
+    sortSupported: fill?.support_sale_attribute_sort === true, fill, fillUnread, taken, market, warehouse: jctx.warehouse, attrs });
   plan.reviewOpen = reviewOpen;
   plan.preVersion = docs.get(spuName)?.version || null;   // what SHEIN showed before we sent — a new version later = it arrived (S2)
   plan.title = d.product.title || null;
@@ -1026,7 +1051,8 @@ async function buildResync(it, { d, product, spu, payload, spuName, lg, io, jctx
     names = (all?.productMultiNameList || []).filter((x) => x?.language && String(x.productName || "").trim()).map((x) => ({ language: x.language, name: String(x.productName).trim() }));
     if (!langs.every((l) => names.some((n) => n.language === l))) names = null;   // a language missing → no title (never drop one)
   }
-  const { body, plan } = planEdit({ spu, product, stored, productRow: d.product, fill, fillUnread: !fill, taken, recentShelf, names });
+  const attrs = await editAttrs(spu, { io, log: lg });
+  const { body, plan } = planEdit({ spu, product, stored, productRow: d.product, fill, fillUnread: !fill, taken, recentShelf, names, attrs });
   plan.reviewOpen = reviewOpen;
   plan.preVersion = docs.get(spuName)?.version || null;
   plan.productTitle = d.product.title || null;

@@ -225,6 +225,30 @@ test.describe('SHEIN live — one product, end to end (fakes)', () => {
     expect(f.calls.items.find((i) => i.shein_sku === 's8')).toMatchObject({ wrote: 'stock+link', target_qty: 0 });
   });
 
+  test('full mode: the seller-SKU edit carries the details SHEIN now requires; with no default set it waits (SHEIN would refuse it)', async () => {
+    const { stepProduct } = await import('../api/_lib/shein-live.js');
+    const list = [{ attribute_id: 1002260, attribute_value_id: 459 }];
+    const f = fakeIO({ spu, stock, shopify });
+    let sent = null;
+    f.io.sheinSetSellerSkus = async (spuName, edits, opts) => { sent = opts; f.calls.edits.push(...edits); return { ok: true, version: 'v1', messages: [] }; };
+    f.io.sheinEditAttrs = async () => ({ list, added: [{ attributeId: 1002260, attribute: 'Reflection' }], dropped: [], problems: [] });
+    await stepProduct('spu1', ctxFor(f.io, 'full', scan()));
+    expect(sent).toEqual({ attributes: list });
+    expect(f.calls.items.find((i) => i.shein_sku === 's8').action).toContain('SHEIN details it now requires (Reflection)');
+    const g = fakeIO({ spu, stock, shopify });
+    g.io.sheinEditAttrs = async () => ({ list: null, added: [], dropped: [], problems: [{ code: 'missing_attr', params: { attributeId: 1002260, attribute: 'Reflection' } }] });
+    await stepProduct('spu1', ctxFor(g.io, 'full', scan()));
+    expect(g.calls.edits).toEqual([]);
+    expect(g.calls.items.find((i) => i.shein_sku === 's8').action).toContain('SHEIN now requires Reflection on this shoe');
+    expect(g.calls.stock.length).toBeGreaterThan(0);   // stock is still fixed
+    // nothing missing → no list (an attribute list sends every colour to review)
+    const h = fakeIO({ spu, stock, shopify }); let opts = 'unset';
+    h.io.sheinSetSellerSkus = async (n, e, o) => { opts = o; return { ok: true, version: 'v1', messages: [] }; };
+    h.io.sheinEditAttrs = async () => ({ list: null, added: [], dropped: [], problems: [] });
+    await stepProduct('spu1', ctxFor(h.io, 'full', scan()));
+    expect(opts).toEqual({ attributes: null });
+  });
+
   test('full mode: a product SHEIN is still reviewing gets stock fixed but no edit', async () => {
     const { stepProduct } = await import('../api/_lib/shein-live.js');
     const f = fakeIO({ spu, stock, shopify, inReview: true });
@@ -587,6 +611,33 @@ test.describe('SHEIN live — whole shoes off the shelf', () => {
     expect(f.calls.items.every((i) => i.reason === 'no_shopify')).toBe(true);
     expect(r.counts.needs_person).toBe(2);
     expect(f.calls.items[0].action).toContain('Shopify still has this style under new SKUs');
+  });
+
+  test('one shoe (no catalogue): a shoe re-made under new SKUs is found by its style and relinked — never "would DELETE"', async () => {
+    const { stepProduct } = await import('../api/_lib/shein-live.js');
+    const spu = SPUS(false, [SKU('s7', 'DEAD7', 'US7'), SKU('s8', 'DEAD8', 'US8')]);
+    const scan = rowsFromSpu(spu, STOCK([['s7', 0], ['s8', 0]]), {});
+    const remade = [V('N7', '7', 2, 'P2'), V('N8', '8', 1, 'P2')];   // same style IB7936-100, new product + SKUs
+    // Before 2026-10-28 the one-shoe run only saw the seller SKUs' own products: none here → "gone".
+    const f = fakeIO({ spu, stock: [['s7', 0], ['s8', 0]], shopify: remade });
+    const asked = [];
+    f.io.listingProductIdsForStyle = async (style) => { asked.push(style); return ['P2']; };
+    await stepProduct('spuX', { ...ctxFor(f.io, 'dry', scan), source: 'shoe' });
+    expect(asked).toEqual(['IB7936-100']);
+    expect(f.calls.items.map((i) => [i.shein_sku, i.link_to])).toEqual([['s7', 'N7'], ['s8', 'N8']]);
+    expect(f.calls.items.some((i) => /DELETE/.test(i.action))).toBe(false);
+    expect(f.calls.edits).toEqual([]); expect(f.calls.deletes).toEqual([]);
+    // Truly gone (no product of that style): the dry run says the walk decides — Fix this shoe never deletes.
+    const g = fakeIO({ spu, stock: [['s7', 0], ['s8', 0]], shopify: [] });
+    g.io.listingProductIdsForStyle = async () => [];
+    const r = await stepProduct('spuX', { ...ctxFor(g.io, 'dry', scan), source: 'shoe' });
+    expect(g.calls.items[0].action).toContain('Fix this shoe never does');
+    expect(g.calls.items.some((i) => /would ask SHEIN to DELETE/.test(i.action))).toBe(false);
+    expect(r.counts.skc_delete_requested).toBeUndefined();
+    const full = fakeIO({ spu, stock: [['s7', 0], ['s8', 0]], shopify: [] });
+    full.io.listingProductIdsForStyle = async () => [];
+    await stepProduct('spuX', { ...ctxFor(full.io, 'full', scan), source: 'shoe' });
+    expect(full.calls.deletes).toEqual([]);
   });
 
   test('SHEIN’s review answer is recorded: deleted, or refused (it stays delisted, never asked again)', async () => {

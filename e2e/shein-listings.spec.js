@@ -28,7 +28,7 @@ import { loginAs } from './helpers/auth.js';
 import {
   STATUSES, STATUS_ORDER, TILE_STATUSES, BLOCKERS, renderBlocker, sizeKey, resolveSize, validateCustomText, suggestCustomSpelling,
   spuPayload, templateSizes, computeListings, listingHash, normalizeWebhookProduct, rollup, isSheinWrite, matchStore,
-  planAddSizes, summarizePlan, sheinNewSizePrice, reviewVerdict, customTextConflict, planPrice, planEdit, variantReadiness, PRICE_FROM, itemRetryable, productReadiness,
+  planAddSizes, summarizePlan, sheinNewSizePrice, reviewVerdict, customTextConflict, planPrice, planEdit, variantReadiness, PRICE_FROM, itemRetryable, productReadiness, blocker,
 } from '../src/lib/sheinListings.js';
 
 const FAKE_PORT = 5194;
@@ -1374,8 +1374,9 @@ test.describe.serial('SHEIN Listings Phase 2 — dry run, run, review (server jo
     expect(fake.writes).toEqual([]); expect(fake.p2.edits).toEqual([]);
     const { rows: log } = await pool.query(`SELECT DISTINCT path, write FROM shein_api_log WHERE job_id = $1`, [job.id]);
     expect(log.filter((l) => l.write)).toEqual([]);
+    // + the associated-attribute rules: which SHEIN details the edit must carry (editAttrs, 2026-10-28) — a read
     expect(new Set(log.map((l) => l.path))).toEqual(new Set(['/open-api/msc/warehouse/list', '/open-api/goods/spu-info', '/open-api/goods/query-publish-fill-in-standard',
-      '/open-api/goods/query-document-state', '/open-api/goods/product/check-supplierSku-repeated']));
+      '/open-api/goods/query-document-state', '/open-api/goods/product/check-supplierSku-repeated', '/open-api/goods/get-associated-attribute-rules']));
     // the sheet: PH sees the summary, not the raw request; an admin sees both
     const ph = await (await request.get(`/api/shein/listing-jobs?id=${job.id}`, { headers: auth.ph })).json();
     const phDunk = ph.items.find((i) => i.shopify_product_id === gidP(7702));
@@ -2709,6 +2710,57 @@ test.describe('SHEIN Listings Phase 4 — the planner (pure)', () => {
   });
 });
 
+test.describe('SHEIN Listings — an edit carries the details SHEIN now requires (2026-10-28, pure)', () => {
+  // 4seller's Nikes lack "Reflection" (made required later): SHEIN refused every seller-SKU fix and size add
+  // ("Reflection: The template attribute under type is required."). partialEdit re-checks the whole product.
+  const cur = (id, valueId, text = null) => ({ attributeId: id, attributeValueId: valueId, attributeValue: text });
+  const spuWith = (list) => ({ ...SHEIN.E2ESPU3, productAttributeInfoList: list });
+  const D = [{ attribute_id: 7000, value_ids: [7001], extra_values: [] }];
+  test('attributePatch: the product’s CURRENT details (sale attributes dropped) + the missing required one from the default — or nothing when none is missing', async () => {
+    const { attributePatch } = await import('../src/lib/sheinPublish.js');
+    const spu = spuWith([cur(27, 81), cur(7100, 7101), cur(7100, 7102), cur(5555, 1)]);   // 27 = Color (a sale attribute) · 5555 = no longer in the template
+    expect(attributePatch({ spu, template: P4TEMPLATE, defaults: D })).toEqual({
+      list: [{ attribute_id: 7100, attribute_value_id: 7101 }, { attribute_id: 7100, attribute_value_id: 7102 }, { attribute_id: 7000, attribute_value_id: 7001 }],
+      added: [{ attributeId: 7000, attribute: 'Upper Material' }], dropped: [5555], problems: [] });
+    // the required one already there → no list at all (an attribute list reviews every colour)
+    expect(attributePatch({ spu: spuWith([cur(7000, 7002)]), template: P4TEMPLATE, defaults: D })).toMatchObject({ list: null, added: [], problems: [] });
+    // no default set → a blocker naming it, nothing sent
+    const none = attributePatch({ spu, template: P4TEMPLATE, defaults: [] });
+    expect(none.list).toBe(null);
+    expect(none.problems).toEqual([expect.objectContaining({ code: 'missing_attr', params: expect.objectContaining({ attributeId: 7000, attribute: 'Upper Material' }) })]);
+    // an associated rule makes another one required; a typed value is copied as SHEIN has it
+    const typed = { ...P4TEMPLATE, attribute_infos: [...P4TEMPLATE.attribute_infos, { attribute_id: 7300, attribute_name_en: 'Model', attribute_type: 4, attribute_mode: 0, attribute_status: 2, data_dimension: 2, attribute_value_info_list: [] }] };
+    const a = attributePatch({ spu: spuWith([cur(7000, 7001), cur(7300, null, 'AJ1')]), template: typed, defaults: [{ attribute_id: 7200, value_ids: [7201] }], assoc: [{ attribute_id: 7200, allowed: [7201] }] });
+    expect(a.list).toEqual([{ attribute_id: 7000, attribute_value_id: 7001 }, { attribute_id: 7300, attribute_extra_value: 'AJ1' }, { attribute_id: 7200, attribute_value_id: 7201 }]);
+    expect(attributePatch({ spu, template: null })).toMatchObject({ list: null, unread: true });
+    // a detail the template now hides (status 1) is kept as SHEIN has it — the list replaces SHEIN's
+    const hidden = { ...P4TEMPLATE, attribute_infos: [...P4TEMPLATE.attribute_infos, { attribute_id: 7400, attribute_name_en: 'Old detail', attribute_type: 4, attribute_mode: 3, attribute_status: 1, attribute_value_info_list: [val(7401, 'x')] }] };
+    expect(attributePatch({ spu: spuWith([cur(7400, 7401)]), template: hidden, defaults: D }).list).toEqual([{ attribute_id: 7400, attribute_value_id: 7401 }, { attribute_id: 7000, attribute_value_id: 7001 }]);
+    // a TYPED detail (Product Model: the default is one shoe's text, "Dunk Low") is never filled in on an edit
+    const model = { ...typed, attribute_infos: typed.attribute_infos.map((x) => (x.attribute_id === 7300 ? { ...x, attribute_status: 3 } : x)) };
+    const m = attributePatch({ spu: spuWith([cur(7000, 7001)]), template: model, defaults: [{ attribute_id: 7300, value_ids: [], extra_values: ['Dunk Low'] }] });
+    expect(m.list).toBe(null);
+    expect(m.problems[0]).toMatchObject({ code: 'missing_attr', params: { attribute: 'Model', why: 'typed_per_shoe' } });
+  });
+  test('planEdit / planAddSizes: the list rides in the same partialEdit (with a note); a detail with no default blocks the edit', async () => {
+    const product = { ...SHOPIFY().find((p) => p.productId === gidP(7704)), title: 'Jordan 1 GS Retro (GS0001-001)' };
+    const names = [{ language: 'en', name: 'Jordan 1 GS (GS0001-001)' }];
+    const attrs = { list: [{ attribute_id: 7000, attribute_value_id: 7001 }], added: [{ attributeId: 7000, attribute: 'Upper Material' }], dropped: [], problems: [] };
+    const fill = { fill_in_standard_list: [], default_language: 'en' };
+    const e = planEdit({ spu: SHEIN.E2ESPU3, product, stored: [], productRow: { synced_hash: 'x' }, fill, names, attrs });
+    expect(e.body.product_attribute_list).toEqual(attrs.list);
+    expect(e.plan.notes.map((n) => n.code)).toContain('attrs_added');
+    expect(e.plan.attributes).toMatchObject({ added: [{ attribute: 'Upper Material' }], count: 1 });
+    expect(summarizePlan(e.plan)).toContain('+ SHEIN details it now requires: Upper Material (SHEIN reviews every colour)');
+    const missing = { list: null, added: [], dropped: [], problems: [blocker('missing_attr', { attributeId: 1002260, attribute: 'Reflection' })] };
+    const b = planEdit({ spu: SHEIN.E2ESPU3, product, stored: [], productRow: { synced_hash: 'x' }, fill, names, attrs: missing });
+    expect(b.body).toBe(null);
+    expect(b.plan.blockers[0]).toMatchObject({ code: 'missing_attr', params: { attribute: 'Reflection' } });
+    expect(planEdit({ spu: SHEIN.E2ESPU3, product, stored: [], productRow: { synced_hash: 'x' }, fill, names }).body.product_attribute_list).toBeUndefined();   // nothing missing → no list
+    expect(planAddSizes({ spu: SHEIN.E2ESPU2, attrs: missing }).plan.blockers.map((x) => x.code)).toContain('missing_attr');
+  });
+});
+
 test.describe('SHEIN Listings 2026-10-28 — the stock gate, favourite categories, tidy titles (pure)', () => {
   test('listingSyncGate: inactive or 0 pairs (sizes left off don’t count) → skipped; rowSyncable reads the stored row the same way', async () => {
     const { listingSyncGate, rowSyncable } = await import('../src/lib/sheinListings.js');
@@ -2816,6 +2868,23 @@ test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fak
     await pool.query(`DELETE FROM shein_category_map WHERE shopify_product_type LIKE 'E2E%'`);
     await pool.query(`DELETE FROM shein_brand_map WHERE vendor LIKE 'e2e%'`);
     await pool.query(`DELETE FROM shein_attr_defaults WHERE product_type_id = $1`, [P4TYPE]);
+  });
+
+  test('editAttrs (2026-10-28): a SHEIN product lacking a required detail gets it from the saved default — plus what an associated rule then requires', async () => {
+    const L = await import('../api/_lib/shein-listing.js');
+    const io = { sheinAttributeTemplates: async () => [P4TEMPLATE],
+      sheinAssocRules: async (req) => [{ group_id: req.group_id, link_rule_attribute_list: (req.attribute_list || []).some((x) => x.attribute_id === 7000 && x.attribute_value_id === 7001)
+        ? [{ attribute_id: 7200, attribute_value_list: [7201], attribute_value_pre_fill_list: [] }] : [] }] };
+    const spu = { spuName: 'E2EATTR', productTypeId: P4TYPE, categoryId: P4CAT, productAttributeInfoList: [{ attributeId: 7100, attributeValueId: 7101 }, { attributeId: 27, attributeValueId: 901 }] };
+    expect((await L.editAttrs(spu, { io })).problems[0]).toMatchObject({ code: 'missing_attr', params: { attributeId: 7000 } });   // no default yet
+    await pool.query(`INSERT INTO shein_attr_defaults (product_type_id, attribute_id, scope, value_ids, extra_values, set_by) VALUES ($1, 7000, 'product', '{7001}', '{}', 'e2e'), ($1, 7200, 'product', '{7201}', '{}', 'e2e')`, [P4TYPE]);
+    try {
+      const a = await L.editAttrs(spu, { io });
+      expect(a.list).toEqual([{ attribute_id: 7100, attribute_value_id: 7101 }, { attribute_id: 7000, attribute_value_id: 7001 }, { attribute_id: 7200, attribute_value_id: 7201 }]);
+      expect(a.added.map((x) => x.attribute)).toEqual(['Upper Material', 'Lining Material']);
+      // it already carries everything → no list
+      expect((await L.editAttrs({ ...spu, productAttributeInfoList: [{ attributeId: 7000, attributeValueId: 7002 }] }, { io })).list).toBe(null);
+    } finally { await pool.query(`DELETE FROM shein_attr_defaults WHERE product_type_id = $1`, [P4TYPE]); }
   });
 
   test('readiness (no SHEIN call): a shoe not on SHEIN is Blocked with what publishing needs — no category, box sizes unconfirmed; the drawer’s checklist comes from the server', async ({ request }) => {

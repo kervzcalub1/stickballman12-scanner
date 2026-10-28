@@ -11427,6 +11427,15 @@ export async function listingGoliveFacts(tables, columns) {
   return { tables: Object.fromEntries(t.map((r) => [r.n, !!r.ok])), columns: Object.fromEntries(columns.map((k) => [k, have.has(k)])),
     firstSnapshot: snap[0] || null, firstRun: run[0] || null };
 }
+// The Shopify products of one style code, from SHEIN Listings' copy of every Shopify product (the one-shoe
+// fix has no store-wide catalogue to find a shoe re-made under new SKUs). Newest first, ≤ 10.
+export async function listingProductIdsForStyle(style) {
+  const s = String(style || '').trim().toUpperCase();
+  if (!/^[A-Z0-9][A-Z0-9-]{3,30}$/.test(s)) return [];   // a style code, nothing LIKE could widen
+  return (await db()`SELECT shopify_product_id FROM shein_listing_products
+    WHERE (upper(style) = ${s} OR upper(title) LIKE ${`%${s}%`}) AND shopify_product_id LIKE 'gid://shopify/Product/%'
+    ORDER BY shopify_updated_at DESC NULLS LAST LIMIT 10`).map((r) => r.shopify_product_id);
+}
 export async function getListingProduct(id) {
   const [p] = await db()`SELECT * FROM shein_listing_products WHERE shopify_product_id = ${id}`;
   if (!p) return null;

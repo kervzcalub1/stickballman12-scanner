@@ -209,6 +209,18 @@ Plan §3 Phase 2 + Appendix A.2; API: `partialEdit` (doc 3002047) and the review
   `shein_note` (code-only; wording in `BLOCKERS`).
 - **Columns** (`shein_listing_job_items`, ADD COLUMN IF NOT EXISTS): `plan`, `retries`, `sent_at`,
   `sku_codes`, `document_state`, `review_checked_at` (+ index on open statuses). No new table.
+- **SHEIN details on every edit (2026-10-28).** partialEdit re-checks the WHOLE product, so a detail SHEIN
+  made required after 4seller listed it refused every edit — live run 10/28: 14 of 75 size adds and 19 Nike
+  seller-SKU fixes, all "Reflection: The template attribute under type is required." `editAttrs`
+  (`shein-listing.js`; template cached 7 d + `shein_attr_defaults` + the associated rules for the values
+  it would carry) → `attributePatch` (`sheinPublish.js`): the product's CURRENT details (spu-info's
+  `productAttributeInfoList`, sale attributes dropped) + each missing required one from Setup → SHEIN
+  details. `product_attribute_list` REPLACES the list (doc 3002047 rule 3), so it is sent whole, and only
+  when something is missing — it is a product-level change: SHEIN reviews EVERY colour of the shoe (note
+  `attrs_added`, and "+ SHEIN details…" in the dry-run line). Only PICKED values are filled; a missing
+  TYPED one (Product Model — its default is one shoe's text, "Dunk Low") blocks: `missing_attr`,
+  why `typed_per_shoe`. A required detail with no default blocks too (SHEIN would refuse). Used by
+  `planAddSizes`, `planEdit` and the live fix's seller-SKU edit (`sheinSetSellerSkus(…, { attributes })`).
 - **What is sent** — ONE `partialEdit` per SHEIN product: every size to add + every seller-SKU relink
   pending for it (`shein_links` → `match 'link'`). **Products only** with ONE SKC, **no size chart**
   (`dimensionAttributeInfoList` non-empty → `size_table_not_yet`: SHEIN needs the whole chart re-sent;

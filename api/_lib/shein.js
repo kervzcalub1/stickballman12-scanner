@@ -243,11 +243,15 @@ export async function sheinSellerSkusTaken(skus) {
   return taken;
 }
 // Change seller SKUs on existing sizes of ONE product (partialEdit — SHEIN reviews it).
-// edits: [{ skc, skuCode, supplierSku }]. Returns { ok, version, messages }.
-export async function sheinSetSellerSkus(spuName, edits) {
+// edits: [{ skc, skuCode, supplierSku }]; attributes: the WHOLE product_attribute_list when SHEIN now
+// requires a detail the product lacks (editAttrs, shein-listing.js) — else none is sent.
+// Returns { ok, version, messages }.
+export async function sheinSetSellerSkus(spuName, edits, { attributes = null } = {}) {
   const bySkc = new Map();
   for (const e of edits) { const a = bySkc.get(e.skc) || []; a.push({ sku_code: e.skuCode, supplier_sku: e.supplierSku }); bySkc.set(e.skc, a); }
-  const info = await sheinCall('/open-api/goods/product/partialEdit', { spu_name: spuName, skc_list: [...bySkc].map(([skc_name, sku_list]) => ({ skc_name, sku_list })) });
+  const body = { spu_name: spuName, skc_list: [...bySkc].map(([skc_name, sku_list]) => ({ skc_name, sku_list })) };
+  if (Array.isArray(attributes) && attributes.length) body.product_attribute_list = attributes;
+  const info = await sheinCall('/open-api/goods/product/partialEdit', body);
   const messages = (info?.pre_valid_result || []).flatMap((x) => x.messages || []);
   return { ok: info?.success !== false && !messages.length, version: info?.version || null, messages };
 }

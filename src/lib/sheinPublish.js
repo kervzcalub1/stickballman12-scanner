@@ -262,6 +262,47 @@ export function buildAttributes({ parts, defaults = [], assoc = [] }) {
   return { rows, problems };
 }
 
+// An EDIT of a product already on SHEIN (partialEdit: sizes, seller SKUs, sizes back on) is re-checked
+// WHOLE — a detail SHEIN made required after the product was listed (4seller's Nikes lack "Reflection",
+// found 2026-10-28) refuses every edit. product_attribute_list REPLACES the list (doc 3002047 rule 3),
+// so the patch = the product's CURRENT details (spu-info mixes in sale attributes — only the template's
+// product attributes are kept) + each missing required one (status 3 ∪ assoc) from the person's
+// defaults (Setup → SHEIN details), checked like a publish (buildAttributes). Only PICKED values
+// (Reflection: No, not dangerous goods…) — a TYPED one is per shoe (the Product Model default is
+// "Dunk Low"), so a product missing it is blocked, never given another shoe's text.
+// → { list | null (nothing missing: send no list), added: [{attributeId, attribute}], dropped: [ids], problems }.
+export function attributePatch({ spu, template, defaults = [], assoc = [] }) {
+  if (!template?.attribute_infos) return { list: null, added: [], dropped: [], problems: [], unread: true };
+  const parts = templateParts(template);
+  // every product attribute the template still lists, hidden ones (status 1) too: the list replaces SHEIN's
+  const keep = new Set((template.attribute_infos || []).filter((a) => [3, 4].includes(Number(a.attribute_type))).map((a) => Number(a.attribute_id)));
+  const other = new Set((template.attribute_infos || []).filter((a) => [1, 2].includes(Number(a.attribute_type))).map((a) => Number(a.attribute_id)));
+  const cur = new Map(); const dropped = new Set();
+  for (const x of spu?.productAttributeInfoList || []) {
+    const id = Number(x.attributeId);
+    if (!keep.has(id)) { if (!other.has(id)) dropped.add(id); continue; }
+    const row = { attribute_id: id };
+    if (x.attributeValueId != null) row.attribute_value_id = Number(x.attributeValueId);
+    if (trim(x.attributeValue)) row.attribute_extra_value = trim(x.attributeValue);
+    if (row.attribute_value_id == null && row.attribute_extra_value == null) continue;
+    cur.set(stableKey(row), row);
+  }
+  const have = new Set([...cur.values()].map((r) => r.attribute_id));
+  const assocBy = new Map((assoc || []).map((a) => [Number(a.attribute_id), a]));
+  const added = []; const problems = []; const rows = [];
+  for (const a of parts.product) {
+    const id = Number(a.attribute_id);
+    if (have.has(id) || !(Number(a.attribute_status) === 3 || assocBy.has(id))) continue;
+    if (Number(a.attribute_mode) === 0) { problems.push(blocker('missing_attr', { attributeId: id, attribute: a.attribute_name_en || a.attribute_name || String(id), why: 'typed_per_shoe' })); continue; }
+    const at = buildAttributes({ parts: { ...parts, product: [a] }, defaults, assoc: assocBy.has(id) ? [assocBy.get(id)] : [] });
+    if (at.problems.length) { problems.push(...at.problems); continue; }
+    rows.push(...at.rows); added.push({ attributeId: id, attribute: a.attribute_name_en || a.attribute_name || String(id) });
+  }
+  if (!added.length || problems.length) return { list: null, added: problems.length ? [] : added, dropped: [...dropped], problems };
+  return { list: [...cur.values(), ...rows], added, dropped: [...dropped], problems };
+}
+const stableKey = (r) => `${r.attribute_id}|${r.attribute_value_id ?? ''}|${r.attribute_extra_value ?? ''}`;
+
 // fill-in-standard field_keys → what we do (spec §3.2). → { problems, send: { shelfRequire, skcTitle } }
 const HANDLED_KEYS = new Set(['brand_code', 'supplier_code', 'mall_state', 'skc_title', 'shelf_require', 'stop_purchase']);
 export function fillRules(fill) {

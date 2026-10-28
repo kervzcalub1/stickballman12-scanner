@@ -1094,6 +1094,51 @@ test.describe.serial('SHEIN Listings — the page', () => {
     await expect(page).not.toHaveURL(/product=/);
   });
 
+  // docs/context/shein-live-fix.md → "One shoe": Match sizes inside the drawer, then the live fix for
+  // this shoe only. The live endpoint is faked here — a real one-shoe run would call SHEIN.
+  test('Fix SHEIN sizes: “Match sizes” opens it in the drawer; save a choice, dry run THIS shoe; Fix needs the privilege + a fresh dry run', async ({ page }) => {
+    const posted = { links: [], live: [] };
+    let shoe = { ok: true, run: null, items: [], links: [], running: null, walkRunning: false };
+    await page.route('**/api/shein/listings?*', async (r) => {   // the list says whether SHEIN is connected
+      const res = await r.fetch(); const j = await res.json();
+      return r.fulfill({ response: res, json: 'connected' in j ? { ...j, connected: true } : j });
+    });
+    await page.route('**/api/shein/live?shoe=*', (r) => r.fulfill({ json: shoe }));
+    await page.route('**/api/shein/links', (r) => {
+      if (r.request().method() === 'POST') { posted.links.push(r.request().postDataJSON()); return r.fulfill({ json: { ok: true, saved: 1 } }); }
+      return r.fallback();
+    });
+    await page.route('**/api/shein/live', (r) => {
+      if (r.request().method() !== 'POST') return r.fallback();
+      const b = r.request().postDataJSON(); posted.live.push(b);
+      shoe = { ...shoe, run: { id: 91, mode: `shoe:${b.mode}`, status: 'done', phase: 'Finished', started_at: new Date().toISOString(), finished_at: new Date().toISOString(), started_by: 'E2E PH',
+        current: b.spu, counts: { sizes: 2, stock_changed: 0, links_changed: 1, needs_person: 0 } },
+      items: [{ id: 1, shein_sku: 'x', shein_size: 'US9', seller_sku: 'A8', link_to: 'A9', before_qty: 0, target_qty: 0, reason: 'pending_change', result: 'ok', wrote: 'dry', action: 'would change A8 → A9' }] };
+      return r.fulfill({ json: { ok: true, run: shoe.run } });
+    });
+    await page.goto(`/ph/shein-listings?product=${encodeURIComponent(gidP(7701))}`);
+    const drawer = page.getByRole('dialog', { name: 'Product details' });
+    const fix = drawer.locator('[data-shoe-fix]');
+    await expect(fix).toHaveAttribute('open', '');   // a wrong link opens it by itself
+    await drawer.locator('.shl-req', { hasText: 'carries this SKU' }).getByRole('button', { name: 'Match sizes' }).click();   // not the SHEIN check page
+    await expect(page).toHaveURL(/shein-listings/);
+    const us9 = fix.locator('.shl-shoe-match tr', { hasText: 'US9' });
+    await expect(us9).toContainText('wrong size');
+    const sel = us9.getByRole('combobox');
+    await expect(sel.locator('option')).toContainText(['Leave as it is', 'A9 — our size 9', 'Take this size off SHEIN']);   // only the SAME size is offered
+    await expect(sel.locator('option', { hasText: 'our size 8' })).toHaveCount(0);
+    await sel.selectOption('A9');
+    await expect(fix.getByRole('button', { name: 'Dry run this shoe' })).toBeDisabled();   // save first
+    await fix.getByRole('button', { name: 'Save choices (1)' }).click();
+    await expect.poll(() => posted.links.at(-1)?.links?.[0]).toMatchObject({ linkSku: 'A9', decision: 'link', source: 'person', sellerSkuWas: 'A8' });
+    await expect(fix.getByRole('button', { name: 'Fix this shoe' })).toBeDisabled();
+    await fix.getByRole('button', { name: 'Dry run this shoe' }).click();
+    await expect.poll(() => posted.live.at(-1)).toMatchObject({ action: 'shoe', mode: 'dry', productId: gidP(7701) });
+    await expect(fix.locator('[data-shoe-run="done"]')).toContainText('nothing was written');
+    await expect(fix).toContainText('would change A8 → A9');
+    await expect(fix.getByRole('button', { name: 'Fix this shoe' })).toHaveAttribute('title', /admin|Connect integrations/);   // PH: the dry run only
+  });
+
   test('ticked products are not restored by a refresh', async ({ page }) => {
     await page.goto('/ph/shein-listings');
     await page.locator(`.shl-product[data-product="${P7702}"] .shl-chk input`).check();
@@ -1727,7 +1772,11 @@ test.describe.serial('SHEIN Listings Phase 2 — the page (dry run, confirm, pro
     };
     await dryRun(page, [7702, 7704]);
     expect((await sheet(page).boundingBox()).width).toBeLessThanOrEqual(390);
-    for (const n of [7702, 7704]) await item(page, n).getByRole('button', { name: /What is sent/ }).click().catch(() => {});
+    // only the ticked shoes with a size to add are dry-run (2026-10-28) — 7702 was sent and approved above
+    for (const n of [7702, 7704]) {
+      const open = item(page, n).getByRole('button', { name: /What is sent/ });
+      if (await open.count()) await open.click();
+    }
     await noSideScroll('review');
     await shot(page, 'phone-dryrun');
     await expect(sheet(page).getByRole('button', { name: /^Add sizes to/ })).toBeDisabled();
@@ -2660,6 +2709,56 @@ test.describe('SHEIN Listings Phase 4 — the planner (pure)', () => {
   });
 });
 
+test.describe('SHEIN Listings 2026-10-28 — the stock gate, favourite categories, tidy titles (pure)', () => {
+  test('listingSyncGate: inactive or 0 pairs (sizes left off don’t count) → skipped; rowSyncable reads the stored row the same way', async () => {
+    const { listingSyncGate, rowSyncable } = await import('../src/lib/sheinListings.js');
+    const v = (id, qty) => ({ variantId: id, sku: `S${id}`, size: '9', price: '100', qty });
+    expect(listingSyncGate({ status: 'ACTIVE', variants: [v(1, 0), v(2, 1)] })).toBe(null);
+    expect(listingSyncGate({ status: 'ACTIVE', variants: [v(1, 0), v(2, 0)] })?.code).toBe('no_shopify_stock');
+    expect(listingSyncGate({ status: 'ACTIVE', variants: [v(1, 0), v(2, 3)] }, new Set([2]))?.code).toBe('no_shopify_stock');
+    expect(listingSyncGate({ status: 'DRAFT', variants: [v(1, 3)] })).toMatchObject({ code: 'shopify_inactive', params: { status: 'DRAFT' } });
+    expect(listingSyncGate(null)?.code).toBe('shopify_inactive');
+    expect(renderBlocker({ code: 'no_shopify_stock' }).title).toBe('No Shopify stock — not sent to SHEIN.');
+    expect(rowSyncable({ shopify_product_id: gidP(1), shopify_status: 'ACTIVE', counts: { sizes: 2 } })).toBe(true);
+    expect(rowSyncable({ shopify_product_id: gidP(1), shopify_status: 'ACTIVE', counts: { sizes: 0 } })).toBe(false);
+    expect(rowSyncable({ shopify_product_id: gidP(1), shopify_status: 'ARCHIVED', counts: { sizes: 2 } })).toBe(false);
+    expect(rowSyncable({ shopify_product_id: 'shein:X', shopify_status: null, counts: {} })).toBe(false);
+  });
+  test('the publish checklist: line 5 is ✕ for a draft AND for 0 pairs; the readiness keeps “no stock” off the stored sizes', async () => {
+    const { planPublish, publishReadiness } = await import('../src/lib/sheinPublish.js');
+    const prod = (status, qty) => ({ productId: gidP(7790), title: 'Nike X', status, variants: [{ variantId: gidV(779009), sku: 'X9', size: '9', price: '100', qty }] });
+    expect(planPublish({ product: prod('ACTIVE', 0), readiness: true }).checklist.find((l) => l.key === 'shopify')).toMatchObject({ ok: false, label: 'Active on Shopify, with stock' });
+    expect(planPublish({ product: prod('DRAFT', 2), readiness: true }).checklist.find((l) => l.key === 'shopify').ok).toBe(false);
+    expect(planPublish({ product: prod('ACTIVE', 2), readiness: true }).checklist.find((l) => l.key === 'shopify').ok).toBe(true);
+    const r = publishReadiness(prod('ACTIVE', 0), {});
+    expect(r.checklist.find((l) => l.key === 'shopify').ok).toBe(false);
+    expect(r.productBlockers.map((b) => b.code)).not.toContain('no_shopify_stock');   // a sold-out shoe isn't “Blocked” on the list
+  });
+  test('favouriteLeaves: men / women / kids by whole PATH words (Women is not men); a favourite SHEIN’s tree lacks is left out', async () => {
+    const { favouriteLeaves, FAVOURITE_CATEGORIES } = await import('../src/lib/sheinPublish.js');
+    expect(FAVOURITE_CATEGORIES.map((f) => f.key)).toEqual(['men_casual_athletic', 'women_casual_athletic', 'kids_sneakers']);
+    const leaves = [
+      { categoryId: 1, path: 'Shoes › Women Shoes › Women Sneakers › Women Casual Athletic Shoes' },
+      { categoryId: 2, path: 'Shoes › Men Shoes › Men Sneakers › Men Casual Athletic Shoes' },
+      { categoryId: 3, path: 'Kids › Kids Shoes › Boys Shoes › Kids Sneakers' },
+      { categoryId: 4, path: 'Kids › Girls Shoes › Girls Casual Athletic Shoes' },          // kids — never the women's / men's favourite
+      { categoryId: 5, path: 'Shoes › Men Shoes › Men Boots' },
+      { categoryId: 6, path: 'Shoes › Women’s Shoes › Sneakers' },
+    ];
+    const f = Object.fromEntries(favouriteLeaves(leaves).map((x) => [x.key, x.leaves.map((l) => l.categoryId)]));
+    expect(f).toEqual({ men_casual_athletic: [2], women_casual_athletic: [1], kids_sneakers: [3] });
+    expect(favouriteLeaves([{ categoryId: 9, path: 'E2E Shoes › E2E Men’s Sneakers' }])).toEqual([]);   // not in this tree → nothing shown
+    expect(favouriteLeaves(null)).toEqual([]);
+  });
+  test('tidyTitle: spaces + emoji out; cut at the last whole word within SHEIN’s limit only when it is known', async () => {
+    const { tidyTitle } = await import('../src/lib/sheinPublish.js');
+    expect(tidyTitle('  Nike  Air Max 👟 95  ')).toBe('Nike Air Max 95');
+    expect(tidyTitle('Nike Air Max 95 Essential Triple White Men Running Shoes', 30)).toBe('Nike Air Max 95 Essential');
+    expect(tidyTitle('Nike Air Max 95', 60)).toBe('Nike Air Max 95');
+    expect(tidyTitle('Nike Air Max 95 Essential Triple White', null)).toBe('Nike Air Max 95 Essential Triple White');
+  });
+});
+
 test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fake SHEIN)', () => {
   let L; let D; let auth; let png; let small; const hosted = []; const stocked = []; const savedRows = {}; let started;
   const items = async (jobId) => (await D.listListingJobItems(jobId, { limit: 1000 })).map((i) => ({ ...i, n: Number(i.shopify_product_id.split('/').pop()) }));
@@ -3047,7 +3146,8 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await expect(line(page, 'box')).toContainText('placeholders nobody confirmed');
     await expect(line(page, 'box').getByRole('button', { name: 'Confirm box sizes' })).toBeVisible();
     await expect(line(page, 'photos').getByRole('checkbox', { name: /Use PH edited photos/ })).not.toBeChecked();
-    await expect(dr.getByRole('button', { name: 'Publish new product' })).toBeEnabled();
+    // the safety net (2026-10-28): ✕ lines left → the button says so (it shows them, never a dry run)
+    await expect(dr.locator('[data-dry="publish"]')).toHaveText(/^Fix \d+ first$/, { timeout: 10_000 });
     await expect(dr.getByRole('button', { name: 'Add missing sizes' })).toHaveCount(0);
     await shot(page, 'desktop-publish-drawer');
     // Choose category: SHEIN suggests one from the photo (a read); searchable by path; saved per Shopify type + size group
@@ -3088,7 +3188,22 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await page.goto('/ph/shein-listings');
     await page.locator(`.shl-product[data-product="${gidP(7708)}"] .shl-chk input`).check();
     await expect(page.locator('.shl-bar [data-dry="add"]')).toBeDisabled();
-    await page.locator('.shl-bar').getByRole('button', { name: /^Publish new products/ }).click();
+    // the safety net (2026-10-28): a ticked new shoe with ✕ lines opens the fix step (bulk edit) — never the dry run
+    const before = posted.length;
+    await page.locator('.shl-bar [data-dry="publish"]').click();
+    const bs = page.getByRole('dialog', { name: 'Bulk edit before publishing' });
+    await expect(bs.locator('[data-fix-first]')).toContainText('can’t be published yet', { timeout: 10_000 });
+    await expect(bs.locator(`[data-bulk-row="${gidP(7708)}"] [data-chip="box"]`)).toBeVisible();
+    await expect(bs.locator('[data-dry="publish-ready"]')).toBeDisabled();
+    expect(posted.slice(before).filter((b) => b.action === 'preview')).toEqual([]);
+    await bs.locator('.shl-d-foot').getByRole('button', { name: 'Close' }).click();
+    // the server stays the last guard: “Dry run anyway” from the drawer → the dry run refuses it line by line
+    await page.goto(`/ph/shein-listings?product=${encodeURIComponent(gidP(7708))}`);
+    await expect(drawer(page).locator('[data-dry="publish"]')).toHaveText(/^Fix \d+ first$/, { timeout: 10_000 });
+    await drawer(page).locator('[data-dry="publish"]').click();
+    await expect(drawer(page).locator('[data-fix-first]')).toContainText('nothing was sent or dry-run');
+    expect(posted.slice(before).filter((b) => b.action === 'preview')).toEqual([]);
+    await drawer(page).locator('[data-act="dry-anyway"]').click();
     await expect(sheet(page).locator('[data-proof]')).toBeVisible({ timeout: 20_000 });
     expect(posted.at(-1)).toMatchObject({ action: 'preview', ops: ['publish'], productIds: [gidP(7708)] });
     await expect(sheet(page).locator('.shl-sheet-head')).toContainText('Publish new products — what WOULD be sent');
@@ -3266,7 +3381,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await expect(b).toContainText('SHEIN won’t take new listings: KYC not finished.');
     await expect(b).toContainText('Dry runs still work');
     await page.locator(`.shl-product[data-product="${gidP(7709)}"] .shl-chk input`).check();
-    await expect(page.locator('.shl-bar').getByRole('button', { name: /^Publish new products/ })).toBeEnabled();
+    await expect(page.locator('.shl-bar [data-dry="publish"]')).toBeEnabled();
     await page.getByRole('tab', { name: /Setup/ }).click();
     await expect(page.locator('[data-setup="gates"]')).toContainText('SHEIN said: “KYC not finished”');
     await shot(page, 'desktop-publish-gates');
@@ -3294,11 +3409,135 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await page.goto('/ph/shein-listings');
     await page.locator(`.shl-product[data-product="${gidP(7709)}"] .shl-chk input`).check();
     await noSideScroll(page, 'bar');
-    await page.locator('.shl-bar').getByRole('button', { name: /^Publish new products/ }).click();
+    await page.locator('.shl-bar [data-dry="publish"]').click();   // 7709 is ready by now → straight to the dry run
     await expect(sheet(page).locator('[data-proof]')).toBeVisible({ timeout: 20_000 });
     await expect(item(page, 7709).locator('[data-plan="publish"]')).toBeVisible();
     await noSideScroll(page, 'publish dry run');
     await shot(page, 'phone-publish-dryrun');
+  });
+
+  /* ---- 2026-10-28: bulk edit before publishing · the Shopify active / inactive filter · the listing syncs' stock gate ---- */
+  const logCount = async () => (await pool.query(`SELECT count(*)::int AS n FROM shein_api_log`)).rows[0].n;
+  const whAuth = async () => { const { signToken } = await import('../api/_lib/util.js'); return { Authorization: `Bearer ${signToken({ uid: 'e2e-wh', username: 'e2e_wh', name: 'E2E Warehouse', role: 'warehouse' })}` }; };
+
+  test('bulk edit: GET ?publishSetup= — PH ok, ≤ 100, one row per shoe not on SHEIN with its checklist; the rest left out with why; DB only', async ({ request }) => {
+    const n0 = await logCount(); const w0 = fake.writes.length;
+    const url = (ids) => `/api/shein/listings?publishSetup=${encodeURIComponent(ids.join(','))}`;
+    expect((await request.get(url([gidP(7709)]))).status()).toBe(401);
+    expect((await request.get(url([gidP(7709)]), { headers: await whAuth() })).status()).toBe(403);
+    expect((await request.get('/api/shein/listings?publishSetup=', { headers: auth.ph })).status()).toBe(400);
+    const tooMany = Array.from({ length: 101 }, (_, i) => gidP(990000 + i));
+    const r101 = await request.get(url(tooMany), { headers: auth.ph });
+    expect(r101.status()).toBe(400);
+    expect((await r101.json()).error).toMatch(/At most 100/);
+    const r = await request.get(url([gidP(7709), gidP(7705), gidP(7708), gidP(7706), gidP(999999)]), { headers: auth.ph });
+    expect(r.status()).toBe(200);
+    const j = await r.json();
+    const by = new Map(j.products.map((p) => [p.productId, p]));
+    expect([...by.keys()].sort()).toEqual([gidP(7705), gidP(7706), gidP(7709)].sort());
+    expect(j.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ productId: gidP(7708), why: expect.stringMatching(/already on SHEIN/) }),
+      expect.objectContaining({ productId: gidP(999999), why: expect.stringMatching(/not in SHEIN Listings/) })]));
+    const p9 = by.get(gidP(7709));
+    expect(p9).toMatchObject({ productType: 'E2E Sneakers', vendor: 'E2E Nike', sizeGroups: ['adult'], syncable: true, productTypeId: P4TYPE,
+      category: expect.objectContaining({ categoryId: P4CAT }), usePhPhotos: false });
+    expect(p9.checklist).toHaveLength(18);
+    expect(p9.blocking).toEqual(p9.checklist.filter((l) => l.ok === false).map((l) => l.key));
+    // a draft shoe: listed, but never ready — the "Active on Shopify, with stock" line says why
+    const p6 = by.get(gidP(7706));
+    expect(p6).toMatchObject({ syncable: false, ready: false });
+    expect(p6.checklist.find((l) => l.key === 'shopify').ok).toBe(false);
+    // the shoes that need fixing come first
+    const firstReady = j.products.findIndex((p) => p.ready);
+    if (firstReady >= 0) expect(j.products.slice(firstReady).every((p) => p.ready)).toBe(true);
+    expect(await logCount()).toBe(n0); expect(fake.writes.length).toBe(w0);
+  });
+
+  test('bulk edit: publish_choices_bulk — ≤ 100, publish_choices’ validation, a colour only within ONE SHEIN product type; PH ok; DB only', async ({ request }) => {
+    const n0 = await logCount(); const w0 = fake.writes.length;
+    const act = async (data, headers = auth.ph) => { const r = await request.post('/api/shein/listings', { headers, data: { action: 'publish_choices_bulk', ...data } }); return { status: r.status(), body: await r.json() }; };
+    expect((await act({ productIds: [gidP(7709)], patch: { usePhPhotos: true } }, await whAuth())).status).toBe(403);
+    expect((await act({ productIds: Array.from({ length: 101 }, (_, i) => gidP(990000 + i)), patch: { usePhPhotos: true } })).status).toBe(400);
+    expect((await act({ productIds: [gidP(7709)], patch: {} })).status).toBe(400);                                         // nothing to save
+    expect((await act({ productIds: [gidP(7709)], patch: { titleOverride: 'Same for all' } })).body.error).toMatch(/per shoe/);
+    expect((await act({ titles: { [gidP(7709)]: 'x' } })).body.error).toMatch(/at least 2 characters/);
+    expect((await act({ productIds: [gidP(7709)], patch: { skcValueId: 'abc' } })).body.error).toMatch(/SHEIN value id/);
+    expect((await act({ productIds: [gidP(7709)], patch: { skcValueId: 901 } })).body.error).toMatch(/productTypeId/);
+    const mixed = await act({ productIds: [gidP(7709), gidP(7705)], patch: { skcValueId: 901 }, productTypeId: P4TYPE });   // 7705 is a “Shoes” shoe with no category
+    expect(mixed.status).toBe(400);
+    expect(mixed.body.error).toMatch(/per product type/);
+    expect((await act({ productIds: [gidP(7709)], patch: { skcValueId: 999 }, productTypeId: P4TYPE })).body.error).toMatch(/isn’t in SHEIN’s list/);
+    const row = async (n) => (await pool.query(`SELECT use_ph_photos, skc_value_id, title_override FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(n)])).rows[0];
+    // the same patch on many shoes
+    const ok = await act({ productIds: [gidP(7709), gidP(7705)], patch: { usePhPhotos: true } });
+    expect(ok.status).toBe(200);
+    expect(ok.body.updated.sort()).toEqual([gidP(7705), gidP(7709)].sort());
+    expect((await row(7709)).use_ph_photos).toBe(true); expect((await row(7705)).use_ph_photos).toBe(true);
+    expect((await act({ productIds: [gidP(7709)], patch: { skcValueId: 901 }, productTypeId: P4TYPE })).status).toBe(200);
+    expect((await row(7709)).skc_value_id).toBe('901');
+    // titles are one per shoe, cleaned like publish_choices; null = back to Shopify’s
+    expect((await act({ titles: { [gidP(7709)]: '  Nike Dunk  Low Panda 👟 ' } })).status).toBe(200);
+    expect((await row(7709)).title_override).toBe('Nike Dunk Low Panda');
+    // put it all back
+    expect((await act({ productIds: [gidP(7709), gidP(7705)], patch: { usePhPhotos: false, skcValueId: null }, titles: { [gidP(7709)]: null } })).status).toBe(200);
+    expect(await row(7709)).toEqual({ use_ph_photos: false, skc_value_id: null, title_override: null });
+    expect(await logCount()).toBe(n0); expect(fake.writes.length).toBe(w0);
+  });
+
+  test('the Shopify filter: ?shopify=active | inactive (+ counts for the same filters); anything else 400', async ({ request }) => {
+    const get = async (qs) => { const r = await request.get(`/api/shein/listings?status=all&pageSize=200${qs}`, { headers: auth.ph }); expect(r.status()).toBe(200); return r.json(); };
+    const all = await get(''); const on = await get('&shopify=active'); const off = await get('&shopify=inactive');
+    expect(on.total + off.total).toBe(all.total);
+    expect(all.shopifyCounts).toEqual({ active: on.total, inactive: off.total });
+    expect(on.shopifyCounts).toEqual(all.shopifyCounts);
+    for (const p of on.products) { expect(p.shopify_status).toBe('ACTIVE'); expect(p.shopify_product_id.startsWith('shein:')).toBe(false); }
+    expect(on.products.map((p) => p.shopify_product_id)).toContain(gidP(7709));
+    expect(off.products.map((p) => p.shopify_product_id)).toContain(gidP(7706));   // draft
+    expect((await request.get('/api/shein/listings?shopify=maybe', { headers: auth.ph })).status()).toBe(400);
+  });
+
+  test('the listing syncs skip a shoe with 0 pairs on Shopify (publish, add sizes, update) — before any SHEIN read for it; nothing written', async () => {
+    const zero = () => P4UI().map((p) => ([gidP(7709), gidP(7701)].includes(p.productId) ? { ...p, variants: p.variants.map((v) => ({ ...v, qty: 0 })) } : p));
+    const ioZ = () => ({ ...p2IO(L.IO, { shopify: zero }), recentShelf: async () => new Set(), fetchImage: async () => png, hostImage: async (key) => `https://r2.e2e.test/${key}` });
+    const w0 = fake.writes.length;
+    for (const [n, ops] of [[7709, ['publish']], [7701, ['add_sku']], [7701, ['price', 'edit']]]) {
+      const j = await L.startListingJob({ kind: 'preview', by: 'e2e-p4ui', scope: { productIds: [gidP(n)], ops }, io: ioZ() });
+      jobsMade.add(j.id); const done = await finished(j.id);
+      expect(done.status, ops.join('+')).toBe('done');                                   // nothing to send
+      const its = await D.listListingJobItems(j.id, { limit: 100 });
+      expect(its).toHaveLength(ops.length);
+      for (const it of its) {
+        expect(it.status).toBe('skipped');
+        expect((it.blockers || []).map((b) => b.code)).toContain('no_shopify_stock');
+        if (it.op === 'publish') expect(it.plan.checklist.find((l) => l.key === 'shopify')).toMatchObject({ ok: false });
+        else expect((await pool.query(`SELECT count(*)::int AS n FROM shein_api_log WHERE item_id = $1`, [it.id])).rows[0].n).toBe(0);
+      }
+    }
+    expect(fake.writes.length).toBe(w0);
+  });
+
+  test('390 px: the Shopify filter, “Bulk edit”, and the bulk sheet (fix step) — no horizontal scroll; the filter survives a refresh', async ({ page }) => {
+    await loginAs(page, 'ph_team');
+    await routeWrites(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/ph/shein-listings');
+    await page.locator('[data-shopfilter] [data-shop="active"]').click();
+    await expect(page).toHaveURL(/[?&]shop=active/);
+    await page.reload();
+    await expect(page.locator('[data-shopfilter] [data-shop="active"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('[data-shopfilter] [data-shop="active"] .seg-n')).toHaveText(/\d/);
+    await noSideScroll(page, 'shopify filter');
+    await page.locator(`.shl-product[data-product="${gidP(7709)}"] .shl-chk input`).check();
+    await page.locator(`.shl-product[data-product="${gidP(7705)}"] .shl-chk input`).check();
+    const before = posted.length;
+    await page.locator('.shl-bar [data-bar="bulk"]').click();
+    const bs = page.getByRole('dialog', { name: 'Bulk edit before publishing' });
+    await expect(bs.locator('[data-bulk-row]')).toHaveCount(2, { timeout: 10_000 });
+    await expect(bs.locator('[data-bulk-fixes] [data-fix="category"]')).toBeVisible();
+    await expect(bs.locator('[data-dry="publish-ready"]')).toHaveText(/^Dry run publish \(\d+ ready\)$/);
+    await noSideScroll(page, 'bulk sheet');
+    await shot(page, 'phone-bulk-sheet');
+    expect(posted.slice(before).filter((b) => b.action === 'preview')).toEqual([]);   // opening it starts nothing
   });
 });
 

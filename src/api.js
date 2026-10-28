@@ -337,6 +337,7 @@ export const api = {
   sheinLive: () => get('/api/shein/live'),
   sheinLiveAllItems: (runId) => get(`/api/shein/live?run=${encodeURIComponent(runId)}&all=1`),
   sheinLiveAction: (body) => post('/api/shein/live', body),
+  sheinShoe: (spu) => get(`/api/shein/live?shoe=${encodeURIComponent(spu)}`),
   // SHEIN Listings (docs/context/shein-listings.md). Nothing here writes to SHEIN in Phase 1.
   sheinListings: (params = {}) => {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
@@ -344,6 +345,8 @@ export const api = {
   },
   sheinListingProduct: (id) => get(`/api/shein/listings?product=${encodeURIComponent(id)}`),
   sheinListingProbe: () => get('/api/shein/listings?probe=1'),
+  // Bulk edit before publishing: the checklist + inputs of ≤ 100 products not on SHEIN (DB only).
+  sheinPublishSetup: (ids) => get(`/api/shein/listings?publishSetup=${encodeURIComponent(ids.join(','))}`),
   sheinListingAction: (body) => post('/api/shein/listings', body),
   sheinListingJobs: (page = 1) => get(`/api/shein/listing-jobs?page=${page}`),
   sheinListingJob: (id, page = 1) => get(`/api/shein/listing-jobs?id=${encodeURIComponent(id)}&page=${page}`),

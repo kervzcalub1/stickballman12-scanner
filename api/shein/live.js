@@ -1,17 +1,21 @@
 // GET  /api/shein/live            -> { ok, connected, run, items (first 3,000), itemsTotal, sync, units, unitCounts, pushes, worker }
 // GET  /api/shein/live?run=<id>&all=1 -> { ok, items } — EVERY row of that run (the CSV)
+// GET  /api/shein/live?shoe=<SPU>      -> { ok, run, items, links, running, walkRunning } — that shoe's latest one-shoe run
+//                                         and the Match-sizes decisions on its SHEIN sizes
 // POST /api/shein/live { action }:
 //   start { mode: dry|stock|full, ai }   walk every SHEIN product, one at a time
 //   stop                                 stop after the current product
 //   orders_on { openAtStart } | orders_off   SHEIN sales → Shopify (admin)
 //   push_on | push_off                   Shopify stock changes → SHEIN (admin; registers Shopify's webhook)
 //   retry                                retry SHEIN sales that failed to leave Shopify
+//   shoe { spu, mode: dry|full, productId? }  ONE SHEIN product (SHEIN Listings → Details): dry = PH;
+//                                        full writes seller SKUs + stock = admin or Connect integrations
 // docs/context/shein-live-fix.md. PH + admin; the two switches that change how SHOPIFY's
 // stock moves are admin-only.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, latestSheinLiveRun, listSheinLiveItems, countSheinLiveItems, recentSheinUnits, sheinUnitCounts, recentSheinPushes, requestSheinLiveStop } from '../_lib/db.js';
+import { dbConfigured, latestSheinLiveRun, listSheinLiveItems, countSheinLiveItems, recentSheinUnits, sheinUnitCounts, recentSheinPushes, requestSheinLiveStop, listSheinLinks } from '../_lib/db.js';
 import { sheinStatus } from '../_lib/shein.js';
-import { startWalk, walkActive, heartbeat, MODES } from '../_lib/shein-live.js';
+import { startWalk, walkActive, heartbeat, MODES, startShoe, shoeActive, latestShoeRun } from '../_lib/shein-live.js';
 import { readSync, writeSync, switchOn, switchOff, actOnUnits } from '../_lib/shein-orders.js';
 import { sheinWorkerEnabled } from '../_lib/shein-worker.js';
 import { hasPrivilege } from '../_lib/buycart.js';
@@ -31,6 +35,14 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     // The CSV wants the whole run; the page's live refresh stays capped (a full run is 4,000+ rows).
     const qs = new URL(req.url, 'http://x').searchParams;
+    if (qs.has('shoe')) {
+      const spu = String(qs.get('shoe') || '').trim();
+      if (!/^[A-Za-z0-9_-]{3,60}$/.test(spu)) return send(res, 400, { ok: false, error: 'That isn’t a SHEIN SPU.' });
+      await heartbeat();
+      const [run, walk, links] = await Promise.all([latestShoeRun(spu), latestSheinLiveRun(), listSheinLinks()]);
+      return send(res, 200, { ok: true, run, items: run ? await listSheinLiveItems(run.id, 500) : [], links: links.filter((l) => l.spu === spu),
+        running: shoeActive()?.spu || null, walkRunning: walk?.status === 'running' });
+    }
     if (qs.get('all') === '1') {
       const runId = Number(qs.get('run'));
       if (!Number.isInteger(runId) || runId < 1) return send(res, 400, { ok: false, error: 'Which run?' });
@@ -50,6 +62,14 @@ export default async function handler(req, res) {
     switch (b.action) {
       case 'start': {
         const run = await startWalk({ mode: String(b.mode || 'dry'), by, ai: b.ai !== false });
+        return send(res, 200, { ok: true, run });
+      }
+      case 'shoe': {
+        const mode = String(b.mode || 'dry');
+        if (mode === 'full' && !isAdmin(user) && !(await hasPrivilege(user, 'connect_integrations')))
+          return send(res, 403, { ok: false, error: 'Fixing a shoe on SHEIN needs an admin, or the “Connect integrations” privilege. The dry run is open to everyone.' });
+        const pid = typeof b.productId === 'string' && /^gid:\/\/shopify\/Product\/\d+$/.test(b.productId) ? b.productId : null;
+        const run = await startShoe({ spu: b.spu, mode, by, productIds: pid ? [pid] : [] });
         return send(res, 200, { ok: true, run });
       }
       case 'stop': {

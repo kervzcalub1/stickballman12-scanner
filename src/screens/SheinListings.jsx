@@ -8,7 +8,7 @@
 // (checklist in the drawer, the Setup tab for what is set once, a store-gate banner when SHEIN
 // refuses new listings).
 //
-// URL (refresh-proof, src/lib/urlstate.js): tab · status · q · brand · blocker · p · product ·
+// URL (refresh-proof, src/lib/urlstate.js): tab · status · q · brand · blocker · shop (active|inactive on Shopify) · p · product ·
 // job · sz · pt (Setup). Never in the URL: ticked products, the custom-size draft, the dry-run sheet.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -40,12 +40,14 @@ export function SheinListings({ user, onHome, onSignOut }) {
   const [q, setQ] = useQueryParam('q', '');
   const [brand, setBrand] = useQueryParam('brand', '');
   const [blocker, setBlocker] = useQueryParam('blocker', '');
+  const [shopRaw, setShop] = useQueryParam('shop', '');   // Shopify: '' all · active (in stock) · inactive (or no stock)
   const [pRaw, setP] = useQueryParam('p', '');
   const [product, setProduct] = useQueryParam('product', '');
   const [job, setJob] = useQueryParam('job', '');
   const [sz, setSz] = useQueryParam('sz', '');
   // A hand-edited ?status= that isn't a code falls back to All instead of a 400.
   const status = STATUS_CODES.includes(statusRaw) || statusRaw === 'all' ? statusRaw : '';
+  const shop = ['active', 'inactive'].includes(shopRaw) ? shopRaw : '';
   const page = Math.max(1, Number(pRaw) || 1);
   const tabKey = ['sizes', 'jobs', 'setup'].includes(tab) ? tab : 'products';
 
@@ -62,7 +64,7 @@ export function SheinListings({ user, onHome, onSignOut }) {
   async function load() {
     const mine = ++seq.current;
     try {
-      const r = await api.sheinListings({ status, q, brand, blocker, page, pageSize: PAGE_SIZE });
+      const r = await api.sheinListings({ status, q, brand, blocker, shopify: shop, page, pageSize: PAGE_SIZE });
       if (mine !== seq.current) return;
       setD(r); setErr(''); setLoadedAt(new Date().toISOString());
     } catch (e) {
@@ -70,7 +72,7 @@ export function SheinListings({ user, onHome, onSignOut }) {
       else if (mine === seq.current) setErr(e.message);
     }
   }
-  useEffect(() => { load(); }, [status, q, brand, blocker, page]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [status, q, brand, blocker, shop, page]); // eslint-disable-line react-hooks/exhaustive-deps
   const active = d?.summary?.activeJob || null;
   useLive(LISTING_TABLES, load, { mount: false, every: active ? 5_000 : 60_000 });
 
@@ -233,7 +235,7 @@ export function SheinListings({ user, onHome, onSignOut }) {
 
       {d && !neverRead && tabKey === 'products' && (
         <SheinListingsProducts setStatusAll={() => pickStatus('')} d={d} status={status} q={q} setQ={(v) => { setQ(v); setP(''); }} brand={brand} setBrand={(v) => { setBrand(v); setP(''); }}
-          blocker={blocker} setBlocker={(v) => { setBlocker(v); setP(''); }} page={page} setPage={(n) => setP(n > 1 ? String(n) : '')} pageSize={PAGE_SIZE}
+          blocker={blocker} setBlocker={(v) => { setBlocker(v); setP(''); }} shop={shop} setShop={(v) => { setShop(v); setP(''); }} page={page} setPage={(n) => setP(n > 1 ? String(n) : '')} pageSize={PAGE_SIZE}
           onOpen={(id) => setProduct(id)} onAct={act} busy={busy} onSignOut={onSignOut} active={active} onDryRun={dryRun} />
       )}
       {d && tabKey === 'sizes' && (

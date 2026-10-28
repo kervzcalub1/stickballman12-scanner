@@ -4,10 +4,11 @@
 // server now). Spec: scratchpad plan/phase4-spec.md (API specialist, 2026-10-27); docs/shein-listings-plan.md
 // §3 Phase 4, §4.2 blockers 11–19, D4/D5/D6/D7/D12. No I/O, no clock — it runs in the browser too.
 import { parseSize } from './sheinCheck.js';
-import { blocker, BLOCKERS, resolveSize, validateCustomText, customTextConflict, sheinNewSizePrice, templateSizes, sizeSort, renderBlocker } from './sheinListings.js';
+import { blocker, BLOCKERS, listingSyncGate, resolveSize, validateCustomText, customTextConflict, sheinNewSizePrice, templateSizes, sizeSort, renderBlocker } from './sheinListings.js';
 
 const trim = (v) => String(v ?? '').trim();
-const isBlocking = (b) => !['note', 'review'].includes(BLOCKERS[b.code]?.level);
+// shopify_inactive is a NOTE on the list (the product reads "Not listing"), but it never publishes (2026-10-28).
+const isBlocking = (b) => b.code === 'shopify_inactive' || !['note', 'review'].includes(BLOCKERS[b.code]?.level);
 // SHEIN's own range (doc 3002018 custom-value note: [\uD83C-\uDBFF\uDC00-\uDFFF\u2600-\u27ff]) + variation selectors — review S3
 const EMOJI_ALL = /[\u{1F000}-\u{1FFFF}\u{10000}-\u{10FFFF}\u2600-\u27FF\uFE0F]|[\uD800-\uDFFF]/gu;
 
@@ -99,6 +100,59 @@ export function validateImperialBox(draft) {
 
 // Shopify title → SHEIN name: trimmed, single spaces, no emoji.
 export const cleanTitle = (t) => trim(String(t ?? '').replace(EMOJI_ALL, '').replace(/\s+/g, ' '));
+// Bulk edit's "Tidy titles" (2026-10-28): the title SHEIN would get — cleanTitle, and when SHEIN's limit
+// is known and it's over, cut at the last whole word that fits (no dangling punctuation). Nothing else
+// is rewritten: a person reads the preview and applies it (it saves title_override, Shopify unchanged).
+export function tidyTitle(title, max = null) {
+  let t = cleanTitle(title);
+  const m = Number(max) || 0;
+  if (m > 1 && t.length > m) {
+    const cut = t.slice(0, m + 1);
+    const sp = cut.lastIndexOf(' ');
+    t = (sp > m * 0.5 ? cut.slice(0, sp) : t.slice(0, m)).replace(/[\s,;:/(\-–—]+$/, '').trim();
+  }
+  return t;
+}
+
+// The categories the team uses most (2026-10-28, the user): shown on TOP of the category picker. Matched
+// in SHEIN's own tree by the PATH's words (never a hard-coded id): the leaf name carries `leaf`, and the
+// audience is read per word of every path segment — "Women" is not "men" (whole words, not substrings).
+export const FAVOURITE_CATEGORIES = [
+  { key: 'men_casual_athletic', label: 'Men’s Casual Athletic Shoes', who: 'men', leaf: ['casual', 'athletic'] },
+  { key: 'women_casual_athletic', label: 'Women’s Casual Athletic Shoes', who: 'women', leaf: ['casual', 'athletic'] },
+  { key: 'kids_sneakers', label: 'Kids’ Sneakers', who: 'kids', leaf: ['sneakers'] },
+];
+const AUDIENCE = {
+  men: ['men', 'mens', 'man', 'male'],
+  women: ['women', 'womens', 'woman', 'ladies', 'lady', 'female'],
+  kids: ['kids', 'kid', 'children', 'childrens', 'child', 'boys', 'boy', 'girls', 'girl', 'baby', 'babies', 'toddler', 'toddlers', 'youth', 'teen', 'teens'],
+};
+const words = (seg) => String(seg || '').toLowerCase().replace(/[’'`]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+const singular = (w) => (w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w);
+// → [{ key, label, leaves:[leaf…] }] for the favourites found (≤ 2 leaves each, the closest first); a
+// favourite SHEIN's tree doesn't have is left out.
+export function favouriteLeaves(leaves = []) {
+  const out = [];
+  for (const f of FAVOURITE_CATEGORIES) {
+    const hits = [];
+    for (const l of leaves || []) {
+      const segs = String(l?.path || '').split('›').map((x) => x.trim()).filter(Boolean);
+      if (!segs.length) continue;
+      const leafW = words(segs.at(-1)).map(singular);
+      if (!f.leaf.every((w) => leafW.includes(singular(w)))) continue;
+      const all = new Set(segs.flatMap(words));
+      const has = (who) => AUDIENCE[who].some((w) => all.has(w));
+      const ok = f.who === 'kids' ? has('kids') : f.who === 'women' ? has('women') && !has('kids') : has('men') && !has('women') && !has('kids');
+      if (!ok) continue;
+      const named = AUDIENCE[f.who].some((w) => words(segs.at(-1)).includes(w));   // "Men Casual Athletic Shoes" beats a deeper generic leaf
+      hits.push({ l, score: (named ? 0 : 100) + segs.length });
+    }
+    hits.sort((a, b) => a.score - b.score || String(a.l.path).localeCompare(String(b.l.path)));
+    if (hits.length) out.push({ key: f.key, label: f.label, leaves: hits.slice(0, 2).map((h) => h.l) });
+  }
+  return out;
+}
+
 // Shopify descriptionHtml → plain text (doc: "请不要输入html内容"): block tags → new lines, entities
 // decoded, emoji / surrogates dropped, whitespace collapsed, cut to 5000 at a sentence / word boundary.
 export function cleanDescription(html, max = 5000) {
@@ -237,7 +291,7 @@ const LINES = [
   [2, 'quota', 'Publish quota', ['publish_quota_used']],
   [3, 'shelf', 'Shelf quota', ['shelf_quota_full']],
   [4, 'site', 'Selling on shein-us', ['store_cannot_publish:no_us_site', 'no_warehouse']],
-  [5, 'shopify', 'Active on Shopify', ['shopify_inactive']],
+  [5, 'shopify', 'Active on Shopify, with stock', ['shopify_inactive', 'no_shopify_stock']],
   [6, 'category', 'Category picked', ['no_category', 'mixed_size_groups']],
   [7, 'brand', 'Brand', ['brand_not_authorized', 'brand_unset', 'brand_none', 'brand_list_unread']],
   [8, 'title', 'Title', ['title_too_long', 'language_not_en']],
@@ -312,6 +366,8 @@ export function planPublish(input) {
 
   // 1B-1 · Shopify
   if (String(product.status || '').toUpperCase() !== 'ACTIVE') blockers.push(blocker('shopify_inactive', { status: product.status || null }));
+  // the listing syncs' gate (2026-10-28): an active shoe with 0 pairs on Shopify isn't published
+  else if (listingSyncGate(product, productRow.excludedVariants || new Set())) blockers.push(blocker('no_shopify_stock', {}));
   const variants = (product.variants || []).filter((v) => !(productRow.excludedVariants || new Set()).has(v.variantId));
   const groups = [...new Set(variants.map((v) => sizeGroupOf(v.size)).filter(Boolean))];
   plan.sizeGroup = groups.length === 1 ? groups[0] : null;
@@ -510,7 +566,8 @@ export function publishReadiness(product, ctx = {}) {
     sizeFor.set(x.variantId, { key: null, kind: null, valueId: null, label: null, source: null, blocker: ['note', 'review'].includes(level) ? null : x.blocker, note: ['note', 'review'].includes(level) ? x.blocker : null });
   }
   const seen = new Set();
-  const productBlockers = [...plan.blockers, ...plan.notes].filter((b) => !VARIANT_CODES.has(b.code) && !seen.has(`${b.code}:${b.params?.why || ''}`) && seen.add(`${b.code}:${b.params?.why || ''}`));
-  return { productBlockers, sizeFor, category, checklist };
+  // no_shopify_stock stays on the checklist (line 5) but NOT on the stored sizes: a sold-out shoe isn't "Blocked" on the list
+  const productBlockers = [...plan.blockers, ...plan.notes].filter((b) => b.code !== 'no_shopify_stock' && !VARIANT_CODES.has(b.code) && !seen.has(`${b.code}:${b.params?.why || ''}`) && seen.add(`${b.code}:${b.params?.why || ''}`));
+  return { productBlockers, sizeFor, category, checklist, titleMax: plan.title?.max ?? null, titleMaxRead: !!(ctx.fills && category && ctx.fills.get(category.categoryId)), sizeGroup: plan.sizeGroup ?? null };
 }
 

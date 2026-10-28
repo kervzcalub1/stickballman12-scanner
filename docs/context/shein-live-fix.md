@@ -130,6 +130,30 @@ One SHEIN **SKC** = one shoe (a colour, all its sizes). After each product's sto
   and no longer count as "need a person". Run tiles: shoes delisted / listed again / sent to
   delete / deleted / delete refused / didn't go through.
 
+## 5. One shoe (SHEIN Listings → Details → "Fix SHEIN sizes"; `startShoe` in `shein-live.js`)
+The walk's own `stepProduct` for ONE SHEIN product, without the store-wide scan (seconds, not the
+whole store). Built 2026-10-28: a wrong-link "Match sizes" used to send a person to the check page,
+where the only button was the full dry run.
+- The drawer (`src/components/SheinShoeFix.jsx`) lists the product's SHEIN sizes; per size a person
+  picks the SAME-size Shopify SKU it should carry, or "Take this size off SHEIN" → `shein_links`
+  (`POST /api/shein/links`, which now recounts SHEIN Listings at once — DB only).
+- `POST /api/shein/live { action:'shoe', spu, mode:'dry'|'full', productId }` — dry = PH; full
+  (seller SKUs + stock, read back) = admin or Connect integrations. The drawer enables Fix only after
+  a done dry run of that SPU < 30 min old and newer than the last Match-sizes save.
+  `GET ?shoe=<SPU>` → its latest one-shoe run + items + that SPU's decisions.
+- A server job: a `shein_live_runs` row, mode `shoe:dry` | `shoe:full`, the SPU in `current`. NOT a
+  walk: `latestSheinLiveRun` skips `shoe:%` (the panel and the worker's 3-h re-walk clock); one shoe at
+  a time per process; refused while a walk runs, and a walk is refused while a shoe runs. Items
+  `source = 'shoe'`, which `sheinLastWalkFacts` / `sheinLastWalkStock` count as the newest picture.
+- Store-wide facts (who else carries a SKU) come from the last walk's log (`factsCtx`, as a Shopify
+  push); `sheinSellerSkusTaken` is still asked live before any edit. No catalogue: the Shopify product
+  SHEIN Listings matched (`productIds`) and any person-linked SKU are read live.
+- `parkDelisted` (one shoe only): a size taken off whose seller SKU Shopify still has gets it renamed
+  `<sku>-off`, so the right SHEIN size can carry it ("Add missing sizes"). The full walk is unchanged.
+- A SHEIN Listings send of the product in flight → stock only (`walkModeFor`). After the step, SHEIN
+  Listings re-reads that SPU (`refreshListingSpu`: spu-info + searchProduct + document state) and
+  recomputes.
+
 ## Endpoint / page
 `GET/POST /api/shein/live` (PH + admin; the two sync switches are admin-only). Panel
 `src/screens/SheinLivePanel.jsx`, shown above the export upload when SHEIN is connected.

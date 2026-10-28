@@ -3,7 +3,13 @@
 //
 // GET  /api/shein/listings?status=&blocker=&q=&brand=&page=1&pageSize=50&sort=worst|title|updated|coverage
 //        -> { ok, connected, configured, canWrite, isAdmin, summary, products, total, page, pageSize }
+//        &shopify=active|inactive  (2026-10-28) active = ACTIVE on Shopify with stock > 0; inactive = the rest;
+//        the answer carries shopifyCounts { active, inactive } for the same filters
 // GET  /api/shein/listings?product=<gid>   -> { ok, product, variants, jobItems, log, canWrite, isAdmin }
+// GET  /api/shein/listings?publishSetup=<gid,gid,…>  (≤ 100; PH ok; DB only) bulk edit before publishing ->
+//        { ok, products:[{ productId, title, titleOverride, style, vendor, productType, imageUrl, shopifyStatus, inStock,
+//          syncable, sizeGroups, category, productTypeId, skcValueId, usePhPhotos, titleMax, checklist, blocking, ready }],
+//          skipped:[{ productId, title, why }], canWrite, isAdmin }
 // GET  /api/shein/listings?probe=1         -> { ok, probe, job }   the last Ask-SHEIN answer
 // POST /api/shein/listings { action }:
 //   snapshot                          re-read Shopify + SHEIN (a server job)          -> { ok, job }
@@ -22,6 +28,9 @@
 //   Phase 4 — publish brand-new products: preview { …, ops:['publish'] } (never mixed; filter = products NOT on SHEIN);
 //     photos are converted (R2 + transform-pic) only when the starter is an admin / Connect integrations holder (security H2);
 //   publish_choices { productId, titleOverride?, skcValueId?, usePhPhotos? } (PH, DB only) -> { ok, product };
+//   publish_choices_bulk { productIds (≤ 100), patch: { skcValueId?, usePhPhotos? }, productTypeId?, titles?: { [productId]: title | null } }
+//     (PH, DB only; the same validation as publish_choices; a colour needs productTypeId and every product must be
+//     mapped to that SHEIN product type) -> { ok, updated, missing };
 //   publish_again { productIds }  admin or Connect integrations: re-publish after SHEIN rejected the first one -> { ok, products }
 //   look_again { itemIds }  (PH, read-only) a publish SHEIN didn't confirm: looked up (seller SKUs / document state) -> { ok, results:[{id, found, sendAgainOk, looks}] }
 //   send_again { itemIds }  admin or Connect integrations: only after a second look ≥ 30 min after the send found nothing -> { ok, results }
@@ -37,17 +46,30 @@ import {
   activeListingJob, latestListingJob, markStaleListingJobs, requestListingStop, cancelQueuedListingJob, setListingExcluded, listingVariantProductIds,
   getSetting, setSetting, getListingItems, updateListingItem, requeueListingJob, resumeListingJob,
   lastPreviewItem, markPublishAgain, setListingPublishChoices,
+  listingShopifyCounts, getListingProductsMany, setListingPublishChoicesMany, listCategoryMaps, listListingCache,
 } from '../_lib/db.js';
-import { publishChecklist, cleanTitle } from '../../src/lib/sheinPublish.js';
+import { publishChecklist, cleanTitle, sizeGroupOf, templateParts } from '../../src/lib/sheinPublish.js';
 import { sheinStatus } from '../_lib/shein.js';
 import { shopifyAdminStore, shopifyEnsureWebhooks } from '../_lib/shopify.js';
-import { startListingJob, startRunJob, resumeJob, recomputeStored, kickListingJobs, PREVIEW_OPS, readAutoPrice, setAutoPrice, lookAgainPublish, sendAgainPublish, readinessChecklist, userThrottle } from '../_lib/shein-listing.js';
+import { startListingJob, startRunJob, resumeJob, recomputeStored, kickListingJobs, PREVIEW_OPS, readAutoPrice, setAutoPrice, lookAgainPublish, sendAgainPublish, readinessChecklist, readinessMany, userThrottle } from '../_lib/shein-listing.js';
 import { hasPrivilege } from '../_lib/buycart.js';
-import { renderBlocker, STATUS_CODES, STATUS_ORDER, TILE_STATUSES, BLOCKERS, summarizePlan } from '../../src/lib/sheinListings.js';
+import { renderBlocker, STATUS_CODES, STATUS_ORDER, TILE_STATUSES, BLOCKERS, summarizePlan, rowSyncable } from '../../src/lib/sheinListings.js';
 
 const isAdminRole = (u) => u?.role === 'admin' || u?.role === 'superadmin';
 const PRIV_ACTIONS = new Set(['probe', 'webhooks', 'run', 'retry', 'auto_price', 'publish_again', 'send_again']);
 const PREVIEW_MAX = 300;
+const BULK_MAX = 100;   // bulk edit before publishing: products per read / save
+const SHOP_FILTERS = ['active', 'inactive'];
+const blockingLines = (list) => (list || []).filter((l) => l.ok === false).map((l) => l.key);
+// The size groups the drawer maps a category by (its Shopify sizes not left off) — productGroups() on the page.
+const groupsOf = (variants) => [...new Set(variants.filter((v) => v.shopify_variant_id && !v.excluded).map((v) => sizeGroupOf(v.shopify_size)).filter(Boolean))];
+// The SHEIN product type each product's category map gives (one size group only), else null.
+const typeOf = (row, variants, maps) => {
+  const g = groupsOf(variants);
+  const m = g.length === 1 ? maps.find((x) => x.shopify_product_type === String(row.product_type || '') && x.size_group === g[0]) : null;
+  return m ? Number(m.product_type_id) : null;
+};
+const idList = (v) => [...new Set(String(v || '').split(',').map((x) => x.trim()).filter(Boolean))];
 const HOOK_TOPICS = ['PRODUCTS_CREATE', 'PRODUCTS_UPDATE', 'PRODUCTS_DELETE'];
 const HOOKS_KEY = 'shein_listing_hooks';
 const baseUrl = (req) => String(process.env.APP_URL || process.env.PUBLIC_URL || `https://${req.headers['x-forwarded-host'] || req.headers.host}`).replace(/\/+$/, '');
@@ -107,6 +129,38 @@ export default async function handler(req, res) {
       const c = await getListingCache('probe', 'last');
       return send(res, 200, { ok: true, probe: c?.payload || null, savedAt: c?.fetched_at || null, job: c?.payload?.jobId ? jobOut(await getListingJob(c.payload.jobId)) : null, canWrite });
     }
+    if (qs.has('publishSetup')) {
+      const want = idList(qs.get('publishSetup'));
+      if (!want.length) return send(res, 400, { ok: false, error: 'Which products? (publishSetup=<id,id,…>)' });
+      if (want.length > BULK_MAX) return send(res, 400, { ok: false, error: `At most ${BULK_MAX} products at a time — tick fewer.` });
+      if (want.some((x) => x.length > 200)) return send(res, 400, { ok: false, error: 'That isn’t a product id.' });
+      const rows = await getListingProductsMany(want);
+      const found = new Set(rows.map((r) => r.product.shopify_product_id));
+      const skipped = want.filter((x) => !found.has(x)).map((x) => ({ productId: x, title: null, why: 'not in SHEIN Listings (re-read Shopify + SHEIN)' }));
+      const todo = [];
+      for (const r of rows) {
+        const p = r.product;
+        if (String(p.shopify_product_id).startsWith('shein:')) skipped.push({ productId: p.shopify_product_id, title: p.title, why: 'only on SHEIN — not a Shopify product' });
+        else if (p.spu) skipped.push({ productId: p.shopify_product_id, title: p.title, why: 'already on SHEIN — use Add missing sizes / Update' });
+        else if (p.excluded) skipped.push({ productId: p.shopify_product_id, title: p.title, why: 'marked “Don’t list on SHEIN”' });
+        else todo.push(r);
+      }
+      const ready = await readinessMany(todo);
+      const products = todo.map(({ product: p, variants }) => {
+        const x = ready.get(p.shopify_product_id) || null;
+        const checklist = x?.checklist || publishChecklist(p.blockers || [], { unknown: ['store', 'quota', 'shelf', 'site', 'brand', 'title', 'fields', 'colour', 'attributes', 'size_chart', 'sizes', 'prices', 'photos', 'skus'] });
+        const blocking = blockingLines(checklist);
+        const inStock = variants.filter((v) => v.shopify_variant_id && !v.excluded && Number(v.shopify_qty) > 0).length;
+        const syncable = rowSyncable(p);
+        return { productId: p.shopify_product_id, title: p.title, titleOverride: p.title_override || null, style: p.style, vendor: p.vendor, productType: p.product_type || '',
+          imageUrl: p.image_url, shopifyStatus: p.shopify_status, inStock, sizes: variants.filter((v) => v.shopify_variant_id && !v.excluded).length, syncable,
+          sizeGroups: groupsOf(variants), category: x?.category || null, productTypeId: x?.category?.productTypeId ?? null, skcValueId: p.skc_value_id == null ? null : Number(p.skc_value_id),
+          usePhPhotos: !!p.use_ph_photos, titleMax: x?.titleMax ?? null, checklist, blocking, ready: syncable && !blocking.length, shopifyUrl: adminUrl(p.shopify_product_id) };
+      });
+      // the shoes that need fixing first (most ✕ first), then the ready ones
+      products.sort((a, b) => Number(a.ready) - Number(b.ready) || b.blocking.length - a.blocking.length || String(a.title || '').localeCompare(String(b.title || '')));
+      return send(res, 200, { ok: true, products, skipped, canWrite, isAdmin });
+    }
     const pid = t(qs.get('product'), 200);
     if (pid) {
       const d = await getListingProduct(pid);
@@ -132,12 +186,16 @@ export default async function handler(req, res) {
     const blocker = t(qs.get('blocker'), 40);
     if (blocker && !/^[a-z_]+$/.test(blocker)) return send(res, 400, { ok: false, error: 'Unknown blocker.' });
     const sort = ['worst', 'title', 'updated', 'coverage'].includes(qs.get('sort')) ? qs.get('sort') : 'worst';
-    const [st, list, summary] = await Promise.all([
+    const shopify = t(qs.get('shopify'), 20) || '';
+    if (shopify && !SHOP_FILTERS.includes(shopify)) return send(res, 400, { ok: false, error: 'shopify: active or inactive.' });
+    const f = { status, blocker, q: t(qs.get('q'), 120), brand: t(qs.get('brand'), 120) };
+    const [st, list, summary, shopifyCounts] = await Promise.all([
       sheinStatus().catch(() => null),
-      listListingProducts({ status, blocker, q: t(qs.get('q'), 120), brand: t(qs.get('brand'), 120), page: Number(qs.get('page')) || 1, pageSize: Number(qs.get('pageSize')) || 50, sort }),
+      listListingProducts({ ...f, shopify: shopify || null, page: Number(qs.get('page')) || 1, pageSize: Number(qs.get('pageSize')) || 50, sort }),
       summaryOut(),
+      listingShopifyCounts(f),
     ]);
-    return send(res, 200, { ok: true, connected: !!st?.connected, configured: !!st?.configured, canWrite, isAdmin, summary,
+    return send(res, 200, { ok: true, connected: !!st?.connected, configured: !!st?.configured, canWrite, isAdmin, summary, shopifyCounts,
       products: list.rows.map(productOut), total: list.total, page: list.page, pageSize: list.pageSize });
   }
 
@@ -242,6 +300,45 @@ export default async function handler(req, res) {
         const row = await setListingPublishChoices(pid, patch);
         if (!row) return send(res, 404, { ok: false, error: 'That product isn’t in SHEIN Listings.' });
         return send(res, 200, { ok: true, product: productOut(row) });
+      }
+      case 'publish_choices_bulk': {
+        // the same gate + validation as publish_choices, for many products at once; DB only
+        const raw = Array.isArray(b.productIds) ? b.productIds : [];
+        if (raw.length > BULK_MAX) return send(res, 400, { ok: false, error: `At most ${BULK_MAX} products at a time.` });
+        const productIds = ids(raw, BULK_MAX);
+        const titlesIn = b.titles && typeof b.titles === 'object' && !Array.isArray(b.titles) ? Object.entries(b.titles) : [];
+        if (titlesIn.length > BULK_MAX) return send(res, 400, { ok: false, error: `At most ${BULK_MAX} titles at a time.` });
+        const patch = {}; const pa = b.patch && typeof b.patch === 'object' ? b.patch : {};
+        if (pa.titleOverride !== undefined) return send(res, 400, { ok: false, error: 'A title is per shoe — send titles: { productId: title }.' });
+        if (pa.skcValueId !== undefined) { const v = pa.skcValueId == null || pa.skcValueId === '' ? null : Number(pa.skcValueId); if (v != null && !Number.isSafeInteger(v)) return send(res, 400, { ok: false, error: 'That isn’t a SHEIN value id.' }); patch.skcValueId = v; }
+        if (pa.usePhPhotos !== undefined) patch.usePhPhotos = pa.usePhPhotos === true;
+        const titles = [];
+        for (const [id, raw2] of titlesIn) {
+          const pid2 = t(id, 200); if (!pid2) return send(res, 400, { ok: false, error: 'Which product is that title for?' });
+          const title = raw2 == null || raw2 === '' ? null : cleanTitle(raw2).slice(0, 1000);
+          if (title != null && title.length < 2) return send(res, 400, { ok: false, error: 'A SHEIN title needs at least 2 characters.' });
+          titles.push([pid2, title]);
+        }
+        const hasPatch = Object.keys(patch).length > 0;
+        if (!titles.length && !(hasPatch && productIds.length)) return send(res, 400, { ok: false, error: 'Nothing to save — pick the products and what to set.' });
+        if (hasPatch && !productIds.length) return send(res, 400, { ok: false, error: 'Which products?' });
+        const all = [...new Set([...productIds, ...titles.map((x) => x[0])])];
+        const rows = await getListingProductsMany(all);
+        const have = new Set(rows.map((r) => r.product.shopify_product_id));
+        const missing = all.filter((x) => !have.has(x));
+        if (patch.skcValueId != null) {
+          // a colour value belongs to ONE SHEIN product type: every product must be mapped to it
+          const ptid = Number(b.productTypeId);
+          if (!Number.isSafeInteger(ptid) || ptid < 1) return send(res, 400, { ok: false, error: 'A colour needs the SHEIN product type it comes from (productTypeId).' });
+          const maps = await listCategoryMaps();
+          const off = rows.filter((r) => productIds.includes(r.product.shopify_product_id) && typeOf(r.product, r.variants, maps) !== ptid);
+          if (off.length) return send(res, 400, { ok: false, error: `${off.length} of these shoe${off.length === 1 ? ' isn’t' : 's aren’t'} in that SHEIN product type (or ${off.length === 1 ? 'has' : 'have'} no category yet) — a colour is set per product type: ${off.slice(0, 3).map((r) => r.product.title || r.product.shopify_product_id).join('; ')}${off.length > 3 ? ' …' : ''}` });
+          const tpl = (await listListingCache('attr_template', [ptid]))[0]?.payload || null;
+          const vals = tpl ? (templateParts(tpl).main?.attribute_value_info_list || []) : null;
+          if (vals && !vals.some((v) => Number(v.attribute_value_id) === patch.skcValueId)) return send(res, 400, { ok: false, error: 'That colour isn’t in SHEIN’s list for this product type.' });
+        }
+        const updated = await setListingPublishChoicesMany(hasPatch ? productIds.filter((x) => have.has(x)) : [], patch, titles.filter((x) => have.has(x[0])));
+        return send(res, 200, { ok: true, updated, missing });
       }
       case 'look_again': {
         const itemIds = (Array.isArray(b.itemIds) ? b.itemIds : []).map(Number).filter((x) => Number.isInteger(x) && x > 0).slice(0, 50);

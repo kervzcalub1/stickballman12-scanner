@@ -43,7 +43,9 @@ export const checkPath = () => (inPh() ? '/ph/shein-check' : '/shein-check');
 // Phase 4: the fixes for publishing a new product live in its drawer's checklist — a row's button opens it.
 export const PUBLISH_FIX_KINDS = ['choose_category', 'set_attr', 'review_title', 'use_ph_photos', 'set_defaults', 'publish_again'];
 const LIVE_KINDS = new Set(['add_custom_size', 'edit_size_map', 'leave_off', 'include', 'open_shopify', 'open_match', 'open_shopify_listings', 'open_seller_center', ...PUBLISH_FIX_KINDS]);
-export function FixButton({ action, shopifyUrl, onAct, busy }) {
+// open_match with `here`: the fix is this shoe's own "Fix SHEIN sizes" (onMatch — the drawer opens /
+// scrolls to it); without it (another SHEIN product holds the SKU) the SHEIN check page.
+export function FixButton({ action, shopifyUrl, onAct, busy, onMatch }) {
   if (!action) return null;
   const k = action.kind;
   const cls = 'btn xs shl-fix';
@@ -57,7 +59,7 @@ export function FixButton({ action, shopifyUrl, onAct, busy }) {
     return <a className={cls} href="https://sellerhub.shein.com/" target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{action.label}</a>;
   }
   if (k === 'open_match') {
-    return <button type="button" className={cls} onClick={(e) => { e.stopPropagation(); goPath(checkPath()); }}>{action.label}</button>;
+    return <button type="button" className={cls} onClick={(e) => { e.stopPropagation(); if (action.here && onMatch) onMatch(); else goPath(checkPath()); }}>{action.label}</button>;
   }
   if (k === 'open_shopify_listings') {
     return inPh()

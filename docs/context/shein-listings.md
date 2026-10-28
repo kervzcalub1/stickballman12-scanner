@@ -14,7 +14,9 @@ Needs update / Not in Shopify / Not listing (codes `out_of_date` / `shein_only` 
 buttons "Don't list on SHEIN" / "List on SHEIN again"; "SHEIN has the wrong SKU: A → will change to B";
 "SHEIN size" vs "Custom size".
 Related and already live: stock both ways + the walk (`shein-live-fix.md`), seller-SKU links /
-Match sizes (`shein-fix.md`).
+Match sizes (`shein-fix.md`). **Match sizes for one shoe is in its Details drawer** ("Fix SHEIN sizes",
+2026-10-28): a wrong-link / SPU-spans / SHEIN-already-has-it button (`open_match` with `here: true`)
+opens the drawer there, not the check page; the one-shoe dry run / fix is `shein-live-fix.md` §5.
 
 ## Files
 | File | What |
@@ -35,6 +37,7 @@ Match sizes (`shein-fix.md`).
 | `src/components/SheinListingsBits.jsx` | `StatusChip`, `BlockerSay`, `FixButton` (live vs "Coming in a later phase"), `CustomSizeModal`, `when` (EST) |
 | `src/components/SheinDryRunSheet.jsx` | Phase 2: `DryRunSheet` (the overlay) + `DryRunView` (dry-run review → Confirm → the run's job card; also inline on Jobs `?job=`); Phase 4 `PublishPlan` |
 | `src/components/SheinPublishBits.jsx` | Phase 4: `PublishChecklist` (the drawer's 18 lines + inline fixes), `CategoryPicker`, `BrandPicker`, `AttrEditor`, `ColourPicker`, `TitleEditor`, `BoxDefaults` (D6), `useStoreGates` / `StoreGateBanner` |
+| `src/components/SheinBulkPublish.jsx` | Bulk edit before publishing (2026-10-28): the ticked new shoes, what blocks each, fixes grouped by key, "Dry run publish (n ready)" |
 | `src/screens/SheinListingsSetup.jsx` | Phase 4: the Setup tab (`?tab=setup`, `?pt=`) — store gates, D6 box, category map, brand map, SHEIN details per product type |
 | `src/lib/sheinCutover.js`, `api/shein/listing-cutover.js`, `src/components/SheinCutover.jsx` | Phase 5: the cut-over / go-live checks (pure), the endpoint, the two Setup cards + the strip line |
 
@@ -106,7 +109,11 @@ Match sizes (`shein-fix.md`).
   sizes, inStock}}, tiles, order, topBlockers: [{code, sizes, products, level, title}], brands: [{brand,
   products}], lastSnapshot, latestSnapshot, activeJob, probe: {askedAt, jobId, categories} | null, hooks }`.
   Product rows: the table's columns (no `shopify_json`/`search_text`/`computed_hash`) + rendered
-  `blockers`, `worst`, `shopifyUrl`.
+  `blockers`, `worst`, `shopifyUrl`. `&shopify=active|inactive` (2026-10-28, 400 otherwise): active = ACTIVE on
+  Shopify with stock > 0 on a size not left off (`EXISTS` on `shein_listing_variants.shopify_qty`, no new column);
+  inactive = the rest (draft / archived / 0 pairs / SHEIN-only rows). Every list answer carries
+  `shopifyCounts: { active, inactive }` for the same status / blocker / q / brand.
+- `GET ?publishSetup=<gid,gid,…>` (≤ 100 → else 400; PH ok; DB only) — bulk edit before publishing, below.
 - `GET ?product=<gid>` → `{ ok, product, variants (rendered blockers + notes), jobItems (last 5),
   log (last 20 for its SPU; bodies admin-only), canWrite, isAdmin }`; 404 unknown.
 - `GET ?probe=1` → `{ ok, probe, savedAt, job, canWrite }` — `probe = { askedAt, by, jobId, store:{spus,
@@ -583,6 +590,54 @@ Spec: `scratchpad/plan/phase4-spec.md` (API specialist; raw pages `scratchpad/p4
   yet", ✕ lines); brand + details set in the drawer → full dry run sheet, PH Confirm disabled; admin Publish 1
   product → In review → Rejected with SHEIN's reason; PH can't Publish again / save box (403 too); admin Publish
   again → fresh dry run Ready; store-gate banner; 390 px no horizontal scroll (drawer + picker, Setup, sheet).
+
+## Bulk edit before publishing + the Shopify active filter + the listing syncs' stock gate (built 2026-10-28)
+- **Shopify filter** (Products, `?shop=active|inactive`, refresh-proof; default All): chips "All · Active (in stock) n ·
+  Inactive or no stock n" (counts = `shopifyCounts`). Same rule client side: `rowSyncable(row)` (`shopify_status` ACTIVE
+  and `counts.sizes` > 0) in `src/lib/sheinListings.js`.
+- **The stock gate** (`listingSyncGate(product, excludedIds)` — pure, `src/lib/sheinListings.js`): the LISTING syncs
+  never send a shoe Shopify has inactive (`shopify_inactive`) or at 0 pairs across its sizes not left off (new blocker
+  **`no_shopify_stock`**, "No Shopify stock — not sent to SHEIN."). Enforced by the server: `buildItem` (Phase 2 add
+  sizes + Phase 3 price / edit) checks the LIVE Shopify read before any SHEIN call → the item is skipped;
+  `planPublish` puts it on checklist line 5 (now "Active on Shopify, with stock"; `shopify_inactive` now blocks a
+  publish too — it was a note, so a draft could pass). `publishReadiness` keeps `no_shopify_stock` OFF the stored
+  sizes (a sold-out new shoe is not "Blocked" on the list). The ticked-products bar leaves such shoes out of all three
+  dry runs and says "n left out: no Shopify stock / not active on Shopify". **The STOCK sync is untouched**
+  (`shein-live.js` walk / push, `shein-orders.js`): a shoe going to 0 still has SHEIN set to 0. Note: Phase 3 relinks
+  of a 0-stock shoe wait too (they ride on the same dry run).
+- **Bulk edit** (`src/components/SheinBulkPublish.jsx`, in memory, never in the URL): bar → **Bulk edit (n)** = the
+  ticked shoes on this page that `canPublish` and `rowSyncable` (≤ 100; the rest listed under "left out — why").
+  ONE read: `GET ?publishSetup=` → `{ products:[{ productId, title, titleOverride, style, vendor, productType,
+  imageUrl, shopifyStatus, inStock, sizes, syncable, sizeGroups, category{categoryId, productTypeId, path}|null,
+  productTypeId, skcValueId, usePhPhotos, titleMax (only when SHEIN's rules were read), checklist (the 18 lines,
+  `readinessMany` = the drawer's readiness for many at once), blocking:[line keys ✕], ready, shopifyUrl }] (not
+  ready first), skipped:[{productId, title, why}] (on SHEIN already · SHEIN-only · "Don't list" · unknown) }`.
+  Table: photo, title (editable inline), style, type · size group, vendor, a chip per ✕ line. **Fix in bulk**, each
+  keyed so one decision covers many shoes: Category per (Shopify product type × size group) → `CategoryPicker` once
+  ("applies to N"; mixed size groups / no readable size are called out, they can't be mapped) · Brand per vendor
+  lacking a map → `BrandPicker` · SHEIN details per SHEIN product type → `AttrEditor` · Colour per SHEIN product type →
+  one select, set on every ticked shoe of that type · Photos: PH photos on / off for all · Titles: `tidyTitle`
+  preview (cleanTitle + cut at the last whole word within SHEIN's limit when known) → apply · Box: `BoxDefaults`
+  (saving still admin / Connect integrations). Every save re-reads (live: category / brand map, products,
+  app_settings). Footer **Dry run publish (n ready)** = the same `preview ops:['publish']` for the ready ones only.
+- `POST publish_choices_bulk { productIds ≤ 100, patch:{ skcValueId?, usePhPhotos? }, productTypeId?, titles?:{ [id]:
+  title|null } ≤ 100 }` (PH, DB only, same gate + validation as `publish_choices`; `patch.titleOverride` → 400 "per
+  shoe"; a colour needs `productTypeId`, every product must map to that type, and the value must be in the cached
+  template) → `{ ok, updated, missing }`.
+- **Safety net (publish never starts on a shoe that needs fixing):** the bar's button reads **Fix & publish (n)**
+  when a ticked new shoe is Blocked / Error; on click it reads `?publishSetup=` and goes straight to the dry run only
+  when EVERY ticked new shoe is ready, else it opens the bulk sheet on the fix step ("n can't be published yet — fix
+  them first", not-ready first). The drawer's button reads **Fix n first** when its LIVE readiness has ✕ lines (not
+  the last dry run's checklist, which a fix doesn't change); pressing it scrolls to the checklist with what's left, plus
+  "Dry run anyway" (sends nothing). The dry run still refuses blocked ones (the server is the last guard).
+- **Category picker favourites:** "Frequently used" on top of every `CategoryPicker` (drawer, Setup, bulk) —
+  Men's Casual Athletic Shoes, Women's Casual Athletic Shoes, Kids' Sneakers, found in SHEIN's cached tree by
+  `favouriteLeaves(leaves)` (`src/lib/sheinPublish.js`, `FAVOURITE_CATEGORIES`): leaf name words + audience by whole
+  path words (Women ≠ men; kids/boys/girls/youth… = kids). Never a hard-coded id; one SHEIN's tree lacks is not shown.
+- e2e (`shein-listings.spec.js`): pure (gate, rowSyncable, checklist line 5, favourites, tidyTitle); Phase 4 page
+  (publishSetup gates / cap / skipped / DB only; publish_choices_bulk validation + colour type check + DB only; the
+  Shopify filter + counts; the gate skips publish / add sizes / update with no SHEIN read for the item; 390 px filter +
+  bulk sheet); the box-banner test now goes bar → fix step (no dry run) → drawer "Dry run anyway".
 
 ## Phase 5 — 4seller cut-over + go-live (built 2026-10-27)
 - **Where:** Setup tab, on top: **Go-live checklist** then **4seller cut-over**; once "4seller paused" is ticked the

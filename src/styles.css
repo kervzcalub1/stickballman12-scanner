@@ -6743,3 +6743,49 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .shl-pub-group { margin: 12px 0 0; padding-bottom: 4px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); }
 .shl-pub-ph { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; font-size: 13px; cursor: pointer; }
 .shl-pub-ph input { margin-top: 2px; width: 18px; height: 18px; flex: 0 0 auto; }
+
+/* ---- SHEIN Listings → Details → Fix SHEIN sizes (one shoe; src/components/SheinShoeFix.jsx) ---- */
+.shl-shoe > summary { cursor: pointer; list-style: revert; }
+.shl-shoe .seg { margin: 6px 0; }
+.shl-shoe-sel { width: 100%; max-width: 320px; }
+.shl-shoe-run { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.shl-shoe-bad td { background: rgba(236,143,143,0.10); }
+
+/* ---- SHEIN Listings: Shopify active / inactive filter + bulk edit before publishing (2026-10-28) ---- */
+.shl-shopfilter { flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; }
+.shl-shopfilter-lead { align-self: center; margin-right: 2px; }
+.shl-bar-dead { color: #e0b05f; }
+.shl-cat-fav { display: flex; flex-direction: column; gap: 2px; margin: 0 0 6px; padding: 0 0 6px; border-bottom: 1px dashed var(--border); }
+.shl-bulk .shl-d-title .xs { margin-top: 2px; }
+.shl-bulk-left { margin: 0 0 10px; }
+.shl-bulk-left summary { cursor: pointer; color: #e0b05f; }
+.shl-bulk-left p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.shl-bulk-table td { vertical-align: top; }
+.shl-bulk-table tr.shl-chg td:first-child { box-shadow: inset 3px 0 0 #ec8f8f; }
+.shl-bulk-shoe { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.shl-bulk-shoe .shl-thumb { flex: 0 0 auto; }
+.shl-bulk-name { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
+.shl-bulk-name .shl-pub-acts { justify-content: flex-start; margin-top: 2px; }
+.shl-bulk-tedit { display: flex; flex-direction: column; gap: 2px; }
+.shl-bulk-tedit .input { width: 100%; min-width: 0; }
+.shl-bulk-chips { margin: 0; }
+.shl-bulk-block { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-top: 8px; }
+.shl-bulk-block.ok { opacity: 0.85; }
+.shl-bulk-bhead { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.shl-bulk-grp { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; padding: 6px 0; border-top: 1px solid var(--border); min-width: 0; }
+.shl-bulk-grp:first-of-type { border-top: 0; }
+.shl-bulk-grp > .sm { min-width: 0; overflow-wrap: anywhere; flex: 1 1 220px; }
+.shl-bulk-panel { flex: 1 1 100%; min-width: 0; }
+.shl-bulk-titles { margin: 6px 0; padding-left: 18px; }
+.shl-bulk-titles li { margin: 2px 0; overflow-wrap: anywhere; }
+.shl-bulk-colour { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: 1 1 100%; }
+.shl-bulk-colour .input { flex: 1 1 200px; min-width: 0; width: auto; }
+@media (max-width: 768px) {
+  .shl-shopfilter .seg-btn { flex: 1 1 auto; min-height: 40px; }
+  .shl-bulk-table td[data-label="Shoe"] { grid-template-columns: minmax(0, 1fr); }
+  .shl-bulk-table td[data-label="Shoe"]::before { display: none; }
+  .shl-bulk-table tr.shl-chg td:first-child { box-shadow: none; }
+  .shl-bulk-table tr.shl-chg { border-left: 3px solid #ec8f8f; }
+  .shl-bulk-grp .btn { min-height: 40px; }
+  .shl-bulk-colour .btn { flex: 1 1 100%; }
+}

@@ -21,7 +21,7 @@ import { shopifyAllVariants, shopifyProductsLive, shopifyProductIdsForSkus, shop
 import {
   listSheinLinks, saveSheinLinks, createSheinLiveRun, updateSheinLiveRun, getSheinLiveRun, latestSheinLiveRun, markStaleSheinRuns,
   addSheinLiveItems, sheinOpenNotDeducted, getSetting, sheinLastWalkFacts, sheinPushQueueAdd, sheinPushQueueDone, sheinPushQueueList, sheinShelfRecords, saveSheinShelf,
-  listingInflightSpus,
+  listingInflightSpus, latestShoeRun,
 } from './db.js';
 import { sheinAiMatch, sheinAiConfigured } from './shein-ai.js';
 import { readSync } from './shein-orders.js';
@@ -41,6 +41,7 @@ export const IO = {
   readBackWaits: [3_000, 5_000, 10_000],   // ms between read-backs of a size still showing the old stock
 };
 let active = null;   // { runId, promise } — one walk per process
+let shoe = null;     // { runId, spu } — one "fix this shoe" run per process (seconds), never alongside a walk
 
 /* --------------------------------- context --------------------------------- */
 
@@ -74,16 +75,17 @@ const decisionsMap = async () => Object.fromEntries((await listSheinLinks()).map
 
 // Fresh Shopify variants for one SHEIN product: every product its seller SKUs point at (read
 // live; a SKU the catalogue doesn't know is looked up by itself), plus same-style products
-// for relinks, plus anything a person linked it to.
-async function liveVariants(rows, catalogue, decisions, io) {
+// for relinks, plus anything a person linked it to, plus `extraIds` (the one-shoe run: the
+// Shopify product SHEIN Listings matched it to — it has no catalogue to find same-style ones).
+async function liveVariants(rows, catalogue, decisions, io, extraIds = []) {
   const bySku = new Map((catalogue || []).map((v) => [String(v.sku), v]));
-  const ids = new Set(); const unknown = [];
+  const ids = new Set(extraIds.filter(Boolean)); const unknown = [];
   for (const r of rows) {
     const v = r.sellerSku && bySku.get(r.sellerSku);
     if (v) ids.add(v.productId); else if (r.sellerSku) unknown.push(r.sellerSku);
     const d = decisions[r.sheinSku];
     const dv = d?.link_sku && bySku.get(String(d.link_sku));
-    if (dv) ids.add(dv.productId);
+    if (dv) ids.add(dv.productId); else if (d?.link_sku) unknown.push(String(d.link_sku));
   }
   if (unknown.length) {
     const f = await io.shopifyProductIdsForSkus(unknown);
@@ -108,10 +110,10 @@ export async function stepProduct(spuName, ctx) {
   const skus = (spu?.skcInfoList || []).flatMap((c) => (c.skuInfoList || []).map((s) => String(s.skuCode))).filter(Boolean);
   const rows = rowsFromSpu(spu, skus.length ? await io.sheinStock(skus) : [], { merchant: ctx.merchant });
   if (!rows.length) return { items: [], counts: {} };
-  const { variants } = await liveVariants(rows, ctx.catalogue, ctx.decisions, io);
+  const { variants } = await liveVariants(rows, ctx.catalogue, ctx.decisions, io, ctx.productIds || []);
   const held = await heldMap(ctx, rows, io);
   // A dry run shows everything "full" would do (incl. seller SKUs); "stock" never edits them.
-  const base = { rows, variants, decisions: ctx.decisions, owners: ctx.owners, holders: ctx.holders, heldBySku: held.map, target: ctx.target, links: mode !== 'stock' };
+  const base = { rows, variants, decisions: ctx.decisions, owners: ctx.owners, holders: ctx.holders, heldBySku: held.map, target: ctx.target, links: mode !== 'stock', parkDelisted: !!ctx.parkDelisted };
   let plan = planProduct({ ...base, aiLinks: {} });
 
   // The AI, only for sizes whose seller SKU Shopify no longer has and no rule could place.
@@ -364,6 +366,7 @@ async function finish(id, status, counts) {
 export async function startWalk({ mode, by, ai = true }) {
   if (!MODES.includes(mode)) throw Object.assign(new Error('Unknown mode.'), { status: 400 });
   if (active) throw Object.assign(new Error('A walk is already running.'), { status: 409 });
+  if (shoe) throw Object.assign(new Error(`One shoe (${shoe.spu}) is being checked — start the walk in a moment.`), { status: 409 });
   await markStaleSheinRuns();
   const cur = await latestSheinLiveRun();
   if (cur?.status === 'running') throw Object.assign(new Error('A walk is already running.'), { status: 409 });
@@ -438,9 +441,9 @@ export async function pushSpus(spus) {
   if (active) return { pushed: 0, why: 'a walk is running' };   // the walk will reach it
   return stockStepSpus(spus, await sheinLastWalkFacts());
 }
-async function stockStepSpus(spus, facts) {
-  const wh = pickTargetWarehouse(await sheinWarehouses());
-  if (!wh.target) return { pushed: 0, why: 'no target warehouse' };
+// The store-wide facts one product can't know (who owns a seller SKU several sizes carry, every
+// SHEIN size holding a SKU) — from the last walk's log, for a step outside a walk.
+function factsCtx(facts) {
   // Who owns a duplicated seller SKU: whatever the last walk decided (not 'duplicate').
   const owners = new Map();
   for (const f of facts) {
@@ -449,11 +452,65 @@ async function stockStepSpus(spus, facts) {
     if (!cur || (f.reason === 'ok' && !cur.fits)) owners.set(f.seller_sku, { sheinSku: f.shein_sku, spu: f.spu, fits: f.reason === 'ok' });
   }
   const { holders } = indexRows(facts.map((f) => ({ spu: f.spu, sheinSku: f.shein_sku, sellerSku: f.seller_sku, held: 0 })));
-  const ctx = { mode: 'stock', source: 'push', merchant: wh.merchant, target: wh.target, catalogue: null, owners, holders, sheinHeld: new Map(), scanRowHeld: new Map(), decisions: await decisionsMap(), ai: false };
+  return { owners, holders };
+}
+async function stockStepSpus(spus, facts) {
+  const wh = pickTargetWarehouse(await sheinWarehouses());
+  if (!wh.target) return { pushed: 0, why: 'no target warehouse' };
+  const ctx = { mode: 'stock', source: 'push', merchant: wh.merchant, target: wh.target, catalogue: null, ...factsCtx(facts), sheinHeld: new Map(), scanRowHeld: new Map(), decisions: await decisionsMap(), ai: false };
   let n = 0;
   for (const spu of spus) { try { const r = await stepProduct(spu, ctx); n += r.counts.stock_changed || 0; } catch (e) { console.error('[shein-live] push', spu, e.message); } }
   return { pushed: n, products: spus.length };
 }
+
+/* ------------------------------- one shoe ------------------------------- */
+// SHEIN Listings → Details → "Dry run this shoe" / "Fix this shoe" (docs/context/shein-live-fix.md →
+// "One shoe"). The walk's own step for ONE SHEIN product — no store-wide scan: the facts no single
+// product can know (who else carries a seller SKU) come from the last walk's log, like a Shopify
+// push; the seller-SKU checks against SHEIN are still made live before any edit. A size a person
+// took off SHEIN (Match sizes → "take it off") has its seller SKU parked, so the right size can
+// carry it. A server job: a shein_live_runs row (mode shoe:dry | shoe:full, the SPU in `current`)
+// that a closed tab never stops; the drawer reads it back. Then SHEIN Listings re-reads the product.
+export const SHOE_MODES = ['dry', 'full'];
+export async function startShoe({ spu, mode, by, productIds = [], io = IO }) {
+  spu = String(spu || '').trim();
+  if (!/^[A-Za-z0-9_-]{3,60}$/.test(spu)) throw Object.assign(new Error('That isn’t a SHEIN SPU.'), { status: 400 });
+  if (!SHOE_MODES.includes(mode)) throw Object.assign(new Error('Unknown mode.'), { status: 400 });
+  if (active) throw Object.assign(new Error('The full SHEIN walk is running — it reaches this shoe too. Try again when it ends.'), { status: 409 });
+  if (shoe) throw Object.assign(new Error(`Another shoe (${shoe.spu}) is being checked — try again in a moment.`), { status: 409 });
+  await markStaleSheinRuns();
+  if ((await latestSheinLiveRun())?.status === 'running') throw Object.assign(new Error('The full SHEIN walk is running — try again when it ends.'), { status: 409 });
+  if (!shopifyConfigured()) throw Object.assign(new Error('Shopify is not configured on the server.'), { status: 503 });
+  const st = await sheinStatus().catch(() => null);
+  if (!st?.connected) throw Object.assign(new Error('SHEIN is not connected.'), { status: 503 });
+  const run = await createSheinLiveRun({ mode: `shoe:${mode}`, by });
+  await updateSheinLiveRun(run.id, { current: spu, total: 1, phase: 'Reading SHEIN warehouses' });
+  shoe = { runId: run.id, spu };
+  runShoe(run.id, { spu, mode, productIds, io }).finally(() => { shoe = null; });
+  return { ...run, current: spu };
+}
+async function runShoe(id, { spu, mode, productIds, io }) {
+  try {
+    const wh = pickTargetWarehouse(await sheinWarehouses());
+    if (!wh.target) throw new Error(wh.count ? `SHEIN has ${wh.count} merchant warehouses and none is the US default — can’t tell where stock goes.` : 'SHEIN shows no merchant warehouse for this store.');
+    // A SHEIN Listings send of this product in flight: stock only, no seller-SKU edit (as the walk).
+    const flight = (await listingInflightSpus().catch(() => new Map())).get(spu);
+    const ctx = { mode: walkModeFor(flight, mode), runId: id, source: 'shoe', merchant: wh.merchant, target: wh.target, catalogue: null, productIds,
+      ...factsCtx(await sheinLastWalkFacts()), sheinHeld: new Map(), scanRowHeld: new Map(), decisions: await decisionsMap(), ai: true, parkDelisted: true, io };
+    await updateSheinLiveRun(id, { phase: mode === 'dry' ? 'Checking this shoe (dry run — nothing written)' : 'Fixing this shoe' });
+    const r = await stepProduct(spu, ctx);
+    const counts = { ...r.counts, products: 1, ...(flight ? { products_in_flight: 1 } : {}) };
+    await updateSheinLiveRun(id, { phase: 'Refreshing SHEIN Listings', done: 1, counts });
+    try { const { refreshListingSpu } = await import('./shein-listing.js'); await refreshListingSpu(spu, { by: `fix this shoe #${id}` }); }
+    catch (e) { console.error('[shein-live] shoe refresh', spu, e.message); counts.refresh_failed = 1; }
+    await updateSheinLiveRun(id, { status: 'done', phase: 'Finished', counts, finished: true });
+  } catch (e) {
+    console.error('[shein-live] shoe failed', spu, e.message);
+    await updateSheinLiveRun(id, { status: 'failed', error: String(e.message).slice(0, 500), finished: true });
+  }
+}
+export const shoeActive = () => shoe;
+export { latestShoeRun };
 
 export const walkActive = () => (active ? active.runId : null);
 export { getSetting };

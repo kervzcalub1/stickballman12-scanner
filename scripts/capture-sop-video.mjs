@@ -1163,50 +1163,94 @@ const VIDEOS = [
     // Recorded against the demo seed (a fake SHEIN + sample products), never live data: a dry run
     // needs SHEIN, and this machine must never reach the real store. SOP_SHEIN_DEMO_JOBS names the
     // seeded dry runs ({"add":id,"update":id}); the two dry-run buttons are answered with them.
-    id: 'ph-shein-listings', role: 'admin', title: 'SHEIN Listings — check, dry run, send', path: '/shein-listings',
+    id: 'ph-shein-listings', role: 'admin', title: 'SHEIN Listings — check, fix, dry run, send', path: '/shein-listings',
     async setup(page) {
       const jobs = JSON.parse(process.env.SOP_SHEIN_DEMO_JOBS || '{}');
+      const json = (route, body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
       await page.route((u) => u.pathname === '/api/shein/listings', async (route) => {
         const req = route.request();
         const b = req.method() === 'POST' ? (req.postDataJSON() || {}) : {};
         if (b.action !== 'preview') return route.continue();
-        const id = b.ops?.includes('price') ? jobs.update : jobs.add;
-        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, job: { id: String(id), kind: 'preview', status: 'done' } }) });
+        const id = b.ops?.includes('publish') ? jobs.publish : b.ops?.includes('price') ? jobs.update : jobs.add;
+        return json(route, { ok: true, job: { id: String(id), kind: 'preview', status: 'done' } });
+      });
+      // "Fix this shoe" calls SHEIN for real — the demo answers it (Air Max: SHEIN US8 / US9 carry each other's SKU)
+      const now = () => new Date().toISOString();
+      let shoe = { ok: true, run: null, items: [], links: [], running: null, walkRunning: false };
+      await page.route((u) => u.pathname === '/api/shein/live' && u.searchParams.has('shoe'), (route) => json(route, shoe));
+      await page.route((u) => u.pathname === '/api/shein/links', (route) => {
+        if (route.request().method() !== 'POST') return route.continue();
+        const b = route.request().postDataJSON() || {};
+        shoe = { ...shoe, links: (b.links || []).map((l) => ({ shein_sku: l.sheinSku, spu: l.spu, link_sku: l.linkSku, decision: l.decision, decided_by: 'Kervy', decided_at: now() })) };
+        return json(route, { ok: true, saved: (b.links || []).length });
+      });
+      await page.route((u) => u.pathname === '/api/shein/live' && !u.searchParams.has('shoe'), (route) => {
+        const b = route.request().method() === 'POST' ? (route.request().postDataJSON() || {}) : {};
+        if (b.action !== 'shoe') return route.continue();
+        shoe = { ...shoe, run: { id: 412, mode: `shoe:${b.mode}`, status: 'done', phase: 'Finished', started_at: now(), finished_at: now(), started_by: 'Kervy', current: b.spu,
+          counts: { sizes: 4, stock_changed: 2, links_changed: 2, needs_person: 0 } },
+        items: [
+          { id: 1, shein_size: 'US7', shopify_size: '7', seller_sku: 'A7', before_qty: 2, target_qty: 2, reason: 'ok', result: 'ok', wrote: 'none', action: 'stock already right' },
+          { id: 2, shein_size: 'US8', shopify_size: '8', seller_sku: 'A9', link_to: 'A8', before_qty: 2, target_qty: 1, reason: 'pending_change', result: 'changed', wrote: 'dry', action: 'would change A9 → A8, would set 2 → 1' },
+          { id: 3, shein_size: 'US9', shopify_size: '9', seller_sku: 'A8', link_to: 'A9', before_qty: 3, target_qty: 1, reason: 'pending_change', result: 'changed', wrote: 'dry', action: 'would change A8 → A9, would set 3 → 1' },
+          { id: 4, shein_size: 'US10', shopify_size: '10', seller_sku: 'A10', before_qty: 3, target_qty: 3, reason: 'ok', result: 'ok', wrote: 'none', action: 'stock already right' }] };
+        return json(route, { ok: true, run: shoe.run });
       });
     },
     beats: [
       { say: 'SHEIN Listings shows every Shopify shoe with its SHEIN status, size by size. It replaces 4seller for listings.' },
-      { say: 'The top card says SHEIN is connected, and when Shopify and SHEIN were last read.' },
-      { say: 'Re-read reads both again. It only reads, it never writes to SHEIN.', at: 'button:has-text("Re-read Shopify")' },
-      { say: 'Each tile is a status, and a filter. Synced means on SHEIN and matching Shopify.', at: '.shl-tiles [data-status="synced"]' },
-      { say: 'Needs update means it is on SHEIN, but the price, a size, or a seller SKU differs from Shopify.', at: '.shl-tiles [data-status="out_of_date"]' },
+      { say: 'Re-read reads Shopify and SHEIN again. It only reads, it never writes to SHEIN.', at: 'button:has-text("Re-read Shopify")' },
+      { say: 'Each tile is a status, and a filter. Synced means on SHEIN and matching Shopify. Needs update means the price, a size, or a seller SKU differs.', at: '.shl-tiles' , zoom: false },
       { say: 'Blocked means it cannot be sent until something is fixed. Tap it to see only those shoes.', click: '.shl-tiles [data-status="blocked"]' },
       { say: 'Every blocked row says what is wrong in bold, and what to do next to it.', at: '.shl-product >> nth=0' },
       { say: 'Tap the tile again to see every product.', click: '.shl-tiles [data-status="blocked"]' },
+      { say: 'The Shopify filter shows which shoes can be listed. Inactive or no stock means a draft, or zero pairs.', click: '[data-shop="inactive"]' },
+      { say: 'Those are never sent by publish, add sizes, or update. Their SHEIN stock still goes to zero, so nothing is oversold.', at: '.shl-product >> nth=0', zoom: false },
+      { say: '', click: '[data-shop="all"]', hold: 600 },
       { say: 'Tap the size count to open a shoe size by size.', click: '.shl-product[data-product="gid://shopify/Product/7701"] .shl-caret' },
       { say: 'Each size has its own status. A size SHEIN has no option for stays off SHEIN with the reason. We never pick the nearest size.', at: '.shl-product[data-product="gid://shopify/Product/7701"]', zoom: false },
       { say: 'Details opens everything about one shoe.', click: '.shl-product[data-product="gid://shopify/Product/7701"] button:has-text("Details")' },
-      { say: 'Close it, and tick the shoes you want to work on.', click: '[aria-label="Close"]' },
+      { say: 'On this Air Max, SHEIN size eight and size nine carry each other\'s seller SKU. Press Match sizes.', click: '.shl-req:has-text("carries this SKU") button:has-text("Match sizes")' },
+      { say: 'It opens the fix for this shoe only. For each SHEIN size, pick the Shopify SKU it should carry. Only the same size is offered.', select: ['[data-shoe-fix] tr:has-text("US8") select', 'A8'] },
+      { say: '', select: ['[data-shoe-fix] tr:has-text("US9") select', 'A9'], hold: 700 },
+      { say: 'Or take a size off SHEIN. Then save your choices.', click: '[data-shoe-fix] button:has-text("Save choices")' },
+      { say: 'Now dry run this shoe. Only this shoe is read, in seconds. Nothing is written.', click: '[data-shoe="dry"]' },
+      { say: 'It shows each SHEIN size: the seller SKU change, and the stock it would set.', waitFor: '[data-shoe-run="done"]', at: '[data-shoe-run]', zoom: false },
+      { say: 'If it is right, the person who can send presses Fix this shoe. SHEIN then reviews the SKU change.', at: '[data-shoe="full"]' },
+      { say: 'Close Details, and tick the shoes you want to work on.', click: '.shl-drawer [aria-label="Close"]' },
       { say: '', click: '.shl-product[data-product="gid://shopify/Product/7701"] .shl-chk input', hold: 600 },
       { say: 'The bar at the bottom has three dry runs. Add missing sizes, Update prices and sizes, and Publish new products.', click: '.shl-product[data-product="gid://shopify/Product/7704"] .shl-chk input' },
-      { say: 'A dry run only reads. Press Add missing sizes.', click: '[data-dry="add"]' },
-      { say: 'It shows, for each shoe, exactly what would be sent.', waitFor: '[data-proof]', at: '[data-proof]' },
-      { say: 'And it proves nothing changed: zero SHEIN writes.' },
-      { say: 'Check every line. A size SHEIN does not offer is listed as skipped, with the reason.', at: '.shl-ditem >> nth=0', zoom: false },
-      { say: 'If it is right, someone with the Connect integrations privilege presses Add sizes. That is the send.', at: 'button:has-text("Add sizes to")' },
-      { say: 'It runs on the server, so closing the tab never stops it. SHEIN then reviews it, and the size reads In review until SHEIN answers.' },
-      { say: 'We will not send in this tutorial. Close the dry run.', click: '[aria-label="Close"]' },
+      { say: 'A dry run only reads. Press Add missing sizes.', click: '.shl-bar [data-dry="add"]' },
+      { say: 'It shows, for each shoe, exactly what would be sent. And it proves nothing changed: zero SHEIN writes.', waitFor: '[data-proof]', at: '[data-proof]' },
+      { say: 'Check every line. If it is right, someone with the Connect integrations privilege presses Add sizes. That is the send.', at: 'button:has-text("Add sizes to")' },
+      { say: 'It runs on the server, so closing the tab never stops it. The size reads In review until SHEIN answers.' },
+      { say: 'We will not send in this tutorial. Close the dry run.', click: '.shl-sheet [aria-label="Close"]' },
       { say: 'For a Needs update shoe, the second dry run changes SHEIN prices, sizes turned off, and wrong seller SKUs.', click: '.shl-tiles [data-status="out_of_date"]' },
       { say: '', click: '.shl-product[data-product="gid://shopify/Product/7701"] .shl-chk input', hold: 600 },
-      { say: 'Press Update prices and sizes.', click: '[data-dry="update"]' },
+      { say: 'Press Update prices and sizes.', click: '.shl-bar [data-dry="update"]' },
       { say: 'Each price shows SHEIN now, and the new price: market plus fifteen percent, rounded up, or the Shopify price.', waitFor: '[data-proof]', at: '[data-proof]' },
-      { say: 'Same rule. Check it, then the person who can send presses Update.' },
-      { say: '', click: '[aria-label="Close"]', hold: 500 },
+      { say: '', click: '.shl-sheet [aria-label="Close"]', hold: 500 },
+      { say: 'Now new shoes, not on SHEIN yet. Tick them.', click: '.shl-tiles [data-status="out_of_date"][aria-pressed="true"]' },
+      { say: '', click: '.shl-product[data-product="gid://shopify/Product/7708"] .shl-chk input', hold: 500 },
+      { say: '', click: '.shl-product[data-product="gid://shopify/Product/7709"] .shl-chk input', hold: 500 },
+      { say: 'They still need fixing, so the button reads Fix and publish. A blocked shoe is never dry run. It opens the fix step first.', click: '.shl-bar [data-dry="publish"]' },
+      { say: 'Each shoe says what blocks it. Here, both need a SHEIN category.', waitFor: '[data-bulk] .shl-bulk-table', at: '[data-bulk] .shl-bulk-table', zoom: false },
+      { say: 'Fix in bulk: one category covers every Sneakers shoe in men\'s sizes.', click: '[data-bulk] [data-group^="cat:"] button' },
+      { say: 'Your usual categories are at the top: men\'s and women\'s casual athletic shoes, and kids\' sneakers.', waitFor: '[data-bulk] .shl-cat-fav', at: '[data-bulk] .shl-cat-fav' },
+      { say: '', click: '[data-bulk] .shl-cat-fav .shl-cat-opt >> nth=0', hold: 600 },
+      { say: 'Save it once. It applies to both shoes, and to every other one of this type.', click: '[data-bulk] [data-panel="category"] .btn.primary' },
+      { say: 'The brand is set once per vendor. SHEIN details work the same way, once per SHEIN type.', click: '[data-bulk] [data-group^="brand:"] button' },
+      { say: '', select: ['[data-bulk] [data-panel="brand"] select', 'NIKE01'], hold: 700 },
+      { say: '', click: '[data-bulk] [data-panel="brand"] button:has-text("Save brand")', hold: 1500 },
+      { say: 'Pick the SHEIN colour once for all of them.', select: ['[data-bulk] [data-fix="colour"] select', '901'] },
+      { say: '', click: '[data-bulk] [data-fix="colour"] button.shl-fix', hold: 900 },
+      { say: 'Photos and titles can be set for all of them too. Now both are ready.', at: '[data-bulk] .shl-d-foot', zoom: false },
+      { say: 'Dry run publish takes only the ready ones.', click: '[data-dry="publish-ready"]' },
+      { say: 'It shows what SHEIN would receive for each shoe: sizes, prices, photos. Zero SHEIN writes. Then the person who can send presses Publish.', waitFor: '[data-proof]', at: '[data-proof]' },
+      { say: '', click: '.shl-sheet [aria-label="Close"]', hold: 500 },
       { say: 'The Jobs tab lists every re-read, dry run and send, with its progress.', click: '.seg-btn:has-text("Jobs")' },
-      { say: 'The Setup tab holds what is set once: box sizes, the SHEIN category and brand, and the go-live and 4seller cut-over cards.', click: '.seg-btn:has-text("Setup")' },
-      { say: 'Box sizes are in inches and pounds. Over thirty inches or thirty pounds is refused as a typo.', at: '[data-setup="box"]', zoom: false },
-      { say: 'Stock is not done here. The live sync keeps SHEIN stock in step with Shopify.' },
-      { say: 'Remember: look, dry run, check, then send. Never change a size to make it fit.' },
+      { say: 'The Setup tab holds what is set once: box sizes, categories, brands, and the go-live and 4seller cut-over cards. Box sizes are in inches and pounds.', click: '.seg-btn:has-text("Setup")' },
+      { say: 'Remember: look, fix, dry run, check, then send. Never change a size to make it fit.' },
     ],
   },
   {

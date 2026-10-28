@@ -1365,6 +1365,11 @@ For the pushes to actually fire when a supplier never uses the portal:
   failure is logged with a short tail of the deployment ID (`[tracking sheet] …abcXYZ failed:`).
   It was a single slot until 2026-08-17, so adding a sheet meant silently killing the old one.
   Both callers fire-and-forget, which is why the function logs rather than throws.
+  **Each sheet gets 30 s** (was 6 s until 2026-10-28): an Apps Script `/exec` routinely takes
+  8–9 s, so at 6 s about half the updates were logged `… failed: This operation was aborted`
+  (`e2e/tracking-sheet-forward.spec.js`). A sheet answering `{"ok":false,"error":"…SpreadsheetApp.getActive…"}`
+  is the script's own permissions: its `appsscript.json` `oauthScopes` must include
+  `…/auth/spreadsheets`, then run once, Allow, and redeploy (found 2026-10-28).
 - **Sub-status** — 17TRACK's `latest_status` carries `{ status, sub_status, sub_status_descr }`.
   `status` is the coarse stage we map onto `po_boxes.status` and it's too blunt to act on:
   "Exception" doesn't say whether customs is holding the parcel or the courier already sent it

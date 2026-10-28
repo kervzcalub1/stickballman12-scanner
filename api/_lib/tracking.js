@@ -243,10 +243,11 @@ export async function forwardTrackingToSheet(updates) {
   // Every sheet gets its own request, its own timeout and its own failure. One slow or
   // broken sheet must not stop the others receiving the update — and none of them may
   // block the DB write or the 200 we owe 17TRACK, which is why both callers
-  // fire-and-forget this.
+  // fire-and-forget this. 30 s, not 6: an Apps Script /exec routinely takes 8–9 s (measured
+  // 2026-10-28), and at 6 s about half the updates were logged "aborted". Nothing waits on it.
   const results = await Promise.all(urls.map(async (url) => {
     const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), 6000);
+    const t = setTimeout(() => ac.abort(), 30000);
     try {
       const res = await fetch(url, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: ac.signal,

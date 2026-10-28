@@ -112,6 +112,13 @@ async function summaryOut() {
   };
 }
 
+// A publish choice (title / colour / PH photos) changes a new shoe's stored readiness: recount at once, not
+// at the next Re-read. DB only — no SHEIN call; a failure never fails the save.
+async function recountAfterChoices() {
+  if (!(await latestListingJob('snapshot', 'done').catch(() => null))) return;
+  await recomputeStored().catch((e) => console.error('[shein-listing] recompute after publish choices', e.message));
+}
+
 export default async function handler(req, res) {
   applySecurity(req, res);
   const user = requireRole(req, res, ['ph_team']);
@@ -299,6 +306,7 @@ export default async function handler(req, res) {
         if (b.usePhPhotos !== undefined) patch.usePhPhotos = b.usePhPhotos === true;
         const row = await setListingPublishChoices(pid, patch);
         if (!row) return send(res, 404, { ok: false, error: 'That product isn’t in SHEIN Listings.' });
+        await recountAfterChoices();
         return send(res, 200, { ok: true, product: productOut(row) });
       }
       case 'publish_choices_bulk': {
@@ -338,6 +346,7 @@ export default async function handler(req, res) {
           if (vals && !vals.some((v) => Number(v.attribute_value_id) === patch.skcValueId)) return send(res, 400, { ok: false, error: 'That colour isn’t in SHEIN’s list for this product type.' });
         }
         const updated = await setListingPublishChoicesMany(hasPatch ? productIds.filter((x) => have.has(x)) : [], patch, titles.filter((x) => have.has(x[0])));
+        if (updated) await recountAfterChoices();
         return send(res, 200, { ok: true, updated, missing });
       }
       case 'look_again': {

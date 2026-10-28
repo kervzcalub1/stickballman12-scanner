@@ -11151,6 +11151,12 @@ export async function listingPublishTypeUsage() {
 export async function listingVendorUsage() {
   return await db()`SELECT lower(vendor) AS vendor, count(*)::int AS n FROM shein_listing_products WHERE vendor IS NOT NULL AND spu IS NULL GROUP BY 1 ORDER BY 2 DESC`;
 }
+// How many PH edited photos each style has — the publishing readiness counts these when a product
+// is set to "Use PH edited photos" (the dry run sends them; it fell back to counting Shopify's).
+export async function phPhotoCounts() {
+  const rows = await db()`SELECT sku, count(*)::int AS n FROM product_photos WHERE source = 'ph_edited' GROUP BY sku`;
+  return new Map(rows.map((r) => [String(r.sku).trim().toUpperCase(), r.n]));
+}
 export async function productPhotosForSku(sku, source = 'ph_edited') {
   return await db()`SELECT angle, url, source FROM product_photos WHERE sku = ${String(sku || '').trim()} AND source = ${source}
     ORDER BY CASE angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, created_at`;
@@ -11160,7 +11166,8 @@ export async function productPhotosForSku(sku, source = 'ph_edited') {
 // What the compute carries over: person exclusions, the accepted baseline, last errors.
 export async function loadListingPrev() {
   const [products, variants] = await Promise.all([
-    db()`SELECT shopify_product_id, excluded, excluded_by, excluded_at, shopify_hash, shopify_json, computed_hash, spu, review_version FROM shein_listing_products`,
+    // + the publish choices (title / colour / PH photos): the stored readiness of a new shoe is judged on them too
+    db()`SELECT shopify_product_id, excluded, excluded_by, excluded_at, shopify_hash, shopify_json, computed_hash, spu, review_version, title_override, skc_value_id, use_ph_photos FROM shein_listing_products`,
     db()`SELECT row_key, shein_sku, match, excluded, excluded_by, excluded_at, synced_hash, synced_fields, last_error FROM shein_listing_variants`,
   ]);
   return { products: new Map(products.map((r) => [r.shopify_product_id, r])), variants: new Map(variants.map((r) => [r.row_key, r])) };

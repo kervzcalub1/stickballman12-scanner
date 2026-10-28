@@ -487,7 +487,7 @@ export function planPublish(input) {
   // images (§2.5) — converted by the server; refusals / too few photos block
   const ip = imagePlan(fill);
   plan.imagePlan = { newPlan: ip.newPlan, need: ip.need, sku: ip.sku };
-  if (readiness && product.imageCount != null && Number(product.imageCount) < ip.need) blockers.push(blocker('no_image', { count: Number(product.imageCount), need: ip.need }));
+  if (readiness && product.imageCount != null && Number(product.imageCount) < ip.need) blockers.push(blocker('no_image', { count: Number(product.imageCount), need: ip.need, ph: product.phPhotos ?? null, style: product.style || null }));
   if (images) {
     for (const e of images.errors || []) blockers.push(blocker('image_rejected', { reason: e.reason, sheinMessage: e.sheinMessage || null, photo: e.photo + 1 }));
     if ((images.photoCount || 0) < ip.need) blockers.push(blocker('no_image', { count: images.photoCount || 0, need: ip.need }));

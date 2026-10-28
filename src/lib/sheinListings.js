@@ -91,8 +91,11 @@ export const BLOCKERS = {
     title: (p) => `${p?.brand || 'This brand'} isn’t an authorised brand on our SHEIN store.`, fix: () => 'An admin applies for it in Seller Center.',
     action: { kind: 'open_seller_center', label: 'Seller Center ↗' } },
   no_image: { level: 'blocked', scope: 'product', applies: ['publish'],
-    title: (p) => `Only ${p?.count ?? 0} photo${Number(p?.count) === 1 ? '' : 's'}, SHEIN needs ${p?.need ?? 3}.`, fix: () => 'Use the PH edited photos, or add photos on Shopify.',
-    action: { kind: 'use_ph_photos', label: 'Use PH edited photos' } },
+    // ph: null = Shopify's photos counted · 0 = "Use PH edited photos" is on but the PH team has none for the style · n = PH photos counted
+    title: (p) => `Only ${p?.count ?? 0} ${Number(p?.ph) > 0 ? 'PH edited ' : ''}photo${Number(p?.count) === 1 ? '' : 's'}, SHEIN needs ${p?.need ?? 3}.`,
+    fix: (p) => (p?.ph === 0 ? `“Use PH edited photos” is on, but the PH team has no edited photos for ${p?.style || 'this style'} yet — upload them (or add photos on Shopify).`
+      : Number(p?.ph) > 0 ? `Upload more PH edited photos for ${p?.style || 'this style'}, or switch back to Shopify’s photos.` : 'Use the PH edited photos, or add photos on Shopify.'),
+    action: (p) => (p?.ph == null ? { kind: 'use_ph_photos', label: 'Use PH edited photos' } : null) },
   image_rejected: { level: 'blocked', scope: 'product', applies: ['publish'],
     title: (p) => `Photo rejected: ${p?.reason || p?.sheinMessage || 'no reason given'}.`, fix: () => 'Replace the photo.', action: shopifyLink },
   title_too_long: { level: 'blocked', scope: 'product', applies: ['publish'],

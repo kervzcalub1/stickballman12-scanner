@@ -592,6 +592,14 @@ Spec: `scratchpad/plan/phase4-spec.md` (API specialist; raw pages `scratchpad/p4
   again → fresh dry run Ready; store-gate banner; 390 px no horizontal scroll (drawer + picker, Setup, sheet).
 
 ## Bulk edit before publishing + the Shopify active filter + the listing syncs' stock gate (built 2026-10-28)
+
+**Photos + "Use PH edited photos" (fixed 2026-10-28):** the readiness counted Shopify's photos only
+(`imageCount`), so turning PH photos on never cleared "Only 1 photo, SHEIN needs 2" — while the dry run
+does send the style's PH photos (`product_photos`, source `ph_edited`; none → Shopify's). `publishContext`
+now loads the PH photo count per style (`phPhotoCounts`) and, with the choice on, counts those; with none
+the `no_image` line says the PH team has no edited photos for that style (no "Use PH photos" button).
+`loadListingPrev` now carries `title_override` / `skc_value_id` / `use_ph_photos`, so the stored list rows
+are judged on the choices too, and `publish_choices(_bulk)` recount at once (DB only).
 - **Shopify filter** (Products, `?shop=active|inactive`, refresh-proof; default All): chips "All · Active (in stock) n ·
   Inactive or no stock n" (counts = `shopifyCounts`). Same rule client side: `rowSyncable(row)` (`shopify_status` ACTIVE
   and `counts.sizes` > 0) in `src/lib/sheinListings.js`.

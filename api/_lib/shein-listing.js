@@ -36,7 +36,7 @@ import {
   getListingProduct, listListingProducts, updateListingItem, markListingItemSending, dueRunItems, runJobsWithDueItems, requeueListingJob,
   setListingJobStatus, listingInflight, markVariantsPublished, setVariantsLastError, verifySizeMap, verifySizeMapById, getPlatformQuotes, listListingJobItems,
   createRunJob, getListingItems, sheinShelfRecords, markVariantsSynced, listingPriceOffProducts, listCategoryMaps, listBrandMaps, setListingPublished, listAttrDefaults,
-  listPublishUnconfirmed, resumeListingJob as resumeJobRow,
+  listPublishUnconfirmed, resumeListingJob as resumeJobRow, phPhotoCounts,
 } from './db.js';
 import { walkActive, pushSpus } from './shein-live.js';
 import {
@@ -318,7 +318,8 @@ async function computeAndSave({ products, payloads, sizes, io, snapshot = false,
 // Phase 4's readiness for products not on SHEIN — from what is CACHED (no SHEIN call): category maps,
 // SHEIN's rules / templates / permissions for the mapped categories, brand maps + list, attr defaults, D6.
 async function publishContext(maps, market) {
-  const [categoryMaps, brandMaps, attrDefaults, box, brandsRow, unconf] = await Promise.all([listCategoryMaps(), listBrandMaps(), listAttrDefaults(), readBoxDefaults(), getListingCache('brands', 'store'), listPublishUnconfirmed()]);
+  const [categoryMaps, brandMaps, attrDefaults, box, brandsRow, unconf, phCounts] = await Promise.all([listCategoryMaps(), listBrandMaps(), listAttrDefaults(), readBoxDefaults(), getListingCache('brands', 'store'), listPublishUnconfirmed(),
+    phPhotoCounts().catch(() => new Map())]);
   // re-review G1: a product with a publish SHEIN never confirmed shows publish_unconfirmed (no new publish)
   const unconfirmed = new Map(); for (const x of unconf) if (!unconfirmed.has(x.shopify_product_id)) unconfirmed.set(x.shopify_product_id, { itemId: Number(x.id), jobId: Number(x.job_id) });
   const cats = [...new Set(categoryMaps.map((m) => Number(m.category_id)))]; const types = [...new Set(categoryMaps.map((m) => Number(m.product_type_id)))];
@@ -328,7 +329,13 @@ async function publishContext(maps, market) {
   const permissions = new Map();
   for (const r of permRows) for (const x of r.payload || []) permissions.set(`${r.key}|${x.attribute_id}`, x.has_permission);
   const ctx = { categoryMaps, brandMaps, attrDefaults, box, brands: brandsRow?.payload || null, fills, templates, permissions, maps, unconfirmed };
-  return (p, pv, excludedVariants) => publishReadiness(p, { ...ctx, productRow: pv, excludedVariants, market });
+  // "Use PH edited photos" on: the dry run sends the style's PH photos when it has any (else Shopify's),
+  // so the photo count is theirs — and with none, the photo line says so (it read Shopify's count only).
+  return (p, pv, excludedVariants) => {
+    const ph = pv?.use_ph_photos ? (phCounts.get(String(p?.style || '').trim().toUpperCase()) || 0) : null;
+    const prod = ph ? { ...p, imageCount: ph, phPhotos: ph } : { ...p, phPhotos: ph };
+    return publishReadiness(prod, { ...ctx, productRow: pv, excludedVariants, market });
+  };
 }
 
 // The drawer's checklist for a product not on SHEIN, from what is cached (no SHEIN call): lines SHEIN's

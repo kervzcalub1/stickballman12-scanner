@@ -3484,6 +3484,39 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     expect(await logCount()).toBe(n0); expect(fake.writes.length).toBe(w0);
   });
 
+  // 2026-10-28 (user): a shoe with too few Shopify photos, “Use PH photos on all” pressed — still ✕. The readiness
+  // counted Shopify’s photos only; the dry run sends the style’s PH edited photos. Now it counts those, and says so when there are none.
+  test('photos: “Use PH edited photos” on → the photo line counts the style’s PH photos; none → it says the PH team has none (not “use PH photos”)', async ({ request }) => {
+    const style = 'DD1391-100';
+    const setup = async () => (await (await request.get(`/api/shein/listings?publishSetup=${encodeURIComponent(gidP(7709))}`, { headers: auth.ph })).json()).products[0];
+    const photos = (p) => p.checklist.find((l) => l.key === 'photos');
+    const choose = (on) => request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'publish_choices', productId: gidP(7709), usePhPhotos: on } });
+    const was = (await pool.query(`SELECT shopify_json FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(7709)])).rows[0].shopify_json;
+    await pool.query(`UPDATE shein_listing_products SET shopify_json = jsonb_set(shopify_json, '{imageCount}', '1') WHERE shopify_product_id = $1`, [gidP(7709)]);
+    await pool.query(`DELETE FROM product_photos WHERE sku = $1`, [style]);
+    try {
+      let p = await setup();
+      expect(photos(p).ok).toBe(false);
+      expect(JSON.stringify(photos(p))).toContain('Use the PH edited photos');
+      expect((await choose(true)).status()).toBe(200);
+      p = await setup();
+      expect(photos(p).ok).toBe(false);                      // on, but the PH team has no photos for the style
+      expect(JSON.stringify(photos(p))).toContain(`no edited photos for ${style}`);
+      await pool.query(`INSERT INTO product_photos (sku, angle, url, source, created_by) SELECT $1, a, 'https://r2.e2e.test/ph-' || a || '.jpg', 'ph_edited', 'e2e' FROM unnest(ARRAY['side','diagonal','top']) a`, [style]);
+      p = await setup();
+      expect(photos(p).ok).not.toBe(false);                  // 3 PH photos counted — the ✕ is gone
+      expect(p.blocking).not.toContain('photos');
+      // the list row follows at once (the choice is part of the stored readiness now)
+      expect((await choose(true)).status()).toBe(200);
+      const row = (await pool.query(`SELECT blockers FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(7709)])).rows[0];
+      expect(JSON.stringify(row.blockers || [])).not.toContain('no_image');
+    } finally {
+      await pool.query(`DELETE FROM product_photos WHERE sku = $1`, [style]);
+      await pool.query(`UPDATE shein_listing_products SET shopify_json = $2 WHERE shopify_product_id = $1`, [gidP(7709), JSON.stringify(was)]);
+      await choose(false);
+    }
+  });
+
   test('the Shopify filter: ?shopify=active | inactive (+ counts for the same filters); anything else 400', async ({ request }) => {
     const get = async (qs) => { const r = await request.get(`/api/shein/listings?status=all&pageSize=200${qs}`, { headers: auth.ph }); expect(r.status()).toBe(200); return r.json(); };
     const all = await get(''); const on = await get('&shopify=active'); const off = await get('&shopify=inactive');

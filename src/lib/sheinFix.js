@@ -17,10 +17,9 @@
 import { zipSync } from 'fflate';
 import { readSheetRows, openWorkbook, readSheet } from './sheinReprice.js';
 import { buildXlsx } from './xlsx.js';
-import { compareSize, parseSize } from './sheinCheck.js';
+import { compareSize, parseSize, sameSizeForLink } from './sheinCheck.js';
 import { styleFromTitle } from './ebayReprice.js';
 
-const sizeMatches = (sheinSize, shopifySize) => ['ok', 'ok_suffix', 'check_group'].includes(compareSize(sheinSize, shopifySize));
 
 /* ------------------------------ SHEIN orders ------------------------------ */
 
@@ -59,7 +58,7 @@ export function ruleRelink(row, variants) {
   const style = styleFromTitle(row.name);
   if (!style || !row.size) return null;
   const want = style.toUpperCase();
-  const hits = variants.filter((v) => String(v.style || '').toUpperCase() === want && sizeMatches(row.size, v.size));
+  const hits = variants.filter((v) => String(v.style || '').toUpperCase() === want && sameSizeForLink(row.size, v.size, row.name, v.productTitle));
   const active = hits.filter((v) => !v.status || v.status === 'ACTIVE');
   const pick = active.length === 1 ? active[0] : hits.length === 1 ? hits[0] : null;
   return pick ? { sku: pick.sku, size: pick.size, productTitle: pick.productTitle, by: 'rule', why: `same style ${want}, same size` } : null;
@@ -93,7 +92,7 @@ export function verifyAiLink(row, suggestion, variants) {
   if (!suggestion?.shopifySku) return null;
   const v = variants.find((x) => String(x.sku) === String(suggestion.shopifySku));
   if (!v || (suggestion.productId && v.productId !== suggestion.productId)) return null;
-  if (!sizeMatches(row.size, v.size)) return null;
+  if (!sameSizeForLink(row.size, v.size, row.name, v.productTitle)) return null;
   return { sku: v.sku, size: v.size, productTitle: v.productTitle, by: 'ai', why: suggestion.reason || 'AI match, size verified' };
 }
 
@@ -127,7 +126,7 @@ export function buildFix(checked, variants, { openBySku = {}, aiLinks = {}, deci
   const movedTo = new Map();
   for (const r of checked) {
     if (!r.variant || !r.size || !r.issues.some((i) => ['wrong_size', 'wrong_group'].includes(i))) continue;
-    const sib = (byProduct.get(r.variant.productId) || []).find((v) => v.sku !== r.sellerSku && sizeMatches(r.size, v.size));
+    const sib = (byProduct.get(r.variant.productId) || []).find((v) => v.sku !== r.sellerSku && sameSizeForLink(r.size, v.size, r.name, v.productTitle));
     if (sib) movedTo.set(sib.sku, r.size);
   }
   const rows = checked.map((r) => {
@@ -158,7 +157,7 @@ export function buildFix(checked, variants, { openBySku = {}, aiLinks = {}, deci
     // matched it to this exact SKU — and SHEIN now carries that SKU — has checked it.
     const sizeIssue = r.issues.find((i) => ['wrong_size', 'wrong_group'].includes(i) || (!applied && ['blank', 'other_system'].includes(i)));
     if (sizeIssue) {
-      const sib = (byProduct.get(r.variant.productId) || []).find((v) => v.sku !== r.sellerSku && r.size && sizeMatches(r.size, v.size));
+      const sib = (byProduct.get(r.variant.productId) || []).find((v) => v.sku !== r.sellerSku && r.size && sameSizeForLink(r.size, v.size, r.name, v.productTitle));
       if (sib) return done(0, 'swap', `Change the seller SKU to ${sib.sku} (that is Shopify size ${sib.size}) — it sells again on the next fix`, { sku: sib.sku, size: sib.size, by: 'rule', productTitle: sib.productTitle });
       if (sizeIssue === 'blank') return done(0, 'no_size', `Give this SHEIN size ${addLabel(r.variant.size)} (Shopify’s size for ${r.sellerSku})`);
       if (sizeIssue === 'other_system') return done(0, 'other_system', `Make this size ${addLabel(r.variant.size)} on SHEIN (Shopify’s size for ${r.sellerSku})`);

@@ -55,6 +55,27 @@ test.describe('SHEIN fix rules', () => {
     expect(ruleRelink({ name: 'Nike Dunk Low (DD1391-100)', size: 'US10' }, VARIANTS)).toBeNull();   // no size 10 in that product
   });
 
+  test('a women’s SHEIN size never links to a men’s Shopify size (US8W ≠ men’s 8)', () => {
+    // 2026-10-28, live dry run #52: Nike Ja 3 (men's sizes on Shopify, no W) listed on SHEIN as US8W / US8.5W —
+    // the swap would have linked SHEIN US8W to Shopify men's 8. Women's 8 ≈ men's 6.5.
+    const JA = (sku, size) => V(sku, size, 2, 'PJ', { productTitle: 'Nike Ja 3 Twelve Time (IQ6755-300)', style: 'IQ6755-300' });
+    const W = (sku, size) => V(sku, size, 2, 'PW', { productTitle: 'Nike AL8 Smoke Grey Women\'s (FJ3794-101)', style: 'FJ3794-101' });
+    const B = (sku, size) => V(sku, size, 2, 'PB', { productTitle: 'Jordan 6 Retro Low Blackout Women\'s (IO9786-001)', style: 'IO9786-001' });
+    const vars = [JA('J8', '8'), JA('J9', '9'), W('W8', '8W'), W('W9', '9W'), B('B8', '8')];
+    const ja = (line, sku, size) => S(line, sku, size, 1, { name: 'Nike Ja 3 Twelve Time (IQ6755-300)', spu: 'spuJ' });
+    // swap path: SHEIN US8W carries Shopify men's 9 — there is no women's 8, so no sibling: held at 0 for a person
+    const fix = buildFix(checkRows([ja(2, 'J9', 'US8W')], vars), vars);
+    expect(fix.rows[0]).toMatchObject({ newQty: 0, linkTo: null });
+    // dead-SKU path, same rule
+    expect(ruleRelink({ name: 'Nike Ja 3 Twelve Time (IQ6755-300)', size: 'US8W' }, vars)).toBeNull();
+    expect(verifyAiLink({ size: 'US8W', name: 'Nike Ja 3 Twelve Time (IQ6755-300)' }, { productId: 'PJ', shopifySku: 'J8' }, vars)).toBeNull();
+    // still links: W ↔ W, and a bare size on a product whose title says Women's
+    expect(ruleRelink({ name: 'Nike AL8 Smoke Grey Women\'s (FJ3794-101)', size: 'US8W' }, vars)).toMatchObject({ sku: 'W8' });
+    expect(ruleRelink({ name: 'Jordan 6 Retro Low Blackout Women\'s (IO9786-001)', size: 'US8W' }, vars)).toMatchObject({ sku: 'B8' });
+    // and men's still links to men's
+    expect(ruleRelink({ name: 'Nike Ja 3 Twelve Time (IQ6755-300)', size: 'US9' }, vars)).toMatchObject({ sku: 'J9' });
+  });
+
   test('an AI suggestion counts only when the rules agree: same product, same size', () => {
     const row = { size: 'US9', name: 'x' };
     expect(verifyAiLink(row, { productId: 'P2', shopifySku: 'N9' }, VARIANTS)).toMatchObject({ sku: 'N9', by: 'ai' });

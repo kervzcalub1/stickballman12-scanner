@@ -21,7 +21,7 @@ import { shopifyAllVariants, shopifyProductsLive, shopifyProductIdsForSkus, shop
 import {
   listSheinLinks, saveSheinLinks, createSheinLiveRun, updateSheinLiveRun, getSheinLiveRun, latestSheinLiveRun, markStaleSheinRuns,
   addSheinLiveItems, sheinOpenNotDeducted, getSetting, sheinLastWalkFacts, sheinPushQueueAdd, sheinPushQueueDone, sheinPushQueueList, sheinShelfRecords, saveSheinShelf,
-  listingInflightSpus, latestShoeRun,
+  listingInflightSpus, latestShoeRun, listingProductIdsForStyle,
 } from './db.js';
 import { sheinAiMatch, sheinAiConfigured } from './shein-ai.js';
 import { readSync } from './shein-orders.js';
@@ -36,8 +36,9 @@ export const walkModeFor = (flight, mode) => (flight && mode === 'full' ? 'stock
 // Everything the step touches outside itself — swappable in tests (e2e/shein-live.spec.js).
 export const IO = {
   sheinSpuInfo, sheinStock, sheinInReview, sheinSellerSkusTaken, sheinSetSellerSkus, sheinSetStock,
-  shopifyProductsLive, shopifyProductIdsForSkus, saveSheinLinks, addSheinLiveItems, sheinOpenNotDeducted, readSync, sheinAiMatch, sheinAiConfigured,
+  shopifyProductsLive, shopifyProductIdsForSkus, listingProductIdsForStyle, saveSheinLinks, addSheinLiveItems, sheinOpenNotDeducted, readSync, sheinAiMatch, sheinAiConfigured,
   sheinSetShelf, sheinCheckDeletable, sheinDeleteSkc, sheinDeleteLogs, sheinShelfRecords, saveSheinShelf,
+  sheinEditAttrs: async (spu) => (await import('./shein-listing.js')).editAttrs(spu),   // lazy: shein-listing imports this file
   readBackWaits: [3_000, 5_000, 10_000],   // ms between read-backs of a size still showing the old stock
 };
 let active = null;   // { runId, promise } — one walk per process
@@ -76,7 +77,9 @@ const decisionsMap = async () => Object.fromEntries((await listSheinLinks()).map
 // Fresh Shopify variants for one SHEIN product: every product its seller SKUs point at (read
 // live; a SKU the catalogue doesn't know is looked up by itself), plus same-style products
 // for relinks, plus anything a person linked it to, plus `extraIds` (the one-shoe run: the
-// Shopify product SHEIN Listings matched it to — it has no catalogue to find same-style ones).
+// Shopify product SHEIN Listings matched it to). With no catalogue (the one-shoe run) the
+// same-style products come from SHEIN Listings' copy of Shopify — without them a shoe re-made
+// under new SKUs read as "gone" and its dead sizes were never relinked (2026-10-28).
 async function liveVariants(rows, catalogue, decisions, io, extraIds = []) {
   const bySku = new Map((catalogue || []).map((v) => [String(v.sku), v]));
   const ids = new Set(extraIds.filter(Boolean)); const unknown = [];
@@ -94,6 +97,7 @@ async function liveVariants(rows, catalogue, decisions, io, extraIds = []) {
   }
   const style = styleFromTitle(rows[0]?.name || '');
   if (style && catalogue) for (const v of catalogue) if (String(v.style || '').toUpperCase() === style.toUpperCase()) ids.add(v.productId);
+  if (style && !catalogue && io.listingProductIdsForStyle) for (const id of await io.listingProductIdsForStyle(style)) ids.add(id);
   const live = await io.shopifyProductsLive([...ids]);
   if (live.error) throw new Error(live.error);
   const fresh = new Set(ids);
@@ -152,8 +156,16 @@ export async function stepProduct(spuName, ctx) {
         if (dead) skipResult.set(e.skuCode, { sheinSku: e.skuCode, why: `${e.frees || e.supplierSku} is already used by a SHEIN listing in review or outside this product` });
         return !dead;
       });
+      // SHEIN re-checks the WHOLE product on this edit: a detail it now requires (e.g. "Reflection") goes
+      // with it from Setup → SHEIN details, or — none set — the edit waits (SHEIN would refuse it).
+      const attrs = edits.length && io.sheinEditAttrs ? await io.sheinEditAttrs(spu).catch((e) => { console.error('[shein-live] details', spuName, e.message); return null; }) : null;
+      if (attrs?.problems?.length) {
+        const names = [...new Set(attrs.problems.map((p) => p.params?.attribute || `detail ${p.params?.attributeId ?? '?'}`))].join(', ');
+        for (const e of edits) skipResult.set(e.skuCode, { sheinSku: e.skuCode, why: `SHEIN now requires ${names} on this shoe — set it in SHEIN Listings → Setup → SHEIN details` });
+        edits = [];
+      } else if (attrs?.list?.length) edits = edits.map((e) => ({ ...e, withAttrs: attrs.added.map((a) => a.attribute) }));
       if (edits.length && mode === 'full') {
-        const r = await io.sheinSetSellerSkus(spuName, edits);
+        const r = await io.sheinSetSellerSkus(spuName, edits, { attributes: attrs?.list || null });
         for (const e of edits) editResult.set(e.skuCode, { ...e, ok: r.ok, error: r.ok ? null : r.messages.join(' | ') || 'SHEIN refused the edit' });
         if (r.ok) {
           const byRow = new Map(plan.rows.map((x) => [x.sheinSku, x]));
@@ -257,6 +269,8 @@ async function stepShelf({ spu, spuName, plan, variants = [], mode, runId, sourc
   const save = (x, patch) => io.saveSheinShelf({ skc: x.skc, spu: spuName, name: nameOf(x.skc), runId, ...patch });
   const bump = (k) => { counts[k] = (counts[k] || 0) + 1; };
   for (const x of acts) {
+    // Only the walk deletes (below): a one-shoe dry run must not say it would (2026-10-28).
+    if ((x.act === 'delete' || x.act === 'delete_check') && source !== 'walk') { notes.set(x.skc, `${x.why} — only the store-wide walk asks SHEIN to delete a shoe; Fix this shoe never does`); continue; }
     if (mode === 'dry') {
       const t = { delist: `would DELIST this shoe on SHEIN (${x.why})`, relist: `would LIST this shoe again (${x.why})`, delete: `would ask SHEIN to DELETE this shoe (${x.why})` }[x.act];
       if (t || x.act === 'wait' || x.act === 'delete_check' || x.act === 'relink') notes.set(x.skc, t || x.why);

@@ -84,7 +84,9 @@ export const BLOCKERS = {
     title: (p) => `No foot length for ${sz(p)} (SHEIN’s size chart needs one).`, fix: () => 'Add it on the Sizes tab.',
     action: { kind: 'edit_size_map', label: 'Add foot length' } },
   missing_attr: { level: 'blocked', scope: 'product', applies: ['publish', 'edit', 'add_sizes'],
-    title: (p) => `Missing SHEIN detail: ${p?.attribute || 'a required attribute'}.`, fix: () => 'Set it once for the product type.', action: { kind: 'set_attr', label: 'Set it' } },
+    title: (p) => `Missing SHEIN detail: ${p?.attribute || 'a required attribute'}.`,
+    fix: (p) => (p?.why === 'typed_per_shoe' ? 'It is typed per shoe — fill it in for this shoe in Seller Center, then dry run again.' : 'Set it once for the product type.'),
+    action: { kind: 'set_attr', label: 'Set it' } },
   no_category: { level: 'blocked', scope: 'product', applies: ['publish'],
     title: (p) => `No SHEIN category picked.${p?.suggestion ? ` We suggest ${p.suggestion}.` : ''}`, fix: () => 'Choose the SHEIN category.', action: { kind: 'choose_category', label: 'Choose category' } },
   brand_not_authorized: { level: 'blocked', scope: 'product', applies: ['publish'],
@@ -234,6 +236,9 @@ export const BLOCKERS = {
     title: () => 'Nothing to change on SHEIN for this product.', fix: () => '', action: null },
   title_not_ours: { level: 'note', scope: 'product', applies: ['edit'],
     title: () => 'The title differs from Shopify, but 4seller listed this product — we don’t change its title or photos.', fix: () => '', action: null },
+  attrs_added: { level: 'note', scope: 'product', applies: ['edit', 'add_sizes'],
+    title: (p) => `Also sends SHEIN details it now requires: ${(p?.attributes || []).join(', ') || 'a required detail'} (from Setup → SHEIN details).`,
+    fix: () => 'SHEIN refuses any edit of this shoe without them. A product-level change: SHEIN reviews every colour of it.', action: null },
   images_later: { level: 'note', scope: 'product', applies: ['edit'],
     title: () => 'Photo changes go up with publishing (a later phase).', fix: () => '', action: null },
   too_many_prices: { level: 'blocked', scope: 'product', applies: ['edit'],
@@ -919,7 +924,8 @@ const imageOf = (s) => {
 //   market     Map(variantId → market cents) · warehouse { code, name, count } (merchant warehouses;
 //              `code` = the US default type-1 warehouseCode → stock_info_list.supplier_warehouse_id)
 // Out: { body | null, plan } — body is EXACTLY what partialEdit gets; plan is what a person reads.
-export function planAddSizes({ spu, product, stored = [], maps = [], sizes = null, permission = null, customValues = [], sortSupported = false, fill = null, fillUnread = false, taken = new Set(), market = new Map(), warehouse = null }) {
+//   attrs      attributePatch() (src/lib/sheinPublish.js): the product's details + the required ones it lacks
+export function planAddSizes({ spu, product, stored = [], maps = [], sizes = null, permission = null, customValues = [], sortSupported = false, fill = null, fillUnread = false, taken = new Set(), market = new Map(), warehouse = null, attrs = null }) {
   const plan = { spu: spu?.spuName || null, skc: null, sizes: [], relinks: [], skipped: [], blockers: [], notes: [], sortSent: false, sizeTable: false, sibling: null };
   if (!spu?.spuName) { plan.blockers.push(blocker('not_on_shein_product')); return { body: null, plan }; }
   const payload = spuPayload(spu);
@@ -946,6 +952,7 @@ export function planAddSizes({ spu, product, stored = [], maps = [], sizes = nul
   if (titleRule?.show === true && titleRule.required === true && !skcNames.length) plan.blockers.push(blocker('skc_field_uncopyable', { field: 'skc_title' }));
   const linkRule = rule('reference_product_link');
   if (linkRule?.show === true && linkRule.required === true) plan.blockers.push(blocker('skc_field_uncopyable', { field: 'competing_product_link' }));
+  plan.blockers.push(...(attrs?.problems || []));   // a required detail with no default: SHEIN would refuse the edit
   if (plan.blockers.length) return { body: null, plan };
   plan.skc = String(skcs[0].skcName);
   plan.categoryId = payload.categoryId; plan.sizeAttributeId = Number(sizeAttr);
@@ -1048,6 +1055,7 @@ export function planAddSizes({ spu, product, stored = [], maps = [], sizes = nul
     plan.skcTitleCopied = true;
   }
   const body = { spu_name: spu.spuName, skc_list: [skc] };
+  withAttrs(body, plan, attrs);
   // spu-info doesn't return a custom order, so the FULL list goes in numeric size order — only when
   // SHEIN says the store may sort sizes, and only when every existing size has its value id.
   if (sortSupported && rows.every((r) => r.sizeValueId != null)) {
@@ -1128,7 +1136,8 @@ export function planPrice({ spu, stored = [], targets = new Map(), locks = new M
 //   names: the SPU name in EVERY language SHEIN keeps (spu-info read with fill-in-standard's
 //   language_title_max_length_list) — an object[] is replaced whole (doc 3002047 rule 3), so without
 //   it no title is sent.
-export function planEdit({ spu, product, stored = [], productRow = null, fill = null, fillUnread = false, taken = new Set(), recentShelf = new Set(), names = null }) {
+//   attrs: attributePatch(), as planAddSizes.
+export function planEdit({ spu, product, stored = [], productRow = null, fill = null, fillUnread = false, taken = new Set(), recentShelf = new Set(), names = null, attrs = null }) {
   const plan = { op: 'edit', spu: spu?.spuName || null, mallOn: [], relinks: [], title: null, skipped: [], blockers: [], notes: [] };
   if (!spu?.spuName) { plan.blockers.push(blocker('not_on_shein_product')); return { body: null, plan }; }
   if (fillUnread) { plan.blockers.push(blocker('skc_field_uncopyable', { why: 'fill_unread' })); return { body: null, plan }; }
@@ -1173,7 +1182,9 @@ export function planEdit({ spu, product, stored = [], productRow = null, fill = 
   const skcsTouched = [...new Set([...plan.mallOn, ...plan.relinks].map((x) => x.skc))];
   if (skcsTouched.length && rule('reference_product_link')?.show === true) { plan.blockers.push(blocker('skc_field_uncopyable', { field: 'competing_product_link' })); return { body: null, plan }; }
   if (!skcsTouched.length && !plan.title) { plan.notes.push(blocker('nothing_to_edit')); return { body: null, plan }; }
+  if (attrs?.problems?.length) { plan.blockers.push(...attrs.problems); return { body: null, plan }; }
   const body = { spu_name: spu.spuName };
+  withAttrs(body, plan, attrs);
   if (plan.title) body.multi_language_name_list = plan.title.list;   // the WHOLE list, the default language replaced
   if (skcsTouched.length) {
     const titleRule = rule('skc_title');
@@ -1193,6 +1204,15 @@ export function planEdit({ spu, product, stored = [], productRow = null, fill = 
   return { body, plan };
 }
 
+// The details SHEIN now requires ride in the same partialEdit — the WHOLE list (it replaces), only when
+// one is missing (sending it reviews every colour of the shoe).
+function withAttrs(body, plan, attrs) {
+  if (!attrs?.list?.length) return;
+  body.product_attribute_list = attrs.list;
+  plan.attributes = { added: attrs.added, dropped: attrs.dropped || [], count: attrs.list.length };
+  plan.notes.push(blocker('attrs_added', { attributes: attrs.added.map((a) => a.attribute) }));
+}
+
 // The plan as stored (no raw SHEIN objects).
 function tidy(plan) { return { ...plan, sizes: plan.sizes.map(({ raw, ...z }) => z) }; }
 
@@ -1204,6 +1224,7 @@ export function summarizePlan(plan) {
   const parts = [];
   const skippedPart = (sk) => `${sk.length} size${sk.length === 1 ? '' : 's'} skipped: ${sk.map((x) => `${x.size || x.sku || '?'} (${renderBlocker(x.blocker).title.replace(/\.$/, '')})`).join('; ')}`;
   const lead = (pb) => (pb.length ? renderBlocker(pb[0]).title.replace(/\.$/, '') : '');
+  const attrPart = () => (plan.attributes?.added?.length ? `+ SHEIN details it now requires: ${plan.attributes.added.map((a) => a.attribute).join(', ')} (SHEIN reviews every colour)` : '');
   if (plan.op === 'publish') {   // Phase 4
     const sz = plan.sizes || [];
     const hard = (plan.blockers || []).filter((b) => !isNote(b) || b.code === 'shopify_inactive');   // inactive never publishes
@@ -1224,6 +1245,7 @@ export function summarizePlan(plan) {
     if (on.length) parts.push(`Will turn ${on.length} size${on.length === 1 ? '' : 's'} back on: ${on.map((x) => x.size).join(', ')}`);
     if (rl.length) parts.push(`change ${rl.length} SKU${rl.length === 1 ? '' : 's'} SHEIN has wrong: ${rl.map((l) => `${l.from || '—'} → ${l.to}`).join(', ')}`);
     if (plan.title) parts.push(`title → “${plan.title.to}”`);
+    parts.push(attrPart());
     if ((plan.skipped || []).length) parts.push(skippedPart(plan.skipped));
     if (!on.length && !rl.length && !plan.title) parts.unshift((plan.skipped || []).length && !(plan.blockers || []).length ? 'Nothing to send' : lead([...(plan.blockers || []), ...(plan.notes || [])]));
     return parts.filter(Boolean).join(' · ');
@@ -1232,11 +1254,12 @@ export function summarizePlan(plan) {
   if (sz.length) parts.push(`Will add ${sz.length} size${sz.length === 1 ? '' : 's'}: ${sz.map((z) => `${z.sheinSize} (${z.kind === 'custom' ? (z.isNew ? 'custom, new' : 'custom') : z.customExisting ? 'custom' : 'SHEIN size'})`).join(', ')}`);
   const rl = plan.relinks || [];
   if (rl.length) parts.push(`change ${rl.length} SKU${rl.length === 1 ? '' : 's'} SHEIN has wrong: ${rl.map((l) => `${l.from || '—'} → ${l.to}`).join(', ')}`);
+  if (sz.length || rl.length) parts.push(attrPart());
   const sk = plan.skipped || [];
   if (sk.length) parts.push(`${sk.length} size${sk.length === 1 ? '' : 's'} skipped: ${sk.map((x) => `${x.size || x.sku || '?'} (${renderBlocker(x.blocker).title.replace(/\.$/, '')})`).join('; ')}`);
   const pb = (plan.blockers || []).concat(plan.notes || []);
   if (!sz.length && pb.length) parts.unshift(renderBlocker(pb[0]).title.replace(/\.$/, ''));
-  return parts.join(' · ');
+  return parts.filter(Boolean).join(' · ');
 }
 
 // What a person reads for one item of a dry run / a send (the review sheet, the job card, the

@@ -95,6 +95,19 @@ export function compareSize(sheinRaw, shopifyRaw) {
   return 'ok_suffix';                                            // 6 vs 6W, 9 vs 9M
 }
 
+// Before a seller SKU is LINKED (written to SHEIN), "same number, only the W marker differs" is not
+// enough. In our Shopify store women's sizes carry the W ("8W"), so a bare "8" is MEN'S — and SHEIN
+// "US8W" → Shopify men's 8 sells a women's 8 as a men's 8 (2026-10-28: 8 such links on 5 men's shoes
+// in one dry run). Both sides must be women's or both not; a bare size counts as women's only when
+// the product's own title says so. Display (compareSize / ok_suffix) is unchanged.
+const WOMEN_TITLE = /\b(women'?s?|wmns)\b|\(w\)/i;
+const womensSide = (raw, title) => { const p = parseSize(raw); return p.group === 'women' || (p.group === 'adult' && WOMEN_TITLE.test(String(title || ''))); };
+export function sameSizeForLink(sheinRaw, shopifyRaw, sheinName = '', shopifyTitle = '') {
+  const v = compareSize(sheinRaw, shopifyRaw);
+  if (v === 'ok' || v === 'check_group') return true;
+  return v === 'ok_suffix' && womensSide(sheinRaw, sheinName) === womensSide(shopifyRaw, shopifyTitle);
+}
+
 /* ------------------------------- the check ------------------------------- */
 
 // What each finding means and how bad it is. `bad` = a cancellation or an oversell waiting

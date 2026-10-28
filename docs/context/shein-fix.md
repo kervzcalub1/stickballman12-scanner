@@ -31,6 +31,11 @@ The warehouse ships whatever SELLER SKU a SHEIN order carries, so:
 A relinked / swapped size stays 0 until the seller SKU is actually changed on SHEIN; the next
 export + fix gives it stock. **Sizes to add**: Shopify sizes in stock that no SHEIN size sells
 (add as a custom size value on SHEIN — never the nearest size).
+**Men's vs women's on a link (2026-10-28):** a relink / swap / AI link needs the SAME side —
+`sameSizeForLink` (src/lib/sheinCheck.js). Our Shopify women's sizes carry the W ("8W"), so a bare
+"8" is men's unless the product title says Women's / Wmns / (W). Before this, "US8W" ↔ "8" passed as
+`ok_suffix` and live dry run #52 proposed 8 such links on 5 men's shoes. The check screen's
+"Same size (marker differs)" display is unchanged.
 
 ## Inputs / outputs
 - SHEIN Export Products (required, the check's upload). SHEIN Export Order (optional): lines

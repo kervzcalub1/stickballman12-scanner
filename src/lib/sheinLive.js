@@ -255,7 +255,7 @@ export function shelfPlan({ rows, shelf, records = new Map(), styleOnShopify = n
 export function outcome(row, { wrote = [], edit = null, skip = null, after = null, dry = false } = {}) {
   const parts = [];
   if (wrote.length) parts.push(`${dry ? 'would set' : 'stock'} ${row.qty} → ${row.newQty}${after != null && after !== row.newQty ? ` (SHEIN shows ${after}!)` : ''}`);
-  if (edit) parts.push(`${dry ? 'would change' : 'seller SKU'} ${edit.from || '—'} → ${edit.supplierSku}${edit.frees ? ` (frees ${edit.frees})` : ''}`);
+  if (edit) parts.push(`${dry ? 'would change' : 'seller SKU'} ${edit.from || '—'} → ${edit.supplierSku}${edit.frees ? ` (frees ${edit.frees})` : ''}${edit.withAttrs?.length ? ` + SHEIN details it now requires (${edit.withAttrs.join(', ')})` : ''}`);
   if (skip) parts.push(`not changed: ${skip.why}`);
   return parts.join(' · ');
 }

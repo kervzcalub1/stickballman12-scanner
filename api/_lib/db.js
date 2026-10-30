@@ -1985,6 +1985,15 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
 //   'rescale'   — restock-pending units, dated by their latest 'rescaled' event.
 //   'receiving' — newly RECEIVED stock (excludes rescale batches), by scan date.
 //   null        — everything scanned in range, by scan date (admin report).
+//
+// The DATE RANGE is what bounds this list (the widest the grid asks for is one month),
+// not a row count. PH_LIST_MAX is only a runaway guard, set far above any real month,
+// and both branches fetch one row past it so the endpoint can SAY it cut the list.
+// Newest first, so if it ever does cut, what goes is old work rather than today's
+// arrivals. It used to be LIMIT 5000 oldest-first with no signal: October 2026 hit
+// 5,618 pairs and everything received after Oct 28 11:19 EST silently fell off New
+// Inventory (ph-report.md). The grid sorts its own groups, so row order is free here.
+export const PH_LIST_MAX = 25000;
 export async function phListItems(from, to, kind = null) {
   if (kind === 'rescale') {
     // Date/scanned-by come from the latest 'rescaled' event so the grid columns
@@ -2016,7 +2025,7 @@ export async function phListItems(from, to, kind = null) {
         AND (${from}::date IS NULL OR (coalesce(ev.created_at, i.updated_at) AT TIME ZONE 'America/New_York')::date >= ${from}::date)
         AND (${to}::date   IS NULL OR (coalesce(ev.created_at, i.updated_at) AT TIME ZONE 'America/New_York')::date <= ${to}::date)
       ORDER BY created_at DESC, i.id
-      LIMIT 5000
+      LIMIT ${PH_LIST_MAX + 1}
     `;
   }
   return await db()`
@@ -2076,8 +2085,8 @@ export async function phListItems(from, to, kind = null) {
       -- restock_pending). Same shape as the no-box rule above: the admin Report
       -- (kind IS NULL) still sees everything.
       AND (${kind}::text IS NULL OR NOT i.restock_pending)
-    ORDER BY CASE WHEN i.waitlist_until <= now() THEN greatest(i.waitlist_until, coalesce(i.presell_freed_at, i.created_at)) ELSE coalesce(i.presell_freed_at, i.created_at) END, i.id
-    LIMIT 5000
+    ORDER BY CASE WHEN i.waitlist_until <= now() THEN greatest(i.waitlist_until, coalesce(i.presell_freed_at, i.created_at)) ELSE coalesce(i.presell_freed_at, i.created_at) END DESC, i.id DESC
+    LIMIT ${PH_LIST_MAX + 1}
   `;
 }
 

@@ -17,6 +17,18 @@ The admin/warehouse Home card + page title for this grid is **"Listings & Sync"*
   branches) — in-store buys bypass PH entirely; they're listed to stores by hand on
   the In-Store Listing page. See `in-store.md` for every guard.
 
+## How big the list can get (2026-10-30)
+The **date range** bounds the grid — the widest is one month — not a row count.
+`PH_LIST_MAX` (25,000, `api/_lib/db.js`) is only a runaway guard far above any real
+month; both `phListItems` branches return **newest first** and fetch one row past it,
+so `api/ph/list` can answer `{ rows, truncated, limit }` and the grid shows a red
+*"Too many pairs in this range — showing the newest N only"* banner. Why: it used to be
+`LIMIT 5000` **oldest first** with no signal. October 2026 reached 5,618 pairs in the
+default Month view, so everything received after Oct 28 11:19 EST (~400 pairs on
+Oct 29 alone) silently never reached New Inventory while the Inventory page showed
+them. The grid sorts its own groups (`allGroups.sort`, group date = earliest pair), so
+row order from the server is free. A month is ~750 B/pair of JSON (~4 MB at 5,600).
+
 ## SKU-merge — expandable per-size rows (`groupPhSized`)
 - One **collapsed row per SKU + status + store-flag signature + scan day** (the scan
   day only once a pair has been touched — see the split rules below): Date · Shoe ·

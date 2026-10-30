@@ -177,3 +177,29 @@ test('History modal opens with a timeline', async ({ page }) => {
   const ok = page.locator('.hist-timeline .tl-item').first().or(page.getByText('No history yet.'));
   await expect(ok).toBeVisible();
 });
+
+// The list is bounded by its date range; past the server's runaway guard it is cut,
+// and the grid must SAY so. It used to drop the newest pairs in silence: October 2026
+// passed 5,000 and a day's ~400 arrivals never reached New Inventory (ph-report.md).
+test('a cut list says so instead of hiding pairs in silence', async ({ page }) => {
+  await page.route('**/api/ph/list?**', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, truncated: true, limit: 25000 } });
+  });
+  await openGrid(page);
+  await expect(page.getByRole('alert')).toContainText('showing the newest 25,000 only');
+});
+
+test('the real list says nothing when it is whole', async ({ page }) => {
+  await openGrid(page);
+  const r = await page.evaluate(async () => {
+    const t = sessionStorage.getItem('sb_session_token');
+    return (await fetch('/api/ph/list?kind=receiving', { headers: { Authorization: `Bearer ${t}` } })).json();
+  });
+  expect(r.truncated).toBe(false);
+  expect(r.limit).toBeGreaterThan(5000);
+  // Newest first, so a cut can only ever drop old work.
+  for (let i = 1; i < r.rows.length; i++) expect(r.rows[i - 1].created_at >= r.rows[i].created_at).toBe(true);
+  await expect(page.getByText(/showing the newest/)).toHaveCount(0);
+});

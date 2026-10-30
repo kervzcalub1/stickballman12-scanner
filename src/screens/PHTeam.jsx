@@ -384,6 +384,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     setDrAnchor(Number.isNaN(a.getTime()) ? '' : ymd(estCivil(a)));
   };
   const [rows, setRows] = useState(null);
+  // The server cut the list at its row guard — say so (api/ph/list.js). It used to
+  // drop the newest pairs in silence, which is how a day's 400 arrivals went missing.
+  const [cut, setCut] = useState(null); // { limit } | null
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(() => new Set()); // group keys in edit mode
@@ -541,9 +544,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     setLoading(true); setError(''); setNotice('');
     try {
       const [from, to] = rangeOf(dr.mode, dr.anchor);
-      const { rows: r } = await api.phList(from, to, kind);
+      const { rows: r, truncated, limit } = await api.phList(from, to, kind);
       knownVinsRef.current = null; newVinsRef.current = new Set(); noteArrivals(r);
-      setRows(r); setEditing(new Set()); setDrafts({}); setExpanded(new Set());
+      setRows(r); setCut(truncated ? { limit } : null); setEditing(new Set()); setDrafts({}); setExpanded(new Set());
       // Re-read the open rescale requests on an explicit reload, so the row chip
       // clears once the warehouse audits one. The 15s quiet poll deliberately does
       // NOT — it's a courtesy chip, not worth 500 rows every tick.
@@ -572,9 +575,9 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
     pollBusyRef.current = true;
     try {
       const [from, to] = rangeOf(dr.mode, dr.anchor);
-      const { rows: r } = await api.phList(from, to, kind);
+      const { rows: r, truncated, limit } = await api.phList(from, to, kind);
       // Re-check: the user may have started editing during the fetch.
-      if (editingCountRef.current === 0 && !savingRef.current) { noteArrivals(r); setRows(r); }
+      if (editingCountRef.current === 0 && !savingRef.current) { noteArrivals(r); setRows(r); setCut(truncated ? { limit } : null); }
     } catch { /* transient — try again next tick */ }
     finally { pollBusyRef.current = false; }
   }
@@ -1289,6 +1292,12 @@ export function PHGrid({ user, kind = null, onHome, onSignOut }) {
       </div>
 
       {error && <div className="error mt">{error}</div>}
+      {cut && (
+        <div className="error mt" role="alert">
+          Too many pairs in this range — showing the newest {cut.limit.toLocaleString('en-US')} only.
+          Older pairs are hidden. Switch to Week or Day to see everything.
+        </div>
+      )}
       {notice && <div className="notice mt">{notice}</div>}
 
       <div className="card">

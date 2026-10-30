@@ -1,7 +1,7 @@
-// GET /api/ph/list?from=YYYY-MM-DD&to=YYYY-MM-DD&kind=  ->  { ok, rows }
+// GET /api/ph/list?from=YYYY-MM-DD&to=YYYY-MM-DD&kind=  ->  { ok, rows, truncated, limit }
 // PH grid for an EST date range. Restricted to the ph_team and admin roles.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { phListItems, dbConfigured } from '../_lib/db.js';
+import { phListItems, PH_LIST_MAX, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -21,8 +21,12 @@ export default async function handler(req, res) {
   const kind = kindParam === 'receiving' || kindParam === 'rescale' ? kindParam : null;
 
   try {
-    const rows = await phListItems(from, to, kind);
-    return send(res, 200, { ok: true, rows });
+    // phListItems fetches one row past the guard; that extra row is how we know the
+    // list was cut, and the grid says so instead of dropping pairs in silence.
+    const all = await phListItems(from, to, kind);
+    const truncated = all.length > PH_LIST_MAX;
+    const rows = truncated ? all.slice(0, PH_LIST_MAX) : all;
+    return send(res, 200, { ok: true, rows, truncated, limit: PH_LIST_MAX });
   } catch (e) {
     console.error('[ph/list]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load the monthly list.' });

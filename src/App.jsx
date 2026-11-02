@@ -22,6 +22,7 @@ import { PreSell } from './screens/PreSell.jsx';
 import { Inventory } from './screens/Inventory.jsx';
 import { PHTeamApp, PHGrid } from './screens/PHTeam.jsx';
 import { EbayListings } from './screens/EbayListings.jsx';
+import { StockxListings } from './screens/StockxListings.jsx';
 import { SheinCheck } from './screens/SheinCheck.jsx';
 import { SheinListings } from './screens/SheinListings.jsx';
 import { NoBoxHub } from './screens/NoBoxHub.jsx';
@@ -235,6 +236,7 @@ export default function App() {
   if (view === 'shein-listings' && isPrivilegedRole(user.role)) return withAdvisor(<SheinListings user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'shein-check' && (isPrivilegedRole(user.role) || hasPriv(user, 'connect_integrations'))) return withAdvisor(<SheinCheck user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'ebay' && (isPrivilegedRole(user.role) || hasPriv(user, 'connect_integrations'))) return withAdvisor(<EbayListings user={user} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'stockx-listings' && isPrivilegedRole(user.role)) return withAdvisor(<StockxListings onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'presell-listings') return withAdvisor(<PresellListings onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'vin-stock') return withAdvisor(<VinStock onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'access') return withAdvisor(<CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />);

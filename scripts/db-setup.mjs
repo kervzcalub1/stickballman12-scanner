@@ -2561,6 +2561,67 @@ await sql(`
     locked_by  TEXT,
     locked_at  TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
+// STOCKX LISTINGS + REPRICE (2026-11-03, docs/context/stockx-reprice.md). Alex was editing our
+// ~1,750 Direct asks one by one in StockX Pro; the Direct lowest ask sat far above the standard
+// (Ship to Verify) one ($170 vs $48). `stockx_listings` = what the last pull saw: our ask + the
+// market per programme for that size. A listing gone from a pull keeps its row with `ended_at`
+// (sold or taken down) — so "did the price cut sell it?" can be answered afterwards.
+await sql(`
+  CREATE TABLE IF NOT EXISTS stockx_listings (
+    listing_id      TEXT PRIMARY KEY,
+    variant_id      TEXT,
+    product_id      TEXT,
+    product_name    TEXT,
+    style_id        TEXT,
+    size            TEXT,
+    amount          NUMERIC(12,2),
+    inventory_type  TEXT,
+    sx_created_at   TIMESTAMPTZ,
+    standard_lowest NUMERIC(12,2),
+    direct_lowest   NUMERIC(12,2),
+    flex_lowest     NUMERIC(12,2),
+    highest_bid     NUMERIC(12,2),
+    market_at       TIMESTAMPTZ,
+    pulled_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ended_at        TIMESTAMPTZ
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS stockx_listings_variant_idx ON stockx_listings (variant_id)`);
+// 🔒 Keep price — a listing no reprice run may touch (same idea as ebay_price_locks).
+await sql(`
+  CREATE TABLE IF NOT EXISTS stockx_price_locks (
+    listing_id TEXT PRIMARY KEY,
+    note       TEXT,
+    locked_by  TEXT,
+    locked_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+// The reprice QUEUE and its log in one: a row per listing to change. The worker
+// (stockx-reprice-worker.js) sends `queued` ones, StockX answers async (`sent` + operation id),
+// then `done` / `failed`. A closed tab or a restart never loses a run.
+await sql(`
+  CREATE TABLE IF NOT EXISTS stockx_price_edits (
+    id              BIGSERIAL PRIMARY KEY,
+    listing_id      TEXT NOT NULL,
+    product_name    TEXT,
+    style_id        TEXT,
+    size            TEXT,
+    old_amount      NUMERIC(12,2),
+    new_amount      NUMERIC(12,2) NOT NULL,
+    standard_lowest NUMERIC(12,2),
+    direct_lowest   NUMERIC(12,2),
+    rule            TEXT,
+    status          TEXT NOT NULL DEFAULT 'queued',
+    operation_id    TEXT,
+    error           TEXT,
+    requested_by    TEXT,
+    requested_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sent_at         TIMESTAMPTZ,
+    finished_at     TIMESTAMPTZ
+  )`);
+await sql(`ALTER TABLE stockx_price_edits DROP CONSTRAINT IF EXISTS stockx_price_edits_status_check`);
+await sql(`ALTER TABLE stockx_price_edits ADD CONSTRAINT stockx_price_edits_status_check
+           CHECK (status IN ('queued','sent','done','failed','cancelled'))`);
+await sql(`CREATE INDEX IF NOT EXISTS stockx_price_edits_status_idx ON stockx_price_edits (status, id)`);
+await sql(`CREATE INDEX IF NOT EXISTS stockx_price_edits_listing_idx ON stockx_price_edits (listing_id, id DESC)`);
 // eBay coded coupons made / paused / resumed / deleted from here (2026-10-13,
 // docs/context/ebay-coupons.md). eBay holds the coupons; this is who did what, and the
 // exact request when one was created.
@@ -3171,7 +3232,7 @@ const LIVE_TABLES = [
   'tracking_duplicates',
   'email_receipts', 'user_purchase_emails',
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log',
-  'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_price_locks', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
+  'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_price_locks', 'stockx_listings', 'stockx_price_locks', 'stockx_price_edits', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
   'shein_order_units', 'shein_live_runs', 'shein_live_items',
   'shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_jobs', 'shein_listing_job_items',
   'cancellations', 'cancellation_photos', 'cancellation_events',

@@ -12457,3 +12457,144 @@ export async function listUnclaimedInboundIssues(hours) {
                                 ORDER BY ii.created_at, ii.id`, [hours]);
   return rows.map(inboundRow);
 }
+
+// ---------------------------------------------------------------------------
+// StockX Listings + Reprice (docs/context/stockx-reprice.md, 2026-11-03)
+// ---------------------------------------------------------------------------
+// A pull: upsert every live listing it saw, then stamp `ended_at` on the ones it didn't
+// (sold or taken down since) — kept, so a price cut can be checked against what sold.
+export async function saveStockxListings(rows, startedAt) {
+  const sql = db();
+  const list = (rows || []).filter((r) => r && r.listing_id);
+  for (let i = 0; i < list.length; i += 500) {
+    const part = list.slice(i, i + 500);
+    const col = (k) => part.map((r) => (r[k] == null ? null : r[k]));
+    await sql`
+      INSERT INTO stockx_listings (listing_id, variant_id, product_id, product_name, style_id, size, amount, inventory_type, sx_created_at, pulled_at, ended_at)
+      SELECT x.listing_id, x.variant_id, x.product_id, x.product_name, x.style_id, x.size, x.amount, x.inventory_type, x.sx_created_at, now(), NULL
+        FROM unnest(${col('listing_id')}::text[], ${col('variant_id')}::text[], ${col('product_id')}::text[], ${col('product_name')}::text[],
+                    ${col('style_id')}::text[], ${col('size')}::text[], ${col('amount')}::numeric[], ${col('inventory_type')}::text[],
+                    ${col('sx_created_at')}::timestamptz[])
+             AS x(listing_id, variant_id, product_id, product_name, style_id, size, amount, inventory_type, sx_created_at)
+      ON CONFLICT (listing_id) DO UPDATE SET
+        variant_id = EXCLUDED.variant_id, product_id = EXCLUDED.product_id, product_name = EXCLUDED.product_name,
+        style_id = EXCLUDED.style_id, size = EXCLUDED.size, amount = EXCLUDED.amount, inventory_type = EXCLUDED.inventory_type,
+        sx_created_at = EXCLUDED.sx_created_at, pulled_at = now(), ended_at = NULL`;
+  }
+  const ended = await sql`
+    UPDATE stockx_listings SET ended_at = now()
+     WHERE ended_at IS NULL AND pulled_at < ${startedAt}::timestamptz
+    RETURNING listing_id`;
+  return { saved: list.length, ended: ended.length };
+}
+
+// Every listing on one size shares its market — written once per variant.
+export async function setStockxMarket(variantId, m) {
+  if (!variantId || !m) return;
+  await db()`
+    UPDATE stockx_listings SET standard_lowest = ${m.standard_lowest ?? null}, direct_lowest = ${m.direct_lowest ?? null},
+           flex_lowest = ${m.flex_lowest ?? null}, highest_bid = ${m.highest_bid ?? null}, market_at = now()
+     WHERE variant_id = ${variantId} AND ended_at IS NULL`;
+}
+export async function stockxLiveVariants() {
+  return await db()`
+    SELECT variant_id, max(product_id) AS product_id FROM stockx_listings
+     WHERE ended_at IS NULL AND variant_id IS NOT NULL GROUP BY variant_id`;
+}
+
+// The page's rows: each live listing + its 🔒, whether Pre-sell manages it, its COST (the
+// Pre-sell stock row's when it is one, else the average cost of OUR pairs of that style +
+// size — sizes compared on their numbers, "7.5W" = "7.5"), and its latest reprice.
+export async function listStockxListings(listingIds = null) {
+  const ids = Array.isArray(listingIds) ? listingIds.map(String) : null;
+  return await db()`
+    WITH ic AS (
+      SELECT upper(btrim(sku)) AS sku, regexp_replace(coalesce(size, ''), '[^0-9.]', '', 'g') AS sz, round(avg(cost), 2) AS cost
+        FROM items WHERE cost > 0 AND coalesce(btrim(sku), '') <> '' GROUP BY 1, 2
+    )
+    SELECT s.*,
+           (k.listing_id IS NOT NULL) AS locked, k.note AS lock_note, k.locked_by, k.locked_at,
+           (pl.id IS NOT NULL) AS presell,
+           coalesce(ps.unit_cost, ic.cost) AS cost,
+           CASE WHEN ps.unit_cost IS NOT NULL THEN 'presell' WHEN ic.cost IS NOT NULL THEN 'stock' END AS cost_source,
+           le.status AS last_status, le.new_amount AS last_amount, le.old_amount AS last_old, le.requested_at AS last_at, le.error AS last_error
+      FROM stockx_listings s
+      LEFT JOIN stockx_price_locks k ON k.listing_id = s.listing_id
+      LEFT JOIN presell_listings pl ON pl.platform = 'stockx' AND pl.external_id = s.listing_id AND pl.status IN ('live', 'pending', 'off')
+      LEFT JOIN presell_stock ps ON ps.id = pl.stock_id
+      LEFT JOIN ic ON ic.sku = upper(btrim(s.style_id)) AND ic.sz = regexp_replace(coalesce(s.size, ''), '[^0-9.]', '', 'g')
+      LEFT JOIN LATERAL (
+        SELECT status, new_amount, old_amount, requested_at, error FROM stockx_price_edits e
+         WHERE e.listing_id = s.listing_id ORDER BY e.id DESC LIMIT 1
+      ) le ON true
+     WHERE (${ids}::text[] IS NULL AND s.ended_at IS NULL) OR s.listing_id = ANY(${ids || []}::text[])
+     ORDER BY s.product_name, s.size, s.listing_id`;
+}
+
+export async function setStockxLocks(listingIds, { note = null, by = null } = {}) {
+  const ids = [...new Set((listingIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return 0;
+  return (await db()`
+    INSERT INTO stockx_price_locks (listing_id, note, locked_by)
+    SELECT x, ${note}, ${by} FROM unnest(${ids}::text[]) AS x
+    ON CONFLICT (listing_id) DO UPDATE SET note = EXCLUDED.note, locked_by = EXCLUDED.locked_by, locked_at = now()
+    RETURNING listing_id`).length;
+}
+export async function clearStockxLocks(listingIds) {
+  const ids = [...new Set((listingIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return 0;
+  return (await db()`DELETE FROM stockx_price_locks WHERE listing_id = ANY(${ids}::text[]) RETURNING listing_id`).length;
+}
+
+// Queue price changes. A listing that already has one waiting (queued / sent) is skipped —
+// two changes in flight on one listing would race at StockX.
+export async function queueStockxEdits(edits, by) {
+  const sql = db();
+  const out = [];
+  for (const e of edits || []) {
+    const rows = await sql`
+      INSERT INTO stockx_price_edits (listing_id, product_name, style_id, size, old_amount, new_amount, standard_lowest, direct_lowest, rule, requested_by)
+      SELECT ${e.listing_id}, ${e.product_name || null}, ${e.style_id || null}, ${e.size || null}, ${e.old_amount ?? null}, ${e.new_amount},
+             ${e.standard_lowest ?? null}, ${e.direct_lowest ?? null}, ${e.rule || null}, ${by || null}
+       WHERE NOT EXISTS (SELECT 1 FROM stockx_price_edits x WHERE x.listing_id = ${e.listing_id} AND x.status IN ('queued', 'sent'))
+      RETURNING id`;
+    if (rows[0]) out.push(Number(rows[0].id));
+  }
+  return out;
+}
+export async function stockxQueueSummary() {
+  return (await db()`
+    SELECT count(*) FILTER (WHERE status = 'queued')::int AS queued,
+           count(*) FILTER (WHERE status = 'sent')::int AS sent,
+           count(*) FILTER (WHERE status = 'done' AND finished_at > now() - interval '24 hours')::int AS done_24h,
+           count(*) FILTER (WHERE status = 'failed' AND finished_at > now() - interval '24 hours')::int AS failed_24h
+      FROM stockx_price_edits`)[0];
+}
+export async function nextStockxEdits(status, limit = 10) {
+  return await db()`SELECT * FROM stockx_price_edits WHERE status = ${status} ORDER BY id LIMIT ${limit}`;
+}
+export async function markStockxEdit(id, { status, operationId, error } = {}) {
+  await db()`
+    UPDATE stockx_price_edits SET status = ${status},
+           operation_id = coalesce(${operationId ?? null}::text, operation_id),
+           error = ${error ?? null},
+           sent_at = CASE WHEN ${status} = 'sent' THEN now() ELSE sent_at END,
+           finished_at = CASE WHEN ${status} IN ('done', 'failed', 'cancelled') THEN now() ELSE finished_at END
+     WHERE id = ${id}`;
+}
+export async function setStockxListingAmount(listingId, amount) {
+  await db()`UPDATE stockx_listings SET amount = ${amount} WHERE listing_id = ${listingId}`;
+}
+export async function cancelQueuedStockxEdits(by) {
+  return (await db()`
+    UPDATE stockx_price_edits SET status = 'cancelled', finished_at = now(), error = ${`Stopped by ${by || 'someone'}`}
+     WHERE status = 'queued' RETURNING id`).length;
+}
+// The log, newest first, with whether the listing has ENDED since (sold or taken down) —
+// the follow-up question: did the cut move it?
+export async function recentStockxEdits(limit = 300) {
+  return await db()`
+    SELECT e.*, s.ended_at AS listing_ended_at
+      FROM stockx_price_edits e LEFT JOIN stockx_listings s ON s.listing_id = e.listing_id
+     ORDER BY e.id DESC LIMIT ${limit}`;
+}

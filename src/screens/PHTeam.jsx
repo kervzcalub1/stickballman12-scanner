@@ -42,6 +42,7 @@ import { PresellListings } from './PresellListings.jsx';
 import { EbayReprice } from './EbayReprice.jsx';
 import { SheinReprice } from './SheinReprice.jsx';
 import { EbayListings } from './EbayListings.jsx';
+import { StockxListings } from './StockxListings.jsx';
 import { SheinCheck } from './SheinCheck.jsx';
 import { SheinListings } from './SheinListings.jsx';
 import { ShopifyListings } from './ShopifyListings.jsx';
@@ -104,6 +105,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     if (page === 'sheinlistings') return <SheinListings user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'sheincheck') return <SheinCheck user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'ebaylistings') return <EbayListings user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'stockxlistings') return <StockxListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'presellListings') return <PresellListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'receipts') return <Receipts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} cartHref={(id) => `/ph/gift-card-buying?request=${id}`} />;
     // A PH account reaches this ONLY by holding a buying privilege. PH has its own app and

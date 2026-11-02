@@ -76,10 +76,10 @@ export function BuyCartCosts({ cart, canEdit, onChanged, onSignOut }) {
   // What the edit actually does to this request, in the only terms that matter: the
   // pairs on it. Shown live while typing, so a rate is never saved on faith.
   const shelfTotal = (cart.lines || [])
-    .filter((l) => l.status !== 'rejected')
+    .filter((l) => l.status !== 'rejected' && l.status !== 'skipped')
     .reduce((n, l) => n + (Number(l.shelf_price) || 0) * (Number(l.qty) || 0), 0);
   const landedTotal = (cart.lines || [])
-    .filter((l) => l.status !== 'rejected')
+    .filter((l) => l.status !== 'rejected' && l.status !== 'skipped')
     .reduce((n, l) => {
       const shelf = Number(l.shelf_price) || 0;
       if (!(shelf > 0)) return n;

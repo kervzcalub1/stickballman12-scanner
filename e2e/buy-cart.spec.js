@@ -1138,15 +1138,17 @@ test('the desk can correct a shelf price after submission, until the cards are o
   const cartId = await newRequest(request, { lines: [LINE] });          // 2 × $50, submitted
   const lineId = Number((await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0].id);
 
-  // The buyer can no longer touch it — that half of the freeze is unchanged.
-  const buyer = await call(request, 'buyer', 'cart/line', { cartId, lineId, patch: { shelfPrice: 20 } });
-  expect(buyer.status).toBe(403);
-
   // The approver can, because a misread shelf ticket used to mean rebuilding the whole
   // request to fix one number, which in practice meant approving it wrong instead.
   const fix = await call(request, 'approver', 'cart/line', { cartId, lineId, patch: { shelfPrice: 45 } });
   expect(fix.status).toBe(200);
   await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+
+  // The buyer may fix their own pair only while it is unanswered (2026-11-02) — once it's
+  // been decided, it is part of an approval and only the desk can move it.
+  const buyer = await call(request, 'buyer', 'cart/line', { cartId, lineId, patch: { shelfPrice: 20 } });
+  expect(buyer.status).toBe(409);
+  expect(buyer.body.error).toMatch(/already been approved/i);
 
   const mid = await read_(request, 'approver', `cart/get?id=${cartId}`);
   expect(mid.body.cart.approved_amount).toBe(90);                        // 2 × $45, recomputed
@@ -2138,7 +2140,9 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     const t0 = calls.length;
     await hook(request, tapUpdate(`approve:${cartId}:${line.id}:1:dev`, { from: 999000777 }));
     const reply = since(t0).find((c) => c.method === 'sendMessage');
-    expect(reply.body.text).toMatch(/^⚠️ .*isn’t linked.* · HTTP 403 · \[dev\]$/);
+    // No status code in the group (2026-11-02) — it means nothing to the person who tapped.
+    expect(reply.body.text).toMatch(/^⚠️ .*isn’t linked.* · \[dev\]$/);
+    expect(reply.body.text).not.toContain('HTTP');
     expect(since(t0).some((c) => c.method === 'setMessageReaction')).toBe(false);
     const after = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart;
     expect(after.lines[0].status).toBe('pending');
@@ -2289,6 +2293,63 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     const reply = since(t0).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT)).pop();
     expect(reply.body.text).toContain(`↩️ Replaced the earlier decision: 9 was ×2 (${people.approver.name}) → turned down`);
     expect(reply.body.text).toContain('⚠️ 10 ×3 is more than the 1 counted in store.');
+  });
+
+  // Alex's actual replies (floor feedback, 2026-11-02): "take all", "Yes", "Two each size
+  // max", "$5 tip" — every one came back as an error. Now they are answers.
+  test('plain words answer the card: "take all" = what is in store, "two each size max" caps at it, "no" = none', async ({ request }) => {
+    const { cartId, row } = await groupCard(request);
+    await pool.query(`UPDATE buy_cart_lines SET available_qty = CASE size WHEN '9' THEN 2 WHEN '9.5' THEN 3 ELSE NULL END WHERE cart_id = $1`, [cartId]);
+    let t0 = calls.length;
+    await hook(request, replyUpdate(row, 'Take all', { replyId: 730001 }));
+    expect(await statuses(cartId)).toEqual({ 9: 'approved ×2', '9.5': 'approved ×3', 10: 'approved ×1' });
+    let reply = since(t0).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT)).pop();
+    expect(reply.body.text).toContain('Read "Take all" as every size, as many as were counted in store (1 of 10 — not counted).');
+
+    await hook(request, replyUpdate(row, 'Two each size max', { replyId: 730002 }));
+    expect(await statuses(cartId)).toEqual({ 9: 'approved ×2', '9.5': 'approved ×2', 10: 'approved ×2' });
+
+    // Saying it again is not an error — no "someone got there first · HTTP 409".
+    t0 = calls.length;
+    await hook(request, replyUpdate(row, '2 each', { replyId: 730003 }));
+    reply = since(t0).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT)).pop();
+    expect(reply.body.text).toMatch(/^✅ Already recorded — nothing changed/);
+    expect(reply.body.text).not.toContain('HTTP');
+
+    await hook(request, replyUpdate(row, 'no', { replyId: 730004 }));
+    expect(await statuses(cartId)).toEqual({ 9: 'rejected', '9.5': 'rejected', 10: 'rejected' });
+
+    // Still strict about what it can't read — nothing recorded, and it says what works.
+    t0 = calls.length;
+    await hook(request, replyUpdate(row, 'hmm maybe later', { replyId: 730005 }));
+    reply = since(t0).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT)).pop();
+    expect(reply.body.text).toMatch(/Reply "take all", "2 each", "no"/);
+    expect(await statuses(cartId)).toEqual({ 9: 'rejected', '9.5': 'rejected', 10: 'rejected' });
+    // …and it is kept, so what to teach the reader next comes from real replies.
+    const miss = (await pool.query(`SELECT * FROM telegram_reply_misses WHERE cart_id = $1 ORDER BY id DESC LIMIT 1`, [cartId])).rows[0];
+    expect(miss).toMatchObject({ reply_text: 'hmm maybe later', card_kind: 'shoe', sizes: '9, 9.5, 10' });
+    expect(miss.error).toMatch(/Couldn't read/);
+  });
+
+  test('a typed reply to a ONE-size card is read too, not dropped', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    const onCard = (text, replyId) => ({
+      update_id: Date.now(),
+      message: {
+        message_id: replyId, chat: { id: CHAT, type: 'supergroup' }, from: { id: TG, first_name: 'Tapper' }, text,
+        reply_to_message: { message_id: 4343, chat: { id: CHAT },
+          reply_markup: { inline_keyboard: [[{ text: '✓ Buy 1', callback_data: `approve:${cartId}:${line.id}:1:dev` }],
+            [{ text: '✕ Turn it down', callback_data: `reject:${cartId}:${line.id}:dev` }]] } },
+      },
+    });
+    const now = async () => (await pool.query('SELECT status, qty FROM buy_cart_lines WHERE id = $1', [line.id])).rows[0];
+    await hook(request, onCard('Yes', 740001));
+    expect(await now()).toMatchObject({ status: 'approved', qty: 1 });
+    await hook(request, onCard('3', 740002));
+    expect(await now()).toMatchObject({ status: 'approved', qty: 3 });
+    await hook(request, onCard('pass', 740003));
+    expect(await now()).toMatchObject({ status: 'rejected' });
   });
 
   test('two replies to one card at once never mix — the newer one stands whole', async ({ request }) => {
@@ -3004,4 +3065,165 @@ test('a reply can name a RANGE of sizes — the card sizes between them, one qua
   expect(read('11 to 14 x 3')).toEqual(['11×3', '11.5×3', '13.5×3', '14×3']);
   expect(read('10.5-11.5 x 2\n11 x 1')).toMatch(/Size 11 is in the reply twice/);
   expect(read('5-6 x 1')).toMatch(/5-6 isn’t on this card/);
+});
+
+// ---------------------------------------------------------------------------
+// Floor feedback, 2026-11-02 (docs/context/buy-cart.md "Floor feedback, November"):
+// change a decision (James), market sales per size (Alex), full box / edit after sending /
+// X out a pair (Andrew).
+test.describe('floor feedback, November', () => {
+  const lineIdsOf = async (request, cartId) =>
+    (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines.map((l) => Number(l.id));
+
+  test('the buyer fixes their own pair after sending it — never the quantity, never once answered', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [{ ...LINE, size: '10' }] });
+    const [lineId] = await lineIdsOf(request, cartId);
+    const fix = await call(request, 'buyer', 'cart/line', { cartId, lineId,
+      patch: { shelfPrice: 55, availableQty: 3, fullBox: true, premium: true, tipProposed: 10, qty: 7 } });
+    expect(fix.status).toBe(200);
+    expect(fix.body.line.shelf_price).toBe(55);
+    expect(fix.body.line.available_qty).toBe(3);
+    expect(fix.body.line.full_box).toBe(true);
+    expect(fix.body.line.premium).toBe(true);
+    expect(fix.body.line.tip_proposed).toBe(10);
+    expect(fix.body.line.tip_status).toBe('proposed');
+    expect(fix.body.line.qty).toBeNull();                       // the approver's, ignored
+    const ev = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.events.find((e) => e.kind === 'line_edited');
+    expect(ev.body).toMatch(/shelf \$50\.00 → \$55\.00/);
+    expect(ev.body).toMatch(/full box/);
+    expect(ev.body).toMatch(/tip proposed \$10\.00\/pair/);
+
+    // Un-premium clears the tip with it.
+    const plain = await call(request, 'buyer', 'cart/line', { cartId, lineId, patch: { premium: false } });
+    expect(plain.body.line.premium).toBe(false);
+    expect(plain.body.line.tip_proposed).toBeNull();
+    expect(plain.body.line.tip_status).toBeNull();
+
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: 1 });
+    const late = await call(request, 'buyer', 'cart/line', { cartId, lineId, patch: { shelfPrice: 60 } });
+    expect(late.status).toBe(409);
+  });
+
+  test('a pair can be marked full box when it is asked about', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [{ ...LINE, fullBox: true }] });
+    const cart = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart;
+    expect(cart.lines[0].full_box).toBe(true);
+    expect(cart.events.find((e) => e.kind === 'line_added').body).toMatch(/full box/);
+  });
+
+  test('X out: the buyer drops an approved pair before the cards, and the target follows', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE, { ...LINE, size: '10' }] });   // 2 sizes × 2 × $50
+    const [a, b] = await lineIdsOf(request, cartId);
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: 2 });
+
+    // A pending pair can't be X'd out (that is the × remove) — only an approved one.
+    const out = await call(request, 'buyer', 'cart/line', { cartId, lineId: b, skip: true });
+    expect(out.status).toBe(200);
+    expect(out.body.line.status).toBe('skipped');
+    expect(out.body.cart.approved_amount).toBe(100);
+    expect(out.body.cart.skipped_count).toBe(1);
+    expect(out.body.cart.status).toBe('approved');
+
+    // An approver can't re-decide it — not one line, not "approve all", not "turn down all".
+    const forced = await call(request, 'approver', 'cart/decide', { cartId, lineIds: [b], action: 'approve', qty: { [b]: 2 } });
+    expect(forced.status).toBe(409);
+    expect(forced.body.error).toMatch(/X’d it out/);
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'reject', reason: 'e2e' });
+    let cart = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart;
+    expect(cart.lines.find((l) => Number(l.id) === b).status).toBe('skipped');
+    expect(cart.events.some((e) => e.kind === 'line_skipped')).toBe(true);
+
+    // Undo puts it back as it was approved — and the turned-down one stays turned down.
+    await call(request, 'approver', 'cart/decide', { cartId, lineIds: [a], action: 'approve', qty: { [a]: 2 } });
+    const back = await call(request, 'buyer', 'cart/line', { cartId, lineId: b, skip: false });
+    expect(back.status).toBe(200);
+    expect(back.body.line.status).toBe('approved');
+    expect(back.body.line.qty).toBe(2);
+    expect(back.body.cart.approved_amount).toBe(200);
+
+    // Once a card is recorded, the cards were sized for it — refused, and says what to do.
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '4111111111118888', balance: 50 } });
+    const late = await call(request, 'buyer', 'cart/line', { cartId, lineId: b, skip: true });
+    expect(late.status).toBe(409);
+    expect(late.body.error).toMatch(/gift cards are already out/i);
+  });
+
+  test('another buyer cannot X out someone else’s pair', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const [a] = await lineIdsOf(request, cartId);
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: 1 });
+    const r = await call(request, 'buyer2', 'cart/line', { cartId, lineId: a, skip: true });
+    expect([403, 404]).toContain(r.status);
+  });
+
+  test('an approver can change their mind until the cards go out', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const [a] = await lineIdsOf(request, cartId);
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: 2 });
+    const no = await call(request, 'approver', 'cart/decide', { cartId, lineIds: [a], action: 'reject', reason: 'changed my mind' });
+    expect(no.status).toBe(200);
+    let line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    expect(line.status).toBe('rejected');
+    expect(line.overrode_status).toBe('approved');
+    expect(line.overrode_qty).toBe(2);
+    const yes = await call(request, 'approver', 'cart/decide', { cartId, lineIds: [a], action: 'approve', qty: { [a]: 3 } });
+    expect(yes.status).toBe(200);
+    line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    expect(line.status).toBe('approved');
+    expect(line.qty).toBe(3);
+  });
+
+  test('market sales are the approver’s — a buyer’s copy never carries them', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const [a] = await lineIdsOf(request, cartId);
+    await pool.query(`UPDATE buy_cart_lines SET market_sales = $2::jsonb, market_sales_at = now() WHERE id = $1`,
+      [a, JSON.stringify({ source: 'alias', sold_7d: 2, sold_30d: 9, avg_30d: 120, high_30d: 140, low_30d: 100, last: [], read_at: new Date().toISOString() })]);
+    const desk = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    expect(desk.market_sales.sold_30d).toBe(9);
+    const buyer = (await read_(request, 'buyer', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    expect(buyer.market_sales).toBeNull();
+  });
+
+  test('the sales summary counts 7 and 30 days and says when it is a floor (pure)', async () => {
+    const { summarizeSales, salesSentence } = await import('../api/_lib/marketSales.js');
+    const now = Date.parse('2026-11-02T12:00:00Z');
+    const at = (days) => new Date(now - days * 86_400_000).toISOString();
+    const s = summarizeSales([{ at: at(1), price: 236 }, { at: at(3), price: 241 }, { at: at(10), price: 326 }, { at: at(40), price: 200 }], { now });
+    expect(s).toMatchObject({ sold_7d: 2, sold_30d: 3, avg_30d: 267.67, high_30d: 326, low_30d: 236, capped: false });
+    expect(s.last).toHaveLength(4);
+    expect(salesSentence(s)).toBe('3 sold in 30 days (2 this week) · avg $268 · $236–$326');
+    const full = summarizeSales(Array.from({ length: 3 }, (_, i) => ({ at: at(i + 1), price: 100 })), { now, limit: 3 });
+    expect(full.capped).toBe(true);
+    expect(salesSentence(full)).toMatch(/^3\+ sold/);
+    expect(salesSentence(summarizeSales([], { now }))).toBe('No recent sales');
+  });
+
+  test('on screen: the approver has Change on a decided pair, the buyer ✕ Not buying', async ({ page, request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: 2 });
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    await page.getByRole('button', { name: /Not buying CW2288-111 size 9/ }).click();
+    await expect(page.locator('.bc-line-status.skipped')).toHaveText('not buying');
+    await page.getByRole('button', { name: 'Undo' }).click();
+    await expect(page.locator('.bc-line-status.approved')).toBeVisible();
+  });
+});
+
+test('plain-words replies and amount-first tips are read; anything else is still refused (pure)', async () => {
+  const { parseApprovalReply, splitTipReply } = await import('../src/lib/buyPaste.js');
+  const L = [{ id: 1, size: '14', available_qty: 2 }, { id: 2, size: '15', available_qty: 3 }];
+  const q = (t) => { const r = parseApprovalReply(t, L); return r.ok ? r.approve.map((a) => `${a.line.size}x${a.qty}`).join(' ') + (r.reject.length ? ` -${r.reject.map((l) => l.size).join(',')}` : '') : 'ERR'; };
+  expect(q('take all')).toBe('14x2 15x3');
+  expect(q('Yes')).toBe('14x2 15x3');
+  expect(q('Two each size max')).toBe('14x2 15x2');
+  expect(q('max 1 each')).toBe('14x1 15x1');
+  expect(q('3 each')).toBe('14x2 15x3');                // never more than the store has
+  expect(q('nah')).toBe(' -14,15');
+  expect(q('size 15 x two')).toBe('15x2 -14');
+  expect(q('y')).toBe('ERR');                           // one letter is a typo, not a decision
+  expect(q('take all of the blue ones')).toBe('ERR');
+  for (const t of ['$5 tip', '5 tip', '5$ tip', '5 dollar tip', 'tip 5'])
+    expect(splitTipReply(t).tip).toEqual({ action: 'approve', amount: 5 });
+  expect(splitTipReply('take all, $5 tip')).toMatchObject({ tip: { action: 'approve', amount: 5 }, rest: 'take all' });
 });

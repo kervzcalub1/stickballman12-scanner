@@ -227,7 +227,7 @@ costs us** card above the lines.
 A misread shelf ticket used to mean pulling the whole request back and rebuilding it to
 fix one number, which in practice meant approving it wrong instead. `cart/line`'s
 **patch** branch now takes size / qty / shelf price from a cost-privilege holder while
-the request is `draft`, `submitted` or `approved` (the buyer still only in `draft`), and
+the request is `draft`, `submitted` or `approved` (the buyer: their own **pending** pair — see "Floor feedback, November"), and
 re-prices the line when the shelf price moved.
 
 **Shelf prices freeze at `funded`** — the same freeze approvals get, and for the same
@@ -578,7 +578,8 @@ It is done BEFORE the add, not after, and that is the whole reason it lives in t
 **adding a line posts a Telegram card with the price written into its caption.** Re-pricing
 afterwards would leave the group holding a card that quotes a number the request no longer
 carries, and the group is where the decision gets made. A price that is wrong after
-sending is a remove-and-re-add (the × on a pending row), not an edit.
+sending was a remove-and-re-add (the × on a pending row); since 2026-11-02 the buyer edits a pending pair
+and the card is re-posted ("Floor feedback, November").
 
 ### One card per shoe + paste the supplier's text (2026-10-24)
 Suppliers often send just `100000317` / `Sizes 8-12 $50`, and a run of nine sizes used to put
@@ -806,6 +807,106 @@ standing in, off a style code four characters from a different shoe.
 > than posting it — `cart/submit` is capped at 30/min and this helper runs forty-odd
 > times, so going through the endpoint 429'd unrelated tests at the end of a run. The
 > tests that are actually about sending call it directly.
+
+## Floor feedback, November (2026-11-02)
+Five asks from the floor (James, Alex, Andrew), one PR. **`db:setup`** — new columns
+`buy_cart_lines.full_box / market_sales / market_sales_at / skipped_by / skipped_at`,
+`buy_carts.skipped_count`, and `'skipped'` in `buy_cart_lines_status_check`. Until it runs,
+every buying write fails on `skipped_count` (recalcCartMoney) — run it right after deploy.
+Tests: `buy-cart.spec.js` § "floor feedback, November".
+
+### Change a decision (James)
+The server always took an override while `decisionsOpen` (see "One approver can override
+another"); the screen only drew controls on **pending** rows. Now a decided line shows
+**Change** (`canChange` in `Lines`: `canDecide` and not `decisionsPendingOnly` — so until the
+cards go out) → a `FormModal`: Approve (with qty) / Turn it down (reason required). It posts
+the ordinary `cart/decide` for one line, so `overrode_*` keeps the earlier call on the row.
+On Telegram a new reply already replaced the last one.
+
+### Market sales per size (Alex)
+What StockX's *Sales* tab shows — sold in 30 days / this week, avg · low · high, the last 5
+sales — per line, for the approver. **From Alias (GOAT) recent sales, not StockX**: the
+sanctioned StockX API has no sales history (`integrations.md`), and the gateway that does is
+off-limits. `GET api.alias.org/api/v1/pricing_insights/recent_sales` (`aliasRecentSales`,
+`api/_lib/alias.js`): ≤ 200 per call, newest first, **the size filter only works with both
+condition params** (without them it answers every size). `api/_lib/marketSales.js`:
+`readMarketSales({sku,size})` (catalog id cached 12 h, sales 10 min), `summarizeSales` (pure,
+`now` passed in; `capped` = 200 returned and the oldest is inside 30 days → "200+"),
+`salesSentence` for the card.
+- A **snapshot** on the line (`market_sales` JSONB), like the buy call: read beside the price
+  when the buyer asks (`priceLineNow` in `cart/line`) and re-read by **Price it**
+  (`cart/price-line`). A desk's own add reads no market, so it has none until Price it.
+- **Approver-only**: `market_sales(_at)` are in `CALL_FIELDS` — market prices, stripped from a
+  buyer's copy.
+- Shown: `18 sold/30d · avg $259` under the buy call; the full panel (`SalesPanel`) when the
+  row is opened; on the Telegram card a "Market sales (GOAT/Alias), size 9:" line (one size) or
+  `· 48 sold/30d avg $58` per row (one card per shoe). Never "0 sold" for a failed read — omitted.
+
+### Full box (Andrew)
+`full_box` per line — the pair comes in its own box, complete. A tick on the add form (beside
+Premium, applies to every size asked), editable in ✎, a **Full box** chip on the row, `📦 Full
+box` on the card (in the header when every size of a run says so), `· full box` in the trail.
+Unticked = not said, not "no box".
+
+### The buyer edits a sent pair (Andrew: "edit after submission to premium")
+`cart/line` patch from the request's own buyer (`buyerFix`): their **pending** pair only, while
+the request is in `LIST_ADDABLE` — size, shelf price, in-store count, full box, **premium +
+tip** (the likely meaning of "to premium"). **Never the quantity** (ignored, it's the
+approver's). The write is compare-and-set (`updateBuyCartLine(..., { onlyIfPending })`): a desk
+deciding it in the same second wins and the buyer gets a 409. A changed tip is a NEW proposal
+(`tip_status` back to `proposed`, the desk's earlier answer cleared). A shelf/tip change
+re-prices off the captured market; a **new size is re-read** (price + sales) after the response.
+Then the pair is **re-posted to the group** as a single card headed `✏️ CHANGED by …: shelf $50
+→ $55` — replies to the old run card still work (sizes are read live).
+
+### Not buying a pair — "X out" (Andrew)
+`cart/line { lineId, skip:true }` → status **`skipped`** ("not buying"): an APPROVED pair the
+buyer isn't grabbing, so the cards aren't sized for it. `skip:false` = Undo (back to approved
+at the qty kept on the row). Rules (`skipBuyCartLine`, one compare-and-set statement): the line
+is approved (skipped for undo), the request is `submitted/approved/denied`, and **no live gift
+card exists** — after that the receipt says what was bought and the audit returns the rest.
+The buyer, or a desk with a cost privilege on their behalf.
+- Every money/receipt/pack reader filters `status = 'approved'`, so the target drops by itself;
+  `recalcCartMoney` keeps `skipped_count`. The request's status follows its lines as after a
+  decision (all X'd out / turned down → `denied`).
+- **Never re-decided by an approver**: `decideBuyCartLines` skips `skipped` targets (one line,
+  approve-all, turn-down-all), `decideLines` answers 409 "they X'd it out", and Telegram card
+  replies drop skipped sizes (`cardLines`) — "the rest are turned down" can't rewrite their "not
+  buying" into our "no".
+- Group note (`notifyLineSkipped`): `✕ BC-#### — Andrew is NOT buying CW2288-111 size 9 ×2 (it
+  was approved)` + the new amount to fund; the desk DM (`notifyIssuersIfReady`) re-announces a
+  changed amount.
+
+### Replies in plain words (Alex's screenshots, same day)
+Alex answered cards the way people do — "take all", "Yes", "Two each size max", "$5 tip" — and
+got an error for each, plus "Nothing was still awaiting a decision — someone may have got there
+first · HTTP 409" on a reply that repeated what was already recorded. Now:
+- **Whole-card answers** (`readWholeCardReply`, `src/lib/buyPaste.js`, tried first by
+  `parseApprovalReply`): `take all` / `yes` / `ok` / `all` / `approve` / 👍 → every size, **as
+  many as were counted in store** (1 where nobody counted); `2 each` / `two each size max` /
+  `max 2 each` → that many per size, **never more than the store's count**; `no` / `pass` /
+  `none` / `nah` / 👎 → all turned down. Number words read as digits; `size 15 x two` works.
+  One-letter `y` / `n` / `k` are NOT read (a typo must not spend money). The answer under the
+  card says how it was read ("Read "take all" as every size, … (1 of 10 — not counted).").
+- **Amount-first tips**: `$5 tip`, `5 tip`, `5$ tip`, `5 dollar tip` (as well as `tip 5`).
+- **A reply that changes nothing** → "✅ Already recorded — nothing changed (…)" — `decideGroup`
+  sends only the lines that would move.
+- **No "· HTTP 4xx"** in the group (`answerOnCard`); the code goes to the server log.
+- **Typed replies to a ONE-size card** (Buy 1/2/3 buttons) were silently dropped. Now read the
+  same way (`handleLineReply`): a bare `3` = buy 3, plus every phrase above and the tip forms.
+- The card's instructions add "Or just reply: take all (what's in store) · 2 each · no".
+- Unreadable is still refused, nothing recorded, and the error lists what works.
+- **Every unreadable reply is kept** in **`telegram_reply_misses`** (new table → `db:setup`):
+  card kind, the sizes it offered, the reply, the error, who sent it. Rules the reader refused
+  for a REASON (unlinked tapper, funded request) are not misses. Decision on an AI reader
+  (gpt-5.4-mini as a fallback, confirm-tap before recording) was **deferred until this has a
+  week or two of data**:
+  `SELECT reply_text, sizes, from_name, created_at FROM telegram_reply_misses ORDER BY id DESC;`
+
+### Fixed on the way: unpriced pairs never got a card
+`priceInBackground` `return`ed out of itself when neither Alias nor StockX had a price, which
+skipped the card below it — a size with no market was never shown to the group. The read now
+lives in `priceLineNow`, and the card always follows.
 
 ## The buy call is the APPROVER's (2026-09-11)
 `canSeeBuyCall` / `redactCartForViewer` / `redactLineForViewer` in `api/_lib/buycart.js`.

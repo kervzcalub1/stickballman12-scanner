@@ -4805,6 +4805,16 @@ button.bc-cost-chip { font-family: inherit; line-height: inherit; }
 .bc-line-status.approved { color: var(--ok); }
 .bc-line-status.rejected { color: var(--err); }
 .bc-line-status.pending { color: #c6871a; }
+/* Not buying (the buyer X'd an approved pair out) — out of the money, kept on the list. */
+.bc-line.skipped { opacity: 0.55; }
+.bc-line.skipped .bc-td-shoe b { text-decoration: line-through; }
+.bc-line-status.skipped { color: var(--muted); }
+.bc-change { display: block; margin-top: 4px; }
+.bc-skip { white-space: nowrap; }
+/* Market sales per size (Alias recent sales) — the approver's read of how fast it sells. */
+.bc-sales-mini { margin-top: 2px; }
+.bc-sales-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 2px; font-size: 13px; }
+.bc-sales-list li { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
 .bc-decide { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px;
   padding-top: 10px; border-top: 1px solid var(--border); }
 

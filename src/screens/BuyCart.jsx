@@ -21,10 +21,10 @@ import { BuyCartReceipt } from '../components/BuyCartReceipt.jsx';
 import { BuyCartCosts } from '../components/BuyCartCosts.jsx';
 import { BuyCartPack } from '../components/BuyCartPack.jsx';
 import { BuyCartTasks } from '../components/BuyCartTasks.jsx';
-import { estDate, estTime } from '../lib/format.js';
+import { estDate, estTime, PH_DATE, estClock } from '../lib/format.js';
 import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
-import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep } from '../lib/buycartRules.js';
+import { LIST_ADDABLE, decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep } from '../lib/buycartRules.js';
 import { NudgeButton } from '../components/NudgeButton.jsx';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
@@ -241,6 +241,37 @@ function ShoeShots({ cart, sku, onSignOut }) {
 // What we ALREADY hold of this shoe, in this size — the half of the picture the buy
 // call never had. See `api/cart/stock.js` for why the basis is Shopify plus what is
 // not yet listed, and why our own listed count is shown but not added.
+// HOW FAST THIS SIZE SELLS on the market — Alias/GOAT recent sales, snapshotted when the
+// pair was asked about (or last "Price it"). What StockX's Sales tab shows, which is what
+// Alex asked to see on a request (floor feedback, 2026-11-02). Approver-only: the server
+// strips `market_sales` from a buyer's copy with the rest of the call.
+function SalesPanel({ ms, size }) {
+  if (!ms) return null;
+  const d = (n) => (n == null ? '—' : `$${Number(n).toFixed(0)}`);
+  return (
+    <div className="bc-stock bc-sales">
+      <div className="bc-stock-top">
+        <b className="bc-stock-n">{ms.sold_30d}{ms.capped ? '+' : ''}</b>
+        <span>sold in the last 30 days in size <b>{size}</b> · <b>{ms.sold_7d}</b> this week</span>
+      </div>
+      {ms.sold_30d > 0 && (
+        <p className="bc-stock-sum">Avg {d(ms.avg_30d)} · low {d(ms.low_30d)} · high {d(ms.high_30d)} (30 days)</p>
+      )}
+      {ms.last?.length > 0 && (
+        <ul className="bc-sales-list">
+          {ms.last.map((x, i) => (
+            <li key={i}><b>{d(x.price)}</b><span className="muted">{PH_DATE.format(new Date(x.at))} · {estClock(x.at)} EST</span></li>
+          ))}
+        </ul>
+      )}
+      <p className="muted xs">
+        Market sales on GOAT/Alias, new with a good box · read {estDate(ms.read_at)} {estClock(ms.read_at)} EST.
+        StockX doesn’t share sales history; “Price it” re-reads this.
+      </p>
+    </div>
+  );
+}
+
 function StockPanel({ s }) {
   if (!s || !s.checked) return null;
   const o = s.ours || {};
@@ -333,6 +364,9 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
   // The line being corrected, if any. A misread shelf ticket is the common case and it
   // used to mean pulling the whole request back to fix one number.
   const [fixing, setFixing] = useState(null);
+  // The decided line an approver is CHANGING their mind on (James: "indecisive"). Allowed
+  // until the cards go out — the server already took overrides; the screen had no button.
+  const [changing, setChanging] = useState(null);
   // Which line's working is open. One at a time: the panel is tall, and two of them open
   // is a table you have to scroll to compare two rows of.
   const [open, setOpen] = useState(null);
@@ -358,11 +392,24 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
   // front of the desk with its price written into a Telegram card, and a price that is
   // wrong after asking is a remove-and-re-add, not an edit.
   const editable = isBuyer && cart.status === 'draft';
+  // …and after sending (Andrew, 2026-11-02): the buyer fixes their OWN pair while it is
+  // still PENDING — size, shelf price, count, full box, premium + tip. The pair is re-posted
+  // to the group with what changed. Never the quantity; never once it's been answered.
+  const buyerEdit = (l) => isBuyer && l.status === 'pending' && LIST_ADDABLE.includes(cart.status);
   // The × is per LINE: a pending pair the buyer has not had an answer on is theirs to
   // withdraw while their list is open. A decided one is part of an approval.
   const canRemove = (l) => l.status === 'pending' && (
     (isBuyer && buyerCanAdd(cart)) || (!isBuyer && canEditLines));
-  const canFix = editable || canEditLines || (lines.some(canRemove));
+  // NOT BUYING IT ("X out", Andrew): an APPROVED pair the buyer isn't grabbing, so the cards
+  // aren't sized for it — before any card is recorded (gc_total counts only live cards).
+  const beforeCards = ['submitted', 'approved', 'denied'].includes(cart.status) && !(Number(cart.gc_total) > 0);
+  const canSkip = (l) => beforeCards && (isBuyer || canEditLines) && l.status === 'approved';
+  const canUnskip = (l) => beforeCards && (isBuyer || canEditLines) && l.status === 'skipped';
+  // CHANGE A DECISION already made — until the cards go out (`decisionsPendingOnly` from
+  // `funded`). A skipped pair is the buyer's call, not ours, so it has no Change.
+  const canChange = (l) => canDecide && !decisionsPendingOnly(cart.status) && ['approved', 'rejected'].includes(l.status);
+  const canFix = editable || canEditLines || lines.some(canRemove) || lines.some(buyerEdit)
+    || lines.some(canSkip) || lines.some(canUnskip);
   // Kept in one place: the detail row has to span exactly the header, and a colSpan that
   // drifts from the columns leaves a ragged edge nobody notices in review.
   // A buyer has no "Buy call" column — the call is the approver's (`canSeeBuyCall` on
@@ -471,13 +518,40 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
 
   // Not through `act`-style error swallowing: FormModal keeps the typed values when the
   // server refuses, which is the whole reason these stopped being window.prompts.
-  async function fix({ size, qty, shelfPrice }) {
-    await api.cartEditLine(cart.id, fixing.id, {
+  async function fix({ size, qty, shelfPrice, availableQty, fullBox, premium, tip }) {
+    const base = {
       size: String(size ?? '').trim() || null,
-      qty: Number(qty) || fixing.qty,
       shelfPrice: String(shelfPrice ?? '').trim() === '' ? null : Number(shelfPrice),
-    });
+      fullBox: fullBox === 'yes',
+    };
+    await api.cartEditLine(cart.id, fixing.id, isBuyer
+      ? {
+        ...base,
+        // Blank = "didn't count" — sent as '' so the server clears it rather than keeps it.
+        availableQty: String(availableQty ?? '').trim() === '' ? '' : Number(availableQty),
+        premium: premium === 'yes',
+        tipProposed: premium === 'yes' ? String(tip ?? '').trim() : '',
+      }
+      : { ...base, qty: Number(qty) || fixing.qty });
     setFixing(null); onChanged();
+  }
+
+  async function skip(l, on) {
+    setBusy(`sk${l.id}`); setErr('');
+    try { await api.cartSkipLine(cart.id, l.id, on); onChanged(); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+    finally { setBusy(''); }
+  }
+
+  // One line, re-decided. Turning down still asks why — the buyer reads it in the shop.
+  async function change({ decision, qty: n, reason }) {
+    const id = Number(changing.id);
+    if (decision === 'approve' && !(Number(n) > 0)) throw new Error('Say how many to buy.');
+    if (decision === 'reject' && !String(reason ?? '').trim()) throw new Error('Say why it’s turned down — the buyer reads it.');
+    await api.cartDecide(cart.id, decision === 'approve'
+      ? { action: 'approve', lineIds: [id], qty: { [id]: Number(n) }, reason: String(reason ?? '').trim() || null }
+      : { action: 'reject', lineIds: [id], reason: String(reason).trim() });
+    setChanging(null); onChanged();
   }
 
   return (
@@ -503,21 +577,52 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
           onSubmit={({ amount }) => api.cartTip(cart.id, tipping.sku, 'approve', Number(amount)).then(() => { setTipping(null); onChanged(); })}
           fields={[{ name: 'amount', label: 'Tip per pair ($)', type: 'number', step: '0.01', min: 0.01, required: true }]} />
       )}
+      {changing && (
+        <FormModal
+          title={`Change the decision on ${changing.sku}${changing.size ? ` size ${changing.size}` : ''}`}
+          message={`Now: ${changing.status === 'approved' ? `approved ×${changing.qty}` : 'turned down'}${changing.decided_by ? ` by ${changing.decided_by}` : ''}. The change is recorded under your name and the earlier decision stays on the row.`}
+          submitLabel="Change it"
+          onClose={() => setChanging(null)}
+          onSubmit={change}
+          fields={[
+            { name: 'decision', label: 'Decision', type: 'select',
+              value: changing.status === 'approved' ? 'reject' : 'approve',
+              options: [{ value: 'approve', label: 'Approve' }, { value: 'reject', label: 'Turn it down' }] },
+            { name: 'qty', label: 'How many to buy (if approving)', type: 'number', min: 1, max: 999,
+              value: changing.qty != null ? String(changing.qty) : (changing.overrode_qty != null ? String(changing.overrode_qty) : '') },
+            { name: 'reason', label: 'Why? (needed to turn it down)', type: 'textarea',
+              placeholder: 'e.g. Market dropped — only worth it under $95' },
+          ]} />
+      )}
       {fixing && (
         <FormModal
-          title={`Correct ${fixing.sku}`}
+          title={`Correct ${fixing.sku}${fixing.size ? ` size ${fixing.size}` : ''}`}
           message={isBuyer
-            ? 'Fix what you typed. The buy call re-prices against the same market prices it was quoted at.'
+            ? (cart.status === 'draft'
+              ? 'Fix what you typed.'
+              : 'Fix what you sent. The desk gets the pair again with what you changed — it hasn’t been answered yet.')
             : 'The buyer read the ticket in a shop. Correcting it here re-prices the line and the change is recorded against your name.'}
           submitLabel="Save the correction"
           onClose={() => setFixing(null)}
           onSubmit={fix}
           fields={[
             { name: 'size', label: 'Size', value: fixing.size || '', maxLength: 20 },
-            { name: 'qty', label: 'Pairs', type: 'number', value: String(fixing.qty ?? 1), min: 1, max: 999, required: true },
+            // The quantity is the approver's answer — never on the buyer's form.
+            ...(isBuyer ? [] : [{ name: 'qty', label: 'Pairs', type: 'number', value: String(fixing.qty ?? 1), min: 1, max: 999, required: true }]),
             { name: 'shelfPrice', label: 'Price on the shelf', type: 'number', step: '0.01',
               value: fixing.shelf_price == null ? '' : String(fixing.shelf_price), min: 0, required: true,
               hint: 'What the sticker says, before any discount — it is what the gift cards have to cover.' },
+            ...(isBuyer ? [{ name: 'availableQty', label: 'How many in the shop', type: 'number', min: 1, max: 999,
+              value: fixing.available_qty == null ? '' : String(fixing.available_qty), hint: 'Blank = you didn’t count.' }] : []),
+            { name: 'fullBox', label: 'Full box?', type: 'select', value: fixing.full_box ? 'yes' : 'no',
+              options: [{ value: 'no', label: 'Not said' }, { value: 'yes', label: 'Yes — its own box, complete' }] },
+            ...(isBuyer ? [
+              { name: 'premium', label: 'Premium shoe?', type: 'select', value: fixing.premium ? 'yes' : 'no',
+                options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes' }] },
+              { name: 'tip', label: 'Tip per pair (premium only)', type: 'number', step: '0.01', min: 0,
+                value: fixing.tip_proposed == null ? '' : String(fixing.tip_proposed),
+                hint: 'Blank = no tip proposed; the desk decides.' },
+            ] : []),
           ]} />
       )}
       {/* The heading and its one action on one line. `.bc-h` is left alone deliberately:
@@ -597,6 +702,7 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                         )}
                       </div>
                     )}
+                    {l.full_box && <div className="bc-premium-tag"><span className="po-chip">Full box</span></div>}
                     <ShoeShots cart={cart} sku={l.sku} onSignOut={onSignOut} />
                     {/* Amber only when we already hold at least as many as are being
                         asked for. Any-stock-is-amber made a single spare pair look like
@@ -667,11 +773,19 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                       ) : (
                         <div className="muted xs">{shown ? 'why ▴' : 'why ▾'}</div>
                       )}
+                      {l.market_sales && (
+                        <div className="muted xs bc-sales-mini" title="Market sales on GOAT/Alias for this size — open the row for the list">
+                          {l.market_sales.sold_30d}{l.market_sales.capped ? '+' : ''} sold/30d
+                          {l.market_sales.avg_30d != null ? ` · avg $${Number(l.market_sales.avg_30d).toFixed(0)}` : ''}
+                        </div>
+                      )}
                     </td>
                   )}
                   <td className="bc-td-status">
-                    <span className={`bc-line-status ${l.status}`}>{l.status}</span>
-                    {l.decided_by && <div className="muted xs">{l.decided_by}</div>}
+                    <span className={`bc-line-status ${l.status}`}>{l.status === 'skipped' ? 'not buying' : l.status}</span>
+                    {l.status === 'skipped'
+                      ? <div className="muted xs">{l.skipped_by || 'the buyer'} X’d it out · was approved{l.qty ? ` ×${l.qty}` : ''}{l.decided_by ? ` by ${l.decided_by}` : ''}</div>
+                      : l.decided_by && <div className="muted xs">{l.decided_by}</div>}
                     {/* One approver reversing another's call is a real thing here, and
                         the last write must not be able to present itself as the only
                         one. Both names, in the order they happened. */}
@@ -682,12 +796,26 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                       </div>
                     )}
                     {l.decided_reason && <div className="muted xs">{l.decided_reason}</div>}
+                    {canChange(l) && (
+                      <button type="button" className="btn sm ghost bc-change" disabled={!!busy}
+                        onClick={(e) => { e.stopPropagation(); setChanging(l); }}
+                        title="Approve or turn it down instead — allowed until the gift cards go out">Change</button>
+                    )}
                   </td>
                   {canFix && (
                     <td className="bc-line-actions" onClick={(e) => e.stopPropagation()}>
-                      {(editable || canEditLines) && (
+                      {(editable || canEditLines || buyerEdit(l)) && (
                         <button type="button" className="btn sm ghost" onClick={() => setFixing(l)}
-                          aria-label={`Correct ${l.sku}`} title="Correct the size, quantity or shelf price">✎</button>
+                          aria-label={`Correct ${l.sku}`} title={isBuyer ? 'Fix the size, price, count, full box or premium' : 'Correct the size, quantity or shelf price'}>✎</button>
+                      )}
+                      {canSkip(l) && (
+                        <button type="button" className="btn sm ghost bc-skip" disabled={busy === `sk${l.id}`}
+                          onClick={() => skip(l, true)} aria-label={`Not buying ${l.sku}${l.size ? ` size ${l.size}` : ''}`}
+                          title="Not grabbing this pair — takes it off what the gift cards cover">✕ Not buying</button>
+                      )}
+                      {canUnskip(l) && (
+                        <button type="button" className="btn sm ghost" disabled={busy === `sk${l.id}`}
+                          onClick={() => skip(l, false)} title="Buying it after all — back to approved">Undo</button>
                       )}
                       {canRemove(l) && (
                         <button type="button" className="btn sm ghost" disabled={busy === 'rm'}
@@ -704,6 +832,7 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                         <LineCall line={l} stack={cart.cost_stack || {}} canPrice={canPrice}
                           busy={busy === `px${id}`} onPrice={() => price(id)} />
                       )}
+                      {!isBuyer && <SalesPanel ms={l.market_sales} size={l.size} />}
                       <StockPanel s={stock?.[id]} />
                     </td>
                   </tr>

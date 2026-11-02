@@ -143,6 +143,56 @@ export const sizeKey = (v) => String(v ?? '').trim().toUpperCase().replace(/^US\
  * @param {Array<{id:number, size:string}>} lines  the card's lines
  * @returns {{ ok:true, approve:Array<{line, qty}>, reject:Array<line> } | { ok:false, error:string }}
  */
+// "two" → 2 … "twelve" → 12, so "two each" reads like "2 each".
+const NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, a: 1, an: 1 };
+const wordsToDigits = (t) => t.replace(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/gi, (w) => String(NUMBER_WORDS[w.toLowerCase()]));
+
+/**
+ * HOW PEOPLE ACTUALLY ANSWER A CARD (floor feedback, 2026-11-02 — Alex replied "take all",
+ * "Yes", "Two each size max" and got three errors). A whole-card answer in plain words:
+ *   take all · yes · ok · all · approve · 👍  → every size, as many as were COUNTED in store
+ *                                               (1 where nobody counted — said in the note)
+ *   2 each · two each size max · max 2 each   → that many per size, never more than counted
+ *   no · pass · none · nah · 👎               → every size turned down
+ * Returns null when the text isn't one of these (the size-by-size grammar takes over).
+ */
+export function readWholeCardReply(text, lines) {
+  const t = wordsToDigits(String(text || '').trim().toLowerCase())
+    .replace(/[.!?]+$/g, '').replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+  const counted = (l) => (Number(l.available_qty) > 0 ? Number(l.available_qty) : null);
+  const ALL = /^(?:yes|yep|yeah|ya|yup|ok|okay|sure|approve(?:d)?(?: all| them| them all| it)?|all|all of (?:them|it|em)|(?:take|get|buy|grab|cop)(?: them| em| 'em| it)?(?: all)?|(?:take|get|buy|grab|cop) all(?: of (?:them|it|em))?(?: sizes)?|send it|go|go ahead|do it|👍|✅|💯)$/u;
+  const NONE = /^(?:no|nope|nah|n|pass|none|no thanks|nothing|reject(?:ed)?(?: all| them| them all)?|decline(?:d)?(?: all| them)?|turn (?:them|it|em) (?:all )?down|skip(?: it| them| all)?|👎|❌)$/u;
+  if (ALL.test(t)) {
+    const uncounted = lines.filter((l) => counted(l) == null).map((l) => l.size);
+    return {
+      ok: true,
+      approve: lines.map((l) => ({ line: l, qty: counted(l) ?? 1 })),
+      reject: [],
+      note: `Read "${String(text).trim()}" as every size, as many as were counted in store`
+        + `${uncounted.length ? ` (1 of ${uncounted.join(', ')} — not counted)` : ''}.`,
+    };
+  }
+  if (NONE.test(t)) return { ok: true, approve: [], reject: [...lines], note: null };
+  // "2 each", "take 2 each", "2 of each", "2 per size", "2 each size max", "max 2 each", "up to 2 each".
+  const m = /^(?:(?:take|get|buy|grab|approve)\s+)?(?:(max(?:imum)?|up to|at most)\s+)?(\d{1,3})\s*(?:x\s*)?(?:each|of each|per size|a size|each size|of every size|every size)(?:\s+size)?(?:\s+(max(?:imum)?))?$/.exec(t);
+  if (m) {
+    const n = Number(m[2]);
+    if (!(n > 0)) return { ok: true, approve: [], reject: [...lines], note: null };
+    const capped = [];
+    const approve = lines.map((l) => {
+      const c = counted(l);
+      if (c != null && c < n) { capped.push(`${l.size} ×${c}`); return { line: l, qty: c }; }
+      return { line: l, qty: n };
+    });
+    return {
+      ok: true, approve, reject: [],
+      note: `Read "${String(text).trim()}" as ${n} of every size${capped.length ? `, fewer where the store has fewer: ${capped.join(', ')}` : ''}.`,
+    };
+  }
+  return null;
+}
+
 export function parseApprovalReply(text, lines) {
   const bySize = new Map(lines.map((l) => [sizeKey(l.size), l]));
   // Two lines of one size on a card can't be told apart by a reply — the second would be
@@ -156,11 +206,15 @@ export function parseApprovalReply(text, lines) {
     const hits = lines.filter((l) => parseFloat(sizeKey(l.size)) === n);
     return hits.length === 1 ? hits[0] : null;
   };
+  // A plain-words answer for the whole card first ("take all", "2 each", "no").
+  const whole = readWholeCardReply(text, lines);
+  if (whole) return whole;
   const qty = new Map();
   const bad = []; const unknown = []; const twice = [];
   let all = null;
   for (const raw of String(text || '').split(/[\r\n,;]+/)) {
-    const t = raw.trim();
+    // "size 14 x two" reads as "14 x 2".
+    const t = wordsToDigits(raw.trim()).replace(/^(?:size|sz)\s+/i, '');
     if (!t) continue;
     // A RANGE of sizes, one quantity each: "10.5-11.5 x 2" = 10.5, 11 and 11.5, two of each —
     // the sizes ON THE CARD between the two, inclusive (2026-10-27).
@@ -186,7 +240,7 @@ export function parseApprovalReply(text, lines) {
     qty.set(line.id, n);
   }
   if (bad.length)
-    return { ok: false, error: `Couldn't read ${bad.map((b) => `"${b}"`).join(', ')}. Reply one size per line, like "9 x 5" — sizes you leave out are turned down.` };
+    return { ok: false, error: `Couldn't read ${bad.map((b) => `"${b}"`).join(', ')} — nothing was recorded. Reply "take all", "2 each", "no", or one size per line like "${lines[0]?.size || 9} x 2" (sizes you leave out are turned down).` };
   if (unknown.length)
     return { ok: false, error: `${unknown.join(', ')} ${unknown.length === 1 ? 'isn’t' : 'aren’t'} on this card (sizes: ${lines.map((l) => l.size).join(', ')}). Nothing was recorded.` };
   if (twice.length)
@@ -219,7 +273,9 @@ export function splitTipReply(text) {
     if (/^(?:(?:approve|approved|ok|okay|yes)\s+(?:the\s+)?tip(?:\s+request)?|tip\s+(?:ok|okay|yes|approve|approved|✅|👍)(?:\s+request)?)$/.test(t)) found = { action: 'approve', amount: null };
     else if (/^(?:(?:decline|declined|deny|denied|reject|rejected|no)\s+(?:the\s+)?tip(?:\s+request)?|tip\s+(?:no|decline|declined|deny|denied|reject|rejected|❌|👎)(?:\s+request)?)$/.test(t)) found = { action: 'decline', amount: null };
     else {
-      const m = /^(?:approve(?:d)?\s+)?tip\s*(?:of\s*)?\$?\s*(\d{1,3}(?:\.\d{1,2})?)\s*(?:per\s+pair|\/\s*pair|each|ea)?$/.exec(t);
+      const m = /^(?:approve(?:d)?\s+)?tip\s*(?:of\s*|is\s*)?\$?\s*(\d{1,3}(?:\.\d{1,2})?)\s*\$?\s*(?:dollars?\s*)?(?:per\s+pair|\/\s*pair|each|ea)?$/.exec(t)
+        // "$5 tip" / "5 tip" / "5$ tip" / "5 dollar tip" — the amount first (Alex, 2026-11-02).
+        || /^(?:ok\s+|approve\s+)?\$?\s*(\d{1,3}(?:\.\d{1,2})?)\s*\$?\s*(?:dollars?\s+)?tip(?:\s+(?:per\s+pair|each|ea|is fine|ok))?$/.exec(t);
       if (m && Number(m[1]) > 0) found = { action: 'approve', amount: Math.round(Number(m[1]) * 100) / 100 };
       else if (m) found = { action: 'decline', amount: null };   // "tip 0" = no tip
     }

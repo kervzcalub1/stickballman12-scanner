@@ -290,6 +290,32 @@ export async function aliasPriceInsights({ catalogId, size, productCondition = D
   };
 }
 
+// RECENT SALES for one catalog_id + size, newest first (official API,
+// `GET /api/v1/pricing_insights/recent_sales`). Up to 200 per call, which is 30+ days of
+// even a fast Dunk. The size filter only applies WITH the two conditions — without them
+// the endpoint answers every size of the shoe (probed 2026-11-02). Returns
+// [{ at, price, consigned }] in dollars, or null when there is no key/catalog/size or
+// the call fails (best-effort, like the GI read above).
+export async function aliasRecentSales({ catalogId, size, limit = 200 }) {
+  const apiKey = process.env.ALIAS_API_KEY;
+  const sizeNum = size == null ? '' : (String(size).match(/[\d.]+/)?.[0] ?? '');
+  if (!apiKey || !catalogId || sizeNum === '') return null;
+  const r = await aliasApiGet('/api/v1/pricing_insights/recent_sales', {
+    token: apiKey,
+    query: {
+      catalog_id: String(catalogId),
+      size: sizeNum,
+      product_condition: DEFAULT_PRODUCT_CONDITION,
+      packaging_condition: DEFAULT_PACKAGING_CONDITION,
+      limit: String(Math.max(1, Math.min(200, Number(limit) || 200))),
+    },
+  });
+  if (!r.ok) return null;
+  return (Array.isArray(r.data?.recent_sales) ? r.data.recent_sales : [])
+    .map((s) => ({ at: s.purchased_at || null, price: centsToDollars(s.price_cents), consigned: !!s.consigned }))
+    .filter((s) => s.at && s.price != null && s.price > 0);
+}
+
 // Resolve a size's listing price by walking PRICE_HIERARCHY — Global Indicator,
 // then Lowest, then Last Sold, then Highest, each consigned before "With You" —
 // and return the FIRST level that has a real price. Used by every New-Inventory

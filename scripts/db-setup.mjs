@@ -144,6 +144,25 @@ await sql(`
 `);
 await sql(`CREATE UNIQUE INDEX IF NOT EXISTS telegram_group_cards_msg
              ON telegram_group_cards (chat_id, message_id) WHERE message_id IS NOT NULL`);
+// Every card reply the bot COULDN'T READ (2026-11-02, docs/context/buy-cart.md "Replies in
+// plain words"). The evidence for what to teach the reader next — or whether an AI reader is
+// worth it at all — instead of guessing from screenshots. Write-only from the webhook.
+await sql(`
+  CREATE TABLE IF NOT EXISTS telegram_reply_misses (
+    id               BIGSERIAL PRIMARY KEY,
+    cart_id          BIGINT,
+    line_ids         TEXT,
+    card_kind        TEXT,            -- 'shoe' (one card per shoe) | 'line' (one size)
+    sizes            TEXT,            -- what the card offered, e.g. "14, 15"
+    reply_text       TEXT NOT NULL,
+    error            TEXT,
+    telegram_user_id BIGINT,
+    from_name        TEXT,
+    env              TEXT NOT NULL DEFAULT 'prod',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS telegram_reply_misses_at ON telegram_reply_misses (created_at DESC)`);
 // "More…" on a Telegram approval card asks the tapper "How many pairs?" and waits for a
 // number typed back (2026-09-29, replacing the Make data store that did this). One open
 // question per Telegram account — a second "More…" replaces the first — answered only in
@@ -1538,7 +1557,7 @@ await sql(`
 `);
 await sql(`ALTER TABLE buy_cart_lines DROP CONSTRAINT IF EXISTS buy_cart_lines_status_check`);
 await sql(`ALTER TABLE buy_cart_lines ADD CONSTRAINT buy_cart_lines_status_check
-           CHECK (status IN ('pending','approved','rejected'))`);
+           CHECK (status IN ('pending','approved','rejected','skipped'))`);
 await sql(`CREATE INDEX IF NOT EXISTS buy_cart_lines_cart_idx ON buy_cart_lines (cart_id, id)`);
 
 // THE APPROVER SETS THE QUANTITY, so a pending line does not have one yet (2026-09-11).
@@ -1569,6 +1588,18 @@ await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS tip_status TEXT`)
 await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS tip_approved NUMERIC(10,2)`);
 await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS tip_decided_by TEXT`);
 await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS tip_decided_at TIMESTAMPTZ`);
+// Buying feedback, 2026-11-02 (docs/context/buy-cart.md "Floor feedback, November").
+// FULL BOX: the buyer says the pair comes in its own box, complete — false = not said.
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS full_box BOOLEAN NOT NULL DEFAULT false`);
+// MARKET SALES for the size (Alias/GOAT recent sales, summarised), a SNAPSHOT taken when
+// the pair was asked about — the same rule as the buy call. Approver-only (CALL_FIELDS).
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS market_sales JSONB`);
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS market_sales_at TIMESTAMPTZ`);
+// NOT BUYING ("X out"): status 'skipped' on an approved pair the buyer isn't grabbing,
+// before the cards go out. The approval it replaced stays in decided_by / qty.
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS skipped_by TEXT`);
+await sql(`ALTER TABLE buy_cart_lines ADD COLUMN IF NOT EXISTS skipped_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS skipped_count INT NOT NULL DEFAULT 0`);
 
 // The cards themselves. A code plus a PIN is money in the hand, so neither is ever
 // stored as typed — api/_lib/secrets.js encrypts both under BUY_GC_KEY, and only

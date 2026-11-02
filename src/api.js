@@ -400,6 +400,8 @@ export const api = {
   cartAddLines: (cartId, lines) => post('/api/cart/line', { cartId, lines }),
   cartEditLine: (cartId, lineId, patch) => post('/api/cart/line', { cartId, lineId, patch }),
   cartRemoveLine: (cartId, lineId) => post('/api/cart/line', { cartId, lineId, remove: true }),
+  // Not buying an approved pair (skip=true) / buying it after all (false).
+  cartSkipLine: (cartId, lineId, skip) => post('/api/cart/line', { cartId, lineId, skip: !!skip }),
   // The cost stack an approver or an auditor states when the buyer's preset never had
   // one. Saving re-prices every line server-side and writes the diff into the trail.
   cartSetCosts: (cartId, stack) => post('/api/cart/costs', { cartId, stack }),

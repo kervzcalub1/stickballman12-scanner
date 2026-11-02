@@ -23,7 +23,7 @@
 // passes a dev card's taps on to TELEGRAM_DEV_FORWARD_URL (the dev tunnel) untouched, so a
 // test card is recorded in the dev database and never in the real one.
 import { send, applySecurity, getJsonBody } from '../_lib/util.js';
-import { dbConfigured, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx } from '../_lib/db.js';
+import { dbConfigured, recordReplyMiss, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx } from '../_lib/db.js';
 import { telegramConfigured, telegramChatId, cancelChatId, tg, enqueue } from '../_lib/telegram.js';
 import { decideFromTelegram, decideTipFromTelegram } from '../_lib/telegramDecide.js';
 import { notifyEnv } from '../_lib/notify.js';
@@ -192,6 +192,18 @@ async function handleMessage(update, msg) {
       && await getTelegramGroupCard({ chatId: msg.chat.id, messageId: card0.message_id }).catch(() => null)) {
     return handleGroupReply(msg, card0, notifyEnv());
   }
+  // A REPLY to a ONE-SIZE card (the one with Buy 1/2/3 buttons). Typed answers there used
+  // to vanish without a word — "take all", "2", "yes" all recorded nothing and said
+  // nothing (floor feedback, 2026-11-02). Same reader as the shoe card, for its one size.
+  const lineData = (card0?.reply_markup?.inline_keyboard || []).flat()
+    .map((b) => String(b.callback_data || '')).find((d) => /^reject:\d+:\d+:/.test(d));
+  if (lineData && inOurChat(msg.chat?.id) && msg.text) {
+    const [, cartId, lineId, env] = lineData.split(':');
+    const cardEnv = env === 'dev' ? 'dev' : 'prod';
+    if (cardEnv !== notifyEnv()) return forwardToOtherEnv(update, cardEnv);
+    await takeTelegramQty((msg.from || {}).id, msg.chat.id).catch(() => null);   // a "More…" left open
+    return handleLineReply(msg, card0, cardEnv, Number(cartId), Number(lineId));
+  }
   if (!/^\s*\d{1,3}\s*$/.test(String(msg.text || ''))) return null;
   if (!inOurChat(msg.chat?.id)) return null;
   const from = msg.from || {};
@@ -227,13 +239,14 @@ async function handleGroupReply(msg, cardMsg, cardEnv) {
     if (!lines.length) return say('⚠️ Those sizes are no longer on the request, so nothing was recorded.');
     // A premium shoe's TIP answer ("tip ok" / "tip no" / "tip 5") can come alone or beside
     // the sizes. Everything is read before anything is recorded, as before.
+    const missed = (error) => logMiss(msg, { cartId: card.cart_id, lines, kind: 'shoe', error, env: cardEnv });
     const split = splitTipReply(msg.text);
-    if (split.error) return say(`⚠️ ${split.error}`);
+    if (split.error) { missed(split.error); return say(`⚠️ ${split.error}`); }
     if (split.tip && !lines.some((l) => l.tip_status != null || l.premium))
       return say('⚠️ This shoe isn’t premium and has no tip proposed, so nothing was recorded.');
     const sizesSaid = !split.tip || split.rest.trim() !== '';
     const read = sizesSaid ? parseApprovalReply(split.tip ? split.rest : msg.text, lines) : null;
-    if (read && !read.ok) return say(`⚠️ ${read.error}`);
+    if (read && !read.ok) { missed(read.error); return say(`⚠️ ${read.error}`); }
     // Telegram redelivers an update it didn't get a 200 for; the second copy is a no-op.
     if (!(await claimTelegramGroupReply(card.id, msg.message_id))) return null;
     if (split.tip) {
@@ -249,12 +262,73 @@ async function handleGroupReply(msg, cardMsg, cardEnv) {
       from: msg.from || {}, card, chatId, messageId: cardMsg.message_id, cardEnv, lines,
       approve: read.approve.map((a) => ({ id: Number(a.line.id), size: a.line.size, qty: a.qty })),
       reject: read.reject.map((l) => ({ id: Number(l.id), size: l.size })),
+      note: read.note || null,
     });
   });
 }
 
+// A size the buyer X'd out (status 'skipped') is off the card: a reply can't approve it,
+// and "the rest are turned down" must not turn their "not buying" into our "no".
+// A typed reply to a one-size card: a bare number ("2") is how many to buy; otherwise the
+// shoe card's reader with this one size ("take all", "yes", "no", "9 x 2", "$5 tip").
+async function handleLineReply(msg, cardMsg, cardEnv, cartId, lineId) {
+  const chatId = msg.chat.id;
+  const say = (text) => enqueue(() => tg('sendMessage', {
+    chat_id: chatId, text: `${text}${cardEnv === 'dev' ? ' · [dev]' : ''}`,
+    reply_parameters: { message_id: msg.message_id, allow_sending_without_reply: true },
+  }));
+  const card = { id: `line:${lineId}`, cart_id: cartId, line_ids: [lineId] };
+  return oneCardAtATime(card.id, async () => {
+    const lines = await cardLines(card);
+    if (!lines.length) return say('⚠️ That pair is no longer waiting on the request (removed, or the buyer isn’t buying it), so nothing was recorded.');
+    const missed = (error) => logMiss(msg, { cartId, lines, kind: 'line', error, env: cardEnv });
+    const split = splitTipReply(msg.text);
+    if (split.error) { missed(split.error); return say(`⚠️ ${split.error}`); }
+    if (split.tip && !lines.some((l) => l.tip_status != null || l.premium))
+      return say('⚠️ This shoe isn’t premium and has no tip proposed, so nothing was recorded.');
+    const rest = (split.tip ? split.rest : msg.text).trim();
+    let read = null;
+    if (rest) {
+      const bare = /^(\d{1,3})(?:\s*(?:pairs?|prs?|x))?$/i.exec(rest);
+      read = bare
+        ? (Number(bare[1]) > 0 ? { ok: true, approve: [{ line: lines[0], qty: Number(bare[1]) }], reject: [] } : { ok: true, approve: [], reject: [lines[0]] })
+        : parseApprovalReply(rest, lines);
+      if (!read.ok) { missed(read.error); return say(`⚠️ ${read.error}`); }
+    }
+    if (split.tip) {
+      const from = msg.from || {};
+      const out = await decideTipFromTelegram({
+        telegramUserId: from.id, telegramName: from.first_name, telegramUsername: from.username,
+        cartId, lineIds: [lineId], ...split.tip,
+      });
+      await say(out.body?.ok ? `💵 ${out.body.outcome}` : `⚠️ ${out.body?.error || 'The tip answer was not recorded'}`);
+    }
+    if (!read) return null;
+    return decideGroup({
+      from: msg.from || {}, card, chatId, messageId: cardMsg.message_id, cardEnv, lines,
+      approve: read.approve.map((a) => ({ id: Number(a.line.id), size: a.line.size, qty: a.qty })),
+      reject: read.reject.map((l) => ({ id: Number(l.id), size: l.size })),
+      note: read.note || null,
+    });
+  });
+}
+
+// A reply the bot couldn't READ (not one it read and refused — an unlinked tapper or a
+// funded request is a rule, not a gap in the reader). Kept in telegram_reply_misses so what
+// to teach the reader next is answered from data. Never awaited, never fatal.
+function logMiss(msg, { cartId, lines, kind, error, env }) {
+  const from = msg.from || {};
+  console.log(`[telegram] could not read a ${kind} card reply on cart ${cartId}: "${String(msg.text || '').slice(0, 120)}"`);
+  recordReplyMiss({
+    cartId, lineIds: (lines || []).map((l) => Number(l.id)), cardKind: kind,
+    sizes: (lines || []).map((l) => l.size).join(', '), text: msg.text, error,
+    telegramUserId: from.id ?? null, fromName: [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || null, env,
+  }).catch((e) => console.warn('[telegram] reply miss not logged:', e.message));
+}
+
 const cardLines = async (card) =>
-  (await Promise.all(card.line_ids.map((id) => getBuyCartLine(card.cart_id, id)))).filter(Boolean);
+  (await Promise.all(card.line_ids.map((id) => getBuyCartLine(card.cart_id, id))))
+    .filter((l) => l && l.status !== 'skipped');
 
 // ONE DECISION PER CARD AT A TIME. A reply approves some sizes and turns the rest down in
 // two steps, so two approvers answering the same card in the same second could interleave
@@ -272,23 +346,37 @@ function oneCardAtATime(cardId, fn) {
 // One decision for the whole card: the approvals (each with its quantity), then the rest
 // turned down — through decideFromTelegram, so the identity and `approve_buying` checks are
 // the same as a button tap's. Answered under the card in one message.
-async function decideGroup({ from, card, chatId, messageId, cardEnv, lines, approve, reject }) {
+async function decideGroup({ from, card, chatId, messageId, cardEnv, lines, approve, reject, note = null }) {
   const who = { telegramUserId: from.id, telegramName: from.first_name, telegramUsername: from.username, cartId: card.cart_id };
   let name = null;
-  if (approve.length) {
+  // ONLY WHAT WOULD CHANGE is sent. A reply that says what the card already says (sent
+  // twice, or "take all" after the same answer) used to come back as "Nothing was still
+  // awaiting a decision — someone may have got there first · HTTP 409" — an error for a
+  // reply that was right (floor feedback, 2026-11-02). Now it's "already recorded".
+  const cur = new Map(lines.map((l) => [Number(l.id), l]));
+  const approveNow = approve.filter((a) => !(cur.get(a.id)?.status === 'approved' && Number(cur.get(a.id)?.qty) === Number(a.qty)));
+  const rejectNow = reject.filter((r) => cur.get(r.id)?.status !== 'rejected');
+  if (!approveNow.length && !rejectNow.length) {
+    const said = [
+      ...approve.map((a) => `${a.size} ×${a.qty}`),
+      ...(reject.length ? [`turned down: ${reject.map((r) => r.size).join(', ')}`] : []),
+    ].join(', ');
+    return answerOnCard(chatId, messageId, { code: 200, body: { ok: true, outcome: `✅ Already recorded — nothing changed (${said}).`, reaction: approve.length ? '👍' : '👎' } }, cardEnv);
+  }
+  if (approveNow.length) {
     const out = await decideFromTelegram({
       ...who, action: 'approve',
-      lineIds: approve.map((a) => a.id),
-      qty: Object.fromEntries(approve.map((a) => [a.id, a.qty])),
+      lineIds: approveNow.map((a) => a.id),
+      qty: Object.fromEntries(approveNow.map((a) => [a.id, a.qty])),
     });
     // Nothing turned down either when the approval was refused — half a decision is worse.
     if (!out.body?.ok) return answerOnCard(chatId, messageId, out, cardEnv);
     name = out.body.by;
   }
-  if (reject.length) {
-    const out = await decideFromTelegram({ ...who, action: 'reject', lineIds: reject.map((r) => r.id) });
+  if (rejectNow.length) {
+    const out = await decideFromTelegram({ ...who, action: 'reject', lineIds: rejectNow.map((r) => r.id) });
     // A 409 here after approvals went through = those sizes were already settled; fine.
-    if (!out.body?.ok && !(approve.length && out.code === 409)) return answerOnCard(chatId, messageId, out, cardEnv);
+    if (!out.body?.ok && !(approveNow.length && out.code === 409)) return answerOnCard(chatId, messageId, out, cardEnv);
     name = name || out.body?.by;
   }
   // The answer says what the lines SAY NOW, not what the reply asked for: on a funded
@@ -321,6 +409,8 @@ async function decideGroup({ from, card, chatId, messageId, cardEnv, lines, appr
     ...(unchanged.length ? [`Already funded, so still approved: ${unchanged.map((r) => r.size).join(', ')}`] : []),
     ...(reversed.length ? [`↩️ Replaced the earlier decision: ${reversed.join('; ')}`] : []),
     ...(over.length ? [`⚠️ ${over.join('; ')}.`] : []),
+    // How a plain-words reply ("take all", "2 each") was read, so nobody has to guess.
+    ...(note ? [note] : []),
   ].join('\n');
   return answerOnCard(chatId, messageId, { code: 200, body: { ok: true, outcome, reaction: approved.length ? '👍' : '👎' } }, cardEnv);
 }
@@ -495,7 +585,12 @@ async function answerOnCard(chatId, messageId, out, cardEnv) {
   const reply = (text) => enqueue(() => tg('sendMessage', {
     chat_id: chatId, text, reply_parameters: { message_id: messageId, allow_sending_without_reply: true },
   }));
-  if (!out.body?.ok) return reply(`⚠️ ${out.body?.error || 'Not recorded'} · HTTP ${out.code}${tag}`);
+  // No "· HTTP 409" in the group — a status code means nothing to the person who replied.
+  // It stays in the server log.
+  if (!out.body?.ok) {
+    console.log(`[telegram] card reply refused (HTTP ${out.code}): ${out.body?.error || 'not recorded'}`);
+    return reply(`⚠️ ${out.body?.error || 'Not recorded'}${tag}`);
+  }
   await reply(`${out.body.outcome}${tag}`);
   const emoji = out.body.reaction || '👍';
   try {

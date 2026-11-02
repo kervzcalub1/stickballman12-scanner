@@ -97,6 +97,8 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
   // buy-cart.md "Premium shoes". The desk approves or declines it on the Telegram card.
   const [premium, setPremium] = useState(false);
   const [tip, setTip] = useState('');
+  // FULL BOX — the pair comes in its own box, complete (Andrew, 2026-11-02). Unticked = not said.
+  const [fullBox, setFullBox] = useState(false);
   const [shooting, setShooting] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -275,6 +277,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
         gender: product.gender || null, upc: product.upc || null,
         basis: 'with_you',
         premium, tipProposed: premium && tipNum > 0 ? tipNum : null,
+        fullBox,
       });
       // Several sizes go in ONE call: the server prices them one at a time and the desk
       // gets ONE Telegram card for the shoe, answered with "size x qty" — not one per size.
@@ -286,7 +289,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
       // next action; the buyer said otherwise: every add is a fresh shoe, and a form
       // still showing the last one's code and photo count was being re-sent by mistake.
       setProduct(null); setSkuInput(''); setSizes([]); setShelf(''); setSizePrice({}); setSizeAvail({});
-      setPremium(false); setTip('');
+      setPremium(false); setTip(''); setFullBox(false);
       setFromPaste(null);
       onAdded();
     } catch (err) {
@@ -401,6 +404,10 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
               optional and for this shoe only, per pair, on every size asked; left blank, the
               desk decides it. */}
           <div className="bc-premium">
+            <label className="bc-check">
+              <input type="checkbox" checked={fullBox} onChange={(e) => setFullBox(e.target.checked)} />
+              <span>Full box? <span className="muted xs">· its own box, complete{sizes.length > 1 ? `, all ${sizes.length} sizes` : ''}</span></span>
+            </label>
             <label className="bc-check">
               <input type="checkbox" checked={premium}
                 onChange={(e) => { setPremium(e.target.checked); if (!e.target.checked) setTip(''); }} />

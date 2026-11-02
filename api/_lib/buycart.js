@@ -6,7 +6,7 @@
 // `cart/close` re-evaluates them server-side, so a person is never told they can close
 // something the server will refuse.
 import { send, requireAuth, isPrivileged, blockIfMustChange } from './util.js';
-import { getPoReconciliation, userHasPrivilege, decideBuyCartLines, linesAwaitingQty, decideBuyCartTip } from './db.js';
+import { getPoReconciliation, userHasPrivilege, decideBuyCartLines, linesAwaitingQty, decideBuyCartTip, getBuyCartLine } from './db.js';
 import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../../src/lib/payout.js';
 import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly } from '../../src/lib/buycartRules.js';
 import { alertLinesDecided } from './alerts.js';
@@ -395,6 +395,18 @@ export async function decideLines({ cart, action, lineIds, all, qtyById, qtyAll,
     reason: String(reason ?? '').trim().slice(0, 500) || null,
     actor, qtyById, qtyAll, pendingOnly,
   });
+  if (!out.decided) {
+    // A pair the buyer X'd out is never re-decided (decideBuyCartLines) — say THAT, not
+    // "someone got there first", or the approver goes looking for a decision nobody made.
+    if (!all && lineIds.length) {
+      const asked = (await Promise.all(lineIds.map((id) => getBuyCartLine(cart.id, Number(id))))).filter(Boolean);
+      if (asked.length && asked.every((l) => l.status === 'skipped'))
+        return {
+          error: `${cart.buyer_name || 'The buyer'} isn’t buying ${asked.map((l) => `${l.sku}${l.size ? ` size ${l.size}` : ''}`).join(', ')} — they X’d it out, so there is nothing to decide. They can put it back.`,
+          code: 409,
+        };
+    }
+  }
   if (!out.decided)
     return {
       error: pendingOnly
@@ -441,6 +453,8 @@ export const canSeeBuyCall = (user) => !!user && (user.role !== 'supplier' || is
 const CALL_FIELDS = [
   'verdict', 'profit', 'roi', 'best_platform', 'best_payout',
   'alias_price', 'stockx_price', 'liquidity', 'final_cost',
+  // The size's market sales (Alias recent sales) are market prices too — the approver's.
+  'market_sales', 'market_sales_at',
 ];
 
 // The trail says a line was priced and by whom, but not to what. A record that

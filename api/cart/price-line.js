@@ -17,8 +17,9 @@
 // Same sources and same failure independence as `payout/quote` — a StockX outage must
 // not cost the Alias half of the answer.
 import { getJsonBody, send, applySecurity, rateLimit, requireAuth, blockIfMustChange } from '../_lib/util.js';
-import { getBuyCartFull, priceBuyCartLine, dbConfigured } from '../_lib/db.js';
+import { getBuyCartFull, priceBuyCartLine, setBuyCartLineSales, dbConfigured } from '../_lib/db.js';
 import { readMarketForLine } from '../_lib/lineMarket.js';
+import { readMarketSales } from '../_lib/marketSales.js';
 import { cartVisibleTo, canWriteCosts, canSeeBuyCall, costStackEditable, repriceLine } from '../_lib/buycart.js';
 
 const fmt = (n) => (n == null ? '—' : `$${Number(n).toFixed(2)}`);
@@ -74,8 +75,13 @@ export default async function handler(req, res) {
     // The basis the line was quoted on, kept: consigned and with-you are different
     // numbers, and re-pricing must not quietly switch which question was asked.
     const consigned = line.basis === 'consigned';
-    const { aliasPrice, stockxPrice, liquidity, priced, market: marketOut } =
-      await readMarketForLine({ sku: line.sku, size: line.size, upc: line.upc, consigned });
+    // The size's market sales are re-read with it (Alias recent sales) — "Price it" is the
+    // approver's "show me today", and that includes how fast it is selling.
+    const [{ aliasPrice, stockxPrice, liquidity, priced, market: marketOut }, sales] = await Promise.all([
+      readMarketForLine({ sku: line.sku, size: line.size, upc: line.upc, consigned }),
+      readMarketSales({ sku: line.sku, size: line.size }).catch(() => null),
+    ]);
+    if (sales) await setBuyCartLineSales(cartId, lineId, sales);
     const sxInexact = marketOut.stockxInexact;
 
     // Neither side answered. Say so rather than writing two more zeros — the whole

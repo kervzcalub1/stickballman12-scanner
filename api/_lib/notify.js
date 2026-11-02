@@ -26,6 +26,7 @@ import { telegramConfigured, telegramChatId, sendApprovalCard, sendNote, cardKey
 import { cardsIssuable } from '../../src/lib/buycartRules.js';
 import { compareSizes } from '../../src/lib/codes.js';
 import { stockxConfigured, stockxProductBySku } from './stockx.js';
+import { salesSentence } from './marketSales.js';
 
 // Where the card's SKU line links: the shoe's own StockX page when StockX's catalogue has that
 // exact style code (`urlKey`, cached 12 h — the pricing read already warmed it), else a StockX
@@ -212,6 +213,9 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
     // hold — and only then the paperwork.
     const priced = call && call.verdict;
     const caption = [
+      // A BUYER'S CHANGE to a pair already asked about heads the re-posted card, so the
+      // group knows this replaces the one above and what moved (cart/line patch).
+      ...(extra.edited ? [String(extra.edited), ''] : []),
       // WHAT THE SHOE IS, on its own lines. The style code alone identified the pair for
       // anyone holding it, and for nobody else — an approver reading a group chat knows
       // "Air Jordan 1 Mid 'Patent Bred Toe'" and does not carry HV4091-006 in their head.
@@ -231,6 +235,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
       // entirely when uncounted: a "0 in store" line would argue against a purchase
       // nobody argued against.
       ...(line.available_qty != null ? [`In store: ${line.available_qty}`] : []),
+      ...(line.full_box ? ['📦 Full box'] : []),
       '',
       'Payout Engine Result:',
       // No market is not a bad call, and must never render as one. "We didn't look" and
@@ -253,6 +258,10 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
             : [`${call.roi != null ? `${call.roi.toFixed(1)}%` : '—'} ROI via ${call.platform || '—'}`]),
         ]
         : ['Not priced — no Alias or StockX market for this size right now.']),
+      // HOW FAST THIS SIZE SELLS on the market (Alias/GOAT recent sales) — what the
+      // approver reads on StockX's Sales tab, brought onto the card (floor feedback,
+      // 2026-11-02). Omitted when it couldn't be read, never printed as "0 sold".
+      ...(line.market_sales ? ['', `Market sales (GOAT/Alias), size ${line.size}:`, salesSentence(line.market_sales)] : []),
       '',
       'Inventory:',
       stock ? stockSentence(stock) : 'Stock could not be read.',
@@ -289,8 +298,10 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
         // What they DID state: how many are on the shelf. null means they didn't count,
         // which Make must not render as a zero.
         available_qty: line.available_qty == null ? null : Number(line.available_qty),
+        full_box: !!line.full_box,
       },
       call,
+      market_sales: line.market_sales || null,
       stock,
       photo: {
         file_id: extra.photoFileId ?? null,
@@ -402,6 +413,8 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
     const shelf = [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
     const headLine = lines.find((l) => money(l.shelf_price) === shelf);
 
+    // Full box said of every size → once in the header; of some → on those rows.
+    const allFullBox = lines.every((l) => l.full_box);
     const row = (l) => {
       const bits = [l.size || '—'];
       bits.push(l.available_qty != null ? `${l.available_qty} in store` : 'Did not count');
@@ -411,6 +424,10 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
         bits.push(`${String(l.verdict).toUpperCase()}${money(l.profit) != null ? ` ${dollars(l.profit)}` : ''}`);
         if (money(l.roi) != null) bits.push(`${money(l.roi).toFixed(1)}% ROI`);
       } else bits.push('not priced');
+      // The size's market sales, short: "48 sold/30d avg $58" (full sentence on a one-size card).
+      const ms = l.market_sales;
+      if (ms) bits.push(ms.sold_30d ? `${ms.sold_30d}${ms.capped ? '+' : ''} sold/30d avg $${Number(ms.avg_30d).toFixed(0)}` : 'no sales/30d');
+      if (l.full_box && !allFullBox) bits.push('full box');
       return bits.join(' · ');
     };
 
@@ -431,8 +448,10 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       first.sku,
       `Shelf ${dollars(shelf)}${money(headLine?.final_cost) != null ? ` · costs us ${dollars(headLine.final_cost)}/unit` : ''}`,
       ...premiumLines(first, cart, { replies: true }),
+      ...(allFullBox ? ['📦 Full box'] : []),
       '',
       `Sizes (${lines.length}):`,
+      ...(lines.some((l) => l.market_sales) ? ['(sold/30d = market sales on GOAT/Alias for that size)'] : []),
       ...lines.map(row),
       '',
       'Inventory:',
@@ -447,6 +466,8 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       'To approve, REPLY to this card — one size per line, e.g.:',
       ...lines.slice(0, 2).map((l) => `${l.size} x ${l.available_qty > 0 ? l.available_qty : 1}`),
       ...(lines.length > 2 ? [`A range works too: ${lines[0].size}-${lines[lines.length - 1].size} x 1 · or "all x 1".`] : []),
+      // The plain-words answers people actually type (floor feedback, 2026-11-02).
+      'Or just reply: take all (what’s in store) · 2 each · no',
       'Sizes you leave out are turned down. A new reply replaces the last one (edits aren’t read).',
     ].join('\n');
 
@@ -465,6 +486,37 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
     return { sent: true };
   } catch (e) {
     console.error('[notify] could not send the one-card-per-shoe card:', e.message);
+    return { sent: false, reason: e.message };
+  }
+}
+
+/**
+ * The buyer X'd out an approved pair — or put it back (cart/line `skip`). A plain note to
+ * the group: the approver who said yes, and the desk about to fund, both need to know the
+ * total just moved. Fire-and-forget like every notice here; Make has no route for it.
+ */
+export async function notifyLineSkipped(cartId, line, actor, { undo = false } = {}) {
+  if (!telegramConfigured()) {
+    console.log(`[notify] cart ${cartId} line ${line?.id} ${undo ? 'unskipped' : 'skipped'} — Telegram is not configured, so nothing was sent`);
+    return { sent: false, reason: 'Telegram is not configured' };
+  }
+  try {
+    const cart = await getBuyCart(cartId);
+    if (!cart) return { sent: false, reason: 'cart is gone' };
+    const who = actor?.name || actor?.username || cart.buyer_name || 'The buyer';
+    const pair = `${line.sku}${line.size ? ` size ${line.size}` : ''}${Number(line.qty) > 0 ? ` ×${line.qty}` : ''}`;
+    const caption = [
+      undo
+        ? `↩️ ${cart.cart_code} — ${who} IS buying ${pair} after all`
+        : `✕ ${cart.cart_code} — ${who} is NOT buying ${pair} (it was approved)`,
+      `To fund now: ${dollars(fundingTarget(cart))} · ${Number(cart.approved_count) || 0} size${Number(cart.approved_count) === 1 ? '' : 's'} approved`,
+      ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
+    ].join('\n');
+    const msg = await sendNote(caption);
+    console.log(`[notify] ${cart.cart_code} ${line.sku}/${line.size || '—'} ${undo ? 'back on' : 'not buying'} → Telegram message ${msg?.message_id}`);
+    return { sent: true };
+  } catch (e) {
+    console.error('[notify] could not send the not-buying note:', e.message);
     return { sent: false, reason: e.message };
   }
 }
@@ -499,14 +551,15 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
     if (!cart) return { sent: false, reason: 'cart is gone' };
     const n = (v) => Number(v) || 0;
     const target = fundingTarget(cart);
-    const rejected = n(cart.line_count) - n(cart.approved_count) - n(cart.pending_count);
+    const skipped = n(cart.skipped_count);
+    const rejected = n(cart.line_count) - n(cart.approved_count) - n(cart.pending_count) - skipped;
     const pairs = (k) => `${k} pair${k === 1 ? '' : 's'}`;
     const closed = event === 'buying_request_closed';
     const caption = [
       closed
         ? `${cart.cart_code} — ${cart.buyer_name} closed the request`
         : `${cart.cart_code} — ${cart.buyer_name} re-opened the request and is adding more pairs`,
-      `${pairs(n(cart.line_count))} asked · ${n(cart.approved_count)} approved · ${n(cart.pending_count)} still waiting${rejected > 0 ? ` · ${rejected} turned down` : ''}`,
+      `${pairs(n(cart.line_count))} asked · ${n(cart.approved_count)} approved · ${n(cart.pending_count)} still waiting${rejected > 0 ? ` · ${rejected} turned down` : ''}${skipped > 0 ? ` · ${skipped} not buying` : ''}`,
       closed
         ? `Approved ${dollars(target)} to fund${n(cart.gc_total) > 0 ? ` · ${dollars(cart.gc_total)} in cards already issued` : ''}`
         : n(cart.gc_total) > 0
@@ -530,6 +583,7 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
         pending_count: n(cart.pending_count),
         approved_count: n(cart.approved_count),
         rejected_count: Math.max(0, rejected),
+        skipped_count: skipped,
         approved_amount: money(cart.approved_amount),
         funding_target: money(target),
         gc_total: money(cart.gc_total),

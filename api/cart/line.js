@@ -1,8 +1,9 @@
 // POST /api/cart/line
 //   { cartId, line:{ sku, size, availableQty, shelfPrice, verdict, … } }  -> add
 //   { cartId, lines:[ …same, every size of ONE sku… ] }           -> add several, ONE card
-//   { cartId, lineId, patch:{ qty?, availableQty?, shelfPrice?, size? } }  -> edit
+//   { cartId, lineId, patch:{ qty?, availableQty?, shelfPrice?, size?, fullBox?, premium?, tipProposed? } }  -> edit
 //   { cartId, lineId, remove:true }                               -> remove
+//   { cartId, lineId, skip:true|false }                           -> not buying it / back on
 //
 // The request's LIST is the buyer's to grow until they close it (`list_closed_at`) —
 // every add is its own question to the desk, and a request with cards already out can
@@ -13,11 +14,13 @@ import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_li
 import {
   getBuyCart, getBuyCartLine, addBuyCartLine, updateBuyCartLine, removeBuyCartLine,
   priceBuyCartLine, askBuyCart, cartHasShoePhoto, cartShoePhotos, dbConfigured,
+  setBuyCartLineSales, skipBuyCartLine,
 } from '../_lib/db.js';
-import { notifyLineAsked, notifyGroupAsked } from '../_lib/notify.js';
+import { notifyLineAsked, notifyGroupAsked, notifyLineSkipped, notifyIssuersIfReady } from '../_lib/notify.js';
 import { cartVisibleTo, hasCostPrivilege, canSeeBuyCall, redactLineForViewer, redactCartForViewer, shelfPricesEditable, repriceLine, requireBuyerAccess } from '../_lib/buycart.js';
-import { buyerCanAdd, listOpen } from '../../src/lib/buycartRules.js';
+import { buyerCanAdd, listOpen, LIST_ADDABLE } from '../../src/lib/buycartRules.js';
 import { readMarketForLine } from '../_lib/lineMarket.js';
+import { readMarketSales } from '../_lib/marketSales.js';
 import { sizeKey } from '../../src/lib/buyPaste.js';
 
 const MAX_LINES = 200;
@@ -61,7 +64,23 @@ export default async function handler(req, res) {
     // Shelf prices still freeze at `funded` — `approved_amount` is the target the gift
     // cards were issued against, and moving it after the money is out would rewrite what
     // was approved. From there the RECEIPT records what was actually paid.
-    if (body.patch && cart.status !== 'draft') {
+    // THE BUYER fixes their OWN pair after sending it (floor feedback, 2026-11-02): a
+    // misread ticket, the wrong size tapped, a count, full box, premium + tip. Only while
+    // the pair is still PENDING — nobody has answered it — checked again in the write
+    // itself (`onlyIfPending`) so a desk deciding it in the same second wins. Never the
+    // quantity: how many to buy is the approver's answer, not the buyer's question.
+    const buyerFix = !!body.patch && isOwnBuyer(user, cart);
+    if (buyerFix) {
+      if (!LIST_ADDABLE.includes(cart.status))
+        return send(res, 409, { ok: false, error: 'This request is past the point of changing a pair — the purchase has happened.' });
+    } else if (body.skip !== undefined) {
+      // NOT BUYING IT ("X out"). The buyer, standing in the shop, isn't grabbing a pair
+      // that was approved — so the cards shouldn't be sized for it. A desk may do it for
+      // them (they said so in the chat). Before any card is recorded: after that the
+      // receipt says what was bought and the audit returns the rest (skipBuyCartLine).
+      if (!isOwnBuyer(user, cart) && !(await hasCostPrivilege(user)))
+        return send(res, 403, { ok: false, error: 'Only the buyer or a buying desk can mark a pair as not being bought.' });
+    } else if (body.patch && cart.status !== 'draft') {
       if (!(await hasCostPrivilege(user)))
         return send(res, 403, {
           ok: false,
@@ -112,6 +131,28 @@ export default async function handler(req, res) {
       });
     }
 
+    if (body.skip !== undefined) {
+      const undo = body.skip === false;
+      const lineId = Number(body.lineId);
+      const out = await skipBuyCartLine(cartId, lineId, user, { undo });
+      if (!out) {
+        // Say WHICH of the three it was — they lead to different next steps.
+        const was = await getBuyCartLine(cartId, lineId);
+        const name = was ? `${was.sku}${was.size ? ` size ${was.size}` : ''}` : 'That pair';
+        if (!was) return send(res, 404, { ok: false, error: 'That pair is no longer on the request.' });
+        if (!undo && was.status !== 'approved')
+          return send(res, 409, { ok: false, error: was.status === 'pending'
+            ? `${name} hasn’t been answered yet — remove it with × instead.`
+            : `${name} is ${was.status === 'skipped' ? 'already marked as not buying' : 'turned down'} — there is nothing to X out.` });
+        if (undo && was.status !== 'skipped')
+          return send(res, 409, { ok: false, error: `${name} isn’t marked as not buying.` });
+        return send(res, 409, { ok: false, error: 'The gift cards are already out against this request — tell the desk, and the receipt shows what was actually bought.' });
+      }
+      notifyLineSkipped(cartId, out.line, user, { undo });
+      notifyIssuersIfReady(cartId);   // the amount to fund just changed
+      return send(res, 200, { ok: true, line: redactLineForViewer(out.line, user), cart: redactCartForViewer(out.cart, user) });
+    }
+
     if (body.remove) {
       const gone = await removeBuyCartLine(cartId, Number(body.lineId), user);
       if (!gone) return send(res, 404, { ok: false, error: 'That line is already gone.' });
@@ -123,17 +164,38 @@ export default async function handler(req, res) {
       // guessed and would rather say nothing than say a number. Absent (undefined) still
       // means "leave it alone", which is what every other field here means by null.
       const availSent = body.patch.availableQty;
+      const bool = (v) => (v === true || v === false ? v : null);
       const patch = {
-        qty: Number.isInteger(Number(body.patch.qty)) && Number(body.patch.qty) > 0 ? Number(body.patch.qty) : null,
-        availableQty: Number.isInteger(Number(availSent)) && Number(availSent) > 0 ? Number(availSent) : null,
+        // The quantity is the approver's answer; a buyer's is ignored, never stored.
+        qty: !buyerFix && Number.isInteger(Number(body.patch.qty)) && Number(body.patch.qty) > 0 ? Number(body.patch.qty) : null,
+        availableQty: Number.isInteger(Number(availSent)) && Number(availSent) > 0 ? Math.min(Number(availSent), 999) : null,
         clearAvailable: availSent === '' || availSent === null,
         shelfPrice: blank(body.patch.shelfPrice) ? null : money(body.patch.shelfPrice),
         size: body.patch.size == null ? null : String(body.patch.size).trim().slice(0, 20) || null,
+        fullBox: bool(body.patch.fullBox),
+        // Premium + its tip are the BUYER's proposal; the desk answers a tip on cart/tip.
+        premium: buyerFix ? bool(body.patch.premium) : null,
       };
       if (patch.shelfPrice != null && patch.shelfPrice <= 0)
         return send(res, 400, { ok: false, error: 'Enter the price on the shelf — it is what the gift cards have to cover.' });
       const was = await getBuyCartLine(cartId, Number(body.lineId));
       if (!was) return send(res, 404, { ok: false, error: 'That line does not exist.' });
+      if (buyerFix && was.status !== 'pending')
+        return send(res, 409, { ok: false, error: `${was.sku}${was.size ? ` size ${was.size}` : ''} has already been ${was.status === 'skipped' ? 'marked as not buying' : was.status} — ask the desk to change it.` });
+
+      // THE TIP, when the buyer touched premium or the tip box. Not premium → no tip; a
+      // blank box on a premium shoe → no tip proposed (the desk decides), never $0.
+      if (buyerFix && (patch.premium != null || body.patch.tipProposed !== undefined)) {
+        const premiumNow = patch.premium ?? !!was.premium;
+        const tipSent = body.patch.tipProposed;
+        const tip = premiumNow && !blank(tipSent) ? money(tipSent) : null;
+        if (premiumNow && !blank(tipSent) && !(tip > 0))
+          return send(res, 400, { ok: false, error: 'Enter the tip you are proposing per pair, or leave it blank.' });
+        if (tip != null && tip > 500)
+          return send(res, 400, { ok: false, error: 'A tip above $500 a pair can’t be right — check the amount.' });
+        const tipBefore = was.tip_proposed == null ? null : Number(was.tip_proposed);
+        if (tip !== tipBefore || (!premiumNow && was.tip_status != null)) { patch.tipTouched = true; patch.tipProposed = tip; }
+      }
 
       // What changed, in words, for the trail. A record that says "a line was edited"
       // and not what it used to say is not a record of anything.
@@ -144,18 +206,49 @@ export default async function handler(req, res) {
       else if (patch.availableQty != null && patch.availableQty !== was.available_qty) bits.push(`in store ${was.available_qty ?? 'not counted'} → ${patch.availableQty}`);
       const shelfMoved = patch.shelfPrice != null && patch.shelfPrice !== Number(was.shelf_price);
       if (shelfMoved) bits.push(`shelf $${Number(was.shelf_price ?? 0).toFixed(2)} → $${patch.shelfPrice.toFixed(2)}`);
+      if (patch.fullBox != null && patch.fullBox !== !!was.full_box) bits.push(patch.fullBox ? 'full box' : 'not full box');
+      if (patch.premium != null && patch.premium !== !!was.premium) bits.push(patch.premium ? 'premium' : 'not premium');
+      if (patch.tipTouched) bits.push(patch.tipProposed != null ? `tip proposed $${patch.tipProposed.toFixed(2)}/pair` : 'no tip proposed');
       // Nothing actually moved: return the line and write nothing. An "edited" row in
       // the trail that names no change is a row somebody has to open to find out it
       // says nothing, and the history is read to answer questions, not to be long.
       if (!bits.length) return send(res, 200, { ok: true, line: redactLineForViewer(was, user), unchanged: true });
-      // The buy call is re-derived only when the SHELF PRICE moved, and only from the
-      // market prices already captured on the line — the call still answers "at the
-      // prices the buyer was looking at" (api/_lib/buycart.js repriceLine).
-      const call = shelfMoved ? repriceLine({ ...was, shelf_price: patch.shelfPrice }, cart.cost_stack || {}) : null;
+      const sizeMoved = patch.size != null && String(patch.size) !== String(was.size ?? '');
+      // The buy call is re-derived when the SHELF PRICE or the TIP moved, from the market
+      // prices already captured on the line — the call still answers "at the prices the
+      // buyer was looking at" (api/_lib/buycart.js repriceLine). A buyer's new SIZE is a
+      // different market: it is re-read below, after the response.
+      const call = shelfMoved || patch.tipTouched
+        ? repriceLine({
+          ...was,
+          shelf_price: patch.shelfPrice ?? was.shelf_price,
+          ...(patch.tipTouched ? { tip_proposed: patch.tipProposed, tip_status: patch.tipProposed != null ? 'proposed' : null, tip_approved: null } : {}),
+        }, cart.cost_stack || {})
+        : null;
 
-      const line = await updateBuyCartLine(cartId, Number(body.lineId), patch, user, call,
-        `${was.sku}${was.size ? ` size ${was.size}` : ''}${bits.length ? ` — ${bits.join(', ')}` : ''}`);
-      if (!line) return send(res, 404, { ok: false, error: 'That line does not exist.' });
+      const changed = `${was.sku}${was.size ? ` size ${was.size}` : ''} — ${bits.join(', ')}`;
+      const line = await updateBuyCartLine(cartId, Number(body.lineId), patch, user, call, changed,
+        { onlyIfPending: buyerFix });
+      if (!line)
+        return send(res, buyerFix ? 409 : 404, { ok: false, error: buyerFix
+          ? 'The desk answered this pair while you were editing it — nothing was changed. Ask them to change it.'
+          : 'That line does not exist.' });
+
+      // The group decides from the CARD, and the card still quotes the old numbers. A
+      // buyer's change re-posts the pair as a fresh card headed by what changed; a new
+      // size is priced first (and its sales read) so the card carries the right call.
+      if (buyerFix && cart.status !== 'draft') {
+        const photos = await cartShoePhotos(cartId, line.sku);
+        const tell = { notify: true, photos, edited: `✏️ CHANGED by ${user.name || user.username}: ${bits.join(', ')}` };
+        if (sizeMoved && line.size) {
+          priceInBackground(cartId, Number(line.id), {
+            sku: line.sku, size: line.size, upc: line.upc, basis: line.basis,
+            shelfPrice: Number(line.shelf_price), tipProposed: line.tip_proposed,
+          }, cart.cost_stack || {}, tell);
+        } else {
+          notifyLineAsked(cartId, Number(line.id), { photoFileId: photos[0] ?? null, photoCount: photos.length, edited: tell.edited });
+        }
+      }
       return send(res, 200, { ok: true, line: redactLineForViewer(line, user) });
     }
 
@@ -341,6 +434,8 @@ function prepareLine(l, user, cart) {
     market: { sku, size, upc, basis, shelfPrice, tipProposed },
     row: {
       sku, size, qty, availableQty, shelfPrice, upc, premium, tipProposed,
+      // FULL BOX — the buyer says the pair comes in its own box, complete. Unticked = not said.
+      fullBox: l.fullBox === true,
       name: String(l.name ?? '').trim().slice(0, 200) || null,
       colorway: String(l.colorway ?? '').trim().slice(0, 120) || null,
       gender: String(l.gender ?? '').trim().slice(0, 20) || null,
@@ -389,8 +484,33 @@ async function priceRunInBackground(cartId, added, stack, tell) {
  * the buyer with a call they are not allowed to see or make.
  */
 async function priceInBackground(cartId, lineId, { sku, size, upc, basis, shelfPrice, tipProposed = null }, stack, tell = null) {
+  // In its own function so "nothing to price" can RETURN without skipping the card below.
+  // It used to `return` straight out of this one, so a size with no Alias or StockX market
+  // never got a Telegram card at all — the exact case the comment below rules out.
+  await priceLineNow(cartId, lineId, { sku, size, upc, basis, shelfPrice, tipProposed }, stack);
+  // Whatever happened above — priced, unpriced, or upstream down — the desk still has to
+  // be told the pair was asked about. A market outage must not swallow the question.
+  // WHETHER WE EVEN TRY is the other half of "no card arrived". A line the buyer added
+  // that was never treated as a question leaves no trace at all otherwise.
+  if (!tell) return;   // one size of a run — the run sends its own card (priceRunInBackground)
+  if (!tell.notify) console.log(`[cart/line] line ${lineId} priced — no card (not the buyer's own ask)`);
+  if (tell?.notify) {
+    await notifyLineAsked(cartId, lineId, { photoFileId: tell.photos?.[0] ?? null, photoCount: tell.photos?.length ?? 0, edited: tell.edited ?? null });
+  }
+}
+
+async function priceLineNow(cartId, lineId, { sku, size, upc, basis, shelfPrice, tipProposed }, stack) {
   try {
-    const m = await readMarketForLine({ sku, size, upc, consigned: basis === 'consigned' });
+    // The size's MARKET SALES are read beside the price (Alias recent sales — how many
+    // sold, avg/high/low) and kept on the line whatever the price read does: the card
+    // and the approver's screen both show them. Their failure never costs the price.
+    const [read, sales] = await Promise.all([
+      readMarketForLine({ sku, size, upc, consigned: basis === 'consigned' }).then((v) => ({ v }), (e) => ({ e })),
+      readMarketSales({ sku, size }).catch(() => null),
+    ]);
+    if (sales) await setBuyCartLineSales(cartId, lineId, sales).catch((e) => console.warn('[cart/line] sales snapshot not saved:', e.message));
+    if (read.e) throw read.e;
+    const m = read.v;
     // Nothing answered. Leave the row alone rather than stamping two zeros on it — a
     // stored zero reads as "priced, and worthless".
     if (!m.priced) return;
@@ -409,14 +529,5 @@ async function priceInBackground(cartId, lineId, { sku, size, upc, basis, shelfP
       + ` → ${snap.verdict || 'no call'}`);
   } catch (e) {
     console.error('[cart/line] background pricing failed, line stays unpriced:', e.message);
-  }
-  // Whatever happened above — priced, unpriced, or upstream down — the desk still has to
-  // be told the pair was asked about. A market outage must not swallow the question.
-  // WHETHER WE EVEN TRY is the other half of "no card arrived". A line the buyer added
-  // that was never treated as a question leaves no trace at all otherwise.
-  if (!tell) return;   // one size of a run — the run sends its own card (priceRunInBackground)
-  if (!tell.notify) console.log(`[cart/line] line ${lineId} priced — no card (not the buyer's own ask)`);
-  if (tell?.notify) {
-    await notifyLineAsked(cartId, lineId, { photoFileId: tell.photos?.[0] ?? null, photoCount: tell.photos?.length ?? 0 });
   }
 }

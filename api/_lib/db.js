@@ -7306,6 +7306,7 @@ async function recalcCartMoney(sql, cartId) {
       line_count     = l.total,
       approved_count = l.approved,
       pending_count  = l.pending,
+      skipped_count  = l.skipped,
       approved_amount = l.approved_amount,
       funding_target  = l.approved_amount,
       gc_total        = g.total,
@@ -7316,6 +7317,7 @@ async function recalcCartMoney(sql, cartId) {
       SELECT count(*)::int AS total,
              count(*) FILTER (WHERE status = 'approved')::int AS approved,
              count(*) FILTER (WHERE status = 'pending')::int  AS pending,
+             count(*) FILTER (WHERE status = 'skipped')::int  AS skipped,
              coalesce(sum(coalesce(shelf_price,0) * qty) FILTER (WHERE status = 'approved'), 0) AS approved_amount
         FROM buy_cart_lines WHERE cart_id = ${cartId}
     ) l,
@@ -7336,6 +7338,16 @@ const actorKeyOf = (a) => {
   const u = String(a?.username || '').trim().toLowerCase();
   return u ? `env:${u}` : null;
 };
+
+// One row per Telegram card reply the bot could not read (telegram_reply_misses). Best-effort:
+// the caller has already answered the person; a failed insert costs a log line, nothing more.
+export async function recordReplyMiss({ cartId, lineIds, cardKind, sizes, text, error, telegramUserId, fromName, env }) {
+  await db()`
+    INSERT INTO telegram_reply_misses (cart_id, line_ids, card_kind, sizes, reply_text, error, telegram_user_id, from_name, env)
+    VALUES (${cartId ?? null}, ${(lineIds || []).join(',') || null}, ${cardKind || null}, ${sizes || null},
+            ${String(text || '').slice(0, 1000)}, ${error ? String(error).slice(0, 500) : null},
+            ${telegramUserId ?? null}, ${fromName || null}, ${env || 'prod'})`;
+}
 
 // One row per scan that did not land. Best-effort by contract — the caller is mid-scan.
 export async function recordScanFailure({ code, reason, detail, screen, userName }) {
@@ -7569,14 +7581,15 @@ export async function addBuyCartLine(cartId, line, actor) {
     INSERT INTO buy_cart_lines
       (cart_id, sku, size, qty, available_qty, name, colorway, gender, upc, shelf_price, verdict,
        final_cost, best_platform, best_payout, profit, roi, alias_price, stockx_price,
-       liquidity, basis, quoted_at, premium, tip_proposed, tip_status)
+       liquidity, basis, quoted_at, premium, tip_proposed, tip_status, full_box)
     VALUES (${cartId}, ${line.sku}, ${line.size || null}, ${line.qty}, ${line.availableQty ?? null}, ${line.name || null},
             ${line.colorway || null}, ${line.gender || null}, ${line.upc || null},
             ${line.shelfPrice}, ${line.verdict || null}, ${line.finalCost ?? null},
             ${line.bestPlatform || null}, ${line.bestPayout ?? null}, ${line.profit ?? null},
             ${line.roi ?? null}, ${line.aliasPrice ?? null}, ${line.stockxPrice ?? null},
             ${line.liquidity || null}, ${line.basis || null}, now(),
-            ${line.premium === true}, ${line.tipProposed ?? null}, ${line.tipProposed != null ? 'proposed' : null})
+            ${line.premium === true}, ${line.tipProposed ?? null}, ${line.tipProposed != null ? 'proposed' : null},
+            ${line.fullBox === true})
     RETURNING *`;
   await recalcCartMoney(sql, cartId);
   await logCartEvent({
@@ -7586,7 +7599,7 @@ export async function addBuyCartLine(cartId, line, actor) {
     // the trail read like a request for zero pairs.
     // The in-store count belongs in the trail beside the price: it is half of what the
     // buyer reported, and the approver's quantity is judged against it.
-    body: `${line.sku}${line.size ? ` size ${line.size}` : ''}${Number(line.qty) > 0 ? ` ×${line.qty}` : ''} @ $${Number(line.shelfPrice || 0).toFixed(2)}${line.availableQty != null ? ` · ${line.availableQty} in store` : ''}${line.premium ? ' · premium' : ''}${line.tipProposed != null ? ` · tip $${Number(line.tipProposed).toFixed(2)}/pair proposed` : ''}${line.verdict ? ` — ${line.verdict}` : ''}`,
+    body: `${line.sku}${line.size ? ` size ${line.size}` : ''}${Number(line.qty) > 0 ? ` ×${line.qty}` : ''} @ $${Number(line.shelfPrice || 0).toFixed(2)}${line.availableQty != null ? ` · ${line.availableQty} in store` : ''}${line.fullBox ? ' · full box' : ''}${line.premium ? ' · premium' : ''}${line.tipProposed != null ? ` · tip $${Number(line.tipProposed).toFixed(2)}/pair proposed` : ''}${line.verdict ? ` — ${line.verdict}` : ''}`,
   });
   return lineOut(rows[0]);
 }
@@ -7601,36 +7614,46 @@ export async function getBuyCartLine(cartId, lineId) {
 // which is what a pure size or quantity correction should do. `note` is the before/after
 // in words: an edit to a number somebody is approving has to say what it used to be, or
 // the trail records that something changed and nothing about what.
-export async function updateBuyCartLine(cartId, lineId, patch, actor, call = null, note = null) {
+export async function updateBuyCartLine(cartId, lineId, patch, actor, call = null, note = null, { onlyIfPending = false } = {}) {
   const sql = db();
   // `available_qty` is the one field here that can be UNSET. Everything else follows the
   // coalesce rule (null = leave it alone), which has no way to say "make it empty" — and
   // blank is a real value for this one: it means the buyer did not count, as distinct
   // from any number they might type. `clearAvailable` is that instruction.
   const clearAvail = patch.clearAvailable === true;
-  const rows = call
-    ? await sql`
+  // FULL BOX and PREMIUM are booleans — null leaves them alone. A TIP the buyer changes is
+  // a NEW proposal: whatever the desk answered to the old one no longer applies, so it goes
+  // back to 'proposed' (or to nothing, when the shoe stops being premium or the box is
+  // cleared). `tipTouched` says the tip was part of this edit at all.
+  const tipTouched = patch.tipTouched === true;
+  const tipNew = tipTouched ? (patch.tipProposed ?? null) : null;
+  // A BUYER's edit lands only while the line is still a question: the desk deciding it in
+  // the same second wins, and the buyer is told (`onlyIfPending`, compare-and-set).
+  const rows = await sql`
       UPDATE buy_cart_lines SET
         qty = coalesce(${patch.qty ?? null}::int, qty),
         available_qty = CASE WHEN ${clearAvail}::boolean THEN NULL
                              ELSE coalesce(${patch.availableQty ?? null}::int, available_qty) END,
         shelf_price = coalesce(${patch.shelfPrice ?? null}::numeric, shelf_price),
         size = coalesce(${patch.size ?? null}::text, size),
-        final_cost = ${call.finalCost}, verdict = ${call.verdict},
-        best_platform = ${call.bestPlatform}, best_payout = ${call.bestPayout},
-        profit = ${call.profit}, roi = ${call.roi},
+        full_box = coalesce(${patch.fullBox ?? null}::boolean, full_box),
+        premium = coalesce(${patch.premium ?? null}::boolean, premium),
+        tip_proposed = CASE WHEN ${tipTouched}::boolean THEN ${tipNew}::numeric ELSE tip_proposed END,
+        tip_status = CASE WHEN ${tipTouched}::boolean
+                          THEN (CASE WHEN ${tipNew}::numeric IS NOT NULL THEN 'proposed' ELSE NULL END)
+                          ELSE tip_status END,
+        tip_approved = CASE WHEN ${tipTouched}::boolean THEN NULL ELSE tip_approved END,
+        tip_decided_by = CASE WHEN ${tipTouched}::boolean THEN NULL ELSE tip_decided_by END,
+        tip_decided_at = CASE WHEN ${tipTouched}::boolean THEN NULL ELSE tip_decided_at END,
+        final_cost = CASE WHEN ${!!call}::boolean THEN ${call ? call.finalCost : null}::numeric ELSE final_cost END,
+        verdict = CASE WHEN ${!!call}::boolean THEN ${call ? call.verdict : null}::text ELSE verdict END,
+        best_platform = CASE WHEN ${!!call}::boolean THEN ${call ? call.bestPlatform : null}::text ELSE best_platform END,
+        best_payout = CASE WHEN ${!!call}::boolean THEN ${call ? call.bestPayout : null}::numeric ELSE best_payout END,
+        profit = CASE WHEN ${!!call}::boolean THEN ${call ? call.profit : null}::numeric ELSE profit END,
+        roi = CASE WHEN ${!!call}::boolean THEN ${call ? call.roi : null}::numeric ELSE roi END,
         updated_at = now()
       WHERE id = ${lineId} AND cart_id = ${cartId}
-      RETURNING *`
-    : await sql`
-      UPDATE buy_cart_lines SET
-        qty = coalesce(${patch.qty ?? null}::int, qty),
-        available_qty = CASE WHEN ${clearAvail}::boolean THEN NULL
-                             ELSE coalesce(${patch.availableQty ?? null}::int, available_qty) END,
-        shelf_price = coalesce(${patch.shelfPrice ?? null}::numeric, shelf_price),
-        size = coalesce(${patch.size ?? null}::text, size),
-        updated_at = now()
-      WHERE id = ${lineId} AND cart_id = ${cartId}
+        AND (NOT ${onlyIfPending}::boolean OR status = 'pending')
       RETURNING *`;
   if (!rows[0]) return null;
   await recalcCartMoney(sql, cartId);
@@ -7727,6 +7750,51 @@ export async function setBuyCartCostStack(cartId, stack, calls, actor, note) {
   await recalcCartMoney(sql, cartId);
   await logCartEvent({ cartId, kind: 'costs_edited', actor, body: note });
   return getBuyCart(cartId);
+}
+
+// The market-sales SNAPSHOT for one line (api/_lib/marketSales.js). No trail row: it is a
+// reading taken alongside the price, not a decision, and the price read already logs one.
+export async function setBuyCartLineSales(cartId, lineId, summary) {
+  if (!summary) return;
+  await db()`UPDATE buy_cart_lines SET market_sales = ${JSON.stringify(summary)}::jsonb, market_sales_at = now()
+              WHERE id = ${lineId} AND cart_id = ${cartId}`;
+}
+
+// "NOT GRABBING THIS ONE" — the buyer X's out an approved pair before the cards go out
+// (docs/context/buy-cart.md "Not buying a pair"). `undo` puts it back to approved at the
+// quantity it was approved for (kept on the row). Compare-and-set on the line's status
+// and on the request still being unfunded with no card recorded, so a desk recording
+// cards in the same second can't have the target move under it.
+export async function skipBuyCartLine(cartId, lineId, actor, { undo = false } = {}) {
+  const sql = db();
+  const name = actor ? (actor.name || actor.username || null) : null;
+  const from = undo ? 'skipped' : 'approved';
+  const to = undo ? 'approved' : 'skipped';
+  const rows = await sql`
+    UPDATE buy_cart_lines l SET status = ${to},
+           skipped_by = CASE WHEN ${undo}::boolean THEN NULL ELSE ${name}::text END,
+           skipped_at = CASE WHEN ${undo}::boolean THEN NULL ELSE now() END,
+           updated_at = now()
+      FROM buy_carts c
+     WHERE l.id = ${lineId} AND l.cart_id = ${cartId} AND c.id = l.cart_id AND l.status = ${from}
+       AND c.status IN ('submitted', 'approved', 'denied')
+       AND NOT EXISTS (SELECT 1 FROM buy_cart_gift_cards g WHERE g.cart_id = c.id AND g.voided_at IS NULL)
+    RETURNING l.*`;
+  if (!rows[0]) return null;
+  await recalcCartMoney(sql, cartId);
+  // The request's status follows its lines, exactly as after a decision: nothing approved
+  // left (every pair X'd out or turned down) reads as `denied` — there is nothing to fund.
+  await sql`
+    UPDATE buy_carts SET
+      status = CASE WHEN pending_count > 0 THEN 'submitted' WHEN approved_count > 0 THEN 'approved' ELSE 'denied' END,
+      updated_at = now()
+    WHERE id = ${cartId} AND status IN ('submitted', 'approved', 'denied')`;
+  const r = rows[0];
+  await logCartEvent({
+    cartId, kind: undo ? 'line_unskipped' : 'line_skipped', lineId: r.id, actor,
+    body: `${r.sku}${r.size ? ` size ${r.size}` : ''}${Number(r.qty) > 0 ? ` ×${r.qty}` : ''} — ${undo ? 'back on: buying it after all' : 'not buying it'}`,
+  });
+  return { line: lineOut(r), cart: await getBuyCart(cartId) };
 }
 
 export async function removeBuyCartLine(cartId, lineId, actor) {
@@ -8186,9 +8254,9 @@ export async function linesAwaitingQty(cartId, lineIds, qtyById = {}, qtyAll = n
   const ids = Array.isArray(lineIds) && lineIds.length ? lineIds.map(Number).filter(Number.isInteger) : null;
   const rows = ids
     ? await sql`SELECT id, sku, size, qty FROM buy_cart_lines
-                 WHERE cart_id = ${cartId} AND id = ANY(${ids}::bigint[]) AND status <> 'rejected'`
+                 WHERE cart_id = ${cartId} AND id = ANY(${ids}::bigint[]) AND status NOT IN ('rejected', 'skipped')`
     : await sql`SELECT id, sku, size, qty FROM buy_cart_lines
-                 WHERE cart_id = ${cartId} AND status <> 'rejected'`;
+                 WHERE cart_id = ${cartId} AND status NOT IN ('rejected', 'skipped')`;
   return rows.filter((r) => !(Number(qtyById[r.id]) > 0 || Number(r.qty) > 0 || Number(qtyAll) > 0));
 }
 
@@ -8226,11 +8294,15 @@ export async function decideBuyCartLines({
   // on the request, so those are frozen, but a pair the buyer added AFTER re-opening
   // the list is still a question and can be answered. Filtered in the query rather
   // than by a later `if`, so an override can never slip through on a funded line.
+  //
+  // A SKIPPED line (the buyer X'd it out — not buying it) is never a target: an approval
+  // can't make somebody buy a pair they've said they won't, and "turn down the rest" on a
+  // Telegram card must not rewrite their "not buying" as our "no".
   const targets = ids
     ? await sql`SELECT * FROM buy_cart_lines WHERE cart_id = ${cartId} AND id = ANY(${ids}::bigint[])
-                 AND (NOT ${pendingOnly}::boolean OR status = 'pending')`
+                 AND status <> 'skipped' AND (NOT ${pendingOnly}::boolean OR status = 'pending')`
     : await sql`SELECT * FROM buy_cart_lines WHERE cart_id = ${cartId}
-                 AND (NOT ${pendingOnly}::boolean OR status = 'pending')`;
+                 AND status <> 'skipped' AND (NOT ${pendingOnly}::boolean OR status = 'pending')`;
 
   const rows = [];
   for (const t of targets) {

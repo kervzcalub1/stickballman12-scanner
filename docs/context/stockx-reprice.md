@@ -32,7 +32,8 @@ floor (default **$5** after StockX's 10 % fee), and **only ever lower**.
 Every ACTIVE **Direct** listing (`GET /selling/listings`, pages of 100), saved; then the market
 for each distinct size once (`GET …/variants/{id}/market-data` → `standardMarketData.lowestAsk`,
 `directMarketData.lowestAsk`, `flexMarketData.lowestAsk`, `highestBidAmount`). All on the shared
-StockX pace (one call per 400 ms, 429 back-off — `sxFetch`), so ~1,750 listings ≈ 10+ min.
+StockX pace (one call per 400 ms, 429 back-off — `sxFetch`), three market reads in flight (one
+at a time ran ~40 min on the real 1,736 sizes — each answer takes ~1 s), so ~12–15 min.
 Progress in `app_settings.stockx_pull` (the page watches it live); a "running" pull older than
 30 min counts as dead. In-process, like the eBay pull — a redeploy mid-pull means press it again.
 

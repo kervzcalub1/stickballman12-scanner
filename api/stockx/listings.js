@@ -27,13 +27,20 @@ export async function runStockxPull(by) {
     }
     const { ended } = await saveStockxListings(rows, startedAt);
     const variants = await stockxLiveVariants();
-    let done = 0; let failed = 0; let lastError = null;
-    for (const v of variants) {
-      try { await setStockxMarket(v.variant_id, await stockxMarketByProgramme(v.product_id, v.variant_id)); }
-      catch (e) { failed++; lastError = e.message; }
-      done++;
-      if (done % 20 === 0 || done === variants.length) await put({ state: 'running', phase: 'market', done, of: variants.length, failed, listings: rows.length });
-    }
+    // THREE reads in flight: each answer takes ~1 s, so one at a time left StockX's 400 ms slots
+    // idle (a real pull of 1,736 sizes ran ~40 min). The shared pace in stockx.js still spaces
+    // the calls themselves, so this fills the slots without going faster than ~2.5/s.
+    let done = 0; let failed = 0; let lastError = null; let next = 0;
+    const lane = async () => {
+      while (next < variants.length) {
+        const v = variants[next++];
+        try { await setStockxMarket(v.variant_id, await stockxMarketByProgramme(v.product_id, v.variant_id)); }
+        catch (e) { failed++; lastError = e.message; }
+        done++;
+        if (done % 20 === 0 || done === variants.length) await put({ state: 'running', phase: 'market', done, of: variants.length, failed, listings: rows.length });
+      }
+    };
+    await Promise.all([lane(), lane(), lane()]);
     await put({ state: 'done', finishedAt: new Date().toISOString(), listings: rows.length, sizes: variants.length, ended, marketFailed: failed, lastError });
   } catch (e) {
     console.error('[stockx/pull]', e.message);

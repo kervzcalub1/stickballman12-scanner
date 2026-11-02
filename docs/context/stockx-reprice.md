@@ -71,3 +71,6 @@ cut) · queue strip (waiting / confirming / done today / failed, **Stop the rest
 - No scheduled re-run (a person presses Pull and Reprice).
 - Standard listings (~15) aren't pulled — Direct only.
 - Sales history is still not in StockX's API; the log's **Ended** column is the proxy.
+- **"Listed ≥ days" is the StockX LISTING's age, not the stock's**: on the real pull most listings
+  were 1–3 days old even where the ask was months stale (listings get re-created), so *Over
+  Standard ≥ %* is the reliable way to find over-priced ones.

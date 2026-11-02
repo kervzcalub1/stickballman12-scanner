@@ -151,7 +151,7 @@ export function StockxListings({ onHome, onSignOut }) {
           )}
           {!pulling && pull?.state === 'done' && <span className="muted sm">Last pulled {when(pull.finishedAt)}{pull.by ? ` by ${pull.by}` : ''} — {fmt(pull.listings)} listings, {fmt(pull.sizes)} sizes{pull.ended ? `, ${fmt(pull.ended)} gone since the pull before` : ''}{pull.marketFailed ? ` · ${fmt(pull.marketFailed)} market reads failed` : ''}.</span>}
           {!pulling && pull?.state === 'failed' && <span className="error sm">The last pull failed: {pull.error}</span>}
-          {!pull && <span className="muted sm">Not pulled yet — press Pull (takes a few minutes for ~1,700 listings).</span>}
+          {data && !pull && <span className="muted sm">Not pulled yet — press Pull (about 15 minutes for ~1,750 listings).</span>}
         </div>
         {data?.configured === false && <div className="error sm mt">StockX isn’t set up on this server.</div>}
       </div>
@@ -229,7 +229,7 @@ export function StockxListings({ onHome, onSignOut }) {
                   <input type="checkbox" checked={sel.has(r.listing_id)} disabled={!can} onChange={(e) => setMany([r], e.target.checked)} aria-label={`Pick ${r.product_name} size ${r.size}`} />
                   <div className="sx-shoe">
                     <b>{r.product_name || '—'}</b>
-                    <span className="muted xs">{r.style_id || 'no style'} · size {r.size || '—'}{d != null ? ` · listed ${d} d` : ''}</span>
+                    <span className="muted xs">{r.style_id || 'no style'} · size {r.size || '—'}{d != null ? ` · listing ${d} d old` : ''}</span>
                     {r.locked && <span className="ebr-chip lock" title={r.lock_note || ''}>🔒 Keep price{r.locked_by ? ` · ${r.locked_by}` : ''}</span>}
                     {['queued', 'sent'].includes(r.last_status) && <span className="ebr-chip">→ ${Number(r.last_amount)} on its way</span>}
                     {r.last_status === 'failed' && <span className="ebl-note bad xs">Last change failed: {r.last_error}</span>}

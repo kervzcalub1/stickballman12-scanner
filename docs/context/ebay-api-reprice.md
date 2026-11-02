@@ -21,8 +21,10 @@ PH team + admin. Rows come from the last **Pull listings** (`ebay_listings`), so
   per EST day in the browser and shared with eBay Reprice + Shopify Listings. **Suggestion maths
   = Shopify Listings'** (`suggestion()` in `src/lib/shopifyListings.js`): multi-code style →
   cheapest code; style from the listing title.
-- **Both directions by default** (the user's ask: "price 100 + 12 % → 112"). **Only lower prices**
-  keeps any size the market would raise (the CSV tool's rule).
+- **Three directions** (segmented control, never remembered): **Both ways** (default — the user's
+  ask: "price 100 + 12 % → 112"), **Only raise** (2026-11-03: mark up whatever is under market +
+  markup, never cut — a size above it reads "Already above market + markup — kept"), **Only lower**
+  (keeps any size the market would raise — the CSV tool's rule).
 - **Big swings** (> 50 % from today's price, `BIG_SWING`) are left out unless *Include big
   swings* is ticked — usually a wrong style code. The server refuses them too without `allowBig`.
 - Can't be repriced (not selectable): a multi-size listing's size with **no Custom label** (eBay
@@ -34,3 +36,22 @@ PH team + admin. Rows come from the last **Pull listings** (`ebay_listings`), so
   and on success writes the new price into `ebay_listings` so the page shows it without a pull.
 - **DPL caveat:** if DPL is ever set to sync PRICE Shopify → eBay, its next sync would overwrite
   these prices. Today DPL is used for quantity/listing; the CSV tool has the same exposure.
+
+## Locks — 🔒 Keep price (2026-11-03)
+The exceptions: "listed at $120, market $60 — even +20 % doesn't get to 120, keep the 120" on
+SOME listings, reprice the rest. **Whole listing** (every size), hand-picked — no automatic rule
+(user's call).
+- **`ebay_price_locks`** (`item_id` PK, `note`, `locked_by`, `locked_at`; in `LIVE_TABLES`) →
+  **db:setup**. `listEbayListings` LEFT JOINs it (`locked`, `lock_note`, `locked_by`, `locked_at`
+  on every size row; `groupListings` lifts them to the listing).
+- **`POST /api/ebay/lock { itemId, lock, note? }`** (PH + admin) — lock (re-lock replaces the
+  note) / `lock:false` unlock.
+- **Server-enforced**: `api/ebay/reprice.js` skips every change on a locked listing
+  ("🔒 Locked — Keep price is on for this listing") whatever the screen sends.
+- **Screen**: a **🔒 Keep** / **🔓 Unlock** button on each listing row (Keep asks an optional
+  "Why?"), an amber **🔒 Keep price · who · when** chip and the note, the listing's sizes can't be
+  picked (`selectable`) and read "🔒 Kept — Keep price is on"; locking drops them from the
+  selection; **🔒 Locked only (n)** filter; the confirm says how many locked listings are left alone.
+- The CSV tool (`/ph/ebay-reprice`) does NOT read locks — it works off an uploaded file.
+- Tests: `e2e/ebay-coupons-reprice.spec.js` § "Keep price locks" (UI with eBay mocked, and the
+  real `reprice` handler refusing a locked listing) + Only raise in the main tab test.

@@ -35,7 +35,9 @@ function groupListings(rows) {
     let g = by.get(r.item_id);
     if (!g) {
       g = { item_id: r.item_id, title: r.title, style: r.style, item_sku: r.item_sku, image_url: r.image_url, view_url: r.view_url,
-        watch_count: r.watch_count, listing_type: r.listing_type, start_time: r.start_time, sizes: [], available: 0, sold: 0, min: null, max: null };
+        watch_count: r.watch_count, listing_type: r.listing_type, start_time: r.start_time, sizes: [], available: 0, sold: 0, min: null, max: null,
+        // 🔒 Keep price (ebay_price_locks) is per LISTING — the same on every size row.
+        locked: !!r.locked, lock_note: r.lock_note || null, locked_by: r.locked_by || null, locked_at: r.locked_at || null };
       by.set(r.item_id, g);
     }
     g.sizes.push(r);

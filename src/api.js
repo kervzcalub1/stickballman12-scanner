@@ -329,6 +329,13 @@ export const api = {
   ebayEnds: () => get('/api/ebay/end'),
   ebayReprice: (changes, allowBig) => post('/api/ebay/reprice', { changes, allowBig }),
   ebayPriceEdits: () => get('/api/ebay/reprice'),
+  // StockX Listings + Reprice (docs/context/stockx-reprice.md).
+  stockxListings: () => get('/api/stockx/listings'),
+  stockxPull: () => post('/api/stockx/listings', { pull: true }),
+  stockxReprice: (payload) => post('/api/stockx/reprice', payload),
+  stockxRepriceCancel: () => post('/api/stockx/reprice', { cancel: true }),
+  stockxEdits: () => get('/api/stockx/reprice'),
+  stockxLock: (listingIds, lock, note) => post('/api/stockx/lock', { listingIds, lock, note }),
   // 🔒 Keep price on a whole listing — no reprice run touches it (lock:false = unlock).
   ebayLock: (itemId, lock, note) => post('/api/ebay/lock', { itemId, lock, note }),
   ebayLockMany: (itemIds, lock, note) => post('/api/ebay/lock', { itemIds, lock, note }),

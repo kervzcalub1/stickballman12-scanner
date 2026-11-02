@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'shein-check', 'shein-listings', 'cancellations', 'inbound-issues'];
+export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'shein-check', 'shein-listings', 'cancellations', 'inbound-issues'];
 // No Box lives at /no-box (and /no-box/box-swap, /no-box/print-box-labels — no-box.md);
 // the old /nobox still opens it.
 const PATH_ALIAS = { nobox: 'no-box' };
@@ -203,6 +203,7 @@ export const HOME_SECTIONS = [
   // connect the account without the superadmin-only PH workspace.
   { title: 'Marketplaces', adminOnly: true, accent: 'listing', cards: [
     { key: 'ebay', privKey: 'connect_integrations', icon: '🛒', title: 'eBay', sub: 'Orders & late shipments, sales report (CSV), listings, reprice, coupons — and connect the account' },
+    { key: 'stockx-listings', icon: '📈', title: 'StockX Listings', sub: 'Our StockX asks vs the Standard / Direct lowest ask — bulk reprice to the market, never under the floor' },
     // No privKey: the page's endpoints are PH + admin only, so a non-admin holder of Connect
     // integrations (e.g. a warehouse account) would land on a page that 403s.
     { key: 'shein-listings', icon: '🏷️', title: 'SHEIN Listings', sub: 'Every Shopify shoe on SHEIN size by size — what’s listed, what isn’t and why; Ask SHEIN' },

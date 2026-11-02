@@ -221,6 +221,12 @@ import('./api/_lib/shein-worker.js')
   .then((m) => m.startSheinWorker())
   .catch((e) => console.error('[shein-sync] failed to start:', e.message));
 
+// StockX Reprice — sends the queued price changes and confirms them
+// (docs/context/stockx-reprice.md). On wherever StockX is configured; STOCKX_REPRICE_WORKER=off stops it.
+import('./api/_lib/stockx-reprice-worker.js')
+  .then((m) => m.startStockxRepriceWorker())
+  .catch((e) => console.error('[stockx-reprice] failed to start:', e.message));
+
 // eBay orders — incremental sync every 30 min so late shipments show by themselves
 // (docs/context/ebay-orders.md). Production only by default; EBAY_ORDERS_WATCH overrides.
 import('./api/_lib/ebay-orders-worker.js')

@@ -435,3 +435,49 @@ export async function stockxDirectMarket(productId, variantId) {
   cacheSet(key, m, MARKET_TTL);
   return m;
 }
+
+/* ------------------------------------------------------------------ */
+/* StockX Reprice (docs/context/stockx-reprice.md)                     */
+/* ------------------------------------------------------------------ */
+// One page (≤ 100, StockX's cap) of our ACTIVE listings in a programme, newest first.
+export async function stockxActiveListingsPage(pageNumber = 1, inventoryType = 'DIRECT') {
+  const r = await sxCall('GET', '/selling/listings', null, {
+    query: { pageNumber, pageSize: 100, inventoryTypes: inventoryType, listingStatuses: 'ACTIVE' },
+  });
+  if (!r.ok) throw new Error(stockxError(r));
+  const d = r.data || {};
+  return {
+    count: Number(d.count) || 0,
+    hasNext: !!d.hasNextPage,
+    listings: (d.listings || []).map((l) => ({
+      listing_id: l.listingId,
+      variant_id: l.variant?.variantId || null,
+      product_id: l.product?.productId || null,
+      product_name: l.product?.productName || null,
+      style_id: l.product?.styleId || null,
+      size: l.variant?.variantValue || null,
+      amount: amount(l.amount),
+      inventory_type: l.inventoryType || inventoryType,
+      sx_created_at: l.createdAt || null,
+    })).filter((l) => l.listing_id),
+  };
+}
+
+// The market for one size, SPLIT BY PROGRAMME — the comparison the reprice is about:
+// standard (Ship to Verify), Direct (where we list), Flex (consignment), + the highest bid.
+// Uncached: a pull reads each variant once, and a stale number is what we're trying to fix.
+export async function stockxMarketByProgramme(productId, variantId) {
+  if (!productId || !variantId) return null;
+  const { ok, status, data } = await sxGet(
+    `/catalog/products/${encodeURIComponent(productId)}/variants/${encodeURIComponent(variantId)}/market-data`,
+    { currencyCode: 'USD' },
+  );
+  if (!ok) { const e = new Error(`StockX market-data answered HTTP ${status}`); e.status = status; throw e; }
+  const d = data || {};
+  return {
+    standard_lowest: amount(d.standardMarketData?.lowestAsk) ?? amount(d.lowestAskAmount),
+    direct_lowest: amount(d.directMarketData?.lowestAsk),
+    flex_lowest: amount(d.flexMarketData?.lowestAsk) ?? amount(d.flexLowestAskAmount),
+    highest_bid: amount(d.highestBidAmount) ?? amount(d.standardMarketData?.highestBidAmount),
+  };
+}

@@ -87,6 +87,8 @@ export default defineConfig({
     // NODE_ENV=production (api/_lib/util.js), and the server logs a line when it is off.
     env: {
       TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '', MAKE_RECEIPT_PARSER_URL: '', E2E_NO_RATE_LIMIT: '1',
+      // Dev and prod share ONE StockX account: the suite must never send a price change.
+      STOCKX_REPRICE_WORKER: 'off',
       RECEIPT_INGEST_KEY: process.env.RECEIPT_INGEST_KEY,
       // "Check mailboxes" starts a FAKE Make on localhost (e2e/receipts-check.spec.js listens
       // there) — the suite must never start the real sweep scenario.

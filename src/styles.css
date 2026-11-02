@@ -6057,6 +6057,24 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .ebr-find { align-items: center; }
 .ebr-find .sl-markup input { width: 64px; }
 .ebr-bulk { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+/* StockX Listings (/ph/stockx-listings): our ask vs the market per listing. */
+.sx-pull { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.sx-progress { flex: 1; min-width: 220px; }
+.sx-queue { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
+.sx-rows { display: grid; gap: 6px; margin-top: 8px; }
+.sx-row { display: grid; grid-template-columns: auto minmax(0, 1.4fr) minmax(0, 2fr) minmax(0, 1fr) auto; gap: 10px; align-items: center;
+  padding: 8px 10px; border: 1px solid var(--border, rgba(255,255,255,0.1)); border-radius: 10px; }
+.sx-row.on { border-color: rgba(79,124,255,0.55); }
+.sx-row.locked { border-color: rgba(215,163,92,0.45); }
+.sx-row input[type=checkbox] { width: 20px; height: 20px; }
+.sx-shoe { display: grid; gap: 2px; min-width: 0; }
+.sx-shoe b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sx-nums { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.sx-call { font-size: 13px; }
+@media (max-width: 768px) {
+  .sx-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .sx-nums, .sx-call { grid-column: 2 / 4; }
+}
 .ebr-sizes { border-top: 1px solid var(--border, rgba(255,255,255,0.08)); background: rgba(255,255,255,0.02); }
 .ebr-size { display: grid; grid-template-columns: auto minmax(90px, 1.2fr) auto auto auto minmax(0, 2fr); align-items: center; gap: 4px 10px; padding: 7px 10px; font-size: 13px; cursor: pointer; }
 .ebr-size + .ebr-size { border-top: 1px solid rgba(255,255,255,0.04); }

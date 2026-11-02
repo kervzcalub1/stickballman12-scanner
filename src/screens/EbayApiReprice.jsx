@@ -54,6 +54,12 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
   // Both ways (default) · Only raise · Only lower — never remembered, like the markup.
   const [dir, setDir] = useState('both');
   const [lockedOnly, setLockedOnly] = useState(false);
+  // FINDING THE EXCEPTIONS so they can be kept in one press (2026-11-03: "too many to mark
+  // as keep"): a size that would be CUT by at least this %, and/or priced in this range.
+  const [dropPct, setDropPct] = useState('');
+  const [priceMin, setPriceMin] = useState('');
+  const [priceMax, setPriceMax] = useState('');
+  const [bulk, setBulk] = useState(null);   // { lock: bool, groups } — the confirm for "… all in view"
   const [locking, setLocking] = useState(null);   // the listing whose 🔒 note form is open
   const [lockErr, setLockErr] = useState('');
   const [allowBig, setAllowBig] = useState(false);
@@ -72,6 +78,23 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
 
   const sizesOf = (g) => (stockOnly ? g.sizes.filter((s) => Number(s.qty_available) > 0) : g.sizes);
   const lockedItem = useMemo(() => new Set(listings.filter((g) => g.locked).map((g) => g.item_id)), [listings]);
+  const numOr = (v) => { const n = Number(String(v).replace(/[$,%\s]/g, '')); return String(v).trim() !== '' && Number.isFinite(n) ? n : null; };
+  const dropN = numOr(dropPct);
+  const minN = numOr(priceMin);
+  const maxN = numOr(priceMax);
+  // How far market + markup would CUT this size, as a % of today's price (lock and
+  // direction ignored — the question is "is this one an exception?"). null = not a cut / unknown.
+  const cutPct = (s) => {
+    if (blocked(s)) return null;
+    const g = suggestion(s, mp.cache, pctH);
+    const now = Number(s.price);
+    if (g.state !== 'ok' || g.kind !== 'lower' || !(now > 0)) return null;
+    return (-g.diffCents / 100 / now) * 100;
+  };
+  const inPrice = (s) => {
+    const p = Number(s.price);
+    return Number.isFinite(p) && (minN == null || p >= minN) && (maxN == null || p <= maxN);
+  };
   const planOf = (s) => plan(s, mp.cache, pctH, dir, allowBig, lockedItem.has(s.item_id));
   const filtered = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -83,10 +106,13 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
         if (!words.every((w) => hay.includes(w))) return false;
       }
       if (lockedOnly && !g.locked) return false;
+      // The exception finders match a listing when ANY of its sizes in view does.
+      if (dropN != null && !sizes.some((s) => (cutPct(s) ?? -1) >= dropN)) return false;
+      if ((minN != null || maxN != null) && !sizes.some(inPrice)) return false;
       if (changesOnly && !sizes.some((s) => planOf(s).state === 'change')) return false;
       return true;
     });
-  }, [listings, q, stockOnly, changesOnly, lockedOnly, mp.cache, pctH, dir, allowBig]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [listings, q, stockOnly, changesOnly, lockedOnly, dropN, minN, maxN, mp.cache, pctH, dir, allowBig]); // eslint-disable-line react-hooks/exhaustive-deps
   const viewSizes = useMemo(() => filtered.flatMap(sizesOf), [filtered]); // eslint-disable-line react-hooks/exhaustive-deps
   const sizeByKey = useMemo(() => new Map(listings.flatMap((g) => g.sizes.map((s) => [keyOf(s), s]))), [listings]);
   const selected = useMemo(() => [...sel].map((k) => sizeByKey.get(k)).filter(Boolean), [sel, sizeByKey]);
@@ -106,6 +132,16 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
     await api.ebayLock(g.item_id, true, note || null);
     setMany(g.sizes, false);
     setLocking(null);
+    onChanged();
+  }
+  // "🔒 Keep all in view" / "🔓 Unlock all in view" — one press for every listing the filters
+  // found (≤ 500 a call, sent in chunks). Locked ones leave the selection.
+  async function bulkLock({ note }) {
+    const { lock, groups } = bulk;
+    const ids = groups.map((g) => g.item_id);
+    for (let i = 0; i < ids.length; i += 500) await api.ebayLockMany(ids.slice(i, i + 500), lock, lock ? (String(note || '').trim() || null) : undefined);
+    if (lock) setMany(groups.flatMap((g) => g.sizes), false);
+    setBulk(null);
     onChanged();
   }
   async function unlockListing(g) {
@@ -177,6 +213,21 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
           <label className="er-dry"><input type="checkbox" checked={changesOnly} onChange={(e) => setChangesOnly(e.target.checked)} /> Price off market</label>
           <label className="er-dry" title={`A suggestion more than ${BIG_SWING * 100}% away from today’s price is usually a wrong style code`}><input type="checkbox" checked={allowBig} onChange={(e) => setAllowBig(e.target.checked)} /> Include big swings</label>
         </div>
+        {/* FIND THE EXCEPTIONS — then keep them all in one press. */}
+        <div className="sl-filters ebr-find">
+          <span className="muted xs">Find the ones to keep:</span>
+          <label className="sl-markup"><span className="muted xs">Would drop ≥</span>
+            <input type="text" inputMode="decimal" value={dropPct} placeholder="—" aria-label="Would drop by at least percent"
+              onChange={(e) => { setDropPct(e.target.value); setShown(PAGE); }} /> %</label>
+          <label className="sl-markup"><span className="muted xs">Price $</span>
+            <input type="text" inputMode="decimal" value={priceMin} placeholder="min" aria-label="Price from"
+              onChange={(e) => { setPriceMin(e.target.value); setShown(PAGE); }} />
+            <span className="muted xs">to $</span>
+            <input type="text" inputMode="decimal" value={priceMax} placeholder="max" aria-label="Price to"
+              onChange={(e) => { setPriceMax(e.target.value); setShown(PAGE); }} /></label>
+          {(dropPct || priceMin || priceMax) && <button type="button" className="btn xs ghost" onClick={() => { setDropPct(''); setPriceMin(''); setPriceMax(''); }}>Clear</button>}
+          {dropN != null && viewJobs.length > 0 && <span className="ebl-note warn xs">{fmt(viewJobs.length)} sizes have no market price yet — Get market prices first, or they can’t match “would drop”.</span>}
+        </div>
         <div className="sl-pricing">
           <span className="muted sm">{fmt(filtered.length)} listing{filtered.length === 1 ? '' : 's'} · {fmt(viewSizes.length)} sizes{pctH != null ? ` · e.g. market $100 → $${Math.round(100 + pctH / 100)}` : ''}</span>
           {pricing ? (
@@ -215,6 +266,24 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
       )}
 
       <div className="card sl-list">
+        {(() => {
+          const unlockedInView = filtered.filter((g) => !g.locked);
+          const lockedInView = filtered.filter((g) => g.locked);
+          if (!unlockedInView.length && !lockedInView.length) return null;
+          return (
+            <div className="ebr-bulk">
+              {unlockedInView.length > 0 && (
+                <button type="button" className="btn sm" disabled={!!run?.running} onClick={() => setBulk({ lock: true, groups: unlockedInView })}>
+                  🔒 Keep all {fmt(unlockedInView.length)} listing{unlockedInView.length === 1 ? '' : 's'} in view</button>
+              )}
+              {lockedInView.length > 0 && (
+                <button type="button" className="btn sm ghost" disabled={!!run?.running} onClick={() => setBulk({ lock: false, groups: lockedInView })}>
+                  🔓 Unlock all {fmt(lockedInView.length)} in view</button>
+              )}
+              <span className="muted xs">Filter to the exceptions first (would drop ≥ %, price range, search), keep them, then clear the filters and reprice the rest.</span>
+            </div>
+          );
+        })()}
         <div className="ebl-endbar">
           <label className="ebl-check"><input type="checkbox" checked={allPicked} disabled={!allInView.length || !!run?.running}
             onChange={(e) => setMany(allInView, e.target.checked)} /> Select all {fmt(allInView.length)} sizes in view</label>
@@ -305,6 +374,17 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
           onClose={() => setLocking(null)}
           onSubmit={({ note }) => lockListing(locking, String(note || '').trim())}
           fields={[{ name: 'note', label: 'Why? (optional)', type: 'textarea', placeholder: 'e.g. rare colorway — holding at $120' }]} />
+      )}
+      {bulk && (
+        <FormModal
+          title={bulk.lock ? `Keep the price on ${fmt(bulk.groups.length)} listing${bulk.groups.length === 1 ? '' : 's'}?` : `Unlock ${fmt(bulk.groups.length)} listing${bulk.groups.length === 1 ? '' : 's'}?`}
+          message={bulk.lock
+            ? `Every size of these stays at its current price — no reprice run will change them, up or down, until someone unlocks them. e.g. ${bulk.groups.slice(0, 3).map((g) => g.title).join(' · ')}${bulk.groups.length > 3 ? ` · +${fmt(bulk.groups.length - 3)} more` : ''}`
+            : `Reprice runs can change these again. e.g. ${bulk.groups.slice(0, 3).map((g) => g.title).join(' · ')}${bulk.groups.length > 3 ? ` · +${fmt(bulk.groups.length - 3)} more` : ''}`}
+          submitLabel={bulk.lock ? `🔒 Keep ${fmt(bulk.groups.length)}` : `🔓 Unlock ${fmt(bulk.groups.length)}`}
+          onClose={() => setBulk(null)}
+          onSubmit={bulkLock}
+          fields={bulk.lock ? [{ name: 'note', label: 'Why? (optional, the same for all)', type: 'textarea', placeholder: 'e.g. listed well above market on purpose' }] : []} />
       )}
       {confirm && (
         <Modal type="warn" title={`Reprice ${fmt(toSend.length)} size${toSend.length === 1 ? '' : 's'} on eBay?`}

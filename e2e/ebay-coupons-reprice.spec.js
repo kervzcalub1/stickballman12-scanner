@@ -195,6 +195,31 @@ test.describe('Keep price locks', () => {
     expect(calls[0]).toEqual({ itemId: '2', lock: true, note: 'rare — keep at 220' });
   });
 
+  // "Too many to mark as keep" (2026-11-03): find the exceptions with a filter, keep them all at once.
+  test('would-drop and price filters find the exceptions; Keep all locks every listing in view', async ({ page }) => {
+    await mockEbay(page);
+    const calls = [];
+    await page.route('**/api/ebay/lock', (r) => { calls.push(r.request().postDataJSON()); return r.fulfill({ json: { ok: true, count: 1 } }); });
+    await page.route('**/api/ebay/reprice', (r) => r.fulfill({ json: { ok: true, edits: [] } }));
+    await loginAs(page, 'ph_team');
+    await page.goto('/ph/ebay-listings?tab=reprice');
+    await page.getByRole('button', { name: /Get market prices for \d+ sizes? in view/ }).click();
+    await expect(page.getByRole('button', { name: /Get market prices/ })).toHaveCount(0);
+    // Dunk size 10: $140 → $112 is a 20 % cut; Jordan $220 → $202 only 8 %.
+    await page.getByLabel('Would drop by at least percent').fill('15');
+    await expect(page.locator('.ebr-listing')).toHaveCount(1);
+    await expect(page.locator('.ebr-listing')).toContainText('Nike Dunk Low');
+    await page.getByLabel('Would drop by at least percent').fill('');
+    await page.getByLabel('Price from').fill('200');
+    await expect(page.locator('.ebr-listing')).toHaveCount(1);
+    await expect(page.locator('.ebr-listing')).toContainText('Jordan 4');
+    await page.getByRole('button', { name: /Keep all 1 listing in view/ }).click();
+    await page.getByRole('dialog').getByRole('textbox').fill('above market on purpose');
+    await page.getByRole('dialog').getByRole('button', { name: '🔒 Keep 1' }).click();
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]).toEqual({ itemIds: ['2'], lock: true, note: 'above market on purpose' });
+  });
+
   test('the server refuses a locked listing even when the screen sends it', async () => {
     const { default: pg } = await import('pg');
     const { Readable } = await import('node:stream');
@@ -223,6 +248,12 @@ test.describe('Keep price locks', () => {
       expect((await db.query(`SELECT price FROM ebay_listings WHERE item_id = $1`, [ITEM])).rows[0].price).toBe('120.00');
       const u = await call(lock, { itemId: ITEM, lock: false });
       expect(u.body.unlocked).toBe(true);
+      // Many at once: lock, then unlock, a list.
+      const many = await call(lock, { itemIds: [ITEM], lock: true, note: 'bulk' });
+      expect(many.body).toMatchObject({ ok: true, count: 1 });
+      expect((await db.query(`SELECT note FROM ebay_price_locks WHERE item_id = $1`, [ITEM])).rows[0].note).toBe('bulk');
+      const off = await call(lock, { itemIds: [ITEM], lock: false });
+      expect(off.body.count).toBe(1);
     } finally {
       await db.query(`DELETE FROM ebay_price_locks WHERE item_id = $1`, [ITEM]);
       await db.query(`DELETE FROM ebay_listings WHERE item_id = $1`, [ITEM]);

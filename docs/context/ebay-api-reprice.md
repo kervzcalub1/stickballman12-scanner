@@ -52,6 +52,13 @@ SOME listings, reprice the rest. **Whole listing** (every size), hand-picked —
   "Why?"), an amber **🔒 Keep price · who · when** chip and the note, the listing's sizes can't be
   picked (`selectable`) and read "🔒 Kept — Keep price is on"; locking drops them from the
   selection; **🔒 Locked only (n)** filter; the confirm says how many locked listings are left alone.
+- **Finding the exceptions in bulk** ("too many to mark as keep", same day): a *Find the ones to
+  keep* row — **Would drop ≥ N %** (a size market + markup would cut by at least that much of
+  today's price; lock and direction ignored; needs market prices) and **Price $min to $max** — a
+  listing matches when ANY of its in-view sizes does, combined with search / In stock / Locked
+  only. Then **🔒 Keep all N listings in view** (one optional reason for all) or **🔓 Unlock all
+  in view** → `POST /api/ebay/lock { itemIds:[…], lock, note? }` (≤ 500 a call; the screen
+  chunks). Flow: get market prices → filter → Keep all → clear filters → reprice the rest.
 - The CSV tool (`/ph/ebay-reprice`) does NOT read locks — it works off an uploaded file.
 - Tests: `e2e/ebay-coupons-reprice.spec.js` § "Keep price locks" (UI with eBay mocked, and the
   real `reprice` handler refusing a locked listing) + Only raise in the main tab test.

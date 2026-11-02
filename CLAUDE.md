@@ -64,7 +64,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | **Waitlist** (New Inventory ⏸ tab): hold a losing size off listing until a date (1 month default), back by itself + Telegram; **daily Excel report** at 18:00 EST (`src/lib/xlsx.js`) (`waitlist-worker`, prod only) | `docs/context/waitlist.md` |
 | **Pre-sell Listings**: scan/SKU → list straight to Alias + StockX (no inventory, no Shopify); own stock (sales deduct, oversell guard), StockX async ops + sales watcher (`PRESELL_WATCH`), Telegram sale posts (**net = payout − cost**); **✎ cost & shipment (supplier, PO, many tracking #s) after listing; date-filtered PDF/CSV reports**; **📦 by box: a size's tracking #s derived from what each PO label holds (supplier's per-box list, else `presell_box_lines` grid / "?" count unknown), Make a PO for this buy**; PO link shows on Inbound; **PO guard**: can't pre-list more than the order lists, sold-but-never-arrived = at risk once it lands (`presell_stock_po`); **⚔ market competition** + 🔒 price lock (undercut $1 / match, $5 floor, follows up, 2-h re-base; puts back outside reprices; posts to PRICE_ALERT_CHAT_ID) | `docs/context/presell-listings.md` |
 | **Pre-sell Fulfilment** (Pre-sell Listings → 📦 Fulfill): both platforms make the UPS label AT the sale; read each order back (status, label, tracking, **ship-by**) until it ships, where-is-the-pair, printable **pick list** PDF/CSV | `docs/context/presell-fulfillment.md` |
-| No Box queue, Box-found, UPC box labels, Box Labels tool (`/box-labels`) | `docs/context/no-box.md` |
+| `/no-box` = two cards: **Box swap** (inbound's 3rd box answer → `box_swap`, no sticker, never PH; later scan UPC → VIN sticker) + **Print box labels** (No Box queue, Box-found, UPC box labels); Box Labels tool (`/box-labels`) | `docs/context/no-box.md` |
 | Shelf locations: put-away/shelve, locate, Locations page, labels, seed | `docs/context/locations.md` |
 | Status keys, transitions, sold/shipped cascade | `docs/context/statuses.md` |
 | Purchase Orders: supplier scan-out, PO/label schema, `supplier` role, **shoes vs empty-shoe-box orders**; **📋 Paste a list** (`SKU` + `size x qty` lines, many shoes → `po/scan-bulk`); **store orders** (one supplier, many stores: list by store = the invoice, boxes per store, supplier strip-list `po-supplier-view.js`; **every received box tied to its label = its store** (`batch_boxes.po_box_id`, one shared matcher, alphanumeric tracking); **Kevin's audit** per store (`po/audit`, `getPoStoreVariance`, landed, charges/receipts read twice, Mark audited = `audit_po` privilege); plan `docs/store-orders-plan.md`) | `docs/context/purchase-orders.md` |
@@ -128,7 +128,8 @@ Current work log / next steps: `june22-progress.md`. Full feature history:
   **`items.pre_sell` is a second, parallel exclusion on the same paths** — a *unit*
   state rather than a batch kind, so it must be guarded alongside the kind check,
   not instead of it (`docs/context/pre-sell.md`). **`items.waitlist_until > now()`** is a
-  THIRD one on the same paths (`docs/context/waitlist.md`).
+  THIRD one on the same paths (`docs/context/waitlist.md`). **`status = 'box_swap'`** is a
+  FOURTH, status-level like `no_box`/`issue` (`docs/context/no-box.md` "Box swap").
 - **A failed scan must say what to do, and leave a row.** "No item found" is a dead end
   on a warehouse floor; the sticker's real state is one call away (`stickerState`), and
   every failure writes to `scan_failures` so "it keeps failing" is answerable from data

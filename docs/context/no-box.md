@@ -1,5 +1,62 @@
 # No Box / Not Ready
 
+## /no-box — two cards (2026-11-03)
+`src/screens/NoBoxHub.jsx`. The Home tile opens a choice of two jobs; the sub-page is the
+second path segment, so a refresh or a link lands on the same one (`/nobox` still works):
+
+| Card | Path | Screen |
+|---|---|---|
+| **Box swap** | `/no-box/box-swap` | `BoxSwap.jsx` — below |
+| **Print box labels** | `/no-box/print-box-labels` | `NoBoxReport.jsx` — the No Box queue (this page, below) |
+
+The PH team's `/ph/nobox` is unchanged (the No Box queue only, read-only) — box swap is
+never theirs.
+
+## Box swap (Brent, 2026-11-03)
+**Why.** Andrew's pairs came with no box. Inbounding them as *No box* sent them to the No
+Box queue and the PH team and asked for a VIN sticker on the spot, so Brent stopped
+inbounding them — and with nothing received, Kevin couldn't audit the order.
+
+**Inbound** (`Receiving.jsx`): a third box answer beside *With box* / *No box* —
+**Box swap** — on the "Scanning as" bar, on each cart row, and per shoe on the **PO manifest
+sheet** (`.po-manifest-box`; it has to be there, because in raw-sticker mode an
+un-stickered pair blocks the box from closing). A box-swap line is `withBox:false,
+boxSwap:true`:
+- **no sticker asked for** (`needsSticker`, `stickersShort`, `pickStickerSlot` and the
+  manifest's `1ID n/m` all skip it; the row shows `box swap · sticker later`),
+- **no label printed** at commit (`printItems` filters it out),
+- **not a shipment issue** (`autoIssues` skips it — it's deliberate),
+- committed as **`status = 'box_swap'`**, `with_box = false` (`normalizeItems`, intake.js)
+  under a system VIN nobody prints. It's on its batch, so the **PO reconciliation counts it
+  as received** (status-agnostic) — Kevin can audit.
+- **Never the PH team's**: kept off `phListItems` (both branches; the admin Report still shows
+  it, like no-box), the PH badges (`listable` excludes it), GI re-pricing, the waitlist,
+  and `shelveItems` refuses it (`reason:'box_swap'`, even with "has a box now"). A FOURTH
+  status-level exclusion beside no_box / issue — add `box_swap` wherever those are excluded.
+- `pendingCounts.box_swap` → the Home tile's **Box swap** badge and the card's *Waiting*.
+- **No schema change**: `status` is free text and `item_events.type` has no check.
+
+**The swap** (`/no-box/box-swap`, `BoxSwap.jsx` → `GET/POST /api/items/box-swap`,
+`listBoxSwapItems` / `swapBoxPair` in db.js), warehouse/admin. Scan at the top, list below:
+1. **Scan the box UPC** (or type a SKU — it narrows the list and picks a single match — or
+   tap a row). The list is one row per shoe + size with a count (`×2`), UPC, PO code and
+   date in — pairs of one size are interchangeable, so the oldest goes first.
+2. **Scan the VIN sticker** going on it → the pair **takes that number** (its system VIN
+   is replaced), `with_box = true`, `status = 'needs_shelf'` → Shelve, and only now PH.
+   A roll sticker is claimed in `vin_stock`; a used/voided sticker or one already on
+   another pair is refused by name; a sticker scanned before the shoe says "scan the shoe
+   first". Compare-and-set on `status = 'box_swap'`. Logged as `item_events.type =
+   'box_swapped'` ("sticker SBM-R-… put on (was system VIN SBM-…)"); `inbound_issues.vin`
+   follows the pair. Failed scans go to `scan_failures` (`box_swap_no_match`,
+   `box_swap_sticker_first`).
+- **No sticker? Print its VIN** — keeps the system VIN, boxes the pair, opens the VIN label
+  print. **Box label** — the UPC box label (per pair, or all of a size from the list).
+  **No box coming** — one pair moves to the No Box queue (`status_change → no_box`).
+- Tests: `e2e/box-swap.spec.js` (PO inbound in raw mode, PH exclusion, shelving refused, the
+  two cards, scan → sticker, reused sticker, print-its-VIN, no box coming).
+
+---
+
 Two screens sit under Put-away: the **No Box queue** (this page — units received
 without a box, waiting to be resolved) and the **Box Labels tool**
 (`/box-labels`, below) — an ad-hoc generator for replacement box labels.

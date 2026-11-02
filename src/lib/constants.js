@@ -4,9 +4,13 @@
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
 export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'shein-check', 'shein-listings', 'cancellations', 'inbound-issues'];
-export const pathForView = (v) => (v && v !== 'home' ? `/${v}` : '/');
+// No Box lives at /no-box (and /no-box/box-swap, /no-box/print-box-labels — no-box.md);
+// the old /nobox still opens it.
+const PATH_ALIAS = { nobox: 'no-box' };
+export const pathForView = (v) => (v && v !== 'home' ? `/${PATH_ALIAS[v] || v}` : '/');
 export const viewForPath = (p) => {
-  const seg = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
+  const raw = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
+  const seg = Object.keys(PATH_ALIAS).find((k) => PATH_ALIAS[k] === raw) || raw;
   return ROUTES.includes(seg) ? seg : 'home';
 };
 
@@ -96,7 +100,7 @@ export function homeCardBadges(key, c) {
   if (!c) return [];
   if (key === 'report') return SYNC_BADGES(c);
   if (key === 'inventory') return [['Needs shelf', c.needs_shelf]];
-  if (key === 'nobox') return [['No box', c.no_box]];
+  if (key === 'nobox') return [['No box', c.no_box], ['Box swap', c.box_swap]];
   if (key === 'costs') return [['No cost', c.missing_cost]];
   // Shipments received without a manifest that nobody has audited yet.
   if (key === 'batches') return [['Audit', c.batches_to_audit]];
@@ -164,7 +168,7 @@ export const HOME_SECTIONS = [
   ] },
   { title: 'Put-away', accent: 'orders', cards: [
     { key: 'shelve', icon: '📍', title: 'Shelve / Put-away', sub: 'Scan a shelf, then scan shoes onto it' },
-    { key: 'nobox', icon: '🚫', title: 'No Box / Not Ready', sub: 'Resolve units bought without a box' },
+    { key: 'nobox', icon: '🚫', title: 'No Box / Not Ready', sub: 'Box swaps, and box labels for pairs bought without a box' },
     { key: 'box-labels', icon: '🏷️', title: 'Box Labels', sub: 'Replacement box label for a pair with no box — by VIN, UPC or SKU' },
     // Sits beside No Box on purpose: "is there a box for this?" is the question you ask
     // while standing over a pair that hasn't got one.

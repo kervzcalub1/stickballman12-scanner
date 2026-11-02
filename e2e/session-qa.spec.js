@@ -164,7 +164,7 @@ test.describe.serial('Session QA · No Box redesigned row + UPC gate', () => {
 
   test('row layout: Box found / Box label (needs UPC) / Other status, no stray Set button', async ({ page }) => {
     await loginAs(page, 'admin');
-    await page.goto('/nobox');
+    await page.goto('/no-box/print-box-labels');
     const row = page.locator('.dcard, tr').filter({ hasText: FIXTURE_NAME }).first();
     await expect(row).toBeVisible({ timeout: 10_000 });
     await expect(row.getByRole('button', { name: /Box found/ })).toBeVisible();
@@ -176,7 +176,7 @@ test.describe.serial('Session QA · No Box redesigned row + UPC gate', () => {
 
   test('Box label UPC gate: rejects invalid UPC, accepts valid UPC, saves it, and prints', async ({ page }) => {
     await loginAs(page, 'admin');
-    await page.goto('/nobox');
+    await page.goto('/no-box/print-box-labels');
     const row = page.locator('.dcard, tr').filter({ hasText: vins[0] }).first();
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.getByRole('button', { name: /Box label/ }).click();
@@ -201,7 +201,7 @@ test.describe.serial('Session QA · No Box redesigned row + UPC gate', () => {
 
   test('Box label UPC gate: "No UPC found" checkbox prints without a barcode and does not set a UPC', async ({ page }) => {
     await loginAs(page, 'admin');
-    await page.goto('/nobox');
+    await page.goto('/no-box/print-box-labels');
     const row = page.locator('.dcard, tr').filter({ hasText: vins[1] }).first();
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.getByRole('button', { name: /Box label/ }).click();
@@ -218,7 +218,7 @@ test.describe.serial('Session QA · No Box redesigned row + UPC gate', () => {
 
   test('a unit that already has a UPC prints directly, no prompt', async ({ page }) => {
     await loginAs(page, 'admin');
-    await page.goto('/nobox');
+    await page.goto('/no-box/print-box-labels');
     const row = page.locator('.dcard, tr').filter({ hasText: vins[0] }).first(); // already has a UPC from an earlier test
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.getByRole('button', { name: /Box label/ }).click();
@@ -230,7 +230,7 @@ test.describe.serial('Session QA · No Box redesigned row + UPC gate', () => {
   test('Other status… applies on select with a confirm, and the unit leaves the queue', async ({ page }) => {
     await loginAs(page, 'admin');
     page.on('dialog', (d) => d.accept());
-    await page.goto('/nobox');
+    await page.goto('/no-box/print-box-labels');
     const row = page.locator('.dcard, tr').filter({ hasText: vins[2] }).first();
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.locator('select.nobox-other-sel').selectOption('missing');

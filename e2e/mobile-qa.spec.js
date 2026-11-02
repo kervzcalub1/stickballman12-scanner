@@ -242,7 +242,7 @@ test.describe('390x844 mobile functional', () => {
   test.describe('No-Box mobile cards', () => {
     test('MQA no-box unit renders as a card with resolve controls reachable', async ({ page }) => {
       await loginAs(page, 'admin');
-      await page.goto('/nobox');
+      await page.goto('/no-box/print-box-labels');
       // The page's own title, not a loose "No Box": this spec's own fixture is called
       // "MQA No Box Shoe", so once the seed lands its card matches too and the strict
       // locator resolves to two elements. Green locally only because the seed had

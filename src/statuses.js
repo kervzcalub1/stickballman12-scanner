@@ -14,6 +14,9 @@ export const STATUSES = [
   // Empty shoe boxes only: the carton went onto a pair and is spent. Terminal, so it
   // can never be shelved or handed out again (api/_lib/statuses.js).
   { key: 'used',        label: 'Used on a pair',             fg: '#8a63e0', bg: 'rgba(155,120,230,0.16)' },
+  // Received without a box and set aside until its box is ready — the VIN sticker goes
+  // on then (No Box → Box swap). Not sellable, never the PH team's (no-box.md).
+  { key: 'box_swap',    label: 'Box swap pending',           fg: '#d7a35c', bg: 'rgba(215,163,92,0.15)' },
 ];
 
 export const STATUS_MAP = Object.fromEntries(STATUSES.map((s) => [s.key, s]));

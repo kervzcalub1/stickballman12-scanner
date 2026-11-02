@@ -24,7 +24,7 @@ import { PHTeamApp, PHGrid } from './screens/PHTeam.jsx';
 import { EbayListings } from './screens/EbayListings.jsx';
 import { SheinCheck } from './screens/SheinCheck.jsx';
 import { SheinListings } from './screens/SheinListings.jsx';
-import { NoBoxReport } from './screens/NoBoxReport.jsx';
+import { NoBoxHub } from './screens/NoBoxHub.jsx';
 import { ItemCosts } from './screens/ItemCosts.jsx';
 import { BoxLabels } from './screens/BoxLabels.jsx';
 import { Inbound } from './screens/Inbound.jsx';
@@ -244,7 +244,7 @@ export default function App() {
   if (view === 'merge') return withAdvisor(user.role === 'superadmin'
     ? <MergeTools onHome={() => go('home')} onSignOut={signOut} />
     : <Home user={user} onPick={go} onSignOut={signOut} />);
-  if (view === 'nobox') return withAdvisor(<NoBoxReport user={user} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'nobox') return withAdvisor(<NoBoxHub user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // Replacement box labels — admin/warehouse (ph_team short-circuits to PHTeamApp above).
   if (view === 'costs') return withAdvisor(<ItemCosts onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'box-labels') return withAdvisor(<BoxLabels navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);

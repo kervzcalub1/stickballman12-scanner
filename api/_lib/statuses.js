@@ -12,9 +12,11 @@
 //   missing      Missing
 //   issue        Issue
 //   used         Used on a pair   (empty shoe boxes only — the carton is spent)
+//   box_swap     Box swap pending (received with no box, set aside for its box + VIN
+//                sticker; NOT the No Box queue and never the PH team's — no-box.md)
 export const STATUS_KEYS = [
   'needs_shelf', 'in_stock', 'pre_sold', 'no_box', 'shipped', 'sold', 'returned', 'missing', 'issue',
-  'used',
+  'used', 'box_swap',
 ];
 
 // Terminal states: a unit here has left active inventory. Reactivating one into a

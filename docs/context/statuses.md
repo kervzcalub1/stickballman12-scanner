@@ -9,6 +9,8 @@ Defined centrally: `src/statuses.js` (labels/colors, client) + `api/_lib/statuse
   shown as "In Stock · A2-04" — see `locations.md`)
 - `pre_sold` — Pre-Sold
 - `no_box` — Bought Without Box (auto when "With Box" unchecked; not sellable)
+- `box_swap` — Box swap pending (inbound's third box answer: set aside for its box, no
+  sticker yet, never the PH team's; becomes `needs_shelf` at the swap — `no-box.md`)
 - `shipped` — Shipped
 - `sold` — Sold
 - `returned` — Returned

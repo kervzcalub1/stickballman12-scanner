@@ -49,6 +49,10 @@ export function normalizeItems(rawItems, { defaultCost = null, noBoxVins = new S
   return rawItems.map((it) => {
     const vin = VIN_RE.test(String(it.vin || '')) ? it.vin : null;
     const withBox = (it.withBox !== false) && !(vin && noBoxVins.has(vin.toUpperCase()));
+    // BOX SWAP PENDING (no-box.md "Box swap"): no box yet and set aside for one — recorded
+    // so the order can be checked, but no sticker goes on until the box is ready, and the
+    // PH team never sees it. Only ever a no-box pair; never on a pair flagged with a box.
+    const boxSwap = !withBox && it.boxSwap === true;
     return {
       name: cleanName(it.name) || 'Unknown',
       sku: normSku(it.sku),
@@ -75,7 +79,9 @@ export function normalizeItems(rawItems, { defaultCost = null, noBoxVins = new S
       // GS received as men's: `sku`/`size` are the men's; these keep what the box said.
       // Only stored when the pair really was converted (receiving.md).
       ...gsOriginal(it),
-      status: withBox ? 'needs_shelf' : 'no_box',
+      status: withBox ? 'needs_shelf' : (boxSwap ? 'box_swap' : 'no_box'),
+      // A box-swap pair's VIN (reserved by the cart, or minted at insert) is never
+      // printed — the real sticker replaces it at the swap (swapBoxPair).
       vin,
     };
   });

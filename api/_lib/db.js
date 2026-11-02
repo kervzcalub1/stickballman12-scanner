@@ -386,6 +386,7 @@ export async function recomputeUnlistedPrices(oldMult, newMult) {
       AND NOT EXISTS (SELECT 1 FROM batches b WHERE b.id = items.batch_id AND b.kind = ANY(${PH_EXCLUDED_KINDS}))
       AND NOT items.pre_sell   -- sold before it landed; not PH's to price
       AND (items.waitlist_until IS NULL OR items.waitlist_until <= now())  -- held; priced when it comes back
+      AND items.status <> 'box_swap'  -- set aside for its box; not PH's yet (no-box.md)
     RETURNING id
   `;
   return rows.length;
@@ -1161,6 +1162,7 @@ export async function getItemsForGiRefresh(vins) {
       AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))  -- in-store/existing bypass PH/GI pricing
       AND NOT i.pre_sell                                           -- pre-sell is not listed, so not priced
       AND (i.waitlist_until IS NULL OR i.waitlist_until <= now())  -- waitlisted: priced when it comes back
+      AND i.status <> 'box_swap'                                   -- box swap pending: not PH's yet
   `;
 }
 
@@ -2018,6 +2020,7 @@ export async function phListItems(from, to, kind = null) {
       ) ev ON true
       WHERE i.restock_pending = true  -- pending worklist; cleared on "Mark restocked"
         AND i.status <> 'no_box'      -- no-box units aren't postable; PH never lists them
+        AND i.status <> 'box_swap'    -- set aside for its box + sticker; never PH's (no-box.md)
         AND i.status <> 'issue'       -- held by an open inbound issue (inbound-issues.md)
         AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))  -- in-store/existing bypass PH entirely
         AND NOT i.pre_sell            -- released units clear the flag; unreleased ones stay out
@@ -2072,6 +2075,9 @@ export async function phListItems(from, to, kind = null) {
       -- Hide no-box from the PH team's New Inventory page; keep it in the admin
       -- Report (kind IS NULL) for oversight.
       AND (${kind}::text IS NULL OR i.status <> 'no_box')
+      -- BOX SWAP PENDING never reaches the PH team (Brent's ask, 2026-11-03 — no-box.md);
+      -- the admin Report (kind IS NULL) still shows it, like no-box, for oversight.
+      AND (${kind}::text IS NULL OR i.status <> 'box_swap')
       -- A pair HELD by an open inbound issue (status 'issue': creased, wrong pair, being
       -- returned — inbound-issues.md) is not listing work until its case is resolved.
       -- Same shape as no-box: the admin Report still sees it.
@@ -2107,6 +2113,89 @@ export async function listNoBoxItems(from = null, to = null) {
     ORDER BY i.created_at DESC, i.id DESC
     LIMIT 2000
   `;
+}
+
+// BOX SWAP PENDING (docs/context/no-box.md "Box swap"): pairs received without a box and
+// set aside until their box is ready. `q` narrows by SKU (dashes/spaces ignored) or UPC
+// (digits). Each unit carries where it came from, so the list can say which order it's on.
+export async function listBoxSwapItems(q = '') {
+  const raw = String(q || '').trim();
+  const digits = /^\d{8,14}$/.test(raw) ? raw : null;
+  const skuKey = raw && !digits ? raw.toUpperCase().replace(/[\s-]/g, '') : null;
+  return await db()`
+    SELECT i.id, i.vin, i.name, i.sku, i.size, i.gender, i.upc, i.colorway, i.image_url,
+           i.created_at, i.created_by,
+           b.batch_code, b.supplier_name, p.po_code
+      FROM items i
+      LEFT JOIN batches b ON b.id = i.batch_id
+      LEFT JOIN purchase_orders p ON p.id = b.po_id
+     WHERE i.status = 'box_swap'
+       AND (${digits}::text IS NULL OR i.upc = ${digits})
+       AND (${skuKey}::text IS NULL OR upper(replace(replace(i.sku, '-', ''), ' ', '')) LIKE ${skuKey ? `%${skuKey}%` : null})
+     ORDER BY i.created_at, i.id
+     LIMIT 3000`;
+}
+
+// THE SWAP: one box-swap pair gets its box and its real VIN sticker — the same two beats
+// as intake (scan the shoe, scan the sticker). Which pair: `itemId` when the screen named
+// one, else the OLDEST box-swap pair with that UPC, else that SKU + size — pairs of one
+// size are interchangeable, so the oldest goes first.
+//
+// `vin` = the sticker scanned onto it: the pair takes that number (its system VIN was
+// never printed). No `vin` = keep the system VIN, which the caller prints.
+// Returns { item, from } or { error, code }.
+export async function swapBoxPair({ itemId = null, upc = null, sku = null, size = null, vin = null, by = null }) {
+  const sql = db();
+  let target = null;
+  if (itemId != null) {
+    target = (await sql`SELECT * FROM items WHERE id = ${Number(itemId)} AND status = 'box_swap'`)[0] || null;
+  } else if (upc) {
+    target = (await sql`SELECT * FROM items WHERE status = 'box_swap' AND upc = ${String(upc).replace(/\D/g, '')}
+                         ORDER BY created_at, id LIMIT 1`)[0] || null;
+  } else if (sku) {
+    const key = String(sku).toUpperCase().replace(/[\s-]/g, '');
+    target = (await sql`SELECT * FROM items WHERE status = 'box_swap'
+                         AND upper(replace(replace(sku, '-', ''), ' ', '')) = ${key}
+                         AND btrim(size) = ${String(size ?? '').trim()}
+                         ORDER BY created_at, id LIMIT 1`)[0] || null;
+  }
+  if (!target) return { error: 'No pair waiting for a box swap matches that — it may already be done.', code: 404 };
+
+  const from = target.vin;
+  let next = from;
+  if (vin) {
+    next = String(vin).trim().toUpperCase();
+    if (!VIN_RE.test(next)) return { error: `${vin} isn’t a VIN sticker — scan the SBM-… sticker you’re putting on the pair.`, code: 400 };
+    if (next !== from) {
+      const taken = (await sql`SELECT vin, sku, size, status FROM items WHERE upper(vin) = ${next}`)[0];
+      if (taken) return { error: `${next} is already on another pair (${taken.sku || '?'} size ${taken.size || '?'}) — use a fresh sticker.`, code: 409 };
+      if (ROLL_VIN_RE.test(next)) {
+        const stock = (await sql`SELECT status FROM vin_stock WHERE vin = ${next}`)[0];
+        if (stock && stock.status !== 'available')
+          return { error: `${next} is ${stock.status === 'void' ? 'a voided sticker' : 'already used'} — use a fresh one.`, code: 409 };
+      }
+    }
+  }
+  // Compare-and-set on the status: two people swapping the same pair can't both win.
+  const rows = await sql`
+    UPDATE items SET vin = ${next}, with_box = true, status = 'needs_shelf', updated_at = now()
+     WHERE id = ${target.id} AND status = 'box_swap'
+    RETURNING *`;
+  if (!rows[0]) return { error: 'Someone else just swapped that pair — scan the next one.', code: 409 };
+  if (next !== from) {
+    if (ROLL_VIN_RE.test(next))
+      await sql`UPDATE vin_stock SET status = 'assigned', assigned_item_id = ${target.id}, assigned_at = now()
+                 WHERE vin = ${next} AND status = 'available'`;
+    // Anything filed under the system number follows the pair to its real one.
+    await sql`UPDATE inbound_issues SET vin = ${next} WHERE item_id = ${target.id}`;
+  }
+  await sql`
+    INSERT INTO item_events (item_id, type, details, created_by)
+    VALUES (${target.id}, 'box_swapped', ${JSON.stringify({
+      from_vin: from, vin: next, status: 'needs_shelf',
+      note: next !== from ? `Box swap: sticker ${next} put on (was system VIN ${from})` : `Box swap: boxed, VIN ${from} printed`,
+    })}::jsonb, ${by || null})`;
+  return { item: rows[0], from };
 }
 
 // The In-Store Listing worklist: sellable in-store pairs with their per-store
@@ -2197,6 +2286,9 @@ export async function pendingCounts() {
       -- home page as work forever. missing/issue are off the page too.
       count(*) FILTER (WHERE is_presell AND status NOT IN ('pre_sold','sold','shipped','missing','issue'))::int AS presell_pending,
       count(*) FILTER (WHERE status = 'no_box' AND NOT is_box)::int    AS no_box,
+      -- Received without a box and set aside for one (No Box → Box swap) — warehouse work,
+      -- never in any PH count.
+      count(*) FILTER (WHERE status = 'box_swap')::int                 AS box_swap,
       count(*) FILTER (WHERE restock_pending)::int                     AS restock_pending,
       -- Sold but not yet handed to the carrier — the scan-out backlog. This is the
       -- only real "still to ship" queue we have: sold and shipped are both terminal,
@@ -2206,7 +2298,7 @@ export async function pendingCounts() {
       -- Keyed on is_instore, NOT on "NOT ph_managed": that flag now also covers
       -- existing (old) stock, which would otherwise pour into Brent's In-Store
       -- Listing worklist for pairs that were listed years ago.
-      count(*) FILTER (WHERE is_instore AND status NOT IN ('sold','shipped','missing','issue','no_box')
+      count(*) FILTER (WHERE is_instore AND status NOT IN ('sold','shipped','missing','issue','no_box','box_swap')
         AND NOT (instore_listed_alias AND instore_listed_stockx AND instore_listed_shopify))::int AS instore_unlisted,
       (SELECT count(*) FROM rescale_requests WHERE status = 'open')::int     AS rescale_requests,
       (SELECT count(*) FROM rescale_requests WHERE status = 'audited')::int  AS rescale_requests_audited,
@@ -2257,7 +2349,7 @@ export async function pendingCounts() {
       -- pairs. is_instore is kept separate because the In-Store Listing badge below
       -- means specifically in-store, not "everything PH ignores".
       SELECT it.*,
-             (it.with_box AND it.status NOT IN ('sold','shipped','missing','issue','no_box')) AS listable,
+             (it.with_box AND it.status NOT IN ('sold','shipped','missing','issue','no_box','box_swap')) AS listable,
              -- NOT pre_sell for the same reason as the kinds: a unit sold before
              -- it landed is not PH's to list, so it must not inflate the listing backlog.
              -- A pair on the WAITLIST is held out of listing the same way, until its date.
@@ -2761,6 +2853,12 @@ export async function shelveItems({ location, units, createdBy }) {
     // shelf once its case is resolved ("Keep it — back to stock").
     if (item.status === 'issue') {
       results.push({ vin: u.vin, ok: false, reason: 'issue', status: item.status });
+      continue;
+    }
+    // Box swap pending: it gets its box AND its real sticker on the Box swap page — a
+    // "box found now" here would shelve it under the system VIN nobody printed.
+    if (item.status === 'box_swap') {
+      results.push({ vin: u.vin, ok: false, reason: 'box_swap', status: item.status });
       continue;
     }
     const wasNoBox = item.with_box === false;
@@ -10224,7 +10322,7 @@ export async function setWaitlist({ vins, until, note = null, by }) {
            waitlist_note = ${note || null}, waitlist_alerted_at = NULL, updated_at = now()
       FROM items x LEFT JOIN batches b ON b.id = x.batch_id
      WHERE x.id = i.id AND upper(i.vin) = ANY(${list}::text[])
-       AND i.status NOT IN ('sold', 'shipped', 'missing', 'issue', 'no_box', 'pre_sold')
+       AND i.status NOT IN ('sold', 'shipped', 'missing', 'issue', 'no_box', 'pre_sold', 'box_swap')
        AND (b.kind IS NULL OR b.kind <> ALL(${PH_EXCLUDED_KINDS}))
        AND NOT i.pre_sell AND NOT i.restock_pending
        AND NOT i.added_to_intel_inv AND NOT i.synced_alias AND NOT i.synced_stockx AND NOT i.synced_shopify

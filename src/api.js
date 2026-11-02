@@ -261,6 +261,10 @@ export const api = {
   costBackfillApply: () => post('/api/items/cost-backfill', { apply: true }),
   pendingCounts: () => get('/api/items/pending-counts'),
   boxFound: (vin) => post('/api/items/box-found', { vin }),
+  // Box swap pending (no-box.md "Box swap"): the pairs waiting, and putting one in its box
+  // with its VIN sticker ({ itemId | upc | sku+size, vin? } — no vin = keep and print its own).
+  boxSwapList: (q = '') => get(`/api/items/box-swap${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  boxSwap: (payload) => post('/api/items/box-swap', payload),
   restockDone: (vins) => post('/api/items/restock-done', { vins }),
   // PH-requested rescales
   rescaleRequestCreate: (payload) => post('/api/rescale-requests/create', payload),

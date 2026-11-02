@@ -210,6 +210,9 @@ and `purchase-orders.md` → "Scan-first, any order".
      in a `needsSize` row keeps its scanned UPC** — only retyping a size that was
      already known clears it (before 2026-10-02 the first keystroke wiped it, so
      those pairs also committed `upc = NULL`).
+   - **Box swap** (2026-11-03) is a third answer beside With box / No box — on the bar, each
+     cart row and each PO-manifest shoe: no box YET, no sticker asked for, no label printed,
+     committed as `box_swap`, never PH's (`no-box.md` "Box swap").
    - **`scanBoxMode`** ("Scanning as: With box / No box") is **sticky** and applied
      to every scan — the SOP already says to scan no-box pairs separately. Per-shoe
      box status and **GOAT only** (`goat_only` → PH lists to Alias(GOAT) ALONE;

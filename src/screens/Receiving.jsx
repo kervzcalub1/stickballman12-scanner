@@ -773,7 +773,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     try { const res = await api.reserveVins(n, header.dateReceived); return res.vins || []; }
     catch (err) { if (err.unauthorized) onSignOut(); return []; }
   }
-  const setItemBox = (itemKey, withBox) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, withBox } : it)));
+  // Three answers now (no-box.md "Box swap", 2026-11-03): with a box · no box · BOX SWAP —
+  // no box YET, set aside for one, so no sticker goes on today and the PH team never sees
+  // it. A box-swap line is still a no-box line underneath (`withBox:false, boxSwap:true`).
+  const setItemBox = (itemKey, withBox, boxSwap = false) => setItems((arr) => arr.map((it) => (it.key === itemKey
+    ? { ...it, withBox, boxSwap: !withBox && boxSwap } : it)));
   const setItemGoat = (itemKey, goatOnly) => setItems((arr) => arr.map((it) => (it.key === itemKey ? { ...it, goatOnly } : it)));
   // GS received as men's (receiving.md): `mens` = { sku, name, image, colorway, skip:[GS sizes
   // left as GS] } or null. The cart keeps the GS code — the PO manifest and an online order
@@ -869,6 +873,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [scanCam, setScanCam] = useState(false);
   const [scanBoxMode, setScanBoxMode] = useState(true); // true = With box
   const scanBoxModeRef = useRef(true); scanBoxModeRef.current = scanBoxMode;
+  // …and, when it's No box, whether it's a BOX SWAP (set aside, no sticker yet).
+  const [scanSwap, setScanSwap] = useState(false);
+  const scanSwapRef = useRef(false); scanSwapRef.current = scanSwap;
   const scanInputRef = useRef(null);
   const scanRecentRef = useRef({});   // code -> last scan time (gun/camera re-read cooldown)
   const itemsRef = useRef([]);        // mirror of the cart so a scan callback reads fresh state
@@ -926,7 +933,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // field is `inputMode="none"` while scanning — that's what buys the exception.
   // Pairs — not lines — still short a sticker. On the PO manifest one line is four
   // sizes at four pairs each, so "1 line" would badly understate the work left.
-  const stickersShort = !rawVins ? 0 : items.reduce((n, it) => (it.pending ? n : n + it.sizes.reduce(
+  const stickersShort = !rawVins ? 0 : items.reduce((n, it) => (it.pending || it.boxSwap ? n : n + it.sizes.reduce(
     (a, s) => a + Math.max(0, (Number(s.qty) || 0) - (s.vins || []).length), 0)), 0);
   // The manifest bar is `inputMode="none"` whether or not stickers are in play, so
   // re-arming it after a tick is safe on a phone in both modes (see vin-stock.md).
@@ -1259,7 +1266,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     setItems((arr) => {
       // `!!` on goatOnly: a manifest row never sets it, and `undefined !== false` sent a
       // shoe picked off the PO to its own "not on PO" line instead of onto its rows.
-      const i = arr.findIndex((x) => x.withBox === item.withBox && !!x.goatOnly === !!item.goatOnly
+      const i = arr.findIndex((x) => x.withBox === item.withBox && !!x.boxSwap === !!item.boxSwap && !!x.goatOnly === !!item.goatOnly
         && (x.preSell === true) === (item.preSell === true) && sameSku(x.sku, item.sku) && sameCheck(x, item));
       const sheet = poBoxHasChecklistRef.current;
       const firstSize = [...item.sizes].sort(compareSizes)[0];
@@ -1498,11 +1505,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // same as on the checklist — a SKU names a shoe, not a size.
     if (isPoReceive && !isRescale && !isUpc && !isVinCode(c)) return openSkuPicker(null, c);
     const withBox = scanBoxModeRef.current;
+    const boxSwap = !withBox && scanSwapRef.current;
     const lineKey = cartKey++;
     lastScanRef.current = { lineKey, vin: null }; setCanUndo(true);
     const placeholder = {
       key: lineKey, pending: true, code: c, name: '', sku: '', image: '', source: 'manual',
-      upc: isUpc ? c : '', gender: null, colorway: '', withBox, goatOnly: false, preSell: preSellDefaultRef.current, sizes: [],
+      upc: isUpc ? c : '', gender: null, colorway: '', withBox, boxSwap, goatOnly: false, preSell: preSellDefaultRef.current, sizes: [],
     };
     // Newest on top when scanning free — below the sheet when working a manifest, so
     // the expected rows keep their place and an unexpected pair reads as the exception.
@@ -1530,7 +1538,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       if (look.err?.unauthorized) return onSignOut();
       // Not in the catalogue, but this code's first box was already filled in by hand
       // (name, SKU, size): this box is another of those, not a new red line to retype.
-      if (known && known.item.withBox === withBox && !known.item.goatOnly
+      if (known && known.item.withBox === withBox && !!known.item.boxSwap === boxSwap && !known.item.goatOnly
         && !!known.item.preSell === !!preSellDefaultRef.current) {
         const { item: kit, size: ksz } = known;
         lastHitRef.current = { itemKey: kit.key, sizeKey: ksz.key };
@@ -1581,13 +1589,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         // box — a SKU lookup's UPC is some other size's and merging this line into
         // one already in the cart must not lend it around.
         upc: (isUpc ? c : '') || p.upc || '', gender: p.gender || null, colorway: p.colorway || '',
-        sizeOptions: p.sizes || [], withBox, goatOnly: false, preSell: preSellDefaultRef.current,
+        sizeOptions: p.sizes || [], withBox, boxSwap, goatOnly: false, preSell: preSellDefaultRef.current,
         sizes: [{ key: cartKey++, size, qty: 1, scanned: 1, needsSize: !size, upc: isUpc ? c : '', vins: vin ? [vin] : [] }],
       };
       // Fold into the same shoe already in the cart (same product AND same box /
       // GOAT status — boxed and no-box pairs are tracked apart).
       const i = arr.findIndex((x) => x.key !== lineKey && !x.pending && !x.failed
-        && x.withBox === withBox && !!x.goatOnly === false && !!x.preSell === !!resolved.preSell && sameSku(x.sku, resolved.sku) && sameCheck(x, resolved));
+        && x.withBox === withBox && !!x.boxSwap === boxSwap && !!x.goatOnly === false && !!x.preSell === !!resolved.preSell && sameSku(x.sku, resolved.sku) && sameCheck(x, resolved));
       if (i === -1) {
         // On a PO sheet a new line sits BELOW the expected rows, so "first short row"
         // would hand its sticker to some other pair — aim it at this one.
@@ -1706,7 +1714,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     if (!cur) return arr;
     const line = { ...cur, ...patch, codeCheck: '', codeCheckUpcs: [] };
     const i = !String(line.name || '').trim() ? -1 : arr.findIndex((x) => x.key !== itemKey && !x.pending && !x.failed && !x.codeCheck
-      && x.withBox === line.withBox && !!x.goatOnly === !!line.goatOnly && !!x.preSell === !!line.preSell && sameSku(x.sku, line.sku));
+      && x.withBox === line.withBox && !!x.boxSwap === !!line.boxSwap && !!x.goatOnly === !!line.goatOnly && !!x.preSell === !!line.preSell && sameSku(x.sku, line.sku));
     if (i === -1) return arr.map((x) => (x.key === itemKey ? line : x));
     const sizes = arr[i].sizes.map((z) => ({ ...z, vins: [...(z.vins || [])] }));
     for (const s of line.sizes) {
@@ -1931,7 +1939,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // VIN that matches nothing physically on the shoe — the silent failure this whole
   // mode exists to avoid. So it rides the same machinery: blocks Review, blocks commit,
   // and focusFirstUnresolved puts the cursor on it.
-  const needsSticker = (it) => rawVins && !it.pending && it.sizes.some(
+  // A BOX-SWAP pair gets its sticker later, at the swap (no-box.md) — never asked for here.
+  const needsSticker = (it) => rawVins && !it.pending && !it.boxSwap && it.sizes.some(
     (sz) => (Number(sz.qty) || 0) > (sz.vins || []).length,
   );
   // A shoe sold under more than one style code can't commit until somebody says
@@ -1961,12 +1970,12 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // is worked in the order the box comes out, not the order the list is printed.
     const hit = lastHitRef.current;
     if (hit) {
-      const it = list.find((x) => x.key === hit.itemKey && !x.pending);
+      const it = list.find((x) => x.key === hit.itemKey && !x.pending && !x.boxSwap);
       const size = it?.sizes.find((z) => z.key === hit.sizeKey);
       if (size && (Number(size.qty) || 0) > (size.vins || []).length) return { item: it, size };
     }
     for (const it of list) {
-      if (it.pending) continue;
+      if (it.pending || it.boxSwap) continue;
       const sizes = isPoReceive ? [...it.sizes].sort(compareSizes) : it.sizes;
       for (const size of sizes) {
         if ((Number(size.qty) || 0) > (size.vins || []).length) return { item: it, size };
@@ -2098,7 +2107,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const onlineCheck = activeOnlineOrder && !activeOnlineOrder.received_at && !isRescale && !isPoReceive
     ? onlineOrderCheck(activeOnlineOrder, items) : null;
   const onlineOff = onlineCheck && !onlineCheck.totals.clean ? { order: activeOnlineOrder, summary: onlineCheck } : null;
-  const autoIssues = items.filter((i) => !i.withBox)
+  // A box swap is deliberate (set aside for its box), not a shipment problem to record.
+  const autoIssues = items.filter((i) => !i.withBox && !i.boxSwap)
     .flatMap((i) => i.sizes.map((s) => ({ key: `auto-${i.key}-${s.key}`, description: `${i.sku || '?'} ${s.size} — No box` })));
 
   // Multi-box: the open batch is created lazily on the first box commit
@@ -2243,7 +2253,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           // qty 0 → 0 units (a PO-manifest shortage / unchecked size). The scan
           // flow's steppers are always ≥1, so this is unchanged for normal intake.
           for (let n = 0; n < Math.max(0, Number(r.qty) || 0); n++) {
-            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: sizeCost(it, r), shelfPrice: poMoney(it, r)?.shelf ?? onlineLine(it, r)?.price ?? null, withBox: it.withBox, goatOnly: it.goatOnly, preSell: it.preSell === true, vin: r.vins?.[n] || null, ...asMens(it, r) });
+            out.push({ name: it.name, sku: it.sku, size: r.size, dimensions: r.dimensions || null, upc: r.upc || null, image: it.image, source: it.source, gender: it.gender, colorway: it.colorway, cost: sizeCost(it, r), shelfPrice: poMoney(it, r)?.shelf ?? onlineLine(it, r)?.price ?? null, withBox: it.withBox, boxSwap: it.withBox === false && it.boxSwap === true, goatOnly: it.goatOnly, preSell: it.preSell === true, vin: r.vins?.[n] || null, ...asMens(it, r) });
           }
         }
       }
@@ -2297,10 +2307,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         // An EMPTY BOX gets no VIN sticker. Its label is the SHOE box label the Box
         // Labels tool prints when the box is finally put on a pair — a second barcode on
         // a carton somebody is about to fill is a sticker they have to peel off again.
+        // A BOX-SWAP pair gets no label today either: its sticker goes on at the swap.
         const printItems = (rawVins || isBoxesPo) ? [] : (res.vins || []).map((vin, i) => ({
           vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
           upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
-        }));
+        })).filter((_, i) => !out[i]?.boxSwap);
         setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState();
         if (isMultiBoxNew) {
           // Mark the slot received and drop back to the box list (step 1) to do the next.
@@ -2346,7 +2357,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
       const printItems = (rawVins || isBoxesPo) ? [] : (batchRes?.vins || []).map((vin, i) => ({
         vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
         upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
-      }));
+      })).filter((_, i) => !out[i]?.boxSwap);
       setResult({
         batchCode: batchRes?.batchCode || null,
         newCount: batchRes?.count || 0,
@@ -2790,7 +2801,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     items={items} totalItems={totalItems} expectedUnits={manifestExpected} onAddUnexpected={openAddItem}
                     onSetQty={setSizeQty} onAskClear={(it, sz, n) => setClearAsk({ item: it, size: sz, scanned: n })} onRemoveSize={removeSizeRow} onRemoveItem={removeItem} onSetField={setItemField} onSetSize={setSizeValue} onMergeSize={mergeSizeRow}
                     rawVins={rawVins && !isBoxesPo} awaiting={awaitingSticker} unresolved={isUnresolved}
-                    boxesOrder={isBoxesPo} onCountAsDeclared={countAsDeclared} lineChecks={(it) => <>{skuChoice(it)}{codeCheckUi(it)}</>} />
+                    boxesOrder={isBoxesPo} onCountAsDeclared={countAsDeclared} lineChecks={(it) => <>{skuChoice(it)}{codeCheckUi(it)}</>}
+                    onSetBox={setItemBox} />
                 </>
               ) : (
               <div className="card">
@@ -2843,8 +2855,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                     <div className="scanbar-mode">
                       <span className="scanbar-mode-label">Scanning as</span>
                       <div className="seg sm" role="group" aria-label="Box status applied to every scan">
-                        <button type="button" className={`seg-btn ${scanBoxMode ? 'on yes' : ''}`} aria-pressed={scanBoxMode} onClick={() => setScanBoxMode(true)}><Icon name="box" /> With box</button>
-                        <button type="button" className={`seg-btn ${!scanBoxMode ? 'on no' : ''}`} aria-pressed={!scanBoxMode} onClick={() => setScanBoxMode(false)}><Icon name="nobox" /> No box</button>
+                        <button type="button" className={`seg-btn ${scanBoxMode ? 'on yes' : ''}`} aria-pressed={scanBoxMode} onClick={() => { setScanBoxMode(true); setScanSwap(false); }}><Icon name="box" /> With box</button>
+                        <button type="button" className={`seg-btn ${!scanBoxMode && !scanSwap ? 'on no' : ''}`} aria-pressed={!scanBoxMode && !scanSwap} onClick={() => { setScanBoxMode(false); setScanSwap(false); }}><Icon name="nobox" /> No box</button>
+                        <button type="button" className={`seg-btn ${scanSwap ? 'on swap' : ''}`} aria-pressed={scanSwap} title="No box yet — set aside for its box. No sticker today; the PH team won't see it." onClick={() => { setScanBoxMode(false); setScanSwap(true); }}><Icon name="nobox" /> Box swap</button>
                       </div>
                     </div>
                   )}
@@ -2965,7 +2978,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                               <div className="recv-item-toggles">
                                 <div className="seg sm" role="group" aria-label="Box status">
                                   <button type="button" className={`seg-btn ${it.withBox !== false ? 'on yes' : ''}`} onClick={() => setItemBox(it.key, true)}><Icon name="box" /> Box</button>
-                                  <button type="button" className={`seg-btn ${it.withBox === false ? 'on no' : ''}`} onClick={() => setItemBox(it.key, false)}><Icon name="nobox" /> No box</button>
+                                  <button type="button" className={`seg-btn ${it.withBox === false && !it.boxSwap ? 'on no' : ''}`} onClick={() => setItemBox(it.key, false)}><Icon name="nobox" /> No box</button>
+                                  <button type="button" className={`seg-btn ${it.withBox === false && it.boxSwap ? 'on swap' : ''}`} title="No box yet — set aside for its box; no sticker today, not sent to the PH team" onClick={() => setItemBox(it.key, false, true)}><Icon name="nobox" /> Box swap</button>
                                 </div>
                                 <label className="goat-chip-toggle" title="List to Alias (GOAT) + Intelligent Inventory only">
                                   <input type="checkbox" checked={it.goatOnly === true} onChange={(e) => setItemGoat(it.key, e.target.checked)} /> GOAT only
@@ -3031,7 +3045,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                                           : rawVins
                                             ? <span className="vin need">1ID?</span>
                                             : <span className="vin pending">VIN on submit</span>}
-                                        {!it.withBox && <span className="recv-unit-nobox">no box — sticker carefully</span>}
+                                        {!it.withBox && <span className="recv-unit-nobox">{it.boxSwap ? 'box swap — no sticker yet' : 'no box — sticker carefully'}</span>}
                                       </div>
                                     ))}
                                   </div>
@@ -3133,7 +3147,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                             <div className="recv-item-toggles">
                               <div className="seg sm" role="group" aria-label="Box status">
                                 <button type="button" className={`seg-btn ${it.withBox !== false ? 'on yes' : ''}`} onClick={() => setItemBox(it.key, true)}><Icon name="box" /> Box</button>
-                                <button type="button" className={`seg-btn ${it.withBox === false ? 'on no' : ''}`} onClick={() => setItemBox(it.key, false)}><Icon name="nobox" /> No box</button>
+                                <button type="button" className={`seg-btn ${it.withBox === false && !it.boxSwap ? 'on no' : ''}`} onClick={() => setItemBox(it.key, false)}><Icon name="nobox" /> No box</button>
+                                  <button type="button" className={`seg-btn ${it.withBox === false && it.boxSwap ? 'on swap' : ''}`} title="No box yet — set aside for its box; no sticker today, not sent to the PH team" onClick={() => setItemBox(it.key, false, true)}><Icon name="nobox" /> Box swap</button>
                               </div>
                               {preSellSome && (
                                 <label className={`presell-chip-toggle ${it.preSell === true ? 'on' : ''}`} title="This shoe was sold before it landed — hold it back from listing">
@@ -3179,7 +3194,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                                         <div className="recv-unit" key={i}>
                                           <span className="recv-unit-n">{i + 1}.</span>
                                           {vin ? <span className="vin">{vin}</span> : rawVins ? <span className="vin need">1ID?</span> : <span className="vin pending">VIN on submit</span>}
-                                          {!it.withBox && <span className="recv-unit-nobox">no box</span>}
+                                          {!it.withBox && <span className="recv-unit-nobox">{it.boxSwap ? 'box swap' : 'no box'}</span>}
                                           {vin && (
                                             <button type="button" className={`recv-unit-issue ${hasIssue(vin) ? 'flagged' : ''}`}
                                               onClick={() => setIssueEditorVin(vin)}
@@ -3607,7 +3622,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
    list is the picking guide and whatever stays unticked is the shortage. Adjust the
    "got" count for a partial, add unexpected pairs (overage), then Review → per-shoe
    issues → submit the box. */
-function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onAskClear, onRemoveSize, onRemoveItem, onSetField, onSetSize, onMergeSize, unresolved, wholeOrder = false, orderSkus, rawVins = false, awaiting = null, boxesOrder = false, onCountAsDeclared, lineChecks }) {
+function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expectedUnits, onAddUnexpected, onSetQty, onAskClear, onRemoveSize, onRemoveItem, onSetField, onSetSize, onMergeSize, unresolved, wholeOrder = false, orderSkus, rawVins = false, awaiting = null, boxesOrder = false, onCountAsDeclared, lineChecks, onSetBox }) {
   // Progress is AGAINST the label: an undeclared pair doesn't make a 3-of-4 box a
   // 4-of-4 one, and a third pair of a size that declared two counts as two.
   const onLabel = items.reduce((n, it) => (!it.expected || it.pending ? n : n + it.sizes.reduce((a, r) => {
@@ -3680,6 +3695,16 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
                     : <span className="po-chip receiving">Overage · not on PO</span>}
                 {!it.expected && <button type="button" className="btn icon ghost remove" title="Remove" onClick={() => onRemoveItem(it.key)}>×</button>}
               </div>
+              {/* BOX per shoe, on the sheet itself (no-box.md "Box swap"): in raw-sticker mode a
+                  pair with no sticker blocks the box from closing, so a pair being set aside
+                  for its box has to be said HERE — it gets its sticker at the swap instead. */}
+              {!boxesOrder && !it.pending && onSetBox && (
+                <div className="seg sm po-manifest-box" role="group" aria-label={`Box status for ${it.sku || it.name}`}>
+                  <button type="button" className={`seg-btn ${it.withBox !== false ? 'on yes' : ''}`} onClick={() => onSetBox(it.key, true)}><Icon name="box" /> Box</button>
+                  <button type="button" className={`seg-btn ${it.withBox === false && !it.boxSwap ? 'on no' : ''}`} onClick={() => onSetBox(it.key, false)}><Icon name="nobox" /> No box</button>
+                  <button type="button" className={`seg-btn ${it.withBox === false && it.boxSwap ? 'on swap' : ''}`} title="No box yet — set aside for its box; no sticker today, not sent to the PH team" onClick={() => onSetBox(it.key, false, true)}><Icon name="nobox" /> Box swap</button>
+                </div>
+              )}
               {/* The two questions a scan can leave on a line (which of several codes;
                   is Alias right about this box). They block the commit, so they must be
                   answerable HERE — the PO sheet showed neither, a dead end. */}
@@ -3697,9 +3722,11 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
                 // saved (needsSticker → isUnresolved), so the row that's holding the box
                 // up says so itself — and the ONE row the next scan will land on is
                 // marked, because the person is holding that sticker over a shoe.
-                const ids = rawVins ? (s.vins || []).length : 0;
-                const needsId = rawVins && got > ids;
-                const isNext = rawVins && awaiting?.size?.key === s.key;
+                // A box-swap pair gets its sticker at the swap, not now.
+                const stickered = rawVins && !it.boxSwap;
+                const ids = stickered ? (s.vins || []).length : 0;
+                const needsId = stickered && got > ids;
+                const isNext = stickered && awaiting?.size?.key === s.key;
                 // The tick means THIS ROW IS DONE, not "something landed on it". It used
                 // to be `got > 0`, so scanning one of an expected two showed a ticked row
                 // that was still short — the row's own "short 1" flag contradicting its
@@ -3737,9 +3764,10 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
                       <input className="qty" type="number" inputMode="numeric" min="0" value={got} onChange={(e) => onSetQty(it.key, s.key, e.target.value)} />
                       <button type="button" className="btn icon ghost step" onClick={() => onSetQty(it.key, s.key, got + 1)}>+</button>
                     </div>
-                    {rawVins && got > 0 && (
+                    {stickered && got > 0 && (
                       <span className={`po-flag id ${needsId ? 'need' : 'ok'}`}>1ID {ids}/{got}</span>
                     )}
+                    {it.boxSwap && got > 0 && <span className="po-flag swap" title="Set aside for its box — the VIN sticker goes on at the box swap">box swap · sticker later</span>}
                     {/* A scan is a pair that was in a hand; a tick is a claim about all
                         of them at once. They wrote the same number and looked identical,
                         which is the one thing a verification sheet cannot afford. */}
@@ -3763,7 +3791,7 @@ function ManifestChecklist({ boxNumber, tracking, kind, items, totalItems, expec
       <p className="muted sm">{boxesOrder
         ? 'Check each row off as you count it out of the carton. Anything left unchecked is recorded as a shortage; use the stepper for a partial, and “Add unexpected” for boxes that aren’t on the PO.'
         : 'Scan each pair as you pull it from the box, in any order — its row counts up by itself. Anything still at 0 is recorded as a shortage; a pair that isn’t on the label is added as unexpected. Tick or step a row by hand if a barcode won’t read. Flag defects per shoe on the next screen.'}
-        {rawVins ? ' Every ticked pair also needs a 1ID sticker scanned onto it — that sticker is the pair’s number, so no label gets printed for it.' : ''}</p>
+        {rawVins ? ' Every ticked pair also needs a 1ID sticker scanned onto it — that sticker is the pair’s number, so no label gets printed for it. A shoe marked Box swap gets its sticker later, at the box swap.' : ''}</p>
     </div>
   );
 }

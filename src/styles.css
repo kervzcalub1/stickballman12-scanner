@@ -1025,6 +1025,24 @@ body {
 .nobox-table .nobox-name { max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nobox-col-actions { width: 220px; }
 .nobox-upc-input { width: 100%; margin-top: 8px; text-align: left; }
+/* Box swap at inbound: the third box answer, and its flag on the PO sheet. */
+.seg-btn.on.swap { background: rgba(215,163,92,0.18); color: #d7a35c; border-color: #d7a35c; }
+.po-manifest-box { margin: 6px 0 4px; }
+.po-flag.swap { color: #d7a35c; border-color: rgba(215,163,92,0.5); }
+/* Box swap (/no-box/box-swap): the pair the next sticker lands on, and the waiting list. */
+.boxswap-target { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: center;
+  margin: 8px 0 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid #d7a35c; background: rgba(215,163,92,0.10); }
+.boxswap-target-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.boxswap-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.boxswap-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.boxswap-list li { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--panel-2); }
+.boxswap-list li.on { border-color: #d7a35c; }
+.boxswap-pick { flex: 1; min-width: 0; display: grid; gap: 2px; text-align: left; background: none; border: 0;
+  color: inherit; padding: 0; cursor: pointer; font: inherit; }
+.boxswap-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.boxswap-meta { display: flex; gap: 10px; font-size: 14px; }
+.boxswap-n { font-weight: 700; font-variant-numeric: tabular-nums; }
 .nobox-noupc-check { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 14px; cursor: pointer; text-align: left; }
 .nobox-noupc-check input { width: 18px; height: 18px; flex: none; }
 /* "Is this the shoe you scanned?" — the check before a scanned UPC is written onto

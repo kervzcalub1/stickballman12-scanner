@@ -7,7 +7,7 @@
 // more than half the price either way is refused unless the person ticked "big swings"
 // (usually a wrong style code pricing the shoe off another shoe). Price only, never qty.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, ebayListingSizes, logEbayPriceEdits, setEbayListingPrices, recentEbayPriceEdits } from '../_lib/db.js';
+import { dbConfigured, ebayListingSizes, logEbayPriceEdits, setEbayListingPrices, recentEbayPriceEdits, ebayLockedItemIds } from '../_lib/db.js';
 import { ebayConfigured, reviseEbayPrices } from '../_lib/ebay.js';
 import { BIG_SWING } from '../../src/lib/shopifyListings.js';
 
@@ -36,12 +36,15 @@ export default async function handler(req, res) {
 
   const known = new Map((await ebayListingSizes(changes.map((c) => ({ item_id: c.itemId }))))
     .map((r) => [`${r.item_id}|${r.variation_key}`, r]));
+  // 🔒 Locked listings are never repriced — whatever the screen sent (docs "Locks").
+  const locked = await ebayLockedItemIds(changes.map((c) => c.itemId));
   const results = [];
   const send_ = [];
   for (const c of changes) {
     const key = `${c.itemId}|${c.variationKey}`;
     const row = known.get(key);
     const skip = (error) => results.push({ itemId: c.itemId, variationKey: c.variationKey, ok: false, skipped: true, error });
+    if (locked.has(c.itemId)) { skip('🔒 Locked — Keep price is on for this listing.'); continue; }
     if (!row) { skip('Not in the last pull — pull again.'); continue; }
     if (!Number.isFinite(c.price) || c.price < 1 || c.price > 100000) { skip('Price must be $1–$100,000.'); continue; }
     if (row.listing_type && row.listing_type !== 'FixedPriceItem') { skip(`Not a fixed-price listing (${row.listing_type}).`); continue; }

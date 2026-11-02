@@ -10449,11 +10449,31 @@ export async function listEbayListings() {
   return await db()`
     SELECT e.item_id, e.variation_key, e.title, e.sku, e.item_sku, e.size, e.style, e.price, e.currency,
            e.qty_available, e.qty_sold, e.watch_count, e.listing_type, e.image_url, e.start_time, e.view_url, e.pulled_at,
-           e.in_shopify, e.shopify_verdict, e.shopify_new_sku
+           e.in_shopify, e.shopify_verdict, e.shopify_new_sku,
+           -- 🔒 Keep price (ebay_price_locks): no reprice run touches this listing.
+           (k.item_id IS NOT NULL) AS locked, k.note AS lock_note, k.locked_by, k.locked_at
       FROM ebay_listings e
+      LEFT JOIN ebay_price_locks k ON k.item_id = e.item_id
      ORDER BY e.title, e.item_id,
               CASE WHEN regexp_replace(coalesce(e.size, ''), '[^0-9.]', '', 'g') ~ '^[0-9]+([.][0-9]+)?$'
                    THEN regexp_replace(e.size, '[^0-9.]', '', 'g')::numeric END NULLS FIRST, e.variation_key`;
+}
+
+// 🔒 KEEP PRICE — lock / unlock a whole eBay listing against every reprice run
+// (docs/context/ebay-api-reprice.md "Locks"). Re-locking replaces the note.
+export async function setEbayPriceLock(itemId, { note = null, by = null } = {}) {
+  return (await db()`
+    INSERT INTO ebay_price_locks (item_id, note, locked_by) VALUES (${itemId}, ${note}, ${by})
+    ON CONFLICT (item_id) DO UPDATE SET note = EXCLUDED.note, locked_by = EXCLUDED.locked_by, locked_at = now()
+    RETURNING *`)[0];
+}
+export async function clearEbayPriceLock(itemId) {
+  return (await db()`DELETE FROM ebay_price_locks WHERE item_id = ${itemId} RETURNING item_id`).length > 0;
+}
+export async function ebayLockedItemIds(itemIds) {
+  const ids = [...new Set((itemIds || []).map(String))];
+  if (!ids.length) return new Set();
+  return new Set((await db()`SELECT item_id FROM ebay_price_locks WHERE item_id = ANY(${ids}::text[])`).map((r) => r.item_id));
 }
 
 // What a listing run just put up, for the "listed" post to the pre-sell group: per stock row

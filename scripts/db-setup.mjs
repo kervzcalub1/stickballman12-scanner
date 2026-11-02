@@ -2551,6 +2551,16 @@ await sql(`
     changed_at    TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS ebay_price_edits_at_idx ON ebay_price_edits (changed_at DESC)`);
+// 🔒 KEEP PRICE on an eBay listing (2026-11-03, docs/context/ebay-api-reprice.md "Locks"):
+// the exceptions — e.g. listed at $120 on a $60 market — that no reprice run may touch, in
+// any direction. Whole listing (every size). Checked by the server on every reprice.
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_price_locks (
+    item_id    TEXT PRIMARY KEY,
+    note       TEXT,
+    locked_by  TEXT,
+    locked_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
 // eBay coded coupons made / paused / resumed / deleted from here (2026-10-13,
 // docs/context/ebay-coupons.md). eBay holds the coupons; this is who did what, and the
 // exact request when one was created.
@@ -3161,7 +3171,7 @@ const LIVE_TABLES = [
   'tracking_duplicates',
   'email_receipts', 'user_purchase_emails',
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log',
-  'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
+  'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_price_locks', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
   'shein_order_units', 'shein_live_runs', 'shein_live_items',
   'shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_jobs', 'shein_listing_job_items',
   'cancellations', 'cancellation_photos', 'cancellation_events',

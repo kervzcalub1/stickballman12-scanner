@@ -1,13 +1,14 @@
 // eBay Listings → Reprice (docs/context/ebay-api-reprice.md). Reprice eBay sizes straight
 // through the API: pick listings (or all of them), fetch today's market price per size,
-// and send market + markup to eBay — both directions by default, "Only lower" to never
-// raise. The CSV tool (/ph/ebay-reprice) stays for file-based bulk runs.
+// and send market + markup to eBay — Both ways by default, "Only raise" to mark up what's
+// under market without cutting anything, "Only lower" to never raise. 🔒 Keep price locks a
+// whole listing out of every run (the exceptions). The CSV tool (/ph/ebay-reprice) stays.
 //
 // Market prices are the same shared, cached lookup Shopify Listings and eBay Reprice use
 // (MarketPrices.jsx); the suggestion maths is Shopify Listings' (src/lib/shopifyListings.js),
 // so the three tools agree on what "market + 12 %" means for a size.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, ProgressBar } from '../components/common.jsx';
+import { Modal, ProgressBar, FormModal } from '../components/common.jsx';
 import { api } from '../api.js';
 import { useUnsavedGuard } from '../hooks.js';
 import { useMarketPrices } from '../components/MarketPrices.jsx';
@@ -32,14 +33,17 @@ function blocked(s) {
 }
 
 // The change for one size at this markup / direction, or why there's none.
-function plan(s, cache, pctH, onlyLower, allowBig) {
+// `dir`: 'both' | 'raise' (only mark up) | 'lower' (only cut). `locked` = the listing's 🔒.
+function plan(s, cache, pctH, dir, allowBig, locked = false) {
   const b = blocked(s);
   if (b) return { state: 'blocked', why: b };
   const g = suggestion(s, cache, pctH);
+  if (locked) return { ...(g.state === 'ok' ? g : {}), state: 'locked', why: '🔒 Kept — Keep price is on' };
   if (g.state === 'not_priced') return { state: 'not_priced' };
   if (g.state !== 'ok') return { state: 'no_data', why: g.why || 'No market price' };
   if (g.kind === 'same') return { ...g, state: 'same' };
-  if (onlyLower && g.kind === 'raise') return { ...g, state: 'kept', why: 'Market is higher — kept (only lowering)' };
+  if (dir === 'lower' && g.kind === 'raise') return { ...g, state: 'kept', why: 'Market is higher — kept (only lowering)' };
+  if (dir === 'raise' && g.kind === 'lower') return { ...g, state: 'kept', why: 'Already above market + markup — kept (only raising)' };
   if (g.big && !allowBig) return { ...g, state: 'big', why: `Over ${BIG_SWING * 100}% from today’s price` };
   return { ...g, state: 'change' };
 }
@@ -47,7 +51,11 @@ function plan(s, cache, pctH, onlyLower, allowBig) {
 export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChanged }) {
   const [q, setQ] = useState('');
   const [stockOnly, setStockOnly] = useState(true);
-  const [onlyLower, setOnlyLower] = useState(false);
+  // Both ways (default) · Only raise · Only lower — never remembered, like the markup.
+  const [dir, setDir] = useState('both');
+  const [lockedOnly, setLockedOnly] = useState(false);
+  const [locking, setLocking] = useState(null);   // the listing whose 🔒 note form is open
+  const [lockErr, setLockErr] = useState('');
   const [allowBig, setAllowBig] = useState(false);
   const [changesOnly, setChangesOnly] = useState(false);
   const [markup, setMarkup] = useState('12');   // never remembered: every visit starts at 12 %
@@ -63,7 +71,8 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
   useUnsavedGuard(!!run?.running);
 
   const sizesOf = (g) => (stockOnly ? g.sizes.filter((s) => Number(s.qty_available) > 0) : g.sizes);
-  const planOf = (s) => plan(s, mp.cache, pctH, onlyLower, allowBig);
+  const lockedItem = useMemo(() => new Set(listings.filter((g) => g.locked).map((g) => g.item_id)), [listings]);
+  const planOf = (s) => plan(s, mp.cache, pctH, dir, allowBig, lockedItem.has(s.item_id));
   const filtered = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return listings.filter((g) => {
@@ -73,14 +82,15 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
         const hay = [g.title, g.style, g.item_sku, g.item_id, ...g.sizes.map((s) => s.sku)].join(' ').toLowerCase();
         if (!words.every((w) => hay.includes(w))) return false;
       }
+      if (lockedOnly && !g.locked) return false;
       if (changesOnly && !sizes.some((s) => planOf(s).state === 'change')) return false;
       return true;
     });
-  }, [listings, q, stockOnly, changesOnly, mp.cache, pctH, onlyLower, allowBig]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [listings, q, stockOnly, changesOnly, lockedOnly, mp.cache, pctH, dir, allowBig]); // eslint-disable-line react-hooks/exhaustive-deps
   const viewSizes = useMemo(() => filtered.flatMap(sizesOf), [filtered]); // eslint-disable-line react-hooks/exhaustive-deps
   const sizeByKey = useMemo(() => new Map(listings.flatMap((g) => g.sizes.map((s) => [keyOf(s), s]))), [listings]);
   const selected = useMemo(() => [...sel].map((k) => sizeByKey.get(k)).filter(Boolean), [sel, sizeByKey]);
-  const selPlans = useMemo(() => selected.map((s) => [s, planOf(s)]), [selected, mp.cache, pctH, onlyLower, allowBig]); // eslint-disable-line react-hooks/exhaustive-deps
+  const selPlans = useMemo(() => selected.map((s) => [s, planOf(s)]), [selected, mp.cache, pctH, dir, allowBig, lockedItem]); // eslint-disable-line react-hooks/exhaustive-deps
   const toSend = selPlans.filter(([, p]) => p.state === 'change');
   const lowered = toSend.filter(([, p]) => p.kind === 'lower');
   const raised = toSend.filter(([, p]) => p.kind === 'raise');
@@ -88,7 +98,21 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
   const viewJobs = useMemo(() => jobsFor(viewSizes.filter((s) => !blocked(s))).filter((j) => !mp.cache[`${j.sku}|${j.size}`]), [viewSizes, mp.cache]);
   const pricing = mp.state.running;
 
-  const selectable = (s) => !blocked(s);
+  // A locked listing's sizes can't be picked at all — the lock is the exception list.
+  const selectable = (s) => !blocked(s) && !lockedItem.has(s.item_id);
+  // Locking drops that listing's sizes from the selection, so nothing locked is in a run.
+  async function lockListing(g, note) {
+    setLockErr('');
+    await api.ebayLock(g.item_id, true, note || null);
+    setMany(g.sizes, false);
+    setLocking(null);
+    onChanged();
+  }
+  async function unlockListing(g) {
+    setLockErr('');
+    try { await api.ebayLock(g.item_id, false); onChanged(); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setLockErr(e.message); }
+  }
   const allInView = viewSizes.filter(selectable);
   const allPicked = allInView.length > 0 && allInView.every((s) => sel.has(keyOf(s)));
   function setMany(sizes, on) {
@@ -143,7 +167,12 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
             <input type="text" inputMode="decimal" value={markup} aria-label="Markup percent" onChange={(e) => setMarkup(e.target.value)} /> %
             {pctH == null && <span className="error xs"> 0–100</span>}
           </label>
-          <label className="er-dry"><input type="checkbox" checked={onlyLower} onChange={(e) => setOnlyLower(e.target.checked)} /> Only lower prices</label>
+          <span className="seg sm" role="group" aria-label="Which way prices may move">
+            {[['both', 'Both ways'], ['raise', 'Only raise'], ['lower', 'Only lower']].map(([k, label]) => (
+              <button key={k} type="button" className={`seg-btn${dir === k ? ' on' : ''}`} aria-pressed={dir === k} onClick={() => setDir(k)}>{label}</button>
+            ))}
+          </span>
+          <label className="er-dry"><input type="checkbox" checked={lockedOnly} onChange={(e) => { setLockedOnly(e.target.checked); setShown(PAGE); }} /> 🔒 Locked only ({fmt(lockedItem.size)})</label>
           <label className="er-dry"><input type="checkbox" checked={stockOnly} onChange={(e) => setStockOnly(e.target.checked)} /> In stock on eBay</label>
           <label className="er-dry"><input type="checkbox" checked={changesOnly} onChange={(e) => setChangesOnly(e.target.checked)} /> Price off market</label>
           <label className="er-dry" title={`A suggestion more than ${BIG_SWING * 100}% away from today’s price is usually a wrong style code`}><input type="checkbox" checked={allowBig} onChange={(e) => setAllowBig(e.target.checked)} /> Include big swings</label>
@@ -162,6 +191,8 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
             </>
           )}
         </div>
+        <p className="muted xs">🔒 <b>Keep price</b> locks a listing out of every reprice run, any direction — for the exceptions (say $120 on a $60 market, kept on purpose). Lock them, then reprice the rest.</p>
+        {lockErr && <div className="error xs mt">{lockErr}</div>}
         {mp.state.unresolved.length > 0 && !pricing && <div className="error xs mt">{fmt(mp.state.unresolved.length)} market lookups failed after retries ({mp.state.unresolved[0].error}) — press Get market prices again.</div>}
       </div>
 
@@ -207,7 +238,7 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
           const up = plans.filter((p) => p.state === 'change' && p.kind === 'raise').length;
           const isOpen = open.has(g.item_id);
           return (
-            <div key={g.item_id} className={`ebr-listing${picked ? ' on' : ''}`}>
+            <div key={g.item_id} className={`ebr-listing${picked ? ' on' : ''}${g.locked ? ' locked' : ''}`}>
               <div className="ebr-head">
                 <input type="checkbox" checked={ok.length > 0 && picked === ok.length} ref={(el) => { if (el) el.indeterminate = picked > 0 && picked < ok.length; }}
                   disabled={!ok.length || !!run?.running} onChange={(e) => setMany(ok, e.target.checked)} aria-label={`Pick ${g.title}`} />
@@ -220,9 +251,15 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
                       {down > 0 && <span className="ebr-chip down">↓ {down}</span>}
                       {up > 0 && <span className="ebr-chip up">↑ {up}</span>}
                       {picked > 0 && <span className="ebr-chip">{picked} picked</span>}
+                      {g.locked && <span className="ebr-chip lock" title={g.lock_note || ''}>🔒 Keep price{g.locked_by ? ` · ${g.locked_by}` : ''}{g.locked_at ? ` · ${when(g.locked_at)}` : ''}</span>}
                     </span>
+                    {g.locked && g.lock_note && <span className="muted xs">“{g.lock_note}”</span>}
                   </span>
                 </button>
+                <button type="button" className={`btn sm ${g.locked ? '' : 'ghost'} ebr-lock`} disabled={!!run?.running}
+                  aria-label={g.locked ? `Unlock ${g.title}` : `Lock ${g.title} — keep its price`}
+                  title={g.locked ? 'Unlock — reprice runs can change it again' : 'Keep price — no reprice run will touch this listing'}
+                  onClick={() => (g.locked ? unlockListing(g) : setLocking(g))}>{g.locked ? '🔓 Unlock' : '🔒 Keep'}</button>
               </div>
               {isOpen && (
                 <div className="ebr-sizes">
@@ -235,14 +272,14 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
                         <span className="ebr-size-name">Size <b>{s.size || '—'}</b><span className="muted xs"> · {s.qty_available ?? 0} avail.</span></span>
                         <span className="ebr-now">{money(s.price)}</span>
                         <span className="ebr-arrow" aria-hidden="true">→</span>
-                        <span className="ebr-new">{p.suggestedCents != null && (p.state === 'change' || p.state === 'same' || p.state === 'big' || p.state === 'kept')
+                        <span className="ebr-new">{p.suggestedCents != null && ['change', 'same', 'big', 'kept', 'locked'].includes(p.state)
                           ? <b>{usd(p.suggestedCents)}</b> : <span className="muted">—</span>}</span>
                         <span className="ebr-why xs">
                           {p.marketCents != null && <span className="muted">market {usd(p.marketCents)} </span>}
                           {p.state === 'change' && <span className={p.kind === 'lower' ? 'ebl-note bad' : 'ebl-note ok'}>{p.kind === 'lower' ? '↓' : '↑'} {usd(Math.abs(p.diffCents))}</span>}
                           {p.state === 'same' && <span className="muted">already there</span>}
                           {p.state === 'not_priced' && <span className="muted">no market price yet</span>}
-                          {['blocked', 'no_data', 'kept', 'big'].includes(p.state) && <span className={p.state === 'big' ? 'ebl-note warn' : 'muted'}>{p.why}</span>}
+                          {['blocked', 'no_data', 'kept', 'big', 'locked'].includes(p.state) && <span className={p.state === 'big' ? 'ebl-note warn' : 'muted'}>{p.why}</span>}
                         </span>
                       </label>
                     );
@@ -260,9 +297,18 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
         {showLog && <PriceLog onSignOut={onSignOut} stamp={run?.running ? 0 : run?.done} />}
       </div>
 
+      {locking && (
+        <FormModal
+          title={`Keep the price on ${locking.title}`}
+          message={`Every size stays at its current price (${locking.min == null ? '—' : locking.min === locking.max ? money(locking.min) : `${money(locking.min)}–${money(locking.max)}`}) — no reprice run will change it, up or down, until someone unlocks it.`}
+          submitLabel="🔒 Keep price"
+          onClose={() => setLocking(null)}
+          onSubmit={({ note }) => lockListing(locking, String(note || '').trim())}
+          fields={[{ name: 'note', label: 'Why? (optional)', type: 'textarea', placeholder: 'e.g. rare colorway — holding at $120' }]} />
+      )}
       {confirm && (
         <Modal type="warn" title={`Reprice ${fmt(toSend.length)} size${toSend.length === 1 ? '' : 's'} on eBay?`}
-          message={`${fmt(lowered.length)} go down (−${usd(lowered.reduce((n, [, p]) => n - p.diffCents, 0))} in total), ${fmt(raised.length)} go up (+${usd(raised.reduce((n, [, p]) => n + p.diffCents, 0))}). Each becomes market + ${markup}% (whole dollars). It changes the live eBay price straight away; quantities aren't touched.`}
+          message={`${fmt(lowered.length)} go down (−${usd(lowered.reduce((n, [, p]) => n - p.diffCents, 0))} in total), ${fmt(raised.length)} go up (+${usd(raised.reduce((n, [, p]) => n + p.diffCents, 0))}). Each becomes market + ${markup}% (whole dollars). It changes the live eBay price straight away; quantities aren't touched.${lockedItem.size ? ` ${fmt(lockedItem.size)} locked listing${lockedItem.size === 1 ? ' is' : 's are'} left alone.` : ''}`}
           onClose={() => setConfirm(false)}>
           <button type="button" className="btn ghost" onClick={() => setConfirm(false)}>Cancel</button>
           <button type="button" className="btn primary" onClick={go}>Reprice {fmt(toSend.length)} on eBay</button>

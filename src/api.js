@@ -331,6 +331,7 @@ export const api = {
   ebayPriceEdits: () => get('/api/ebay/reprice'),
   // 🔒 Keep price on a whole listing — no reprice run touches it (lock:false = unlock).
   ebayLock: (itemId, lock, note) => post('/api/ebay/lock', { itemId, lock, note }),
+  ebayLockMany: (itemIds, lock, note) => post('/api/ebay/lock', { itemIds, lock, note }),
   ebayCoupons: () => get('/api/ebay/coupons'),
   ebayOrders: (from, to) => get(`/api/ebay/orders?from=${encodeURIComponent(from || '')}&to=${encodeURIComponent(to || '')}`),
   ebayOrdersSync: (from) => post('/api/ebay/orders', { from: from || null }),

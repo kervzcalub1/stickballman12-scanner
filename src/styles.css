@@ -6054,6 +6054,9 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .ebr-chip.lock { background: rgba(215,163,92,0.16); color: #d7a35c; }
 .ebr-listing.locked { border-color: rgba(215,163,92,0.45); }
 .ebr-lock { white-space: nowrap; }
+.ebr-find { align-items: center; }
+.ebr-find .sl-markup input { width: 64px; }
+.ebr-bulk { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .ebr-sizes { border-top: 1px solid var(--border, rgba(255,255,255,0.08)); background: rgba(255,255,255,0.02); }
 .ebr-size { display: grid; grid-template-columns: auto minmax(90px, 1.2fr) auto auto auto minmax(0, 2fr); align-items: center; gap: 4px 10px; padding: 7px 10px; font-size: 13px; cursor: pointer; }
 .ebr-size + .ebr-size { border-top: 1px solid rgba(255,255,255,0.04); }

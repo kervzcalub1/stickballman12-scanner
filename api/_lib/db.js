@@ -10470,6 +10470,21 @@ export async function setEbayPriceLock(itemId, { note = null, by = null } = {}) 
 export async function clearEbayPriceLock(itemId) {
   return (await db()`DELETE FROM ebay_price_locks WHERE item_id = ${itemId} RETURNING item_id`).length > 0;
 }
+// Many at once — "🔒 Keep all in view" (one reason for the lot). Same upsert as one.
+export async function setEbayPriceLocks(itemIds, { note = null, by = null } = {}) {
+  const ids = [...new Set((itemIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return 0;
+  return (await db()`
+    INSERT INTO ebay_price_locks (item_id, note, locked_by)
+    SELECT x, ${note}, ${by} FROM unnest(${ids}::text[]) AS x
+    ON CONFLICT (item_id) DO UPDATE SET note = EXCLUDED.note, locked_by = EXCLUDED.locked_by, locked_at = now()
+    RETURNING item_id`).length;
+}
+export async function clearEbayPriceLocks(itemIds) {
+  const ids = [...new Set((itemIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return 0;
+  return (await db()`DELETE FROM ebay_price_locks WHERE item_id = ANY(${ids}::text[]) RETURNING item_id`).length;
+}
 export async function ebayLockedItemIds(itemIds) {
   const ids = [...new Set((itemIds || []).map(String))];
   if (!ids.length) return new Set();

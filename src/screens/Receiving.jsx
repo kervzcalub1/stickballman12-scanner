@@ -749,7 +749,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [openSizes, setOpenSizes] = useState(() => new Set()); // expanded size rows (item:size keys)
   const [issues, setIssues] = useState([]);   // manual shipment issues
   // The box problem behind this box's Box swap pairs (no-box.md "Box swap"): REQUIRED when
-  // any are on it — Shoe box damaged / Shoe box missing, a photo, a short note. One shipment
+  // any are on it — Shoe box damaged / Shoe box missing and a short note; a photo is optional
+  // (asked for, never blocking — a phone with no camera must not stop a submit). One shipment
   // issue for them all, so it's on the batch with its photo and opens a case for PH.
   const [boxIssue, setBoxIssue] = useState({ type: '', note: '', photos: [] });
   // Per-unit (VIN) defect issues flagged on the Review step (V6 Feature 4):
@@ -2124,8 +2125,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     .flatMap((i) => i.sizes.map((s) => `${i.sku || '?'} ${s.size}${Number(s.qty) > 1 ? ` ×${s.qty}` : ''}`));
   const boxIssueMissing = !swapLines.length ? null
     : !boxIssue.type ? 'pick Box damaged or Box missing'
-      : !(boxIssue.photos || []).length ? 'take a photo'
-        : !boxIssue.note.trim() ? 'add a short note' : null;
+      : !boxIssue.note.trim() ? 'add a short note' : null;
 
   // Multi-box: the open batch is created lazily on the first box commit
   // (see doCommit). Returns the batch { id, batchCode }, creating it if needed.
@@ -3254,7 +3254,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                         onClick={() => setBoxIssue((b) => ({ ...b, type: k }))}>{label}</button>
                     ))}
                   </div>
-                  <div className="muted sm">Take a photo of the pairs / boxes in this batch:</div>
+                  <div className="muted sm">Photo of the pairs / boxes in this batch <span className="muted">(optional)</span>:</div>
                   <DefectPhotos photos={boxIssue.photos || []} max={6} sign={signShipmentPhoto}
                     onChange={(photos) => setBoxIssue((b) => ({ ...b, photos }))} onSignOut={onSignOut} />
                   <input aria-label="Box problem note" placeholder="Short note — e.g. boxes crushed in transit / supplier sent no boxes" maxLength={300}

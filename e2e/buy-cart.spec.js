@@ -2378,6 +2378,28 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     expect(line).toMatchObject({ premium: true, tip_proposed: '10.00', tip_status: 'proposed' });
   });
 
+  // Whoever holds `premium_ping` (Alex, 2026-11-04) is @-mentioned on a PREMIUM shoe's card —
+  // a Telegram mention by user id, so it pings them even with no public @username.
+  test('a premium shoe pings the people holding "Tagged on premium shoes"; an ordinary one pings nobody', async ({ request }) => {
+    await pool.query(`UPDATE users SET privileges = array_append(privileges, 'premium_ping') WHERE id = $1`, [people.approver.uid]);
+    try {
+      const tgId = Number((await pool.query('SELECT telegram_user_id FROM users WHERE id = $1', [people.approver.uid])).rows[0].telegram_user_id);
+      expect(tgId).toBeGreaterThan(0);
+      const { card } = await groupCard(request, PREMIUM_RUN);
+      const ping = card.text.split('\n').find((l) => l.startsWith('🔔 '));
+      expect(ping).toContain(`${people.approver.name}`);
+      expect(ping).toMatch(/— premium shoe, please take a look$/);
+      const m = (card.entities || []).find((e) => e.type === 'text_mention' && e.user.id === tgId);
+      expect(m).toBeTruthy();
+      expect(card.text.slice(m.offset, m.offset + m.length)).toBe(people.approver.name);
+      const plain = await groupCard(request);
+      expect(plain.card.text).not.toContain('🔔');
+      expect((plain.card.entities || []).some((e) => e.type === 'text_mention')).toBe(false);
+    } finally {
+      await pool.query(`UPDATE users SET privileges = array_remove(privileges, 'premium_ping') WHERE id = $1`, [people.approver.uid]);
+    }
+  });
+
   test('"tip 7" beside the sizes approves the sizes AND a $7 tip — and re-prices the run', async ({ request }) => {
     const { cartId, row } = await groupCard(request, PREMIUM_RUN);
     const before = await costs(cartId);

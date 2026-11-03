@@ -247,6 +247,8 @@ export const PRIVILEGES = [
   // Only a real admin grants or removes these two (`adminLevel`).
   { key: 'manage_access', label: 'Manage user access', hint: 'Open Check Access: approve sign-ups, change roles and privileges, link Telegram, reset passwords — on non-admin accounts', notBuying: true, adminLevel: true },
   { key: 'connect_integrations', label: 'Connect integrations', hint: 'Connect or disconnect SHEIN and eBay, and switch the SHEIN live sync', notBuying: true, adminLevel: true },
+  // Not a permission — a call: @-mentioned on every PREMIUM shoe's card in the buying chat.
+  { key: 'premium_ping', label: 'Tagged on premium shoes', hint: 'Mentioned by name on every premium shoe’s card in the buying Telegram chat (their Telegram must be linked)', notBuying: true },
 ];
 export const PRIVILEGE_KEYS = PRIVILEGES.map((p) => p.key);
 export const STAFF_PRIVILEGES = PRIVILEGES.filter((p) => !p.buyer);

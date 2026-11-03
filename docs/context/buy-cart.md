@@ -686,6 +686,14 @@ whole request.
 - Tests: `buy-cart.spec.js` — card wording + cost, `tip 7` beside sizes, tip on a card without
   one, `cart/tip` (approver only, decline drops the cost), the phone form, `splitTipReply`.
 
+- **Premium ping (2026-11-04, Alex):** a premium shoe's card (both card shapes, and a re-posted
+  edited card) carries `🔔 <names> — premium shoe, please take a look`, each name a Telegram
+  **`text_mention`** entity by user id (`lineMentions`, telegram.js) — so it pings people with no
+  public @username. Who: approved accounts holding the **`premium_ping`** privilege ("Tagged on
+  premium shoes", Check Access) AND linked to Telegram (`premiumPingPeople`, db.js); not admins
+  implicitly. Nobody holds it → no line. A failed lookup costs the ping, never the card.
+  `e2e/buy-cart.spec.js` "a premium shoe pings…".
+
 ### The cost stack is the desk's too (2026-09-11)
 It moved the same way the buy call did, and for the same reason: **the stack is what turns
 a shelf price into a profit, so it is the basis on which a request gets approved or turned

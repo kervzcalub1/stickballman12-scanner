@@ -140,10 +140,37 @@ export function lineLinks(text, links = []) {
   return out;
 }
 
-export async function sendApprovalCard({ caption, keyboard, photoFileId = null, links = [] }) {
+// A MENTION by Telegram user id (a `text_mention` entity) on each person's name inside the
+// given line — so it works for people with no public @username, and pings them. Offsets are
+// UTF-16 code units, which is what a JS string index already is.
+//   mentions: [{ line, people: [{ name, telegramUserId }] }]
+export function lineMentions(text, mentions = []) {
+  const out = [];
+  for (const { line, people } of mentions) {
+    if (!line || !people?.length) continue;
+    let at = -1;
+    if (text === line || text.startsWith(`${line}\n`)) at = 0;
+    else if (text.includes(`\n${line}\n`)) at = text.indexOf(`\n${line}\n`) + 1;
+    else if (text.endsWith(`\n${line}`)) at = text.length - line.length;
+    if (at < 0) continue;
+    let from = 0;
+    for (const p of people) {
+      const i = line.indexOf(p.name, from);
+      if (i < 0 || !p.telegramUserId) continue;
+      out.push({ type: 'text_mention', offset: at + i, length: p.name.length, user: { id: Number(p.telegramUserId) } });
+      from = i + p.name.length;
+    }
+  }
+  return out;
+}
+
+export async function sendApprovalCard({ caption, keyboard, photoFileId = null, links = [], mentions = [] }) {
   const chatId = telegramChatId();
   const reply_markup = JSON.stringify(keyboard);
-  const ents = (text) => { const e = lineLinks(text, links); return e.length ? e : undefined; };
+  const ents = (text) => {
+    const e = [...lineLinks(text, links), ...lineMentions(text, mentions)].sort((a, b) => a.offset - b.offset);
+    return e.length ? e : undefined;
+  };
   return enqueue(async () => {
     if (photoFileId && caption.length <= CAPTION_MAX) {
       const cached = photoCache.get(Number(photoFileId));

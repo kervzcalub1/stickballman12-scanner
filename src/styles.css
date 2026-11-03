@@ -2977,6 +2977,9 @@ button.box-existing-size:hover { border-color: var(--primary); }
 .po-scan-hint { margin: 8px 0 0; }
 .po-scan-recent { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .po-scan-recent .po-lines { margin-top: 6px; }
+.po-scan-failed ul { margin: 6px 0 0; padding-left: 18px; }
+.po-scan-failed-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.po-scan-looking { margin: 6px 0 0; }
 
 .po-list { display: flex; flex-direction: column; gap: 10px; }
 .po-card { text-align: left; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 8px; color: var(--text); }

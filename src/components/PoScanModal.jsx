@@ -6,7 +6,7 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
-import { isUpcCode, usSizeChart, compareSizes } from '../lib/codes.js';
+import { isUpcCode, usSizeChart, compareSizes, isCameraReread } from '../lib/codes.js';
 import { DimensionsFields, dimsComplete, dimsToText, emptyDims } from './PoDimensions.jsx';
 import { parsePoPaste } from '../lib/poPaste.js';
 import { AliasCodeCheck, aliasOnlyCode } from './AliasCodeCheck.jsx';
@@ -174,8 +174,24 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
   const defaultDimsRef = useRef(emptyDims());
   const setDefaultDims = (d) => { defaultDimsRef.current = d; setDefaultDimsState(d); };
   const draftRef = useRef(null); draftRef.current = draft; // so the camera callback sees the live draft
-  const recentRef = useRef({});                       // code -> last-seen ms (dedup gun/camera re-reads)
+  // Set the draft AND its ref in one go: the next scan in the queue can run before React
+  // re-renders, and it must see the shoe this one just opened (or cleared).
+  const openDraft = (d) => { draftRef.current = d; setDraft(d); };
+  const recentRef = useRef({});                       // code -> last-seen ms (camera re-reads only)
   const inputRef = useRef(null);
+  // RAPID SCAN. A scan gun fires the next code while the last lookup is still out, so
+  // scans queue up and run one at a time, in order — the field is never disabled (a
+  // disabled field drops focus, and every scan after the first went nowhere).
+  const queueRef = useRef(Promise.resolve());
+  const [looking, setLooking] = useState(0);          // lookups queued or in flight
+  // Scans that didn't land. Kept on screen until dismissed — with scans queued, a flash
+  // or an error line is overwritten by the next one before anybody reads it.
+  const [failed, setFailed] = useState([]);           // [{ code, why }]
+  const enqueue = (fn) => { queueRef.current = queueRef.current.then(fn).catch(() => {}); return queueRef.current; };
+  // Keep the gun aimed at the scan field — but only with a mouse/trackpad: on a phone a
+  // focus() pops the keyboard over the list (same rule as warehouse receiving).
+  const hasFinePointer = () => { try { return window.matchMedia('(pointer: fine)').matches; } catch { return true; } };
+  const refocusScan = () => { if (hasFinePointer()) inputRef.current?.focus({ preventScroll: true }); };
   // "Paste a list" — a supplier's "SKU / size x qty" message, many shoes at once
   // (src/lib/poPaste.js). Shoes only: an empty box needs its dimensions on every line.
   const [paste, setPaste] = useState(pasteOnly ? { text: '', prices: {} } : null); // null = closed; { text, prices: {sku: '120'} }
@@ -235,15 +251,21 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
   // Scan/type a code → resolve → build/accumulate the draft, exactly like the
   // warehouse Add-Item flow: the catalog size auto-fills, re-scanning the same shoe
   // bumps that size, and a *different* shoe prompts to finish the current one first.
-  // Repeat reads within 1.2s (gun / continuous camera) are ignored.
-  const resolve = async (raw, { showInField = false } = {}) => {
+  // A live camera re-reading the same barcode within 1.2s is ignored. A gun or typed
+  // scan never is: six boxes of one size scanned back to back are six pairs.
+  const resolve = (raw, { fromCamera = false } = {}) => {
     const c = String(raw).trim();
     if (!c) return;
-    const now = Date.now();
-    if (recentRef.current[c] && now - recentRef.current[c] < 1200) return; // gun/camera re-read
-    recentRef.current[c] = now;
-    setCode(showInField ? c : ''); setError('');
-    setBusy(true);
+    if (fromCamera) {
+      const now = Date.now();
+      if (isCameraReread(recentRef.current, c, now)) return;
+      recentRef.current[c] = now;
+    }
+    setCode(''); setError('');
+    setLooking((n) => n + 1);
+    enqueue(() => resolveOne(c).finally(() => setLooking((n) => n - 1)));
+  };
+  const resolveOne = async (c) => {
     try {
       const isUpc = isUpcCode(c);
       const { product: p0 } = isUpc ? await api.searchUpc(c) : await api.searchSku(c);
@@ -258,10 +280,19 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
       };
       const d = draftRef.current;
       if (!d) {
-        setDraft({ ...incoming, rows: firstRows(incoming) });
+        openDraft({ ...incoming, rows: firstRows(incoming) });
         setFlash(startFlash(incoming, c));
       } else if (!sameSku(d.sku, incoming.sku)) {
-        setPendingSwitch(incoming); // different shoe → confirm switch (finish current first)
+        // A different shoe. When the current one is complete, add it and carry on —
+        // a popup per SKU stops the gun. Only a shoe that can't be added yet (a size
+        // or carton missing, a style code to check) still asks.
+        if (!draftIsReady(d)) { setPendingSwitch(incoming); return; }
+        const prev = d.name || d.sku;
+        if (await addToLabel()) {
+          openDraft({ ...incoming, rows: firstRows(incoming) });
+          const f = startFlash(incoming, c);
+          setFlash({ ...f, text: `Added ${prev} · now ${f.text.replace(/^✓ /, '')}` });
+        }
       } else if (incoming.codeCheck && !(d.codeCheckUpcs || []).includes(c)) {
         // Same code, but a box nobody has read yet: ask about it before it counts.
         setDraft((x) => ({ ...x, codeCheck: incoming.codeCheck, codeCheckUpcs: [...(x.codeCheckUpcs || []), c] }));
@@ -281,15 +312,15 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
       // the code they typed and an empty name to fill in. (A shoes order still needs the
       // lookup: that's where the size list comes from.)
       if (boxesOrder && !draftRef.current && !isUpcCode(c)) {
-        setDraft({ name: '', sku: c, image: '', upc: '', colorway: '', gender: null, scannedSize: null, sizeOptions: [], rows: [] });
+        openDraft({ name: '', sku: c, image: '', upc: '', colorway: '', gender: null, scannedSize: null, sizeOptions: [], rows: [] });
         setFlash({ type: 'warn', text: `Couldn’t look up ${c} — declaring it anyway. Type the shoe’s name, then tap the size.` });
         setError('');
       } else {
-        setError(e.message || 'Could not find that code.');
+        setFailed((f) => [{ code: c, why: e.message || (e.timeout ? 'catalogue timed out — scan it again' : 'not found') }, ...f].slice(0, 20));
         // "Not found" on a timeout is a lie that costs somebody a search.
-        setFlash({ type: 'dup', text: e.timeout ? 'Catalogue timed out — scan again' : 'Not found' });
+        setFlash({ type: 'dup', text: e.timeout ? `Catalogue timed out — scan ${c} again` : `Not found · ${c}` });
       }
-    } finally { setBusy(false); }
+    }
   };
 
   // What a freshly-resolved shoe starts with. Identical on both kinds — a box is bought
@@ -347,7 +378,10 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
   };
 
   // Commit the whole draft (every size) to the label. Returns true on success.
+  // Reads the draft through its ref: it also runs from the scan queue, inside a closure
+  // made a few renders ago.
   const addToLabel = async () => {
+    const draft = draftRef.current;
     const rows = (draft?.rows || [])
       .map((r) => ({
         size: String(r.size).trim(),
@@ -385,7 +419,7 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
       if (boxesOrder) setDefaultDims({ ...rows[rows.length - 1].dims });
       const total = rows.reduce((n, r) => n + r.qty, 0);
       setFlash({ type: 'added', text: `Added ${draft.name || draft.sku} · ${total} ${boxesOrder ? (total === 1 ? 'box' : 'boxes') : `unit${total === 1 ? '' : 's'}`} to ${targetLabel}` });
-      setDraft(null); onAdded();
+      openDraft(null); onAdded();
       return true;
     } catch (e) {
       if (e.unauthorized) { onSignOut(); return false; }
@@ -393,13 +427,19 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
     } finally { setBusy(false); }
   };
 
+  function draftIsReady(d) {
+    const rows = d?.rows || [];
+    return !!d && !d.codeCheck && rows.length > 0 && rows.every((r) => String(r.size).trim())
+      && (!boxesOrder || rows.every((r) => dimsComplete(r.dims)));
+  }
+
   // "Different shoe" prompt: commit the current shoe, then open the new one.
   const confirmSwitch = async () => {
     const next = pendingSwitch;
     const ok = await addToLabel();
     setPendingSwitch(null);
     if (ok && next) {
-      setDraft({ ...next, rows: firstRows(next) });
+      openDraft({ ...next, rows: firstRows(next) });
       setFlash(startFlash(next, next.sku));
     }
   };
@@ -409,8 +449,7 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
   // it's a line nobody can match to a shoe. Every row has to be complete, not just one:
   // a half-filled row would be silently dropped on submit.
   const draftRows = draft?.rows || [];
-  const draftReady = !draft?.codeCheck && draftRows.length > 0 && draftRows.every((r) => String(r.size).trim())
-    && (!boxesOrder || draftRows.every((r) => dimsComplete(r.dims)));
+  const draftReady = draftIsReady(draft);
   const draftMissing = draft?.codeCheck ? 'Check the style code printed on the box first.'
     : !draftReady && draftRows.length > 0
     ? (draftRows.some((r) => !String(r.size).trim()) ? 'Every row needs a size.' : 'Every box needs its length, width and height.')
@@ -431,7 +470,12 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
           // empty modal space — but NEVER when they tapped another control (the size box,
           // qty, product name, a chip/button). That refocus was bouncing every click back
           // to SKU, so the size field was impossible to type letters into (5C, 3Y, …).
-          if (mCam || e.target.closest('input, textarea, select, button, [contenteditable="true"]')) return;
+          if (mCam || paste || pendingSwitch) return;
+          // After a BUTTON (a size chip, +/−) the scan field takes focus back, or the gun's
+          // Enter would press that button again and add a pair nobody scanned. "+ Custom"
+          // is the exception: its new size box takes the focus.
+          if (e.target.closest('button')) { if (!e.target.closest('.size-chip.custom')) refocusScan(); return; }
+          if (e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
           inputRef.current?.focus({ preventScroll: true });
         }}>
         <div className="modal-head">
@@ -502,15 +546,17 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
             </div>
           </div>
         ) : (<>
-        <form className="searchrow" onSubmit={(e) => { e.preventDefault(); resolve(code, { showInField: true }); }}>
+        {/* Never disabled: a disabled field (or a disabled submit button, which blocks the
+            gun's Enter) is what made rapid scanning impossible. Scans queue instead. */}
+        <form className="searchrow" onSubmit={(e) => { e.preventDefault(); resolve(code); }}>
           <input ref={inputRef} autoFocus autoCapitalize="characters" autoCorrect="off"
-            placeholder="Scan or type UPC / SKU" value={code} onChange={(e) => setCode(e.target.value)} disabled={busy} />
-          <button className="btn primary" disabled={busy}>{busy ? '…' : 'Add'}</button>
+            placeholder="Scan or type UPC / SKU" value={code} onChange={(e) => setCode(e.target.value)} />
+          <button className="btn primary">Add</button>
           <button type="button" className={`btn ${mCam ? 'primary' : 'ghost'}`} onClick={() => setMCam((v) => !v)} title="Scan with camera"><Icon name="camera" /></button>
         </form>
         {mCam && (
           <Suspense fallback={<p className="muted">Loading camera…</p>}>
-            <CameraScanner continuous mode="product" onDetected={(c) => resolve(c, { showInField: true })} onClose={() => setMCam(false)}
+            <CameraScanner continuous mode="product" onDetected={(c) => resolve(c, { fromCamera: true })} onClose={() => setMCam(false)}
               zoom={camZoom} onZoomChange={setCamZoom} />
           </Suspense>
         )}
@@ -520,8 +566,18 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
         <div className="scan-flash-live" role="status" aria-live="polite">
           {flash && <div className={`scan-flash ${flash.type}`}>{flash.text}</div>}
         </div>
+        {looking > 0 && <p className="muted xs po-scan-looking" role="status">Looking up {looking} scan{looking === 1 ? '' : 's'}…</p>}
+        {failed.length > 0 && (
+          <div className="po-scan-failed error sm mt" role="alert">
+            <div className="po-scan-failed-head">
+              <b>Not added — scan {failed.length === 1 ? 'this' : 'these'} again or type the SKU:</b>
+              <button type="button" className="btn sm ghost" onClick={() => setFailed([])}>Clear</button>
+            </div>
+            <ul>{failed.map((f, i) => <li key={i}><code>{f.code}</code> — {f.why}</li>)}</ul>
+          </div>
+        )}
         {error && <div className="error sm mt">{error}</div>}
-        {!draft && !busy && !paste && (
+        {!draft && !busy && !looking && !paste && (
           <p className="muted sm mt">{boxesOrder
             ? 'Scan or type the SKU printed on the empty box — the shoe’s name fills in, and a scanned UPC fills the size too. Then tap the size each box is for and give its dimensions; a new row starts at the last carton you typed, so a run of sizes is measured once.'
             : 'Scan a shoe’s UPC to begin — its size auto-fills. Add other sizes with the chips, or “+ Custom” if a size isn’t listed. Re-scanning the same shoe bumps its size by 1.'}</p>
@@ -625,8 +681,8 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
             )}
             {draftMissing && <p className="po-draft-missing sm">{draftMissing}</p>}
             <div className="modal-actions">
-              <button type="button" className="btn ghost" onClick={() => setDraft(null)}>Cancel</button>
-              <button type="button" className="btn primary wide" disabled={busy || totalUnits < 1 || !draftReady} onClick={addToLabel}>
+              <button type="button" className="btn ghost" onClick={() => openDraft(null)}>Cancel</button>
+              <button type="button" className="btn primary wide" disabled={busy || totalUnits < 1 || !draftReady} onClick={() => enqueue(addToLabel)}>
                 Add {totalUnits > 0 ? `${totalUnits} ${boxesOrder ? (totalUnits === 1 ? 'box' : 'boxes') : `unit${totalUnits === 1 ? '' : 's'}`} ` : ''}to {orderMode ? 'order' : 'label'}
               </button>
             </div>
@@ -640,7 +696,7 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
               <p className="modal-msg">You scanned <b>{pendingSwitch.name || pendingSwitch.sku || 'a new item'}</b>, different from <b>{draft?.name || draft?.sku || 'the current shoe'}</b>. Add the current shoe to the label and start the new one?</p>
               <div className="modal-actions">
                 <button type="button" className="btn ghost" disabled={busy} onClick={() => setPendingSwitch(null)}>Keep current</button>
-                <button type="button" className="btn primary" disabled={busy} onClick={confirmSwitch}>Add &amp; switch</button>
+                <button type="button" className="btn primary" disabled={busy} onClick={() => enqueue(confirmSwitch)}>Add &amp; switch</button>
               </div>
             </div>
           </div>

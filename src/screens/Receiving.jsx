@@ -752,7 +752,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // any are on it — Shoe box damaged / Shoe box missing and a short note; a photo is optional
   // (asked for, never blocking — a phone with no camera must not stop a submit). One shipment
   // issue for them all, so it's on the batch with its photo and opens a case for PH.
-  const [boxIssue, setBoxIssue] = useState({ type: '', note: '', photos: [] });
+  // Starts on NO LID — the usual reason a pair is set aside for a box swap (Brent, 2026-11-04).
+  const [boxIssue, setBoxIssue] = useState({ type: 'box_no_lid', note: '', photos: [] });
   // Per-unit (VIN) defect issues flagged on the Review step (V6 Feature 4):
   // vin -> [{ key, type, note, photos:[url] }]. Sent with commit → 'issue' events.
   const [unitIssues, setUnitIssues] = useState({});
@@ -1913,7 +1914,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const issuePayload = () => [
     ...autoIssues.map((a) => ({ type: 'no_box', description: a.description })),
     ...(swapLines.length ? [{
-      type: boxIssue.type || 'box_missing',
+      type: boxIssue.type || 'box_no_lid',
       description: `${boxIssue.note.trim()} — Box swap: ${swapLines.join(', ')}`.slice(0, 1000),
       photos: boxIssue.photos || [],
     }] : []),
@@ -2124,7 +2125,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const swapLines = items.filter((i) => !i.withBox && i.boxSwap)
     .flatMap((i) => i.sizes.map((s) => `${i.sku || '?'} ${s.size}${Number(s.qty) > 1 ? ` ×${s.qty}` : ''}`));
   const boxIssueMissing = !swapLines.length ? null
-    : !boxIssue.type ? 'pick Box damaged or Box missing'
+    : !boxIssue.type ? 'pick what’s wrong with the box'
       : !boxIssue.note.trim() ? 'add a short note' : null;
 
   // Multi-box: the open batch is created lazily on the first box commit
@@ -2165,7 +2166,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     }
     setActiveSlot(i); setDraft(null); setStickerTyping(false);
     setItems(isPoReceive ? buildManifestItems(boxSlots[i]?.poBoxId) : []);
-    setIssues([]); setKeyNotes(''); setUnitIssues({}); setRescanned([]); setBoxIssue({ type: '', note: '', photos: [] });
+    setIssues([]); setKeyNotes(''); setUnitIssues({}); setRescanned([]); setBoxIssue({ type: 'box_no_lid', note: '', photos: [] });
     resetScanState();
     emptyBoxAck.current = false;
     setStep(2);
@@ -2174,7 +2175,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // the in-progress, uncommitted draft for that box).
   function backToBoxList() {
     setActiveSlot(null); setStep(1);
-    setItems([]); setIssues([]); setKeyNotes(''); setUnitIssues({}); setDraft(null); setBoxIssue({ type: '', note: '', photos: [] });
+    setItems([]); setIssues([]); setKeyNotes(''); setUnitIssues({}); setDraft(null); setBoxIssue({ type: 'box_no_lid', note: '', photos: [] });
     resetScanState();
     emptyBoxAck.current = false;
   }
@@ -2328,7 +2329,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
           upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
         })).filter((_, i) => !out[i]?.boxSwap);
-        setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setBoxIssue({ type: '', note: '', photos: [] });
+        setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setBoxIssue({ type: 'box_no_lid', note: '', photos: [] });
         if (isMultiBoxNew) {
           // Mark the slot received and drop back to the box list (step 1) to do the next.
           setBoxSlots((slots) => slots.map((s, idx) => (idx === activeSlot
@@ -2384,7 +2385,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         online: onlineAtCommit,
         inboundIssues: batchRes?.inboundIssues || [],
       });
-      setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1); setBoxIssue({ type: '', note: '', photos: [] });
+      setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1); setBoxIssue({ type: 'box_no_lid', note: '', photos: [] });
       // noTracking and pre-sell reset with the tracking # for the same reason: left
       // sticky, the NEXT shipment would quietly commit untracked, or with every pair in
       // it held back from listing.
@@ -3249,7 +3250,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                   <div className="box-issue-head"><b>Box swap — what's wrong with the box?</b> <span className="muted sm">Required</span></div>
                   <div className="muted sm">{swapLines.join(' · ')}</div>
                   <div className="seg box-issue-type" role="group" aria-label="Box problem">
-                    {[['boxes_damaged', 'Box damaged'], ['box_missing', 'Box missing']].map(([k, label]) => (
+                    {[['box_no_lid', 'No lid'], ['boxes_damaged', 'Box damaged'], ['box_missing', 'Box missing']].map(([k, label]) => (
                       <button key={k} type="button" className={`seg-btn ${boxIssue.type === k ? 'on' : ''}`} aria-pressed={boxIssue.type === k}
                         onClick={() => setBoxIssue((b) => ({ ...b, type: k }))}>{label}</button>
                     ))}

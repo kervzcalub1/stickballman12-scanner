@@ -17,7 +17,7 @@
 // seconds later by `priceInBackground`, and a card that goes out first says "not priced"
 // on every pair — which is the one thing the approver most needs and the reason to have
 // a card at all.
-import { getBuyCart, getBuyCartLine, lastCartEvent, logCartEvent, createTelegramGroupCard, setTelegramGroupCardMessage } from './db.js';
+import { getBuyCart, getBuyCartLine, lastCartEvent, logCartEvent, createTelegramGroupCard, setTelegramGroupCardMessage, premiumPingPeople } from './db.js';
 import { alertUsers, at } from './alerts.js';
 import { fundingTarget } from './buycart.js';
 import { stockForPair, stockForSizes, stockSentence } from './buyingStock.js';
@@ -83,6 +83,18 @@ const dollars = (n) => (money(n) == null ? '—' : `${money(n) < 0 ? '-' : ''}$$
 // "Premium shoes"): "⭐ PREMIUM — Andrew is proposing a $10.00 tip per pair". `replies` adds
 // how to answer it by reply (the one-card-per-shoe card); `buttons` = by the tip buttons on a
 // one-size card.
+// A PREMIUM shoe calls the people holding `premium_ping` by name (a Telegram mention).
+// Returns the caption line + the mention for sendApprovalCard, or nothing. Never fatal: a
+// failed lookup costs the card its ping, not the card.
+async function premiumPing(isPremium) {
+  if (!isPremium) return { lines: [], mentions: [] };
+  let people = [];
+  try { people = await premiumPingPeople(); } catch (e) { console.warn('[notify] premium ping lookup failed:', e.message); }
+  if (!people.length) return { lines: [], mentions: [] };
+  const line = `🔔 ${people.map((p) => p.name).join(', ')} — premium shoe, please take a look`;
+  return { lines: [line], mentions: [{ line, people }] };
+}
+
 export function premiumLines(line, cart, { replies = false, buttons = false } = {}) {
   if (!line?.premium && line?.tip_status == null) return [];
   const who = String(cart?.buyer_name || 'The supplier').trim();
@@ -212,6 +224,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
     // approver decides in: what it is, what it costs, what it earns, what we already
     // hold — and only then the paperwork.
     const priced = call && call.verdict;
+    const ping = await premiumPing(!!line.premium);
     const caption = [
       // A BUYER'S CHANGE to a pair already asked about heads the re-posted card, so the
       // group knows this replaces the one above and what moved (cart/line patch).
@@ -229,6 +242,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
       // approver looking at an unpriced pair still wants to know what it would cost.
       `Shelf ${dollars(line.shelf_price)}${money(line.final_cost) != null ? ` · costs us ${dollars(line.final_cost)}/unit` : ''}`,
       ...premiumLines(line, cart, { buttons: direct }),
+      ...ping.lines,
       // HOW MANY THE SHOP HAS, when the buyer counted. Most approvals happen from this
       // card rather than the screen, and the tap IS the decision — so the number the
       // quantity is chosen against has to be on the card, not only in the app. Omitted
@@ -337,6 +351,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
         photoFileId: extra.photoFileId ?? null,
         // The SKU line opens the shoe on StockX — sales, asks, bids at a tap.
         links: [{ line: line.sku, url: await stockxLinkFor(line.sku) }],
+        mentions: ping.mentions,
       });
       console.log(`[notify] ${cart.cart_code} ${line.sku}/${line.size || '—'} → Telegram message ${msg?.message_id}`
         + `${msg?.photo ? ' (with photo)' : ' (no photo)'}`);
@@ -443,11 +458,13 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
         + `${recordsOnly ? ` Our own records only (${recordsOnly.shopify.unavailable}).` : ''}`;
     }
 
+    const ping = await premiumPing(lines.some((l) => l.premium));
     const caption = [
       ...(String(first.name || '').trim() ? [String(first.name).trim()] : []),
       first.sku,
       `Shelf ${dollars(shelf)}${money(headLine?.final_cost) != null ? ` · costs us ${dollars(headLine.final_cost)}/unit` : ''}`,
       ...premiumLines(first, cart, { replies: true }),
+      ...ping.lines,
       ...(allFullBox ? ['📦 Full box'] : []),
       '',
       `Sizes (${lines.length}):`,
@@ -479,6 +496,7 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       keyboard: groupCardKeyboard(card.id, notifyEnv()),
       photoFileId: extra.photoFileId ?? null,
       links: [{ line: first.sku, url: await stockxLinkFor(first.sku) }],
+      mentions: ping.mentions,
     });
     if (msg?.message_id) await setTelegramGroupCardMessage(card.id, msg.message_id);
     console.log(`[notify] ${cart.cart_code} ${first.sku} × ${lines.length} sizes → Telegram message ${msg?.message_id} (one card)`

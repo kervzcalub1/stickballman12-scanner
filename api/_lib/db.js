@@ -7545,6 +7545,17 @@ export async function userHasPrivilege(uid, priv) {
   return rows.length > 0;
 }
 
+// Who gets @-mentioned on a PREMIUM shoe's card (`premium_ping`, buycart.js): approved
+// accounts holding it AND linked to Telegram — a mention needs a Telegram user id.
+export async function premiumPingPeople() {
+  const rows = await db()`
+    SELECT id, coalesce(nullif(btrim(name), ''), username) AS name, telegram_user_id
+      FROM users
+     WHERE status = 'approved' AND 'premium_ping' = ANY(privileges) AND telegram_user_id IS NOT NULL
+     ORDER BY id`;
+  return rows.map((r) => ({ name: String(r.name), telegramUserId: Number(r.telegram_user_id) }));
+}
+
 export async function listUserPrivileges(uid) {
   const rows = await db()`SELECT privileges FROM users WHERE id = ${uid}`;
   return rows[0]?.privileges || [];

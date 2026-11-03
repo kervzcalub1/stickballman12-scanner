@@ -52,6 +52,10 @@ export const PRIVILEGES = [
   // real admin grants or removes these two (ADMIN_LEVEL_PRIVILEGES, api/admin/review.js).
   { key: 'manage_access', label: 'Manage user access' },
   { key: 'connect_integrations', label: 'Connect integrations (SHEIN, eBay)' },
+  // Not a permission — a CALL (2026-11-04): whoever holds it is @-mentioned on every PREMIUM
+  // shoe's card in the buying chat (Alex asked to be pinged on those). Needs the account
+  // linked to Telegram (🔔 panel → Connect); unlinked holders are simply not mentioned.
+  { key: 'premium_ping', label: 'Tagged on premium shoes in the buying chat' },
 ];
 export const ADMIN_LEVEL_PRIVILEGES = ['manage_access', 'connect_integrations'];
 export const PRIVILEGE_KEYS = PRIVILEGES.map((p) => p.key);

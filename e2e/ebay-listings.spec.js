@@ -126,6 +126,28 @@ test.describe('eBay listings not in Shopify', () => {
     });
   });
 
+  test('a size with NO Custom label is never judged — the 41-pair "1 size · SKU —" listing (2026-11-04)', async () => {
+    const { shopifyVerdicts } = await import('../api/_lib/ebay-orphans.js');
+    const variants = [{ sku: '100', style: 'DV1237-001', size: '8' }, { sku: '101', style: 'DV1237-001', size: '10' }];
+    // The pull got the listing with no variations: one row, no SKU, no size.
+    const [v] = shopifyVerdicts([{ item_id: 'x', variation_key: '', sku: null, title: "Nike Motive 'Black Anthracite' (DV1237-001)", size: null }], variants);
+    expect([v.in_shopify, v.verdict]).toEqual([null, 'no_sku']);   // not false → not on the "end" tab, and end.js refuses it
+  });
+
+  test('right before End, eBay\'s LIVE sizes decide: a missed size, a blank SKU, or one still in Shopify refuses it', async () => {
+    const { liveEndCheck } = await import('../api/_lib/ebay-orphans.js');
+    const saved = [{ sku: '109', size: '9', in_shopify: false }];
+    const live = (...xs) => xs.map(([sku, size]) => ({ sku, size }));
+    // 8 and 10 are on the listing but the pull only had 9 → refused, names them.
+    expect(liveEndCheck(saved, live(['108', '8'], ['109', '9'], ['110', '10']))).toMatch(/size 8 \(108\), size 10 \(110\) that the last pull didn’t/);
+    expect(liveEndCheck(saved, live(['109', '9'], [null, '10']))).toMatch(/size 10 with no Custom label/);
+    expect(liveEndCheck([...saved, { sku: '108', size: '8', in_shopify: true }], live(['108', '8'], ['109', '9']))).toMatch(/size 8 \(108\) is still in Shopify/);
+    expect(liveEndCheck([...saved, { sku: '108', size: '8', in_shopify: null }], live(['108', '8'], ['109', '9']))).toMatch(/still in Shopify/);
+    expect(liveEndCheck(saved, [])).toMatch(/no sizes/);
+    expect(liveEndCheck(saved, live(['109', '9']))).toBeNull();                       // every size eBay has is gone from Shopify → may end
+    expect(liveEndCheck([{ sku: 'abc', size: '9', in_shopify: false }], live(['ABC', '9']))).toBeNull();   // SKU case doesn't matter
+  });
+
   test('the "Not in Shopify — end" tab: only listings with EVERY size gone; ends one at a time after confirm', async ({ page }) => {
     const STATUS = { ok: true, configured: true, missing: [], secrets: true, connected: true, user: 'stickballman12', pull: { state: 'done', listings: 3, rows: 4, orphans: 3 } };
     const r = (item, vk, sku, inShop, verdict, avail) => ({ item_id: item, variation_key: vk, title: `Shoe ${item}`, sku, size: '9', price: '100', qty_available: avail, qty_sold: 0, in_shopify: inShop, shopify_verdict: verdict, image_url: null });
@@ -147,6 +169,7 @@ test.describe('eBay listings not in Shopify', () => {
     await expect(page.locator('.ebl-orphan')).toHaveCount(2);
     await expect(page.locator('.ebl-orphans')).not.toContainText('Shoe 333');
     await expect(page.locator('.ebl-orphan').first()).toContainText('Product deleted in Shopify');
+    await expect(page.locator('.ebl-orphan').first()).toContainText('Size 9 (199)');   // each size with its SKU
     await page.getByLabel('Select all').check();
     await page.getByRole('button', { name: 'End 2 on eBay' }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'End 2 on eBay' }).click();

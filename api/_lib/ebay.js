@@ -269,6 +269,7 @@ export function rowsFromItem(itemXml, styleOf) {
 export async function fetchActiveListings(styleOf, onPage = () => {}) {
   const rows = [];
   let listings = 0;
+  let reread = 0;
   for (let page = 1, pages = 1; page <= pages && page <= 200; page++) {
     const xml = await trading('GetMyeBaySelling',
       `<ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList><DetailLevel>ReturnAll</DetailLevel>`);
@@ -276,10 +277,35 @@ export async function fetchActiveListings(styleOf, onPage = () => {}) {
     pages = num(tag(tag(list, 'PaginationResult') || '', 'TotalNumberOfPages')) || 1;
     const items = tags(tag(list, 'ItemArray') || '', 'Item');
     listings += items.length;
-    for (const it of items) rows.push(...rowsFromItem(it, styleOf));
+    for (const it of items) {
+      const got = rowsFromItem(it, styleOf);
+      // A listing that came back with no sizes AND no Custom label: GetMyeBaySelling left its
+      // variations out (seen on prod 2026-11-04 — a 41-pair listing read as one SKU-less
+      // row). Read it on its own; if that fails too, the SKU-less row stays and is never
+      // judged against Shopify (ebay-orphans.js 'no_sku').
+      if (got.length === 1 && !got[0].variation_key && !got[0].sku) {
+        const one = await ebayItemRows(got[0].item_id, styleOf).catch(() => null);
+        if (one?.length && (one.length > 1 || one[0].sku)) {
+          rows.push(...one.map((r) => ({ ...r, watch_count: r.watch_count ?? got[0].watch_count, image_url: r.image_url || got[0].image_url })));
+          reread++;
+          continue;
+        }
+      }
+      rows.push(...got);
+    }
     onPage(page, pages, listings);
   }
-  return { rows, listings };
+  return { rows, listings, reread };
+}
+
+// One listing, read on its own (Trading GetItem, every variation) → the same rows as the pull.
+// Used to fill a listing the pull got without sizes, and LIVE by api/ebay/end.js right before
+// ending (ending ends every size eBay has, not just the ones we saved).
+export async function ebayItemRows(itemId, styleOf) {
+  const xml = await trading('GetItem', `<ItemID>${String(itemId).replace(/[^0-9]/g, '')}</ItemID><DetailLevel>ReturnAll</DetailLevel>`);
+  const item = tag(xml, 'Item');
+  if (!item) throw new Error('eBay GetItem: no item');
+  return rowsFromItem(item, styleOf);
 }
 
 // How many Inventory-API items the account has — the tell for which listing model DPL

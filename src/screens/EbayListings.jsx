@@ -27,6 +27,7 @@ const VERDICT = {
   recreated_on_ebay: ['Re-created in Shopify — new one is on eBay too (duplicate)', 'warn'],
   recreated_not_synced: ['Re-created in Shopify — new one NOT on eBay yet', 'warn'],
   no_style: ['Not in Shopify (no style code in the title)', 'muted'],
+  no_sku: ['No Custom label on eBay — not checked', 'muted'],
 };
 
 function groupListings(rows) {
@@ -337,7 +338,8 @@ function OrphansTab({ orphans, checked, isAdmin, onSignOut, onEnded, onConnect }
                 <span className="ebl-orphan-main">
                   <span className="ebl-title">{g.title}</span>
                   <span className="muted xs">#{g.view_url ? <a className="ebl-link" href={g.view_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{g.item_id} ↗</a> : g.item_id}
-                    {' · '}{g.sizes.length} size{g.sizes.length === 1 ? '' : 's'} · SKU {g.sizes.map((s) => s.sku).filter(Boolean).join(', ') || '—'}</span>
+                    {' · '}{g.sizes.length} size{g.sizes.length === 1 ? '' : 's'}</span>
+                  <span className="muted xs">{g.sizes.map((s) => `${s.size ? `Size ${s.size}` : 'No size'} (${s.sku || 'no SKU'})`).join(' · ')}</span>
                   {verdicts.map((v) => <span key={v} className={`ebl-note ${VERDICT[v]?.[1] || 'muted'}`}>{VERDICT[v]?.[0] || 'Not in Shopify'}</span>)}
                   {newSkus.length > 0 && <span className="muted xs">New Shopify SKU: {newSkus.join(', ')}</span>}
                 </span>

@@ -4,14 +4,18 @@
 // Shopify"). PH + admin. For EACH listing, right before ending it:
 //   1. every size of it must be marked not-in-Shopify by the last pull (ending a listing
 //      ends ALL its sizes — a listing with even one size still in Shopify is refused);
-//   2. its Custom labels are searched in Shopify LIVE, one by one — if any is back (re-linked
-//      since the pull), it is skipped, not ended.
+//   2. the listing is read LIVE from eBay (GetItem): every size eBay has now must be one the
+//      pull saw and found gone from Shopify — a size with no Custom label, one the pull
+//      missed, or one still in Shopify refuses it (liveEndCheck, ebay-orphans.js);
+//   3. those Custom labels are searched in Shopify LIVE, one by one — if any is back
+//      (re-linked since the pull), it is skipped, not ended.
 // Then eBay EndItem, a row in ebay_listing_ends, and it drops off our copy. One at a time.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { dbConfigured, ebayListingRows, logEbayEnd, dropEbayListing, recentEbayEnds } from '../_lib/db.js';
-import { ebayConfigured, endEbayItem } from '../_lib/ebay.js';
+import { ebayConfigured, endEbayItem, ebayItemRows } from '../_lib/ebay.js';
 import { shopifySkusPresent } from '../_lib/shopify.js';
-import { VERDICT_LABEL } from '../_lib/ebay-orphans.js';
+import { VERDICT_LABEL, liveEndCheck } from '../_lib/ebay-orphans.js';
+import { styleFromTitle } from '../../src/lib/ebayReprice.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -33,7 +37,12 @@ export default async function handler(req, res) {
     const rows = await ebayListingRows(itemId);
     if (!rows.length) { results.push({ itemId, ok: false, skipped: true, error: 'Not in the last pull — pull again first.' }); continue; }
     if (rows.some((r) => r.in_shopify !== false)) { results.push({ itemId, ok: false, skipped: true, error: 'Some sizes of this listing ARE in Shopify (or weren’t checked) — not ended.' }); continue; }
-    const skus = rows.map((r) => r.sku).filter(Boolean);
+    let live;
+    try { live = await ebayItemRows(itemId, (t) => styleFromTitle(t)); }
+    catch (e) { results.push({ itemId, ok: false, skipped: true, error: `Couldn’t read the listing from eBay: ${e.message}` }); continue; }
+    const refuse = liveEndCheck(rows, live);
+    if (refuse) { results.push({ itemId, ok: false, skipped: true, error: refuse }); continue; }
+    const skus = live.map((r) => r.sku);
     let back;
     try { back = await shopifySkusPresent(skus); }
     catch (e) { results.push({ itemId, ok: false, skipped: true, error: `Couldn’t re-check Shopify: ${e.message}` }); continue; }

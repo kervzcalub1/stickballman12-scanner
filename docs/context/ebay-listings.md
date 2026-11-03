@@ -74,11 +74,21 @@ deducts nothing anywhere. Found on 10/9: 149 listings / 222 sizes / 279 pairs of
   `ebay_listings.in_shopify`, `shopify_verdict` = deleted · size_removed · recreated_on_ebay
   (same style + size under a NEW SKU that's also on eBay → the old listing is a duplicate) ·
   recreated_not_synced (new SKU not on eBay) · no_style, and `shopify_new_sku`.
+- **A size with NO Custom label is never judged** (`no_sku`, `in_shopify` NULL → never on the
+  end tab). Bug found 2026-11-04: 25 multi-size listings came back from GetMyeBaySelling with
+  NO variations (one SKU-less, size-less row carrying the whole listing's qty, e.g. 41) →
+  judged "Size removed" (a blank size matches nothing) → offered for ending, and End would
+  have ended sizes still in Shopify. Now the pull **re-reads such a listing on its own**
+  (`ebayItemRows`, Trading GetItem ReturnAll) and saves its real sizes; the pull status
+  carries `reread` and `noSku`.
 - **Tab "Not in Shopify — end (N)"**: listings EVERY size of which is not in Shopify (ending a
   listing ends all its sizes, so a listing with one size still in Shopify is never offered).
-  Cards sorted by pairs still offered; select → **End N on eBay** → confirm → ONE at a time.
+  Each card lists every size with its SKU ("Size 9 (10077481) · …"). Cards sorted by pairs still offered; select → **End N on eBay** → confirm → ONE at a time.
 - **`POST /api/ebay/end`** (PH + admin, ≤ 10 ids, the page sends 1): refuses a listing not in
-  the last pull or with any size in_shopify ≠ false; **re-checks every SKU in Shopify LIVE**
+  the last pull or with any size in_shopify ≠ false; **reads the listing LIVE from eBay**
+  (`ebayItemRows`) and refuses if eBay has a size with no Custom label, a size the pull
+  missed, or one not marked gone from Shopify (`liveEndCheck`, names the sizes — ending ends
+  every size eBay has, not just the saved ones); **re-checks every live SKU in Shopify LIVE**
   (`shopifySkusPresent`, exact `sku:` search, one by one) and skips any that came back; then
   Trading `EndItem` (EndingReason NotAvailable; eBay 1047 "already ended" = done), a row in
   **`ebay_listing_ends`** (who, when, reason, eBay's error), and the listing leaves our copy.

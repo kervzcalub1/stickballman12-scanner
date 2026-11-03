@@ -45,8 +45,10 @@ export const dispositionLabel = (k) => (DISPOSITIONS.find(([v]) => v === k) || [
 // Which recorded issues open a case. Not every row in shipment_issues is a problem:
 //   no_box → the No Box queue already owns it (a box is found, or it isn't)
 //   note   → "Key notes", free text about the shipment, not a complaint
+//   box_no_lid → a Box swap pair bought and delivered without its lid: the usual, expected
+//                reason, recorded on the batch — nothing for PH to claim (Brent, 2026-11-04).
 // A per-pair "No box" defect is the same No Box rule.
-const NOT_A_CASE = ['no_box', 'note'];
+const NOT_A_CASE = ['no_box', 'note', 'box_no_lid'];
 export const opensCase = (type) => !NOT_A_CASE.includes(String(type || ''));
 
 const SHIPMENT = Object.fromEntries(ISSUE_TYPES);

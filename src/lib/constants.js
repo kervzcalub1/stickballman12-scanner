@@ -51,6 +51,8 @@ export const ISSUE_TYPES = [
   ['missing_boxes', 'Missing boxes (parcels)'],
   // A pair that came without its shoe box — recorded for every Box swap pair (no-box.md).
   ['box_missing', 'Shoe box missing'],
+  // The usual Box swap reason (Brent, 2026-11-04): bought and delivered with no lid on the box.
+  ['box_no_lid', 'Shoe box has no lid'],
   ['shortfall', 'Short count (expected vs received)'],
   ['improperly_packed', 'Supplier packed it improperly'],
   ['mismatched', 'Mismatched shoe'],

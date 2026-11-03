@@ -27,7 +27,9 @@ boxSwap:true`:
 - **no label printed** at commit (`printItems` filters it out),
 - **not a "No box" auto-issue** (`autoIssues` skips it — it's deliberate), **but its BOX
   problem is required** (2026-11-03): the Issues step shows a **"Box swap — what's wrong with
-  the box?"** card (`#box-issue`) listing the swap pairs — **Box damaged** (`boxes_damaged`) /
+  the box?"** card (`#box-issue`) listing the swap pairs — **No lid** (`box_no_lid`, the
+  DEFAULT, pre-selected: bought and delivered without its lid — Brent 2026-11-04; recorded on
+  the batch but opens **no** Inbound Issues case, `NOT_A_CASE`) / **Box damaged** (`boxes_damaged`) /
   **Box missing** (`box_missing`, new in `ISSUE_TYPES`) and **a short note** — Submit is
   refused until both (`boxIssueMissing`); **a photo is optional** (shipment-photo upload, asked
   for but never blocking — user's call 2026-11-04). It commits as

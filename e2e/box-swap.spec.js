@@ -11,6 +11,7 @@ import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { loadEnv, loginAs } from './helpers/auth.js';
 import { signToken } from '../api/_lib/util.js';
+import { opensCase } from '../src/lib/inboundIssues.js';
 
 loadEnv();
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
@@ -100,9 +101,13 @@ test('inbound: a PO shoe marked Box swap needs no sticker, prints nothing, and l
   // …but WHY there's no usable box is required: damaged / missing, a photo, a short note.
   const card = page.locator('#box-issue');
   await expect(card).toContainText(`${SKU} 9 ×2`);
+  // NO LID is the usual reason (Brent) and starts selected — the note is what's asked for.
+  await expect(card.getByRole('button', { name: 'No lid' })).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: 'Submit box' }).click();
-  await expect(page.locator('.error')).toContainText('Box swap pairs: pick Box damaged or Box missing first.');
+  await expect(page.locator('.error')).toContainText('Box swap pairs: add a short note first.');
+  // This box's pairs came with no box at all — the other reasons are one tap away.
   await card.getByRole('button', { name: 'Box missing' }).click();
+  await expect(card.getByRole('button', { name: 'No lid' })).toHaveAttribute('aria-pressed', 'false');
   // The photo is optional — the note is what's asked for next. One is taken here anyway.
   // The upload is mocked (no bucket in CI): sign → a URL, PUT → 200.
   await page.route('**/api/inbound-issues/photo-sign', (r) => r.fulfill({ json: { ok: true, uploadUrl: 'https://upload.e2e.test/put', publicUrl: 'https://photos.e2e.test/box-swap.jpg' } }));
@@ -134,6 +139,9 @@ test('inbound: a PO shoe marked Box swap needs no sticker, prints nothing, and l
   expect(iss.photos).toEqual(['https://photos.e2e.test/box-swap.jpg']);
   const cases = await q(`SELECT type FROM inbound_issues WHERE po_id = $1`, [poId]);
   expect(cases.map((c) => c.type)).toContain('box_missing');
+  // "No lid" is recorded on the batch the same way, but it's expected — no case for PH.
+  expect(opensCase('box_no_lid')).toBe(false);
+  expect(opensCase('box_missing')).toBe(true);
 });
 
 test('the PH team never sees a box-swap pair, and it counts as warehouse work', async ({ request }) => {

@@ -1,6 +1,6 @@
 // POST /api/admin/review  (admin only)
-//   { userId, decision: 'approve' | 'reject' | 'role' | 'privileges' | 'telegram' | 'delete',
-//     role?, privileges?, telegramUserId? }
+//   { userId, decision: 'approve' | 'reject' | 'role' | 'privileges' | 'telegram' | 'premium_chat' | 'delete',
+//     role?, privileges?, telegramUserId?, premiumChatId? }
 // Approves/rejects a pending account, changes its role or its PRIVILEGES, or deletes it.
 //
 // Role and privileges are separate on purpose. A role is the one job somebody does; a
@@ -8,7 +8,7 @@
 // member or an admin who ALSO does that, not instead of it. See docs/context/buy-cart.md.
 
 import { getJsonBody, send, applySecurity } from '../_lib/util.js';
-import { reviewUser, setUserRole, setUserPrivileges, deleteUser, dbConfigured, setUserTelegramId, getUserById, clearTelegramLinkRequest } from '../_lib/db.js';
+import { reviewUser, setUserRole, setUserPrivileges, deleteUser, dbConfigured, setUserTelegramId, setUserPremiumChat, getUserById, clearTelegramLinkRequest } from '../_lib/db.js';
 import { PRIVILEGE_KEYS, BUYER_PRIVILEGE_KEYS, requireAccessManager, accessRefusal } from '../_lib/buycart.js';
 
 // `supplier` = external scan-out partner (PO feature); admin-assignable, never at signup.
@@ -84,6 +84,20 @@ export default async function handler(req, res) {
           return send(res, 409, { ok: false, error: 'That Telegram account is already linked to somebody else.' });
         throw e;
       }
+    }
+    // A BUYER's premium-shoes group: their premium cards go there instead of the main
+    // approval group (notify.js chatFor). A Telegram GROUP id is negative ("-100…"); blank
+    // clears it, so the cards come back to the main group.
+    if (decision === 'premium_chat') {
+      const raw = String(body.premiumChatId ?? '').trim();
+      if (raw !== '' && !/^-\d{5,20}$/.test(raw))
+        return send(res, 400, { ok: false, error: 'A group chat id is a negative number, like -1001234567890 — send /chatid in the group to get it.' });
+      const target = await getUserById(userId);
+      if (!target) return send(res, 404, { ok: false, error: 'Account not found.' });
+      if (raw !== '' && target.role !== 'supplier')
+        return send(res, 400, { ok: false, error: 'A premium chat is for a buyer (supplier) account.' });
+      const updated = await setUserPremiumChat(userId, raw || null);
+      return send(res, 200, { ok: true, user: updated });
     }
     if (decision === 'role') {
       if (!ROLES.includes(body.role)) return send(res, 400, { ok: false, error: 'Invalid role.' });

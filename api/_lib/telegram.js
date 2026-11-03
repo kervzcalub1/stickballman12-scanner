@@ -164,8 +164,9 @@ export function lineMentions(text, mentions = []) {
   return out;
 }
 
-export async function sendApprovalCard({ caption, keyboard, photoFileId = null, links = [], mentions = [] }) {
-  const chatId = telegramChatId();
+// `chatId` = where the card goes: the main approval group unless a buyer's premium group
+// is passed (notify.js routes it).
+export async function sendApprovalCard({ caption, keyboard, photoFileId = null, links = [], mentions = [], chatId = telegramChatId() }) {
   const reply_markup = JSON.stringify(keyboard);
   const ents = (text) => {
     const e = [...lineLinks(text, links), ...lineMentions(text, mentions)].sort((a, b) => a.offset - b.offset);
@@ -258,8 +259,8 @@ export async function getBotUsername() {
 
 // A plain note to the group — request closed / re-opened. No parse mode, like before:
 // a stray `*` in a store name prints rather than formats.
-export function sendNote(text) {
-  return enqueue(() => tg('sendMessage', { chat_id: telegramChatId(), text }));
+export function sendNote(text, chatId = telegramChatId()) {
+  return enqueue(() => tg('sendMessage', { chat_id: chatId, text }));
 }
 
 // A Pre-sell sale → the pre-sell group. HTML, so the shoe name can be bold; every value

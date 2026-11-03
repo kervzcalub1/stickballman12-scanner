@@ -23,7 +23,8 @@ export function CheckAccess({ user: viewer, onHome, onSignOut }) {
   const [busyId, setBusyId] = useState(null);
   const [confirm, setConfirm] = useState(null); // { u, action: 'reject' | 'delete' } | null
   const [tempPw, setTempPw] = useState(null);    // { u, password } — shown once after a reset
-  const [linking, setLinking] = useState(null);  // the user whose Telegram id is being asked for
+  const [linking, setLinking] = useState(null);
+  const [premiumFor, setPremiumFor] = useState(null);   // a buyer whose premium chat is being set  // the user whose Telegram id is being asked for
   const [waiting, setWaiting] = useState([]);    // Telegram accounts that tapped and aren't linked
   const isMobile = useMediaQuery('(max-width: 600px)');
 
@@ -62,6 +63,12 @@ export function CheckAccess({ user: viewer, onHome, onSignOut }) {
   async function setTelegram(u, telegramUserId) {
     setBusyId(u.id); setError(''); setLinking(null);
     try { await api.adminSetTelegram(u.id, telegramUserId); await load(); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusyId(null); }
+  }
+  async function setPremiumChat(u, chatId) {
+    setBusyId(u.id); setError(''); setPremiumFor(null);
+    try { await api.adminSetPremiumChat(u.id, chatId); await load(); }
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setBusyId(null); }
   }
@@ -107,7 +114,29 @@ export function CheckAccess({ user: viewer, onHome, onSignOut }) {
   // a group chat is not an identity — everybody in the group can press one — so a tap is
   // only recorded once the number that pressed it is tied to somebody here.
   const Telegram = ({ u }) => {
-    if (u.role === 'supplier') return <span className="muted sm">Buyers don’t approve anything</span>;
+    // A BUYER isn't linked (they approve nothing) — but they can have their own group for
+    // PREMIUM shoes, where those cards go instead of the main approval group.
+    if (u.role === 'supplier') {
+      if (!(u.privileges || []).includes('request_buying')) return <span className="muted sm">Buyers don’t approve anything</span>;
+      return (
+        <div className="tg-link">
+          <span className="muted sm">Premium shoes chat:</span>
+          {u.premium_chat_id ? (
+            <>
+              <span className="tg-id mono">{u.premium_chat_id}</span>
+              <button type="button" className="btn sm ghost" disabled={busyId === u.id || locked(u)}
+                onClick={() => setPremiumFor(u)}>Change</button>
+              <button type="button" className="btn sm ghost" disabled={busyId === u.id || locked(u)}
+                onClick={() => setPremiumChat(u, '')}>Remove</button>
+            </>
+          ) : (
+            <button type="button" className="btn sm ghost" disabled={busyId === u.id || locked(u)}
+              title="Their premium shoes’ cards go to this group instead of the main approval group"
+              onClick={() => setPremiumFor(u)}>Set premium chat</button>
+          )}
+        </div>
+      );
+    }
     const held = u.telegram_user_id ? String(u.telegram_user_id) : '';
     return (
       <div className="tg-link">
@@ -258,6 +287,19 @@ export function CheckAccess({ user: viewer, onHome, onSignOut }) {
         </section>
       )}
 
+      {premiumFor && (
+        <FormModal
+          title={`Premium shoes chat for ${premiumFor.name || premiumFor.username}`}
+          message="Their PREMIUM shoes’ approval cards go to this Telegram group instead of the main buying group. Add the bot to the group, send /chatid there, and paste the number it replies with."
+          submitLabel="Save"
+          onClose={() => setPremiumFor(null)}
+          onSubmit={({ premiumChatId }) => setPremiumChat(premiumFor, String(premiumChatId || '').trim())}
+          fields={[{
+            name: 'premiumChatId', label: 'Group chat id', required: true, value: premiumFor.premium_chat_id || '',
+            placeholder: '-1001234567890',
+            hint: 'A group id starts with a minus sign.',
+          }]} />
+      )}
       {linking && (
         <FormModal
           title={`Link ${linking.name || linking.username} to Telegram`}

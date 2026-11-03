@@ -694,6 +694,17 @@ whole request.
   implicitly. Nobody holds it → no line. A failed lookup costs the ping, never the card.
   `e2e/buy-cart.spec.js` "a premium shoe pings…".
 
+- **A buyer's own PREMIUM group (2026-11-04, "Andrew's Premium Shoes"):** `users.premium_chat_id`
+  (a Telegram group id, set per SUPPLIER on Check Access → Telegram column → **Set premium chat**;
+  `/chatid` in the group gives it; `api/admin/review` `decision:'premium_chat'`, must be negative).
+  A premium shoe's card (`chatFor` in notify.js — one-size and one-card-per-shoe; a mixed group
+  card goes there if ANY of its sizes is premium) and the "not buying" note about a premium pair go
+  to that group; everything else, and a buyer with none set, stays in `TELEGRAM_CHAT_ID`. The
+  webhook answers taps/replies in the main group AND every premium group (`inOurChat` reads
+  `premiumChatIds()` fresh — only messages outside the main group pay for it). Request-level notes
+  (closed / re-opened) stay in the main group. The bot must be in the group. `e2e/buy-cart.spec.js`
+  "a buyer’s premium group…".
+
 ### The cost stack is the desk's too (2026-09-11)
 It moved the same way the buy call did, and for the same reason: **the stack is what turns
 a shelf price into a profit, so it is the basis on which a request gets approved or turned

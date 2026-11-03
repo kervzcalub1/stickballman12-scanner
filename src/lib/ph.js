@@ -451,7 +451,7 @@ export function phListingStatus(g) {
 
 // PH pages are URL-routed under /ph/* (their own namespace, separate from the
 // warehouse/admin ROUTES) so a refresh restores the page and Back/Forward work.
-export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', undelivered: '/ph/undelivered', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', sheinreprice: '/ph/shein-reprice', sheincheck: '/ph/shein-check', sheinlistings: '/ph/shein-listings', ebaylistings: '/ph/ebay-listings', stockxlistings: '/ph/stockx-listings', shopifylistings: '/ph/shopify-listings', cancellations: '/ph/cancellations', inboundissues: '/ph/inbound-issues', access: '/ph/access' };
+export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', undelivered: '/ph/undelivered', duptracking: '/ph/duplicate-tracking', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', sheinreprice: '/ph/shein-reprice', sheincheck: '/ph/shein-check', sheinlistings: '/ph/shein-listings', ebaylistings: '/ph/ebay-listings', stockxlistings: '/ph/stockx-listings', shopifylistings: '/ph/shopify-listings', cancellations: '/ph/cancellations', inboundissues: '/ph/inbound-issues', access: '/ph/access' };
 export const phPathForPage = (page) => (page && PH_PATHS[page]) || '/';
 export const phPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';
@@ -501,6 +501,7 @@ export const PH_HOME_SECTIONS = [
     { key: 'reconcile', icon: 'reconcile', title: 'PO Reconciliation', sub: 'Received vs. manifest — copy a discrepancy report' },
     { key: 'online', icon: 'online-orders', title: 'Online Orders', sub: 'Online buys — tracking, real cost per pair, refunds' },
     { key: 'undelivered', icon: 'undelivered', title: 'Undelivered Tracking', sub: 'PO + online-order parcels not delivered — export CSV / PDF to chase' },
+    { key: 'duptracking', icon: 'dup-tracking', title: 'Duplicate Tracking', sub: 'Packages received under a tracking number we already received — per supplier' },
     { key: 'receipts', icon: 'receipts', title: 'Receipts', sub: 'Store receipts from our mailboxes — where & by whom' },
     { key: 'buycarts', icon: 'buy-carts', title: 'Buying Requests', sub: 'Approve requests, release gift cards, audit spending', priv: true },
   ] },

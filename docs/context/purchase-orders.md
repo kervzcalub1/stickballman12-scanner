@@ -479,7 +479,8 @@ purchase order"**.
   says so.
 - **Delete is refused while a batch is linked** (server 409; `batches.po_id` has no
   ON DELETE rule, so the DB would refuse too). The PO code must be typed back, checked
-  **server-side**. Labels/lines/resolution/comments cascade away — no undo.
+  **server-side**. Labels/lines/resolution/comments cascade away from the live tables, but
+  the whole order is archived first — see **Deleted POs** below.
 - Unlink rolls `received_batch_id` to whatever batch is still linked, and an order left
   with none drops back to `shipped` (if any label has left the supplier) or `draft`.
 - Both actions leave a **`system` comment** on the order — otherwise a late order with a
@@ -1772,3 +1773,25 @@ that we never asked the feed about it. Coverage on prod at time of writing: 93 o
 historical warehouse boxes match (61% of September's, 33% of August's), rising as
 more inbound comes through POs. Closing the rest means registering warehouse-typed
 numbers with 17TRACK too — a **quota decision, deliberately not taken here**.
+
+## Deleted POs — the archive (2026-11-03)
+Deleting an order used to ERASE it: 12 orders (PO-100028 … PO-100110) were gone with no
+record of who raised or deleted them. Now `deletePo(poId, { by, role, reason })` writes a
+**`deleted_pos`** row in the SAME transaction as the delete: who raised it and when, **who
+deleted it (name + role), when, and why** (an optional reason on the delete dialog), plus
+every table under the order as whole rows (`to_jsonb` — `po_json` + `children`: po_boxes,
+po_lines, po_comments, po_resolutions, po_stores, presell_stock_po, presell_box_lines).
+Supplier deletes from the portal land there too.
+- **Page:** PH **Purchase Orders → 🗑 Deleted POs** (`/ph/po-status?view=deleted`,
+  `src/screens/DeletedPos.jsx`): newest first, search, CSV; each order opens to its labels
+  (tracking numbers), manifest and comments, a **⬇ Labels PDF** (the file stays in R2 — the
+  delete never removed it) and **↩ Restore**.
+- **Restore** (`POST /api/po/deleted { id, restore: true }`, ph_team/admin; warehouse reads
+  only): re-inserts every row with its ORIGINAL ids (`OVERRIDING SYSTEM VALUE`,
+  `jsonb_populate_record(set)` so a column added since comes back as NULL/default). Refused
+  if the code exists again or it was already restored; stamps `restored_at/by`.
+- **Recovered rows** (`recovered` jsonb, `po_json` NULL): orders deleted BEFORE the archive,
+  rebuilt from what survived — the label PDF in R2 (`po-labels/<code>-<ts>.pdf`), the
+  `[po/delete] <code> deleted by <user> (<role>)` server log line, and the order raised again
+  right after. Shown as **Recovered**; no Restore (there are no rows to put back).
+- ⚠ `deleted_pos` is new: **`db:setup` before this deploys**, or every PO delete fails.

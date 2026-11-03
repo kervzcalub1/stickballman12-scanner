@@ -256,11 +256,13 @@ test('PH links the shipment, unlinks it, then deletes the order — all from the
 
   await page.getByRole('button', { name: 'Delete this purchase order' }).click();
   const del = page.locator('.modal.po-del');
-  const confirm = del.getByRole('button', { name: 'Delete permanently' });
+  const confirm = del.getByRole('button', { name: 'Delete', exact: true });
+  const code = del.getByPlaceholder(f.po.po_code);
   await expect(confirm).toBeDisabled();                 // nothing typed yet
-  await del.locator('input').fill('PO-WRONG');
+  await code.fill('PO-WRONG');
   await expect(confirm).toBeDisabled();                 // wrong code
-  await del.locator('input').fill(f.po.po_code);
+  await code.fill(f.po.po_code);
+  await del.getByPlaceholder(/Duplicate of/).fill('e2e: linked in error');
   await confirm.click();
 
   // Deleting drops back to the list. Waiting on the PAGE to go is what proves the delete
@@ -269,4 +271,8 @@ test('PH links the shipment, unlinks it, then deletes the order — all from the
   await expect(page.locator('.po-detail')).toHaveCount(0, { timeout: 10_000 });
   await expect(page.locator('.po-ov').filter({ hasText: f.po.po_code })).toHaveCount(0);
   expect((await q('SELECT 1 FROM purchase_orders WHERE id = $1', [f.po.id])).length).toBe(0);
+  // …but kept on Deleted POs, with who and why (po-deleted-archive.spec.js covers the rest).
+  const [kept] = await q('SELECT reason, deleted_by FROM deleted_pos WHERE po_id = $1', [f.po.id]);
+  expect(kept.reason).toBe('e2e: linked in error');
+  await q('DELETE FROM deleted_pos WHERE po_id = $1', [f.po.id]);
 });

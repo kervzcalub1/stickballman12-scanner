@@ -77,6 +77,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
   const [unlinkBusy, setUnlinkBusy] = useState(null);   // batch id being unlinked
   const [delPo, setDelPo] = useState(null);             // PO being deleted (confirm dialog)
   const [delText, setDelText] = useState('');
+  const [delReason, setDelReason] = useState('');
   const [delBusy, setDelBusy] = useState(false);
   const [lineBusy, setLineBusy] = useState(null);       // po_line id currently being saved
   const [delLine, setDelLine] = useState(null);         // { line } — remove confirm
@@ -219,8 +220,8 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
   const doDelete = async () => {
     setDelBusy(true); setError('');
     try {
-      await api.poDelete(po.id, delText.trim());
-      setDelPo(null); setDelText('');
+      await api.poDelete(po.id, delText.trim(), delReason.trim());
+      setDelPo(null); setDelText(''); setDelReason('');
       onBack();                       // the order is gone — back to the list
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { setDelBusy(false); }
@@ -635,25 +636,30 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
 
       {/* Deleting is guarded twice over: the order must have no receiving batch attached
           (the server refuses otherwise, and the database would too), and the PO code has to
-          be typed back. Labels, manifest lines, the resolution and the thread go with it —
-          there is no undo. */}
+          be typed back. The order and everything under it are kept on Deleted POs (who,
+          when, why) and can be restored from there. */}
       {delPo && (
         <div className="modal-overlay" onClick={() => !delBusy && setDelPo(null)}>
           <div className="modal confirm po-del" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <h3 className="modal-title">Delete {delPo.po_code}?</h3>
             <p className="modal-msg">
-              This removes the order, its {boxes.length} label(s), everything the supplier
-              declared, and the comment thread. It cannot be undone.
+              This takes the order, its {boxes.length} label(s), everything the supplier
+              declared and the comment thread off Purchase Orders. A full copy is kept on
+              <b> Deleted POs</b> with your name, and it can be restored from there.
             </p>
+            <label className="po-del-field">
+              <span className="muted sm">Why? (duplicate, raised by mistake…)</span>
+              <input value={delReason} maxLength={500} onChange={(e) => setDelReason(e.target.value)} placeholder="e.g. Duplicate of PO-100067" />
+            </label>
             <label className="po-del-field">
               <span className="muted sm">Type <b>{delPo.po_code}</b> to confirm</span>
               <input value={delText} autoCapitalize="characters" autoCorrect="off"
                 onChange={(e) => setDelText(e.target.value)} placeholder={delPo.po_code} />
             </label>
             <div className="modal-actions">
-              <button className="btn ghost" onClick={() => { setDelPo(null); setDelText(''); }} disabled={delBusy}>Cancel</button>
+              <button className="btn ghost" onClick={() => { setDelPo(null); setDelText(''); setDelReason(''); }} disabled={delBusy}>Cancel</button>
               <button className="btn danger" disabled={delBusy || delText.trim().toUpperCase() !== String(delPo.po_code).toUpperCase()}
-                onClick={doDelete}>{delBusy ? 'Deleting…' : 'Delete permanently'}</button>
+                onClick={doDelete}>{delBusy ? 'Deleting…' : 'Delete'}</button>
             </div>
           </div>
         </div>

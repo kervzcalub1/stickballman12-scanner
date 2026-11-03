@@ -645,6 +645,40 @@ await sql(`
 `);
 await sql(`CREATE INDEX IF NOT EXISTS deleted_items_when_idx ON deleted_items (deleted_at DESC)`);
 
+// A deleted PURCHASE ORDER (2026-11-03). Deleting an order used to ERASE it — the order,
+// its labels, manifest lines, resolution and comment thread all cascaded away, and twelve
+// orders were gone with no trace of who raised them or who deleted them. Now the delete
+// writes this row first, in the same transaction: every table under the order as whole
+// rows (to_jsonb — a hand-picked subset would quietly drop columns added later), so the
+// Deleted POs page can show all of it and Restore can put it back with the same ids.
+// `recovered` = a row rebuilt afterwards from what survived (label PDFs, logs) for an
+// order deleted BEFORE this table existed — no rows to restore, only the evidence.
+await sql(`
+  CREATE TABLE IF NOT EXISTS deleted_pos (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    po_id           BIGINT,           -- the original purchase_orders.id (NOT a FK — it's gone)
+    po_code         TEXT NOT NULL,
+    supplier_name   TEXT,
+    tag_code        TEXT,
+    status          TEXT,             -- the order's status when deleted
+    box_count       INT,
+    unit_count      INT,
+    po_created_by   TEXT,
+    po_created_at   TIMESTAMPTZ,
+    reason          TEXT,
+    po_json         JSONB,            -- the purchase_orders row (NULL on a recovered row)
+    children        JSONB,            -- { po_boxes, po_lines, po_comments, po_resolutions, po_stores, presell_stock_po, presell_box_lines }
+    recovered       JSONB,            -- what was found for an order deleted before this table
+    deleted_by      TEXT,
+    deleted_by_role TEXT,
+    deleted_at      TIMESTAMPTZ,
+    restored_at     TIMESTAMPTZ,
+    restored_by     TEXT,
+    archived_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS deleted_pos_code_idx ON deleted_pos (po_code)`);
+
 // Future — profit tracking. Schema now, UI later.
 await sql(`
   CREATE TABLE IF NOT EXISTS sales (
@@ -3223,7 +3257,7 @@ const LIVE_TABLES = [
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
   'shein_category_map', 'shein_brand_map',
   'app_settings', 'payout_presets', 'shipment_issues', 'shipment_tracking',
-  'purchase_orders', 'po_boxes', 'po_lines', 'po_comments', 'po_resolutions',
+  'purchase_orders', 'po_boxes', 'po_lines', 'po_comments', 'po_resolutions', 'deleted_pos',
   'po_stores', 'po_store_charges', 'po_store_receipts', 'presell_stock_po', 'presell_box_lines',
   'rescale_requests', 'rescale_request_items',
   'buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_gift_cards',

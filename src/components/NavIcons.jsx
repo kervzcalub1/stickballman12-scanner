@@ -209,6 +209,11 @@ const PATHS = {
     <path d="M10 10.2a2 2 0 1 1 2.6 1.9c-.4.2-.6.5-.6.9v.5" />
     <path d="M12 16h.01" />
   </>),
+  // Duplicate Tracking — two parcels stacked, one behind the other (the same number twice)
+  'dup-tracking': (<>
+    <path d="M7 6.5 13 3.5l6 3v6.5l-6 3-6-3z" />
+    <path d="M5 10.5v6.5l6 3 6-3" />
+  </>),
   // Inbound Issues — a parcel with a warning mark (something is wrong with this delivery)
   'inbound-issues': (<>
     <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z" />

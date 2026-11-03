@@ -589,7 +589,11 @@ export const api = {
     + (batchId ? `&batchId=${encodeURIComponent(batchId)}` : '')),
   poLinkBatch: (payload) => post('/api/po/link-batch', payload),
   poUnlinkBatch: (poId, batchId) => post('/api/po/unlink-batch', { poId, batchId }),
-  poDelete: (poId, confirm) => post('/api/po/delete', { poId, confirm }),
+  poDelete: (poId, confirm, reason) => post('/api/po/delete', { poId, confirm, reason }),
+  poDeletedList: () => get('/api/po/deleted'),
+  poDeletedGet: (id) => get(`/api/po/deleted?id=${encodeURIComponent(id)}`),
+  poDeletedLabels: (id) => downloadBlob(`/api/po/deleted?id=${encodeURIComponent(id)}&labels=1`),
+  poDeletedRestore: (id) => post('/api/po/deleted', { id, restore: true }),
 
   // The courier's labels PDF: uploaded straight to R2, then downloaded back through the
   // server (never a public URL — these carry an address and a live barcode).

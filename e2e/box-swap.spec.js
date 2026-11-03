@@ -53,6 +53,9 @@ test.afterAll(async () => {
   for (const i of items) await q('DELETE FROM item_events WHERE item_id = $1', [i.id]);
   await q('DELETE FROM items WHERE sku = $1', [SKU]);
   if (poId) {
+    await q('DELETE FROM inbound_issue_events WHERE issue_id IN (SELECT id FROM inbound_issues WHERE po_id = $1)', [poId]);
+    await q('DELETE FROM inbound_issues WHERE po_id = $1', [poId]);
+    await q('DELETE FROM shipment_issues WHERE batch_id IN (SELECT id FROM batches WHERE po_id = $1)', [poId]);
     await q('DELETE FROM batch_boxes WHERE batch_id IN (SELECT id FROM batches WHERE po_id = $1)', [poId]);
     await q('UPDATE purchase_orders SET received_batch_id = NULL WHERE id = $1', [poId]);
     await q('DELETE FROM batches WHERE po_id = $1', [poId]);
@@ -92,8 +95,25 @@ test('inbound: a PO shoe marked Box swap needs no sticker, prints nothing, and l
   await page.getByRole('button', { name: /Review →/ }).click();
   await expect(page.locator('.recv-items.review')).toBeVisible();
   await page.getByRole('button', { name: /Next →/ }).click();
-  // A box swap is deliberate — not a "No box" shipment problem to record.
+  // A box swap is deliberate — not a "No box" shipment problem to record…
   await expect(page.locator('.auto-issue')).toHaveCount(0);
+  // …but WHY there's no usable box is required: damaged / missing, a photo, a short note.
+  const card = page.locator('#box-issue');
+  await expect(card).toContainText(`${SKU} 9 ×2`);
+  await page.getByRole('button', { name: 'Submit box' }).click();
+  await expect(page.locator('.error')).toContainText('Box swap pairs: pick Box damaged or Box missing first.');
+  await card.getByRole('button', { name: 'Box missing' }).click();
+  await page.getByRole('button', { name: 'Submit box' }).click();
+  await expect(page.locator('.error')).toContainText('take a photo');
+  // The upload is mocked (no bucket in CI): sign → a URL, PUT → 200.
+  await page.route('**/api/inbound-issues/photo-sign', (r) => r.fulfill({ json: { ok: true, uploadUrl: 'https://upload.e2e.test/put', publicUrl: 'https://photos.e2e.test/box-swap.jpg' } }));
+  await page.route('https://upload.e2e.test/**', (r) => r.fulfill({ status: 200, body: '' }));
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  await card.locator('input[type="file"]').first().setInputFiles({ name: 'box.png', mimeType: 'image/png', buffer: png });
+  await expect(card.locator('.dp-thumb')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Submit box' }).click();
+  await expect(page.locator('.error')).toContainText('add a short note');
+  await card.getByLabel('Box problem note').fill('Supplier sent these with no boxes');
   await page.getByRole('button', { name: 'Submit box' }).click();
   await page.getByRole('button', { name: 'Yes, commit' }).click();
   await expect(page.locator('.modal')).toContainText(/Box saved/i);
@@ -104,6 +124,13 @@ test('inbound: a PO shoe marked Box swap needs no sticker, prints nothing, and l
   // On the order — Kevin can audit what came in.
   const onPo = await q('SELECT count(*)::int AS n FROM items i JOIN batches b ON b.id = i.batch_id WHERE b.po_id = $1', [poId]);
   expect(onPo[0].n).toBe(3);
+  // The box problem is on the batch, with its photo — and it opens a case for PH.
+  const [iss] = await q(`SELECT s.type, s.description, s.photos FROM shipment_issues s JOIN batches b ON b.id = s.batch_id
+                          WHERE b.po_id = $1 AND s.type = 'box_missing'`, [poId]);
+  expect(iss.description).toMatch(new RegExp(`^Supplier sent these with no boxes — Box swap: .*${SKU} 9 ×2`));
+  expect(iss.photos).toEqual(['https://photos.e2e.test/box-swap.jpg']);
+  const cases = await q(`SELECT type FROM inbound_issues WHERE po_id = $1`, [poId]);
+  expect(cases.map((c) => c.type)).toContain('box_missing');
 });
 
 test('the PH team never sees a box-swap pair, and it counts as warehouse work', async ({ request }) => {
@@ -175,7 +202,8 @@ test('no sticker to hand: keep the pair’s own VIN and print it; "No box coming
   await page.goto('/no-box/box-swap');
   await page.locator('.boxswap-list li', { hasText: SKU }).filter({ hasText: 'US 9' }).locator('.boxswap-pick').click();
   await page.getByRole('button', { name: 'No box coming' }).click();
-  await expect(page.locator('.scan-flash')).toContainText('moved to No Box');
+  await expect(page.locator('.scan-flash')).toContainText('moved to No Box — print its VIN label');
+  await expect(page.getByText('Print VIN labels')).toBeVisible();      // the shoe gets its sticker
   const left = await q(`SELECT status FROM items WHERE sku = $1 AND size = '9' ORDER BY status`, [SKU]);
   expect(left.map((r) => r.status)).toEqual(['needs_shelf', 'no_box']);
 });

@@ -25,7 +25,13 @@ boxSwap:true`:
 - **no sticker asked for** (`needsSticker`, `stickersShort`, `pickStickerSlot` and the
   manifest's `1ID n/m` all skip it; the row shows `box swap · sticker later`),
 - **no label printed** at commit (`printItems` filters it out),
-- **not a shipment issue** (`autoIssues` skips it — it's deliberate),
+- **not a "No box" auto-issue** (`autoIssues` skips it — it's deliberate), **but its BOX
+  problem is required** (2026-11-03): the Issues step shows a **"Box swap — what's wrong with
+  the box?"** card (`#box-issue`) listing the swap pairs — **Box damaged** (`boxes_damaged`) /
+  **Box missing** (`box_missing`, new in `ISSUE_TYPES`), **a photo** (shipment-photo upload)
+  and **a short note**; Submit is refused until all three (`boxIssueMissing`). It commits as
+  ONE `shipment_issues` row ("<note> — Box swap: SKU 9 ×2, …") with the photos, so it's on
+  the Batch page and opens an **Inbound Issues** case for PH (`opensCase`),
 - committed as **`status = 'box_swap'`**, `with_box = false` (`normalizeItems`, intake.js)
   under a system VIN nobody prints. It's on its batch, so the **PO reconciliation counts it
   as received** (status-agnostic) — Kevin can audit.
@@ -51,7 +57,9 @@ boxSwap:true`:
    `box_swap_sticker_first`).
 - **No sticker? Print its VIN** — keeps the system VIN, boxes the pair, opens the VIN label
   print. **Box label** — the UPC box label (per pair, or all of a size from the list).
-  **No box coming** — one pair moves to the No Box queue (`status_change → no_box`).
+  **No box coming** — one pair moves to the No Box queue (`status_change → no_box`) **and its
+  VIN label print opens** — a no-box pair always carries its sticker, and a box-swap pair
+  never got one at inbound.
 - Tests: `e2e/box-swap.spec.js` (PO inbound in raw mode, PH exclusion, shelving refused, the
   two cards, scan → sticker, reused sticker, print-its-VIN, no box coming).
 

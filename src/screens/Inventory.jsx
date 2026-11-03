@@ -11,6 +11,7 @@ import { TopBar, StatusPill, SyncBadges, SizesQty, LabelSheet, PreferencesModal,
 import { PreSellChip } from '../components/PreSellChip.jsx';
 import { SizeEditModal } from '../components/SizeEdit.jsx';
 import { SkuEditModal } from '../components/SkuEdit.jsx';
+import { ShopifyCheckButton } from '../components/ShopifyCheck.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { useUnsavedGuard, useMediaQuery, useLive } from '../hooks.js';
 import { groupPhRows } from '../lib/ph.js';
@@ -97,6 +98,7 @@ function ScanSession({ rows, onOpen, onUndo, onClear }) {
                     {st && <span className={`sr-state ${st[0]}`}>{st[1]}</span>}
                     {r.error && <span className="scan-row-err">{r.error}</span>}
                   </button>
+                  {r.item?.sku && <ShopifyCheckButton sku={r.item.sku} size={r.item.size} label="Shopify" />}
                 </li>
               );
             })}
@@ -849,7 +851,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
                     <div><dt>Supplier</dt><dd>{it.supplier_name || '—'}</dd></div>
                     <div><dt>Received</dt><dd>{(it.date_received || '').slice(0, 10) || '—'}</dd></div>
                     <div><dt>Price</dt><dd>{it.price != null ? `$${Number(it.price).toFixed(2)}` : '—'}</dd></div>
-                    <div><dt>Listed</dt><dd><SyncBadges item={it} /></dd></div>
+                    <div><dt>Listed</dt><dd><SyncBadges item={it} /> <ShopifyCheckButton sku={it.sku} size={it.size} /></dd></div>
                   </dl>
                 </div>
               </div>
@@ -1179,7 +1181,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
                         <button className="btn icon ghost sm" onClick={() => toggleRow(g.key)} aria-expanded={open}>{open ? '▾' : '▸'}</button>
                       </div>
                       {/* SKU sits OUTSIDE the expand button — click-to-copy can't be nested in one. */}
-                      <div className="dcard-line"><CopyText text={g.sku} className="muted">{g.sku || '—'}</CopyText><span>×{g.qty}</span></div>
+                      <div className="dcard-line"><CopyText text={g.sku} className="muted">{g.sku || '—'}</CopyText><span>×{g.qty}</span><ShopifyCheckButton sku={g.sku} size={sizePick[g.key] || null} label="Shopify" /></div>
                       <button className="dcard-main" onClick={() => toggleRow(g.key)}>
                         <div className="dcard-line"><span className="muted sm"><SizesQty sizes={g.sizes} active={sizePick[g.key] || null} onPick={(sz) => pickSize(g, sz)} /></span></div>
                         <div className="inv-status"><StatusPill status={g.status} />{intakeChip(g)}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</div>
@@ -1217,7 +1219,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
                           <td className="inv-col-sku"><CopyText text={g.sku}>{g.sku || '—'}</CopyText></td>
                           <td className="ph-sizes"><SizesQty sizes={g.sizes} active={sizePick[g.key] || null} onPick={(sz) => pickSize(g, sz)} /></td>
                           <td className="inv-col-size"><b>×{g.qty}</b></td>
-                          <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} />{intakeChip(g)}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}</span></td>
+                          <td className="inv-col-status"><span className="inv-status"><StatusPill status={g.status} />{intakeChip(g)}{groupLoc(g) && <span className="loc-chip sm" title="Shelf location"><Icon name="pin" /> {groupLoc(g)}</span>}<ShopifyCheckButton sku={g.sku} size={sizePick[g.key] || null} label="Shopify" /></span></td>
                         </tr>
                         {open && (
                           <tr className="inv-drow">

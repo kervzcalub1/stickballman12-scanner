@@ -226,6 +226,7 @@ export const api = {
   batchAudit: (batchId, note) => post('/api/batches/audit', { batchId, note }),
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
   itemLookup: (code) => get(`/api/items/lookup?code=${encodeURIComponent(code)}`),
+  shopifyCheck: (sku) => get(`/api/items/shopify-check?sku=${encodeURIComponent(sku)}`),
   // Exact UPC/SKU match against our own stock (Box Labels asks this before the catalogue).
   itemsFind: (code) => get(`/api/items/find?code=${encodeURIComponent(code)}`),
   // Shelf locations (put-away + management)

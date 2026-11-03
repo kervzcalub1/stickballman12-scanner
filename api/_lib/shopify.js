@@ -718,3 +718,44 @@ export async function shopifyEnsureInventoryWebhook(uri) {
   if (res?.userErrors?.length) return { error: res.userErrors.map((e) => e.message).join(' | '), code: 'rejected' };
   return { ok: true, id: res?.webhookSubscription?.id, existed: false };
 }
+
+/* ------------------------------------------------------------------ */
+/* Live check for one style — Inventory's "Check Shopify" button       */
+/* (docs/context/inventory.md). No cache: the press IS the question.   */
+/* ------------------------------------------------------------------ */
+
+const STYLE_LIVE_QUERY = `query StyleLive($q: String!) {
+  productVariants(first: 250, query: $q) {
+    edges { node {
+      id sku title inventoryQuantity price
+      selectedOptions { name value }
+      product { id title status }
+    } }
+  }
+}`;
+
+// Every Shopify variant of one style code, read live. The term stays BARE (see
+// shopifyInventoryForSku: the code lives in the product TITLE on the products that hold
+// stock), so the bare search also returns near-misses — "IF4396" finds "IF4396-103".
+// Kept only: the variant sku IS the code, or the code stands alone in the title.
+export async function shopifyLiveForStyle(code) {
+  if (!shopifyConfigured()) return { error: 'Shopify is not connected on this server.', code: 'config' };
+  const c = String(code || '').trim().toUpperCase();
+  if (!c) return { variants: [] };
+  const r = await gql(STYLE_LIVE_QUERY, { q: c });
+  if (!r.ok) return failure(r, 'read');
+  const esc = c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const inTitle = new RegExp(`(^|[^A-Z0-9])${esc}([^A-Z0-9-]|$)`);
+  const variants = [];
+  for (const { node: v } of r.data?.productVariants?.edges || []) {
+    const title = String(v.product?.title || '');
+    if (String(v.sku || '').trim().toUpperCase() !== c && !inTitle.test(title.toUpperCase())) continue;
+    const size = (v.selectedOptions || []).find((o) => /size/i.test(o.name))?.value ?? v.title;
+    variants.push({
+      variantId: v.id, productId: v.product?.id || null, productTitle: title,
+      status: v.product?.status || null, sku: v.sku || '', size: String(size ?? '').trim(),
+      qty: v.inventoryQuantity == null ? null : Number(v.inventoryQuantity), price: v.price ?? null,
+    });
+  }
+  return { variants };
+}

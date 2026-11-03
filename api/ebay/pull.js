@@ -17,7 +17,7 @@ async function run(by) {
   const put = (o) => setSetting(PULL_KEY, JSON.stringify({ by, startedAt, ...o }), by).catch(() => {});
   try {
     await put({ state: 'running', page: 0, pages: null, listings: 0 });
-    const { rows, listings } = await fetchActiveListings(
+    const { rows, listings, reread } = await fetchActiveListings(
       (t) => styleFromTitle(t),
       (page, pages, n) => put({ state: 'running', page, pages, listings: n }),
     );
@@ -33,12 +33,13 @@ async function run(by) {
       else {
         const v = shopifyVerdicts(await _rows(), sh.variants);
         await saveEbayShopifyVerdicts(v);
-        orphans = v.filter((x) => !x.in_shopify).length;
+        orphans = v.filter((x) => x.in_shopify === false).length;
       }
     }
     await put({ state: 'done', finishedAt: new Date().toISOString(), listings, rows: rows.length, removed,
       inventoryItems: inv.count, inventoryError: inv.error || null, orphans, shopifyError,
-      noStyle: rows.filter((r) => !r.style).length, noSize: rows.filter((r) => !r.size).length });
+      noStyle: rows.filter((r) => !r.style).length, noSize: rows.filter((r) => !r.size).length,
+      noSku: rows.filter((r) => !r.sku).length, reread });
   } catch (e) {
     console.error('[ebay/pull]', e.message);
     await put({ state: 'failed', finishedAt: new Date().toISOString(), error: e.message });

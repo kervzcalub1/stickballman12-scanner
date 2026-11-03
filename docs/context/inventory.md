@@ -304,3 +304,19 @@ in the same transaction: `purchase_orders.received_batch_id`, `batches.merged_in
 - Consequences are the same as a miscount fix, at batch scale: counts, the PO's
   received total and reconciliation, and the pending queues all move.
 - `e2e/batch-delete.spec.js`.
+
+## Check Shopify (live) — what Shopify holds
+A **🛍 Shopify** button on every SKU row (table + phone card), every rapid-scan row, and a
+single pair's **Listed** line reads Shopify **live at the press** (`GET
+/api/items/shopify-check?sku=` → `shopifyLiveForStyle`, no cache) and lists what it holds:
+each product carrying the style (admin link, ARCHIVED/DRAFT marked "not for sale"), every
+size's **quantity and price**, in-stock total on active listings (`shopifyHoldings`,
+`src/lib/shopifyCheck.js`). A row opened from a scanned pair highlights that pair's size.
+- **Shopify's numbers only — no comparison with ours, no verdicts (user's call 2026-11-03).**
+  The flow is Nikki → **II** → **Shopify** → every other platform, so Shopify is the bridge
+  to the platforms. Our SH ticks / item records are connected but NOT kept accurate against
+  it (II owns that sync, and we can't reach II), so a ticked-vs-live diff is noise.
+- **Matching:** bare Shopify search (the style lives in the product TITLE — `shopify.md`),
+  kept only where the variant sku IS the code or the code stands alone in the title
+  (`IF4396` ≠ `IF4396-103`). Dual codes (`A/B`) read each.
+- **Shopify unreadable → the error, no list:** "couldn't see it" is never shown as "none".

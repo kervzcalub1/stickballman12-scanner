@@ -3244,26 +3244,26 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
           {step === 4 && !isRescale && (
             <>
+              {swapLines.length > 0 && (
+                <div className={`card box-issue${boxIssueMissing && error ? ' needs' : ''}`} id="box-issue">
+                  <div className="box-issue-head"><b>Box swap — what's wrong with the box?</b> <span className="muted sm">Required</span></div>
+                  <div className="muted sm">{swapLines.join(' · ')}</div>
+                  <div className="seg box-issue-type" role="group" aria-label="Box problem">
+                    {[['boxes_damaged', 'Box damaged'], ['box_missing', 'Box missing']].map(([k, label]) => (
+                      <button key={k} type="button" className={`seg-btn ${boxIssue.type === k ? 'on' : ''}`} aria-pressed={boxIssue.type === k}
+                        onClick={() => setBoxIssue((b) => ({ ...b, type: k }))}>{label}</button>
+                    ))}
+                  </div>
+                  <div className="muted sm">Take a photo of the pairs / boxes in this batch:</div>
+                  <DefectPhotos photos={boxIssue.photos || []} max={6} sign={signShipmentPhoto}
+                    onChange={(photos) => setBoxIssue((b) => ({ ...b, photos }))} onSignOut={onSignOut} />
+                  <input aria-label="Box problem note" placeholder="Short note — e.g. boxes crushed in transit / supplier sent no boxes" maxLength={300}
+                    value={boxIssue.note} onChange={(e) => setBoxIssue((b) => ({ ...b, note: e.target.value }))} />
+                </div>
+              )}
               <div className="card">
                 <h3 className="rows-title">{isInstore ? 'Issues' : 'Shipment issues'} <span className="muted">(optional)</span></h3>
                 <p className="muted sm">Anything wrong with the package as it arrived — damage, tampering, a short count, bad packing. Pick the closest problem, describe it and <b>take photos: the outside of the parcel, the shipping label (tracking #) and what is inside</b>.{!isInstore && <> Each one is sent to the PH team as a case on <b>Inbound Issues</b> — they take it and sort it out with the supplier. A pair with a problem is flagged on the Review step (＋ Issue on its VIN).</>}</p>
-                {swapLines.length > 0 && (
-                  <div className={`box-issue${boxIssueMissing && error ? ' needs' : ''}`} id="box-issue">
-                    <div className="box-issue-head"><b>Box swap — what's wrong with the box?</b> <span className="muted sm">Required</span></div>
-                    <div className="muted sm">{swapLines.join(' · ')}</div>
-                    <div className="seg box-issue-type" role="group" aria-label="Box problem">
-                      {[['boxes_damaged', 'Box damaged'], ['box_missing', 'Box missing']].map(([k, label]) => (
-                        <button key={k} type="button" className={`seg-btn ${boxIssue.type === k ? 'on' : ''}`} aria-pressed={boxIssue.type === k}
-                          onClick={() => setBoxIssue((b) => ({ ...b, type: k }))}>{label}</button>
-                      ))}
-                    </div>
-                    <div className="muted sm">Take a photo of the pairs / boxes in this batch:</div>
-                    <DefectPhotos photos={boxIssue.photos || []} max={6} sign={signShipmentPhoto}
-                      onChange={(photos) => setBoxIssue((b) => ({ ...b, photos }))} onSignOut={onSignOut} />
-                    <input aria-label="Box problem note" placeholder="Short note — e.g. boxes crushed in transit / supplier sent no boxes" maxLength={300}
-                      value={boxIssue.note} onChange={(e) => setBoxIssue((b) => ({ ...b, note: e.target.value }))} />
-                  </div>
-                )}
                 {autoIssues.length > 0 && (
                   <div className="auto-issues">
                     <div className="muted sm">Auto-added — shoes received without a box:</div>

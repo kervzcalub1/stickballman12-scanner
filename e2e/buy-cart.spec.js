@@ -2134,6 +2134,41 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     expect(react.body.message_id).toBe(4242);
   });
 
+  // Floor feedback, 2026-11-04: tapping Buy 1 on a pair already approved ×1 came back as
+  // "⚠️ Nothing was still awaiting a decision — someone may have got there first", twice.
+  // Same answer again = "already recorded", not an error; a DIFFERENT answer still overrides.
+  test('tapping the answer the pair already has says "already recorded", and a different tap still overrides', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    const row = async () => (await pool.query('SELECT status, qty, overrode_status FROM buy_cart_lines WHERE id = $1', [line.id])).rows[0];
+    const lastReply = (from) => since(from).filter((c) => c.method === 'sendMessage').pop();
+    await hook(request, tapUpdate(`approve:${cartId}:${line.id}:1:dev`, { messageId: 4343 }));
+    expect(await row()).toMatchObject({ status: 'approved', qty: 1 });
+
+    let t0 = calls.length;
+    await hook(request, tapUpdate(`approve:${cartId}:${line.id}:1:dev`, { messageId: 4343 }));
+    let reply = lastReply(t0);
+    expect(reply.body.text).toBe(`✅ Already recorded — nothing changed (size ${line.size} ×1, approved by ${people.approver.name}). · [dev]`);
+    expect(reply.body.text).not.toMatch(/got there first/);
+    expect(reply.body.reply_parameters.message_id).toBe(4343);
+    // Nothing written: no override invented by the repeat.
+    expect(await row()).toMatchObject({ status: 'approved', qty: 1, overrode_status: null });
+
+    // A different quantity is a real change, and goes through as an override.
+    t0 = calls.length;
+    await hook(request, tapUpdate(`approve:${cartId}:${line.id}:2:dev`, { messageId: 4343 }));
+    expect(lastReply(t0).body.text).toBe(`${people.approver.name} approved · 2 pairs · [dev]`);
+    expect(await row()).toMatchObject({ status: 'approved', qty: 2, overrode_status: 'approved' });
+
+    // Turn it down twice: the second one is "already recorded" too, with 👎.
+    await hook(request, tapUpdate(`reject:${cartId}:${line.id}:dev`, { messageId: 4343 }));
+    t0 = calls.length;
+    await hook(request, tapUpdate(`reject:${cartId}:${line.id}:dev`, { messageId: 4343 }));
+    reply = lastReply(t0);
+    expect(reply.body.text).toBe(`✅ Already recorded — nothing changed (size ${line.size} turned down by ${people.approver.name}). · [dev]`);
+    expect(since(t0).find((c) => c.method === 'setMessageReaction').body.reaction[0].emoji).toBe('👎');
+  });
+
   test('an unlinked tapper is refused OUT LOUD in the group, and nothing is recorded', async ({ request }) => {
     const cartId = await newRequest(request, { lines: [LINE] });
     const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];

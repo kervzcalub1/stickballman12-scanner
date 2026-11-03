@@ -891,6 +891,13 @@ first · HTTP 409" on a reply that repeated what was already recorded. Now:
 - **Amount-first tips**: `$5 tip`, `5 tip`, `5$ tip`, `5 dollar tip` (as well as `tip 5`).
 - **A reply that changes nothing** → "✅ Already recorded — nothing changed (…)" — `decideGroup`
   sends only the lines that would move.
+- **A BUTTON tap that changes nothing** (2026-11-04: Buy 1 on a pair already approved ×1 —
+  a double tap, or two approvers agreeing — came back as "⚠️ Nothing was still awaiting a
+  decision — someone may have got there first", which read as a conflict). The tap still goes
+  through `decideFromTelegram` first (identity rules answer before anything), then
+  `alreadyRecorded` (webhook.js) rewords a 409 whose line NOW holds exactly what was asked:
+  "✅ Already recorded — nothing changed (size 12 ×1, approved by Alex)." + 👍 / 👎. Same for a
+  picker number typed back. A different answer is not a 409 — it overrides as before.
 - **No "· HTTP 4xx"** in the group (`answerOnCard`); the code goes to the server log.
 - **Typed replies to a ONE-size card** (Buy 1/2/3 buttons) were silently dropped. Now read the
   same way (`handleLineReply`): a bare `3` = buy 3, plus every phrase above and the tip forms.

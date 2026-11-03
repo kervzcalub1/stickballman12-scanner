@@ -1,7 +1,8 @@
-// POST /api/po/delete  (supplier / ph_team / admin)  { poId, confirm }
+// POST /api/po/delete  (supplier / ph_team / admin)  { poId, confirm, reason? }
 // Deletes an order raised by mistake, or a duplicate. `confirm` must be the PO's own code
-// typed back — deletion takes the labels, the manifest lines, the resolution and the
-// comment thread with it (all ON DELETE CASCADE) and there is no undo.
+// typed back. The order and everything under it (labels, manifest lines, resolution,
+// comment thread) are ARCHIVED to deleted_pos first, with who deleted it and why — the
+// Deleted POs page shows them and staff can restore one (api/po/deleted.js).
 //
 // Refused while a receiving batch is linked: the record of what actually arrived must
 // never disappear with the order. Unlink it first (POST /api/po/unlink-batch).
@@ -27,6 +28,7 @@ export default async function handler(req, res) {
   const body = await getJsonBody(req);
   const poId = Number(body.poId);
   const confirm = String(body.confirm ?? '').trim();
+  const reason = String(body.reason ?? '').trim().slice(0, 500) || null;
   if (!Number.isInteger(poId)) return send(res, 400, { ok: false, error: 'A valid poId is required.' });
 
   try {
@@ -50,7 +52,8 @@ export default async function handler(req, res) {
     if (confirm.toUpperCase() !== String(data.po.po_code).toUpperCase()) {
       return send(res, 400, { ok: false, error: `Type ${data.po.po_code} exactly to confirm the deletion.` });
     }
-    const r = await deletePo(poId);
+    const by = user.name || user.username || String(user.uid);
+    const r = await deletePo(poId, { by, role: user.role, reason });
     if (r.error) return send(res, 409, { ok: false, error: r.error });
     console.log(`[po/delete] ${data.po.po_code} deleted by ${user.username || user.uid} (${user.role})`);
     return send(res, 200, { ok: true, poCode: data.po.po_code });

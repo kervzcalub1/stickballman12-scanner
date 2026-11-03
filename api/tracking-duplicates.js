@@ -3,7 +3,7 @@
 //
 // The duplicate tracking number log (docs/context/receiving.md, "Duplicate tracking
 // numbers"): every package received under a number we had already received, written by
-// the server at commit time. The warehouse reads it; an ADMIN closes an entry as handled
+// the server at commit time. The warehouse and the PH team read it; an ADMIN closes an entry as handled
 // with a note — told the supplier, or decided to leave it (Alexander's call on the Foot
 // Locker case). A note is required to close one: "handled" with no reason audits nothing.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from './_lib/util.js';
@@ -14,7 +14,7 @@ const isAdmin = (u) => u?.role === 'admin' || u?.role === 'superadmin';
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (!['GET', 'POST'].includes(req.method)) return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['warehouse']);
+  const user = requireRole(req, res, ['warehouse', 'ph_team']);   // admin auto-allowed
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 60 })) return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });

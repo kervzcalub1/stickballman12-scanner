@@ -113,3 +113,20 @@ test('Receive New warns per box — two boxes of one receive sharing a number', 
   await tracks.nth(1).fill(T1);
   await expect(page.locator('.box-build-row .dup-warn').last()).toContainText('Already received in', { timeout: 10_000 });
 });
+
+test('the PH team reads the log from its own workspace, but only an admin closes an entry', async ({ page, request }) => {
+  const list = await request.get(`/api/tracking-duplicates?supplier=${encodeURIComponent(SUP)}`, { headers: auth('ph_team') });
+  expect(list.ok()).toBeTruthy();
+  const { rows } = await list.json();
+  expect(rows.length).toBeGreaterThan(0);
+  expect((await request.post('/api/tracking-duplicates', { headers: auth('ph_team'), data: { id: Number(rows[0].id), handled: true, note: 'x' } })).status()).toBe(403);
+
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph');
+  await page.getByRole('button', { name: /Duplicate Tracking/ }).first().click();
+  await expect(page).toHaveURL(/\/ph\/duplicate-tracking/);
+  await expect(page.getByRole('group', { name: 'By supplier' })).toContainText(SUP);
+  await page.getByRole('tab', { name: 'Handled' }).click();                 // the earlier test closed one
+  await expect(page.getByText('Left it — not worth chasing for one pair')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reopen' })).toHaveCount(0); // admin-only
+});

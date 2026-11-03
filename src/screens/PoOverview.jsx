@@ -24,6 +24,7 @@ import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoOriginChip } from '../components/PoOriginChip.jsx';
 import { PoSearchPreview } from '../components/PoSearchPreview.jsx';
 import { PoDetail } from './PoDetail.jsx';
+import { DeletedPos } from './DeletedPos.jsx';
 
 export function PoOverview({ onHome, onSignOut }) {
   const [pos, setPos] = useState(null);
@@ -38,6 +39,8 @@ export function PoOverview({ onHome, onSignOut }) {
   // The number off the parcel. In the URL like the other filters, so a link to "the
   // order this tracking number belongs to" can be pasted to whoever is asking.
   const [q, setQ] = useQueryParam('q');
+  // ?view=deleted → the Deleted POs archive (docs/context/purchase-orders.md).
+  const [view, setView] = useQueryParam('view');
   const filtering = !!(supplier || from || to || q);
   const clearAll = () => { setSupplier(''); setFrom(''); setTo(''); setQ(''); };
 
@@ -82,6 +85,11 @@ export function PoOverview({ onHome, onSignOut }) {
 
   // One order, full screen. `pos` rides along so "move this label to another order" can
   // offer the list without fetching it twice.
+  if (view === 'deleted' && openId == null) {
+    return <DeletedPos onBack={() => setView('')} onHome={onHome} onSignOut={onSignOut} canRestore
+      onOpenPo={(id) => { setView(''); setOpenId(id); }} />;
+  }
+
   if (openId != null) {
     return (
       <PoDetail
@@ -98,7 +106,10 @@ export function PoOverview({ onHome, onSignOut }) {
     <div className="app">
       <TopBar title="Purchase Orders" onHome={onHome} onSignOut={onSignOut} />
       <div className="wrap-narrow">
-        <p className="muted sm">Every batch you opened for a supplier — its status and how far its shipping labels have got. Tap one to open it.</p>
+        <div className="po-ov-intro">
+          <p className="muted sm">Every batch you opened for a supplier — its status and how far its shipping labels have got. Tap one to open it.</p>
+          <button type="button" className="btn ghost sm" onClick={() => setView('deleted')}>🗑 Deleted POs</button>
+        </div>
         {error && <div className="po-err">{error}</div>}
 
         {pos != null && pos.length > 0 && (

@@ -6758,7 +6758,7 @@ export async function unlinkBatchFromPo({ poId, batchId, actor = null }) {
 // the database would reject it anyway, and a clear message beats a constraint error.
 // Labels, manifest lines, the resolution and the comment thread go with it (all
 // ON DELETE CASCADE); the supplier's own scans live in po_lines, so they go too.
-export async function deletePo(poId) {
+export async function deletePo(poId, { by = null, role = null, reason = null } = {}) {
   const sql = db();
   const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${poId}`)[0];
   if (!po) return { error: 'Purchase order not found.' };
@@ -6776,8 +6776,75 @@ export async function deletePo(poId) {
       return { error: `${po.po_code} has ${ev.charges} card charge(s) and ${ev.receipts} receipt(s) recorded — that is audit evidence, so the order can't be deleted.` };
     }
   }
-  await sql`DELETE FROM purchase_orders WHERE id = ${poId}`;
+  // Archive first, delete second, one transaction (deleted_pos in db-setup.mjs): the whole
+  // order and every table under it, so nothing about it is lost and Restore can rebuild it.
+  await sql.transaction([
+    sql`INSERT INTO deleted_pos (po_id, po_code, supplier_name, tag_code, status, box_count, unit_count,
+                                 po_created_by, po_created_at, reason, po_json, children, deleted_by, deleted_by_role, deleted_at)
+        SELECT p.id, p.po_code, p.supplier_name, p.tag_code, p.status,
+               (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int,
+               (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int,
+               -- A supplier-raised order has no created_by; the supplier IS who raised it.
+               coalesce(p.created_by, CASE WHEN p.raised_by = 'supplier' THEN p.supplier_name || ' (supplier)' END),
+               p.created_at, ${reason || null}, to_jsonb(p),
+               jsonb_build_object(
+                 'po_boxes',          coalesce((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.box_number, b.id) FROM po_boxes b WHERE b.po_id = p.id), '[]'::jsonb),
+                 'po_lines',          coalesce((SELECT jsonb_agg(to_jsonb(l) ORDER BY l.id) FROM po_lines l WHERE l.po_id = p.id), '[]'::jsonb),
+                 'po_comments',       coalesce((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM po_comments c WHERE c.po_id = p.id), '[]'::jsonb),
+                 'po_resolutions',    coalesce((SELECT jsonb_agg(to_jsonb(r)) FROM po_resolutions r WHERE r.po_id = p.id), '[]'::jsonb),
+                 'po_stores',         coalesce((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM po_stores s WHERE s.po_id = p.id), '[]'::jsonb),
+                 'presell_stock_po',  coalesce((SELECT jsonb_agg(to_jsonb(x)) FROM presell_stock_po x WHERE x.po_id = p.id), '[]'::jsonb),
+                 'presell_box_lines', coalesce((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.id) FROM presell_box_lines x
+                                                 WHERE x.po_box_id IN (SELECT id FROM po_boxes WHERE po_id = p.id)), '[]'::jsonb)),
+               ${by || null}, ${role || null}, now()
+          FROM purchase_orders p WHERE p.id = ${poId}`,
+    sql`DELETE FROM purchase_orders WHERE id = ${poId}`,
+  ]);
   return { ok: true, po };
+}
+
+// The Deleted POs page: newest first, light rows (the snapshot is fetched per order).
+export async function listDeletedPos({ limit = 300 } = {}) {
+  return db()`
+    SELECT id, po_id, po_code, supplier_name, tag_code, status, box_count, unit_count, po_created_by, po_created_at,
+           reason, deleted_by, deleted_by_role, deleted_at, restored_at, restored_by, archived_at,
+           (recovered IS NOT NULL) AS is_recovered, po_json ->> 'labels_key' AS labels_key,
+           coalesce(po_json ->> 'labels_name', recovered ->> 'labels_name') AS labels_name
+      FROM deleted_pos ORDER BY coalesce(deleted_at, archived_at) DESC, id DESC LIMIT ${limit}`;
+}
+
+export async function getDeletedPo(id) {
+  return (await db()`SELECT * FROM deleted_pos WHERE id = ${id}`)[0] || null;
+}
+
+// Put a deleted order back exactly as it was: same ids, same code, every table under it.
+// Refused if the code is taken again or it was already restored. jsonb_populate_record
+// maps each saved row onto TODAY's columns, so a column added since comes back as NULL
+// (or its default) instead of breaking the restore. Identity columns need OVERRIDING
+// SYSTEM VALUE to take the saved id; ids are never reused, so they're still free.
+export async function restoreDeletedPo(id, by) {
+  const sql = db();
+  const d = await getDeletedPo(id);
+  if (!d) return { error: 'That deleted order is not in the archive.' };
+  if (d.restored_at) return { error: `${d.po_code} was already restored.` };
+  if (!d.po_json) return { error: `${d.po_code} was deleted before the archive existed — only what survived is kept, so it can't be restored. Raise it again from its label PDF.` };
+  if ((await sql`SELECT 1 FROM purchase_orders WHERE po_code = ${d.po_code} OR id = ${d.po_id}`).length)
+    return { error: `${d.po_code} exists again, so it can't be restored over it.` };
+  const c = d.children || {};
+  const rows = (k) => JSON.stringify(c[k] || []);
+  await sql.transaction([
+    sql`INSERT INTO purchase_orders OVERRIDING SYSTEM VALUE SELECT * FROM jsonb_populate_record(NULL::purchase_orders, ${JSON.stringify(d.po_json)}::jsonb)`,
+    sql`INSERT INTO po_boxes OVERRIDING SYSTEM VALUE SELECT * FROM jsonb_populate_recordset(NULL::po_boxes, ${rows('po_boxes')}::jsonb)`,
+    sql`INSERT INTO po_lines OVERRIDING SYSTEM VALUE SELECT * FROM jsonb_populate_recordset(NULL::po_lines, ${rows('po_lines')}::jsonb)`,
+    sql`INSERT INTO po_resolutions SELECT * FROM jsonb_populate_recordset(NULL::po_resolutions, ${rows('po_resolutions')}::jsonb)`,
+    sql`INSERT INTO po_comments OVERRIDING SYSTEM VALUE SELECT * FROM jsonb_populate_recordset(NULL::po_comments, ${rows('po_comments')}::jsonb)`,
+    sql`INSERT INTO po_stores OVERRIDING SYSTEM VALUE SELECT * FROM jsonb_populate_recordset(NULL::po_stores, ${rows('po_stores')}::jsonb)`,
+    sql`INSERT INTO presell_stock_po SELECT * FROM jsonb_populate_recordset(NULL::presell_stock_po, ${rows('presell_stock_po')}::jsonb)
+          WHERE stock_id IN (SELECT id FROM presell_stock)`,
+    sql`INSERT INTO presell_box_lines OVERRIDING SYSTEM VALUE SELECT * FROM jsonb_populate_recordset(NULL::presell_box_lines, ${rows('presell_box_lines')}::jsonb)`,
+    sql`UPDATE deleted_pos SET restored_at = now(), restored_by = ${by || null} WHERE id = ${id}`,
+  ]);
+  return { ok: true, poId: Number(d.po_id), poCode: d.po_code };
 }
 
 /* ---- Editing an order that already exists -----------------------------------

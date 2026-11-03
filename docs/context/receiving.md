@@ -559,7 +559,8 @@ E2E: `e2e/receiving-alias-code-check.spec.js`.
 
 ## Shipment issues + key notes (Step 4, 2026-09-15)
 `ISSUE_TYPES` (`src/lib/constants.js`) is the floor's list: damaged package, shoe boxes
-damaged, ripped, **tampered** (merchandise appears removed), item missing, missing boxes,
+damaged, ripped, **tampered** (merchandise appears removed), item missing, missing boxes
+(parcels), **shoe box missing** (`box_missing` — required for Box swap pairs, `no-box.md`),
 short count (with expected/got), improperly packed, mismatched, stolen, other. **Key notes**
 is a textarea under the rows; non-blank it commits as one `shipment_issues` row of
 `type='note'` — no schema change, and it shows everywhere the issues do. `issuePayload()`

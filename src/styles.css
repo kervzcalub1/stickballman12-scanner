@@ -6899,3 +6899,11 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .po-ov-intro { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
 .po-ov-intro p { margin: 0; }
 .po-ov-intro .btn { flex: 0 0 auto; white-space: nowrap; }
+
+/* Receiving → Issues: the required box problem for Box swap pairs */
+.card.box-issue { display: flex; flex-direction: column; gap: 8px;
+  border-color: rgba(233,196,106,0.55); background: rgba(233,196,106,0.07); }
+.card.box-issue.needs { border-color: rgba(255,107,107,0.7); background: rgba(255,107,107,0.07); }
+.box-issue-head { display: flex; align-items: baseline; gap: 8px; }
+.box-issue-type .seg-btn { flex: 1; min-height: 44px; }
+.box-issue input { width: 100%; }

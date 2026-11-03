@@ -48,7 +48,9 @@ export const ISSUE_TYPES = [
   ['ripped', 'Package ripped open'],
   ['tampered', 'Merchandise appears removed / tampered with'],
   ['missing_item', 'Item appears to be missing'],
-  ['missing_boxes', 'Missing boxes'],
+  ['missing_boxes', 'Missing boxes (parcels)'],
+  // A pair that came without its shoe box — recorded for every Box swap pair (no-box.md).
+  ['box_missing', 'Shoe box missing'],
   ['shortfall', 'Short count (expected vs received)'],
   ['improperly_packed', 'Supplier packed it improperly'],
   ['mismatched', 'Mismatched shoe'],

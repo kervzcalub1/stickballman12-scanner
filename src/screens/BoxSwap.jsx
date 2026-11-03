@@ -124,12 +124,14 @@ export function BoxSwap({ user, onBack, onSignOut }) {
 
   async function noBoxComing(g) {
     const unit = g.units[0];
-    if (!window.confirm(`No box is coming for ${g.name || g.sku} size ${g.size}? One pair moves to the No Box queue (Print box labels).`)) return;
+    if (!window.confirm(`No box is coming for ${g.name || g.sku} size ${g.size}? One pair moves to the No Box queue (Print box labels), and its VIN label prints so the shoe has its sticker.`)) return;
     setBusy(true);
     try {
       await api.itemEvent(unit.vin, 'status_change', { status: 'no_box', from: 'box_swap', note: 'No box coming — moved from Box swap' });
       setRows((rs) => (rs || []).filter((r) => r.id !== unit.id));
-      say('ok', `${g.name || g.sku} · size ${g.size} moved to No Box.`);
+      // A no-box pair always carries its VIN sticker — this one never got one at inbound.
+      say('ok', `${g.name || g.sku} · size ${g.size} moved to No Box — print its VIN label and stick it on the shoe.`);
+      setLabels({ mode: 'vin', items: [unit] });
       if (g.units.length <= 1) setTarget(null);
     } catch (e) { if (e.unauthorized) return onSignOut(); say('err', e.message); }
     finally { setBusy(false); }

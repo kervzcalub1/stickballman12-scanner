@@ -748,6 +748,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [rescanned, setRescanned] = useState([]);
   const [openSizes, setOpenSizes] = useState(() => new Set()); // expanded size rows (item:size keys)
   const [issues, setIssues] = useState([]);   // manual shipment issues
+  // The box problem behind this box's Box swap pairs (no-box.md "Box swap"): REQUIRED when
+  // any are on it — Shoe box damaged / Shoe box missing, a photo, a short note. One shipment
+  // issue for them all, so it's on the batch with its photo and opens a case for PH.
+  const [boxIssue, setBoxIssue] = useState({ type: '', note: '', photos: [] });
   // Per-unit (VIN) defect issues flagged on the Review step (V6 Feature 4):
   // vin -> [{ key, type, note, photos:[url] }]. Sent with commit → 'issue' events.
   const [unitIssues, setUnitIssues] = useState({});
@@ -1907,6 +1911,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const [keyNotes, setKeyNotes] = useState('');
   const issuePayload = () => [
     ...autoIssues.map((a) => ({ type: 'no_box', description: a.description })),
+    ...(swapLines.length ? [{
+      type: boxIssue.type || 'box_missing',
+      description: `${boxIssue.note.trim()} — Box swap: ${swapLines.join(', ')}`.slice(0, 1000),
+      photos: boxIssue.photos || [],
+    }] : []),
     ...issues.map((i) => ({
       type: i.type, description: i.description, photos: i.photos || [],
       expectedCount: i.expectedCount === '' ? null : Number(i.expectedCount),
@@ -2110,6 +2119,13 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // A box swap is deliberate (set aside for its box), not a shipment problem to record.
   const autoIssues = items.filter((i) => !i.withBox && !i.boxSwap)
     .flatMap((i) => i.sizes.map((s) => ({ key: `auto-${i.key}-${s.key}`, description: `${i.sku || '?'} ${s.size} — No box` })));
+  // …but its BOX problem is recorded: why there's no usable box (damaged / missing), with a photo.
+  const swapLines = items.filter((i) => !i.withBox && i.boxSwap)
+    .flatMap((i) => i.sizes.map((s) => `${i.sku || '?'} ${s.size}${Number(s.qty) > 1 ? ` ×${s.qty}` : ''}`));
+  const boxIssueMissing = !swapLines.length ? null
+    : !boxIssue.type ? 'pick Box damaged or Box missing'
+      : !(boxIssue.photos || []).length ? 'take a photo'
+        : !boxIssue.note.trim() ? 'add a short note' : null;
 
   // Multi-box: the open batch is created lazily on the first box commit
   // (see doCommit). Returns the batch { id, batchCode }, creating it if needed.
@@ -2149,7 +2165,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     }
     setActiveSlot(i); setDraft(null); setStickerTyping(false);
     setItems(isPoReceive ? buildManifestItems(boxSlots[i]?.poBoxId) : []);
-    setIssues([]); setKeyNotes(''); setUnitIssues({}); setRescanned([]);
+    setIssues([]); setKeyNotes(''); setUnitIssues({}); setRescanned([]); setBoxIssue({ type: '', note: '', photos: [] });
     resetScanState();
     emptyBoxAck.current = false;
     setStep(2);
@@ -2158,7 +2174,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // the in-progress, uncommitted draft for that box).
   function backToBoxList() {
     setActiveSlot(null); setStep(1);
-    setItems([]); setIssues([]); setKeyNotes(''); setUnitIssues({}); setDraft(null);
+    setItems([]); setIssues([]); setKeyNotes(''); setUnitIssues({}); setDraft(null); setBoxIssue({ type: '', note: '', photos: [] });
     resetScanState();
     emptyBoxAck.current = false;
   }
@@ -2312,7 +2328,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
           upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
         })).filter((_, i) => !out[i]?.boxSwap);
-        setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState();
+        setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setBoxIssue({ type: '', note: '', photos: [] });
         if (isMultiBoxNew) {
           // Mark the slot received and drop back to the box list (step 1) to do the next.
           setBoxSlots((slots) => slots.map((s, idx) => (idx === activeSlot
@@ -2368,7 +2384,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         online: onlineAtCommit,
         inboundIssues: batchRes?.inboundIssues || [],
       });
-      setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1);
+      setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1); setBoxIssue({ type: '', note: '', photos: [] });
       // noTracking and pre-sell reset with the tracking # for the same reason: left
       // sticky, the NEXT shipment would quietly commit untracked, or with every pair in
       // it held back from listing.
@@ -3228,6 +3244,23 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
           {step === 4 && !isRescale && (
             <>
+              {swapLines.length > 0 && (
+                <div className={`card box-issue${boxIssueMissing && error ? ' needs' : ''}`} id="box-issue">
+                  <div className="box-issue-head"><b>Box swap — what's wrong with the box?</b> <span className="muted sm">Required</span></div>
+                  <div className="muted sm">{swapLines.join(' · ')}</div>
+                  <div className="seg box-issue-type" role="group" aria-label="Box problem">
+                    {[['boxes_damaged', 'Box damaged'], ['box_missing', 'Box missing']].map(([k, label]) => (
+                      <button key={k} type="button" className={`seg-btn ${boxIssue.type === k ? 'on' : ''}`} aria-pressed={boxIssue.type === k}
+                        onClick={() => setBoxIssue((b) => ({ ...b, type: k }))}>{label}</button>
+                    ))}
+                  </div>
+                  <div className="muted sm">Take a photo of the pairs / boxes in this batch:</div>
+                  <DefectPhotos photos={boxIssue.photos || []} max={6} sign={signShipmentPhoto}
+                    onChange={(photos) => setBoxIssue((b) => ({ ...b, photos }))} onSignOut={onSignOut} />
+                  <input aria-label="Box problem note" placeholder="Short note — e.g. boxes crushed in transit / supplier sent no boxes" maxLength={300}
+                    value={boxIssue.note} onChange={(e) => setBoxIssue((b) => ({ ...b, note: e.target.value }))} />
+                </div>
+              )}
               <div className="card">
                 <h3 className="rows-title">{isInstore ? 'Issues' : 'Shipment issues'} <span className="muted">(optional)</span></h3>
                 <p className="muted sm">Anything wrong with the package as it arrived — damage, tampering, a short count, bad packing. Pick the closest problem, describe it and <b>take photos: the outside of the parcel, the shipping label (tracking #) and what is inside</b>.{!isInstore && <> Each one is sent to the PH team as a case on <b>Inbound Issues</b> — they take it and sort it out with the supplier. A pair with a problem is flagged on the Review step (＋ Issue on its VIN).</>}</p>
@@ -3267,7 +3300,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               <div className="batch-bar">
                 <button className="btn ghost" onClick={() => setStep(3)}>← Back</button>
                 <div className="batch-totals"><b>{totalItems}</b> units · <b>${totalCost.toFixed(2)}</b></div>
-                <button className="btn primary" onClick={() => { setError(''); if (!items.length) { setError('Add at least one item.'); return; } if (backToStickers()) return; if (unresolvedCount) { setError(unresolvedMsg); focusFirstUnresolved(); return; } setShowConfirm(true); }} disabled={committing}>
+                <button className="btn primary" onClick={() => { setError(''); if (!items.length) { setError('Add at least one item.'); return; } if (backToStickers()) return; if (unresolvedCount) { setError(unresolvedMsg); focusFirstUnresolved(); return; } if (boxIssueMissing) { setError(`Box swap pairs: ${boxIssueMissing} first.`); document.getElementById('box-issue')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); return; } setShowConfirm(true); }} disabled={committing}>
                   {isBoxMode || isMultiBoxNew ? 'Submit box' : isInstore ? 'Save trip' : 'Finish batch'}
                 </button>
               </div>

@@ -23,7 +23,7 @@
 // passes a dev card's taps on to TELEGRAM_DEV_FORWARD_URL (the dev tunnel) untouched, so a
 // test card is recorded in the dev database and never in the real one.
 import { send, applySecurity, getJsonBody } from '../_lib/util.js';
-import { dbConfigured, recordReplyMiss, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx } from '../_lib/db.js';
+import { dbConfigured, premiumChatIds, recordReplyMiss, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx } from '../_lib/db.js';
 import { telegramConfigured, telegramChatId, cancelChatId, tg, enqueue } from '../_lib/telegram.js';
 import { decideFromTelegram, decideTipFromTelegram } from '../_lib/telegramDecide.js';
 import { notifyEnv } from '../_lib/notify.js';
@@ -61,9 +61,17 @@ async function handleUpdate(update) {
   return null;
 }
 
-// Only the approval group. The identity check would refuse a stranger anyway; this keeps
-// the bot from answering in chats it was added to by mistake.
-const inOurChat = (chatId) => String(chatId) === telegramChatId();
+// Only the approval groups: the main one, and every buyer's PREMIUM group (users.
+// premium_chat_id, Check Access). The identity check would refuse a stranger anyway; this
+// keeps the bot from answering in chats it was added to by mistake. Read fresh each time
+// (only a message OUTSIDE the main group gets this far — a reply to a card, or a number),
+// so a group set on Check Access answers at once.
+async function inOurChat(chatId) {
+  const id = String(chatId ?? '');
+  if (!id) return false;
+  if (id === telegramChatId()) return true;
+  try { return (await premiumChatIds()).includes(id); } catch { return false; }
+}
 
 async function handleTap(update, cq) {
   // Stop the spinner on the tapper's button first, whatever happens next. Best-effort.
@@ -75,7 +83,7 @@ async function handleTap(update, cq) {
   // and the 👍 belong on the card, not on the picker.
   const tappedId = cq.message?.message_id;
   const messageId = cq.message?.reply_to_message?.message_id || tappedId;
-  if (!inOurChat(chatId) || !messageId) {
+  if (!(await inOurChat(chatId)) || !messageId) {
     console.log(`[telegram/webhook] tap from chat ${chatId} ignored — not the approval group`);
     return null;
   }
@@ -181,14 +189,14 @@ async function handleMessage(update, msg) {
   const card0 = msg.reply_to_message;
   const grpData = (card0?.reply_markup?.inline_keyboard || []).flat()
     .map((b) => String(b.callback_data || '')).find((d) => d.startsWith('grpreject:'));
-  if (grpData && inOurChat(msg.chat?.id) && msg.text) {
+  if (grpData && msg.text && await inOurChat(msg.chat?.id)) {
     const cardEnv = grpData.endsWith(':dev') ? 'dev' : 'prod';
     if (cardEnv !== notifyEnv()) return forwardToOtherEnv(update, cardEnv);
     return handleGroupReply(msg, card0, cardEnv);
   }
   // Same card, should a client ever deliver the reply without the card's buttons: a card
   // in THIS server's table is ours by definition.
-  if (card0 && inOurChat(msg.chat?.id) && msg.text
+  if (card0 && msg.text && await inOurChat(msg.chat?.id)
       && await getTelegramGroupCard({ chatId: msg.chat.id, messageId: card0.message_id }).catch(() => null)) {
     return handleGroupReply(msg, card0, notifyEnv());
   }
@@ -197,7 +205,7 @@ async function handleMessage(update, msg) {
   // nothing (floor feedback, 2026-11-02). Same reader as the shoe card, for its one size.
   const lineData = (card0?.reply_markup?.inline_keyboard || []).flat()
     .map((b) => String(b.callback_data || '')).find((d) => /^reject:\d+:\d+:/.test(d));
-  if (lineData && inOurChat(msg.chat?.id) && msg.text) {
+  if (lineData && msg.text && await inOurChat(msg.chat?.id)) {
     const [, cartId, lineId, env] = lineData.split(':');
     const cardEnv = env === 'dev' ? 'dev' : 'prod';
     if (cardEnv !== notifyEnv()) return forwardToOtherEnv(update, cardEnv);
@@ -205,7 +213,7 @@ async function handleMessage(update, msg) {
     return handleLineReply(msg, card0, cardEnv, Number(cartId), Number(lineId));
   }
   if (!/^\s*\d{1,3}\s*$/.test(String(msg.text || ''))) return null;
-  if (!inOurChat(msg.chat?.id)) return null;
+  if (!(await inOurChat(msg.chat?.id))) return null;
   const from = msg.from || {};
   const pending = await takeTelegramQty(from.id, msg.chat.id);
   // Just someone typing a number in the group — nothing was asked of them.

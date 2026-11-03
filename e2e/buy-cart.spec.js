@@ -2490,6 +2490,31 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     expect(since(t0).length).toBe(0);
   });
 
+  // A buyer's own PREMIUM group (users.premium_chat_id — "Andrew's Premium Shoes", 2026-11-04):
+  // their premium cards go there, the rest stays in the main group, and the group is answered.
+  test('a buyer’s premium group gets their PREMIUM cards; replies there count; the rest stays in the main group', async ({ request }) => {
+    const PREMIUM_CHAT = -1007770001;
+    const H = () => ({ Authorization: `Bearer ${signToken({ uid: 'admin', username: 'admin', name: 'Admin', role: 'admin' })}` });
+    const setChat = await request.post('/api/admin/review', { headers: H('admin'), data: { userId: people.buyer.uid, decision: 'premium_chat', premiumChatId: String(PREMIUM_CHAT) } });
+    expect(setChat.ok(), await setChat.text()).toBeTruthy();
+    expect((await request.post('/api/admin/review', { headers: H('admin'), data: { userId: people.buyer.uid, decision: 'premium_chat', premiumChatId: '12345' } })).status()).toBe(400);
+    try {
+      const prem = await groupCard(request, PREMIUM_RUN);
+      expect(String(prem.card.chat_id)).toBe(String(PREMIUM_CHAT));
+      expect(String(prem.row.chat_id)).toBe(String(PREMIUM_CHAT));
+      // A reply IN the premium group is read like one in the main group.
+      const upd = replyUpdate(prem.row, '9 x 1');
+      upd.message.chat.id = PREMIUM_CHAT; upd.message.reply_to_message.chat.id = PREMIUM_CHAT;
+      await hook(request, upd);
+      expect(await statuses(prem.cartId)).toEqual({ 9: 'approved ×1', '9.5': 'rejected', 10: 'rejected' });
+      // An ordinary shoe from the same buyer stays in the main group.
+      const plain = await groupCard(request);
+      expect(String(plain.card.chat_id)).toBe(String(CHAT));
+    } finally {
+      await request.post('/api/admin/review', { headers: H('admin'), data: { userId: people.buyer.uid, decision: 'premium_chat', premiumChatId: '' } });
+    }
+  });
+
   test('a tap from another chat is ignored', async ({ request }) => {
     const cartId = await newRequest(request, { lines: [LINE] });
     const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];

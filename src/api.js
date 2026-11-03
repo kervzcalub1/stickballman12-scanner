@@ -105,6 +105,9 @@ export const api = {
   // against a real person. Empty string unlinks.
   adminSetTelegram: (userId, telegramUserId) =>
     post('/api/admin/review', { userId, decision: 'telegram', telegramUserId }),
+  // A buyer's premium-shoes Telegram group (their premium cards go there). Empty clears it.
+  adminSetPremiumChat: (userId, premiumChatId) =>
+    post('/api/admin/review', { userId, decision: 'premium_chat', premiumChatId }),
   adminDeleteUser: (userId) => post('/api/admin/review', { userId, decision: 'delete' }),
   adminResetPassword: (userId) => post('/api/admin/reset-password', { userId }),
   // App settings (price margin, …). GET is any authed user; POST is admin/superadmin.

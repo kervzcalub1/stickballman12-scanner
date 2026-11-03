@@ -17,7 +17,7 @@
 // seconds later by `priceInBackground`, and a card that goes out first says "not priced"
 // on every pair — which is the one thing the approver most needs and the reason to have
 // a card at all.
-import { getBuyCart, getBuyCartLine, lastCartEvent, logCartEvent, createTelegramGroupCard, setTelegramGroupCardMessage, premiumPingPeople } from './db.js';
+import { getBuyCart, getBuyCartLine, lastCartEvent, logCartEvent, createTelegramGroupCard, setTelegramGroupCardMessage, premiumPingPeople, premiumChatForBuyer } from './db.js';
 import { alertUsers, at } from './alerts.js';
 import { fundingTarget } from './buycart.js';
 import { stockForPair, stockForSizes, stockSentence } from './buyingStock.js';
@@ -83,6 +83,15 @@ const dollars = (n) => (money(n) == null ? '—' : `${money(n) < 0 ? '-' : ''}$$
 // "Premium shoes"): "⭐ PREMIUM — Andrew is proposing a $10.00 tip per pair". `replies` adds
 // how to answer it by reply (the one-card-per-shoe card); `buttons` = by the tip buttons on a
 // one-size card.
+// Which group a card (or a note about a pair) goes to. A PREMIUM shoe goes to the buyer's
+// own premium group when one is set on their account (Check Access → "Premium shoes chat");
+// everything else — and a buyer with none set — stays in the main approval group.
+async function chatFor(cart, isPremium) {
+  if (!isPremium) return telegramChatId();
+  try { return (await premiumChatForBuyer(cart?.buyer_user_id)) || telegramChatId(); }
+  catch (e) { console.warn('[notify] premium chat lookup failed — main group:', e.message); return telegramChatId(); }
+}
+
 // A PREMIUM shoe calls the people holding `premium_ping` by name (a Telegram mention).
 // Returns the caption line + the mention for sendApprovalCard, or nothing. Never fatal: a
 // failed lookup costs the card its ping, not the card.
@@ -352,6 +361,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
         // The SKU line opens the shoe on StockX — sales, asks, bids at a tap.
         links: [{ line: line.sku, url: await stockxLinkFor(line.sku) }],
         mentions: ping.mentions,
+        chatId: await chatFor(cart, !!line.premium),
       });
       console.log(`[notify] ${cart.cart_code} ${line.sku}/${line.size || '—'} → Telegram message ${msg?.message_id}`
         + `${msg?.photo ? ' (with photo)' : ' (no photo)'}`);
@@ -488,8 +498,9 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       'Sizes you leave out are turned down. A new reply replaces the last one (edits aren’t read).',
     ].join('\n');
 
+    const chatId = await chatFor(cart, lines.some((l) => l.premium));
     const card = await createTelegramGroupCard({
-      cartId, sku: first.sku, lineIds: lines.map((l) => Number(l.id)), chatId: telegramChatId(), env: notifyEnv(),
+      cartId, sku: first.sku, lineIds: lines.map((l) => Number(l.id)), chatId, env: notifyEnv(),
     });
     const msg = await sendApprovalCard({
       caption,
@@ -497,6 +508,7 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       photoFileId: extra.photoFileId ?? null,
       links: [{ line: first.sku, url: await stockxLinkFor(first.sku) }],
       mentions: ping.mentions,
+      chatId,
     });
     if (msg?.message_id) await setTelegramGroupCardMessage(card.id, msg.message_id);
     console.log(`[notify] ${cart.cart_code} ${first.sku} × ${lines.length} sizes → Telegram message ${msg?.message_id} (one card)`
@@ -530,7 +542,8 @@ export async function notifyLineSkipped(cartId, line, actor, { undo = false } = 
       `To fund now: ${dollars(fundingTarget(cart))} · ${Number(cart.approved_count) || 0} size${Number(cart.approved_count) === 1 ? '' : 's'} approved`,
       ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
     ].join('\n');
-    const msg = await sendNote(caption);
+    // Said where the pair's card is: a premium pair's in the buyer's premium group.
+    const msg = await sendNote(caption, await chatFor(cart, !!line.premium));
     console.log(`[notify] ${cart.cart_code} ${line.sku}/${line.size || '—'} ${undo ? 'back on' : 'not buying'} → Telegram message ${msg?.message_id}`);
     return { sent: true };
   } catch (e) {

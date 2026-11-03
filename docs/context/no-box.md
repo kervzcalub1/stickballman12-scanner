@@ -28,8 +28,9 @@ boxSwap:true`:
 - **not a "No box" auto-issue** (`autoIssues` skips it — it's deliberate), **but its BOX
   problem is required** (2026-11-03): the Issues step shows a **"Box swap — what's wrong with
   the box?"** card (`#box-issue`) listing the swap pairs — **Box damaged** (`boxes_damaged`) /
-  **Box missing** (`box_missing`, new in `ISSUE_TYPES`), **a photo** (shipment-photo upload)
-  and **a short note**; Submit is refused until all three (`boxIssueMissing`). It commits as
+  **Box missing** (`box_missing`, new in `ISSUE_TYPES`) and **a short note** — Submit is
+  refused until both (`boxIssueMissing`); **a photo is optional** (shipment-photo upload, asked
+  for but never blocking — user's call 2026-11-04). It commits as
   ONE `shipment_issues` row ("<note> — Box swap: SKU 9 ×2, …") with the photos, so it's on
   the Batch page and opens an **Inbound Issues** case for PH (`opensCase`),
 - committed as **`status = 'box_swap'`**, `with_box = false` (`normalizeItems`, intake.js)

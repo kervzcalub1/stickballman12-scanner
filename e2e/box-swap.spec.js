@@ -103,16 +103,19 @@ test('inbound: a PO shoe marked Box swap needs no sticker, prints nothing, and l
   await page.getByRole('button', { name: 'Submit box' }).click();
   await expect(page.locator('.error')).toContainText('Box swap pairs: pick Box damaged or Box missing first.');
   await card.getByRole('button', { name: 'Box missing' }).click();
-  await page.getByRole('button', { name: 'Submit box' }).click();
-  await expect(page.locator('.error')).toContainText('take a photo');
+  // The photo is optional — the note is what's asked for next. One is taken here anyway.
   // The upload is mocked (no bucket in CI): sign → a URL, PUT → 200.
   await page.route('**/api/inbound-issues/photo-sign', (r) => r.fulfill({ json: { ok: true, uploadUrl: 'https://upload.e2e.test/put', publicUrl: 'https://photos.e2e.test/box-swap.jpg' } }));
   await page.route('https://upload.e2e.test/**', (r) => r.fulfill({ status: 200, body: '' }));
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
   await card.locator('input[type="file"]').first().setInputFiles({ name: 'box.png', mimeType: 'image/png', buffer: png });
   await expect(card.locator('.dp-thumb')).toHaveCount(1);
+  await card.locator('.dp-thumb-wrap .lp-remove').click();          // …and removed: still allowed
+  await expect(card.locator('.dp-thumb')).toHaveCount(0);
   await page.getByRole('button', { name: 'Submit box' }).click();
   await expect(page.locator('.error')).toContainText('add a short note');
+  await card.locator('input[type="file"]').first().setInputFiles({ name: 'box.png', mimeType: 'image/png', buffer: png });
+  await expect(card.locator('.dp-thumb')).toHaveCount(1);
   await card.getByLabel('Box problem note').fill('Supplier sent these with no boxes');
   await page.getByRole('button', { name: 'Submit box' }).click();
   await page.getByRole('button', { name: 'Yes, commit' }).click();

@@ -417,6 +417,56 @@ test('anyone who can reach the request can attach the receipt — the buyer, PH,
   expect(other.status).toBe(403);
 });
 
+test('filed is not read: the audit refuses a request with no receipt total, and says so on screen', async ({ page, request }) => {
+  const cartId = await newRequest(request, { lines: [LINE] });
+  await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+  await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '7171717171717171', balance: 108.25 } });
+  await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
+  // What finding an email leaves behind: the file, the status moved, no lines and no total.
+  const fileId = Number((await pool.query(
+    `INSERT INTO buy_cart_files (cart_id, kind, r2_key, name, content_type) VALUES ($1, 'receipt', 'e2e/none.txt', 'Email receipt T0K.txt', 'text/plain') RETURNING id`,
+    [cartId])).rows[0].id);
+  await pool.query(`UPDATE buy_carts SET status = 'receipted', receipt_at = now() WHERE id = $1`, [cartId]);
+
+  const card = (await read_(request, 'issuer', `cart/get?id=${cartId}`)).body.cart.giftCards[0];
+  const refused = await call(request, 'auditor', 'cart/audit', { cartId, cards: [{ id: card.id, spent: 0, remaining: 0 }] });
+  expect(refused.status).toBe(409);
+  expect(refused.body.error).toMatch(/no total to audit/);
+
+  // The filed email can be read again without typing the number — by those who may, only.
+  expect((await call(request, 'buyer2', 'cart/receipt-email', { cartId, fileId })).status).toBe(403);
+  expect((await call(request, 'buyer', 'cart/receipt-email', { cartId, fileId: 999999999 })).status).toBe(404);
+  await pool.query(`UPDATE buy_cart_files SET content_type = 'image/jpeg' WHERE id = $1`, [fileId]);
+  expect((await call(request, 'buyer', 'cart/receipt-email', { cartId, fileId })).status).toBe(409);
+  await pool.query(`UPDATE buy_cart_files SET content_type = 'text/plain' WHERE id = $1`, [fileId]);
+
+  await as(page, 'buyer');
+  await page.goto(`/buying?request=${cartId}`);
+  await expect(page.getByRole('button', { name: 'Read this email' })).toBeVisible();
+  await expect(page.locator('body')).toContainText('its lines have not been saved');
+  await as(page, 'auditor');
+  await page.goto(`/buy-carts?request=${cartId}`);
+  await expect(page.locator('.bc-audit')).toContainText('not read in yet');
+  await expect(page.locator('.bc-audit')).not.toContainText('balanced');
+  await expect(page.getByRole('button', { name: 'Record the audit' })).toBeDisabled();
+});
+
+test('a filed email is read back by our own parser: every pair, the printed totals, and a pair with no code stays', async () => {
+  const { readingFromEmailText, splitFiledEmail } = await import('../api/cart/receipt-email.js');
+  const filed = splitFiledEmail([
+    'Transaction: T0K1', 'Subject: Your receipt from Nike Store, Nike Factory Store - Round Rock', 'From: Nikenoreply@nike.com',
+    'Date: 2026-11-04T18:19:19.000Z', 'Folder: [Gmail]/All Mail', '', 'Order #', 'T0K1', 'Your Purchase', 'In-Store Items', '(2)',
+    'KD19', '$109.99T', '00000000000000', 'Item Percent Discount 40%', '-$44.00', 'Final Price', '$65.99T',
+    'W NIKE V5 RNR', '$69.97T', '00000000000001', 'Item Percent Discount 40%', '-$27.99', 'Final Price', '$41.98T',
+    'Subtotal', '$107.97', 'Sales Tax', '$8.91', 'Total', '$116.88', 'Number of Item(s) Sold:', '2',
+  ].join('\n'));
+  expect(filed).toMatchObject({ transactionId: 'T0K1', from: 'Nikenoreply@nike.com', folder: '[Gmail]/All Mail' });
+  const r = await readingFromEmailText(filed);
+  expect(r.rows).toHaveLength(2);
+  expect(r.rows.map((x) => x.totalPrice)).toEqual([65.99, 41.98]);
+  expect(r).toMatchObject({ subtotal: 107.97, tax: 8.91, statedTotal: 116.88 });
+});
+
 test('a receipt found by its number in the mailbox lands in the same review table', async ({ request }) => {
   const { readingFromPayload } = await import('../api/cart/receipt-email.js');
 
@@ -433,14 +483,18 @@ test('a receipt found by its number in the mailbox lands in the same review tabl
       { name: 'Samba OG', sku: 'IH8223', upc: null, style_id: 'IH8223', size: '7.5', qty: 1, list_price: 100, discount: null, final_price: 100, raw_code: 'y' },
       { name: 'Unreadable', sku: null, upc: null, style_id: null, size: null, qty: 1, final_price: 50, raw_code: 'z' },
     ],
-    totals: { subtotal: 300, tax: 18, shipping: null, total: 318, item_count_stated: 3 },
+    totals: { subtotal: 350, tax: 18, shipping: null, total: 368, item_count_stated: 4 },
     warnings: ['upc_not_found:1 (http 200)'],
   });
-  expect(r.rows.map((x) => x.sku)).toEqual(['FJ6245-106', 'IH8223']);   // no code → no row, never a blank one
+  // A pair with no code stays as a row, with the reason on it: it is a pair on the receipt, and
+  // cart/receipt refuses to save until someone types its code. Dropping it hid money.
+  expect(r.rows.map((x) => x.sku)).toEqual(['FJ6245-106', 'IH8223', '']);
+  expect(r.rows[2].note).toMatch(/no style code found/);
   expect(r.rows[0]).toMatchObject({ size: '9.5', qty: 2, totalPrice: 200, unitPrice: 100, source: 'email' });
   expect(r.email).toMatchObject({ subject: 'Your Nike Purchase', date: '2026-09-14T18:02:11-04:00', folder: 'Footlocker' });
-  expect(r.statedTotal).toBe(318);
-  expect(r.check.ok).toBe(true);                       // 200 + 100 = the printed subtotal; 3 = the printed count
+  expect(r.statedTotal).toBe(368);
+  expect(r.check.ok).toBe(false);                      // the sums agree; the row with no code is what is named
+  expect(r.check.problems.join(' ')).toMatch(/style code/);
   expect(r.warnings).toEqual(['upc_not_found:1 (http 200)']);
 
   // Without printed totals there is nothing to check and nothing is claimed: no

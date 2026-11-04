@@ -1,4 +1,6 @@
 // POST /api/cart/receipt-email  { cartId, transactionId }  -> { ok, found, rows, email, … }
+// POST /api/cart/receipt-email  { cartId, fileId }         -> the same answer, read off an email
+//                                                             ALREADY FILED on the request
 //
 // The receipt is usually already in a mailbox: the shop emailed it to the ordering
 // account the moment the buyer paid. Asking the buyer to screenshot that email and
@@ -25,9 +27,10 @@
 // `receipt_at` — "a receipt was received" is a closing condition and the auditor reads
 // that file, so an email found by number must leave the same evidence a photo would.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
-import { getBuyCart, addBuyCartFile, logCartEvent, dbConfigured } from '../_lib/db.js';
+import { getBuyCart, getBuyCartFile, addBuyCartFile, logCartEvent, dbConfigured } from '../_lib/db.js';
 import { cartVisibleTo, requireBuyerAccess } from '../_lib/buycart.js';
-import { presignPutUrl, r2Configured } from '../_lib/r2.js';
+import { presignPutUrl, getObject, r2Configured } from '../_lib/r2.js';
+import { parseReceiptEmail } from '../_lib/receipt-parser/index.js';
 import { checkReceiptRead } from '../../src/lib/receiptCheck.js';
 
 const TIMEOUT_MS = 45_000;
@@ -63,20 +66,26 @@ export function rowFromItem(it) {
   const qty = Math.min(Math.max(parseInt(it?.qty, 10) || 1, 1), 999);
   const totalPrice = num(it?.final_price);
   const sku = String(it?.style_id || it?.sku || '').trim().toUpperCase().slice(0, 40);
+  const name = str(it?.name, 200);
+  const upc = str(it?.upc, 20);
   return {
     sku,
     size: str(it?.size, 20),
     qty,
     totalPrice,
     unitPrice: totalPrice != null && qty > 0 ? Math.round((totalPrice / qty) * 100) / 100 : null,
-    name: str(it?.name, 200),
+    name,
+    upc,
     source: 'email',
+    // A pair the catalogue couldn't name is still a pair on the receipt. It stays as a row with
+    // the reason on it; `cart/receipt` refuses to save it until a person types the style code.
+    ...(sku ? {} : { note: `${name || 'This pair'} — no style code found${upc ? ` for UPC ${upc}` : ''}. Read it off the box and type it in.` }),
   };
 }
 
 /** Everything the review step needs, from one scenario answer. Exported for the test. */
 export function readingFromPayload(p) {
-  const rows = (Array.isArray(p?.items) ? p.items : []).slice(0, 300).map(rowFromItem).filter((r) => r.sku);
+  const rows = (Array.isArray(p?.items) ? p.items : []).slice(0, 300).map(rowFromItem).filter((r) => r.sku || r.name || r.totalPrice != null);
   const t = p?.totals || {};
   const subtotal = num(t.subtotal);
   const tax = num(t.tax);
@@ -98,6 +107,32 @@ export function readingFromPayload(p) {
     store: str(p?.store, 40),
     mailbox: str(p?.mailbox, 20),
     warnings: (Array.isArray(p?.warnings) ? p.warnings : []).map((w) => String(w).slice(0, 200)).slice(0, 20),
+  };
+}
+
+/**
+ * Read an email's text with OUR copy of the parser (receipt-parser), the one "Check mailboxes"
+ * uses. Costs no Make run and needs no mailbox search. Null when it isn't a receipt.
+ * Exported for the test.
+ */
+export async function readingFromEmailText({ text, subject = '', from = '', date = '', folder = '' }) {
+  const out = await parseReceiptEmail({ text, subject, from, date, folder, html: '', mailbox: 'filed' });
+  if (!out?.post || !out.parsed) return null;
+  return readingFromPayload({
+    ...out.parsed,
+    email: { subject, from, date_iso: out.parsed.received_at, folder, text: null },
+  });
+}
+
+/** A file written by fileEmailAsReceipt, split back into its header lines and the email's text. */
+export function splitFiledEmail(raw) {
+  const s = String(raw || '');
+  const at = s.indexOf('\n\n');
+  const head = at < 0 ? '' : s.slice(0, at);
+  const field = (k) => (head.match(new RegExp(`^${k}: (.*)$`, 'm')) || [])[1] || '';
+  return {
+    transactionId: field('Transaction'), subject: field('Subject'), from: field('From'),
+    date: field('Date'), folder: field('Folder'), text: at < 0 ? s : s.slice(at + 2),
   };
 }
 
@@ -140,8 +175,10 @@ export default async function handler(req, res) {
   // Order numbers are whatever the shop prints — digits, dashes, letters. Kept as a
   // string and never coerced: a leading zero is part of the number.
   const transactionId = String(body.transactionId ?? '').trim().slice(0, 80);
+  const fileId = body.fileId == null ? null : Number(body.fileId);
   if (!Number.isInteger(cartId)) return send(res, 400, { ok: false, error: 'Which buying request?' });
-  if (!/^[A-Za-z0-9][A-Za-z0-9 ._\-#/]*$/.test(transactionId) || transactionId.length < 4)
+  if (fileId != null && !Number.isInteger(fileId)) return send(res, 400, { ok: false, error: 'Which receipt?' });
+  if (fileId == null && !/^[A-Za-z0-9][A-Za-z0-9 ._\-#/]*$/.test(transactionId) || (fileId == null && transactionId.length < 4))
     return send(res, 400, { ok: false, error: 'Enter the transaction or order number as it appears on the email.' });
 
   try {
@@ -152,6 +189,31 @@ export default async function handler(req, res) {
       return send(res, 403, { ok: false, error: 'You do not have access to this request.' });
     if (['closed', 'cancelled', 'written_off'].includes(cart.status))
       return send(res, 409, { ok: false, error: 'This request is finished — its receipt cannot change.' });
+
+    // The email is already on file: read THAT. Finding it and saving its lines are two steps, and
+    // the rows of the first live only on the screen — so someone who leaves before ticking and
+    // saving must be able to come back without another mailbox search.
+    if (fileId != null) {
+      const file = await getBuyCartFile(cartId, fileId);
+      if (!file || file.kind !== 'receipt')
+        return send(res, 404, { ok: false, error: 'That receipt is not on this request.' });
+      if (!String(file.content_type || '').startsWith('text/'))
+        return send(res, 409, { ok: false, error: 'That receipt is not an email.' });
+      if (!r2Configured()) return send(res, 503, { ok: false, error: 'File storage is not configured.' });
+      const filed = splitFiledEmail((await getObject(file.r2_key)).toString('utf8'));
+      const reading = await readingFromEmailText(filed);
+      await logCartEvent({
+        cartId, kind: 'receipt_email_read', actor: user,
+        body: reading
+          ? `${reading.rows.length} lines read from the filed email “${file.name || 'receipt'}”`
+            + (reading.statedTotal == null ? '' : reading.check.ok ? ' · agrees with the receipt’s own totals' : ` · ${reading.check.problems.length} discrepancy(ies) flagged`)
+          : `The filed email “${file.name || 'receipt'}” did not read as a receipt`,
+      });
+      if (!reading?.rows.length)
+        return send(res, 200, { ok: true, found: true, rows: [], transactionId: filed.transactionId, email: { subject: filed.subject }, warnings: [] });
+      return send(res, 200, { ok: true, found: true, transactionId: filed.transactionId, ...reading, file });
+    }
+
     // After the access checks, not before: whether this server can search a mailbox is
     // an answer for somebody allowed to ask, and a stranger gets the same 403 either way.
     if (!receiptEmailConfigured())
@@ -189,13 +251,24 @@ export default async function handler(req, res) {
       return send(res, 502, { ok: false, error: 'The mailbox search did not answer. Try again in a moment, or upload the receipt.' });
     }
 
-    const reading = readingFromPayload(payload);
+    let reading = readingFromPayload(payload);
     let file = null;
     // Evidence first, lines second — the same order the upload path follows. A missing
     // bucket is logged and the lines still come back: the buyer can attach a screenshot.
     if (reading.email.text && r2Configured()) {
       try { file = await fileEmailAsReceipt({ cart, transactionId, email: reading.email, actor: user }); }
       catch (e) { console.error('[cart/receipt-email] file', e.message); reading.warnings.push('evidence_not_filed'); }
+    }
+    // Make's lookups can come back empty on a receipt that reads fine. The text is what counts, so
+    // read it here before telling a person "nothing on it read as a purchased item".
+    if (!reading.rows.length && reading.email.text) {
+      try {
+        const again = await readingFromEmailText({
+          text: reading.email.text, subject: reading.email.subject || '', from: reading.email.from || '',
+          date: reading.email.date || '', folder: reading.email.folder || '',
+        });
+        if (again?.rows.length) reading = { ...again, email: reading.email, warnings: [...reading.warnings, ...again.warnings, 'read_on_our_server'] };
+      } catch (e) { console.error('[cart/receipt-email] local read', e.message); }
     }
 
     await logCartEvent({

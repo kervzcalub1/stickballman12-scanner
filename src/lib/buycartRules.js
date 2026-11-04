@@ -186,6 +186,12 @@ export function nextStep(cart, who) {
         : { mine: false, text: `Waiting on ${buyer}'s receipt.` };
     case 'receipted':
     case 'audited': {
+      // A filed receipt moves the request here, but with no total saved there is nothing to audit.
+      if (cart.status === 'receipted' && cart.receipt_at && cart.receipt_total == null && cart.funding_method !== 'company_card') {
+        return isBuyer || canDecide || canIssue || canAudit
+          ? { mine: true, text: 'The receipt is on file but its lines have not been saved. Read it, tick each row and save.', action: 'Read the receipt', target: 'receipt' }
+          : { mine: false, text: `Waiting on ${buyer} to read the receipt in.` };
+      }
       // Two halves run side by side here — the money (the auditor) and the goods (the
       // buyer packing, then the boxes landing). Say the viewer's half first.
       if (canAudit && cart.status === 'receipted') {

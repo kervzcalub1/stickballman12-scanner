@@ -77,6 +77,10 @@ export default async function handler(req, res) {
 
     if (!['receipted', 'audited'].includes(cart.status))
       return send(res, 409, { ok: false, error: 'There is nothing to audit until the receipt has been read in.' });
+    // A file on the request moves it to `receipted`; reading it is what gives it a total. Audited
+    // against no total, every blank card "balances" at $0.00.
+    if (cart.receipt_total == null && (cart.funding_method || 'gift_card') !== 'company_card')
+      return send(res, 409, { ok: false, error: 'The receipt is on file but its lines have not been saved, so there is no total to audit against. Read it in first.' });
 
     // A card-funded request has no cards to count. What replaces this audit there is the
     // authorised charge against the receipt, which `cart/control` records and the closing

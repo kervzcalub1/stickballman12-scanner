@@ -170,6 +170,7 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
 
   const files = (cart.files || []).filter((f) => f.kind === 'receipt');
   const committed = cart.receiptLines || [];
+  const filedEmail = [...files].reverse().find((f) => String(f.content_type || '').startsWith('text/')) || null;
   const approved = (cart.lines || []).filter((l) => l.status === 'approved');
   const diffs = compareReceiptToApproved(committed, approved);
   const rowsTotal = rows ? Math.round(rows.reduce((n, r) => n + (Number(r.totalPrice) || 0), 0) * 100) / 100 : 0;
@@ -304,6 +305,26 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
     try {
       const r = await api.cartReceiptEmail(cart.id, id);
       if (!r.found) { setErr(r.error || 'No email with that number.'); return; }
+      applyEmailReading(r, id);
+    } catch (ex) {
+      if (ex.unauthorized) return onSignOut();
+      setErr(ex.message);
+    } finally { setBusy(''); }
+  }
+
+  // The email already filed on the request: no number to type, no mailbox search.
+  async function readFiled(f) {
+    setBusy('filed'); setErr(''); setNote(''); setEmailHit(null);
+    try {
+      const r = await api.cartReceiptEmailFile(cart.id, f.id);
+      applyEmailReading(r, r.transactionId || f.name);
+    } catch (ex) {
+      if (ex.unauthorized) return onSignOut();
+      setErr(ex.message);
+    } finally { setBusy(''); }
+  }
+
+  function applyEmailReading(r, id) {
       setEmailHit({ ...r.email, store: r.store, filed: !!r.file, warnings: r.warnings || [] });
       if (!r.rows?.length) {
         setErr(`Found an email for ${id}${r.email?.subject ? ` (“${r.email.subject}”)` : ''} but nothing on it read as a purchased item — it may not be the receipt. Check the number, or paste the receipt text instead.`);
@@ -318,10 +339,6 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
       // "checked" must not be said about a reading that was not.
       setNote(r.statedTotal != null ? receiptCheckSentence(r.check) : '');
       if (r.file) onChanged();
-    } catch (ex) {
-      if (ex.unauthorized) return onSignOut();
-      setErr(ex.message);
-    } finally { setBusy(''); }
   }
 
   function editRow(i, patch) { setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r))); }
@@ -463,6 +480,21 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
           )}
           {canEdit && <button type="button" className="btn sm ghost" onClick={() => setRows([])}>Re-read the receipt</button>}
         </>
+      )}
+
+      {/* Filed is not read. Finding the email files it straight away, but its lines live on the
+          screen until someone ticks and saves them; until then the total is blank and the audit
+          waits. So the way back is one tap, and it says why it is there. */}
+      {canEdit && !committed.length && !rows && filedEmail && (
+        <div className="bc-filed-unread">
+          <p className="bc-till-warn">
+            <b>{filedEmail.name || 'The email'}</b> is on file, but its lines have not been saved. The audit needs them.
+          </p>
+          <button type="button" className="btn primary" disabled={busy === 'filed'} onClick={() => readFiled(filedEmail)}>
+            {busy === 'filed' ? 'Reading…' : 'Read this email'}
+          </button>
+          {busy === 'filed' && <ReadProgress stage="ai" />}
+        </div>
       )}
 
       {canEdit && !committed.length && !rows && (

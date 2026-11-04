@@ -178,6 +178,21 @@ the panel, the Telegram summary, the issuer DM. `fundingBreakdown` / `fundingWor
 
 **History:** 2026-09-16 shelf + tax → 2026-10-02 shelf only → **2026-11-05 shelf + tax, again.**
 
+## Filed is not read (2026-11-05)
+Finding an email by order number FILES it at once (`receipt_at`, status `receipted`), but its rows
+live only on the screen until someone ticks and saves them. A supplier who left at that point left a
+request with a receipt on file, no lines, and `receipt_total` NULL, and the audit panel said "$0.00
+against a $0.00 receipt — balanced". So:
+- **`receipt_total` NULL is "not read in", never $0.** `cart/audit` refuses (409), the panel says so
+  and disables **Record the audit**, and the next-step line sends the person to the receipt. The
+  `parsed` closing condition already held such a request open.
+- **Read this email** (`cart/receipt-email { cartId, fileId }`) reads the filed text with our own
+  parser (`readingFromEmailText`, receipt-parser): no number to type, no Make run. The same parser is
+  the fallback when Make's answer has no rows.
+- **A pair with no style code stays as a row** with its note and UPC (`rowFromItem`); `cart/receipt`
+  refuses to save it until someone types the code. It used to be dropped, so the rows came up short of
+  the subtotal with nothing to say which pair was missing.
+
 ## The cost stack — and who may write it
 A request's stack is snapshotted from the **buyer's** payout preset when it is opened
 (`payout_presets.supplier_user_id` → `buy_carts.cost_stack`). Buyers do not manage their

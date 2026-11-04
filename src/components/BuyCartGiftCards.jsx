@@ -383,7 +383,7 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
         <div className="bc-gc-read">
           <div className="bc-gc-read-h">
             <b>{reading.cards.length} card{reading.cards.length === 1 ? '' : 's'} read from “{reading.file.name || 'file'}”</b>
-            <span className="muted xs">{reading.source === 'pdf' ? 'from the PDF text' : reading.source === 'csv' ? 'from the CSV' : 'by the image reader'} · check every digit, fill any blank balance, tick, then record</span>
+            <span className="muted xs">{reading.source === 'pdf' ? 'from the PDF text' : reading.source === 'csv' ? 'from the CSV' : reading.source === 'local' ? 'off the card, read twice' : 'by the AI image reader'} · check every digit, fill any blank balance, tick, then record</span>
             {reading.mangled > 0 && (
               <span className="bc-short xs">{reading.mangled} row{reading.mangled === 1 ? '' : 's'} skipped — Excel turned the card number into 6.06E+18 and the digits are gone. Get the original CSV for {reading.mangled === 1 ? 'it' : 'them'}.</span>
             )}

@@ -1176,8 +1176,15 @@ stored `v1:<iv>:<tag>:<ct>` so a key rotation stays possible.
 review table in `BuyCartGiftCards.jsx`. The cards arrive three ways and all three land
 here: a cardwell.fund card face (CARD NUMBER · PIN · barcode), a phone screenshot of one,
 or a table — a spreadsheet screenshot or PDF listing a batch, one card a row
-(balance · number · PIN). An **image** goes to the same vision model as the receipt
-(`gpt-5.4-mini`, ~3 s, ~$0.003); a **PDF** is text already, read with pdfjs
+(balance · number · PIN). An **image** is read on this server first (`readCardFaceLocally`,
+tesseract with the checked-in `eng.traineddata`, ~1 s, free, nothing leaves the building; 2026-11-05):
+twice, plain and with light and dark swapped, and it counts only if the two agree on the number and
+the PIN and there is exactly one number. Anything else (a table, a small or angled photo, two readings
+that differ) goes to the same vision model as the receipt (`gpt-5.4-mini`, ~3 s, ~$0.003). So a card
+face reads with OpenAI out of credit, which is how Read the cards came to fail on images while PDFs
+and CSVs kept working. A 429 from OpenAI now says "out of credit or busy" and not "try again". The
+all-cards PDF matches pictures through the same order. The barcode is not read: ZXing could not decode
+the one on the real card. A **PDF** is text already, read with pdfjs
 (`legacy/build/pdf.mjs`, server-side) and `cardsFromText` (the long digit run is the
 number, a 4–8 digit run beside it the PIN, a `$` amount the balance). Measured on the
 real samples: one card face, one screenshot and a six-row table all read every digit.

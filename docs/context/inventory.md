@@ -320,3 +320,67 @@ size's **quantity and price**, in-stock total on active listings (`shopifyHoldin
   kept only where the variant sku IS the code or the code stands alone in the title
   (`IF4396` ≠ `IF4396-103`). Dual codes (`A/B`) read each.
 - **Shopify unreadable → the error, no list:** "couldn't see it" is never shown as "none".
+
+## Stock Check (`/stock-check`) — scan anything, one answer; count a size; My Scans
+Home → Browse & Listings → **Stock Check** and **My Scans** (admin + warehouse). Alex's ask
+(2026-11-04): "scan the shoe and it says you scanned a size 10, we have three — or the VIN
+says yes this is / is not in inventory", then audit by scanning every pair.
+- **One scan, one call:** `POST /api/items/stock-check { code, size?, countId?, via?, recheck? }`
+  (warehouse/PH/admin). `api/_lib/stock-check.js` `resolveStockCode`: **UPC** → shoe + size
+  through the receiving resolver (`resolveUpc`: catalogue first, own stock as fallback);
+  **VIN** → the pair's record (`getItemByVin`) + its status-change events, no pair → the
+  sticker's state (`checkVinStock`); anything else = **SKU** (every size). Then Shopify live
+  (`readShopify` = `shopifyLiveForStyle` → `shopifyHoldings`, as 🛍 Check).
+- **Every scan is recorded** in `stock_check_scans` under the person (username + name), with
+  what it resolved to, the verdict, Shopify's qty for the size, and `via` (scanner / camera /
+  typed). "Check again" sends `recheck` and is not logged.
+- **The number is Shopify's for-sale quantity** on ACTIVE listings for that size
+  (`shopifyForSize`, `src/lib/stockCheck.js`); archived/draft said apart, oversold = 0.
+  Unreadable Shopify is said, never shown as 0.
+- **Shopify's `committed` is deliberately NOT used.** GOAT and StockX orders are never
+  marked fulfilled in Shopify (24,222 orders before 2026-10-20 still read unfulfilled,
+  checked 2026-11-04), so committed only grows — one size read available 0 / committed 13.
+  A pair sold today but not shipped yet is on the shelf and NOT in the number; the screen
+  says: **count after the day's orders have shipped.**
+- **The VIN answer is our record** (`pairVerdict`): sold/shipped/used → ❌ Not in inventory
+  (with the day), missing → ⚠ "you've found it", pre_sold / issue → in, held; else ✅ In
+  inventory + status + shelf. Only as good as the scan-outs: a pair sold without a Mark
+  Sold scan still reads "In inventory".
+
+### Counting — the SERVER owns it (`stock_counts`)
+`/api/items/stock-count`: GET = my open count (last 12 h — a refresh/closed tab resumes it);
+POST `start` (from a recorded scan `scanId` — its shoe/size, the scan becomes #1 — or
+`sku`+`size`; optional `vinOnly`), `undo` (newest counted scan → `undone`, kept), `finish`
+(re-reads Shopify, `counted` computed from the rows), `cancel`. Shopify is read by the
+server at start (`expected_start`) and finish (`expected_end`). One open count per person.
+A scan with `countId` is judged by **`countDecision`** (pure): typed SKU never counts; a
+different shoe/size doesn't; VIN-only refuses box barcodes; a pair whose record says it
+left COUNTS (it's in hand) but is flagged. The client queues scans, start, undo and finish
+in order (a scan fired the instant after tapping Count lands in the count).
+
+### "Can it be bypassed?" (checked 2026-11-04, `e2e/stock-check.spec.js`)
+- **Editing the tally in the browser / sending `counted:true`** — no effect: the server
+  decides and computes the total from its rows.
+- **The same VIN twice, even fired at once** — counts once: partial unique index
+  `stock_check_scans_vin_once (count_id, vin) WHERE counted AND NOT undone`.
+- **Someone else's count** — scan into / undo / finish / cancel / start-from-my-scan → 404.
+- **Non-admin reading others' history** — `my-scans` ignores `user` for non-admins.
+- **NOT closable — box barcodes:** every size-10 box carries the SAME UPC, so a barcode can't
+  tell two boxes apart; one box scanned 3× counts 3. And a box scanned by barcode AND by
+  VIN counts twice. → **"Count by VIN sticker only"** (`vin_only`) makes each pair count
+  exactly once; reports show "N by VIN · N by box barcode" for every count.
+- **Typing VINs off a list instead of scanning pairs** — allowed (a torn sticker), but
+  recorded: `entryVia` reads keystroke timing (a gun types a code in a burst, <30 ms/char;
+  paste = typed). A HINT — a determined person can fake it — shown as "typed by hand" on
+  the count and in the reports.
+- **Camera counting identical boxes:** `CameraScanner refireAfterGapMs` (1.5 s while
+  counting) lets the same code fire again once it has left the view; a box held still keeps
+  decoding and does not re-fire (a flickering decode could, so each scan is listed + Undo).
+
+### My Scans (`/my-scans`) — scan history
+A person's **scan history** (user's call): every Stock Check scan, newest first, then a
+**Counts** tab — for a day / week / month (EST, `?dm/da/tab/user` in the URL), live
+(`stock_check_scans`, `stock_counts` in LIVE_TABLES). `GET /api/items/my-scans?from&to&user`.
+Non-admins see only their own; **an admin opens on Everyone** (titled "Scan History") and
+can pick one person (anyone who has scanned). **CSV + PDF** per tab (`src/lib/scanReport.js`,
+same rows for both; PDF via presell's `tablePdf`). Needs **`db:setup`** (two tables + index).

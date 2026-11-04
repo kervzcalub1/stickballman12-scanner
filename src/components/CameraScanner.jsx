@@ -13,7 +13,11 @@ import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 // (no exact deviceId) so we never call setDeviceId mid-effect — that used to
 // re-trigger the effect and start a second getUserMedia while the first was
 // still acquiring the camera, which raced into a black/stalled preview.
-export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomChange, mode = 'product', continuous = false }) {
+// `refireAfterGapMs` (continuous only): the SAME code may fire again once it has been out
+// of view that long — for counting identical boxes one after another (Stock Check), where
+// "fire a code once" would count ten size-10 boxes as one. A box held still keeps being
+// decoded, so it does not re-fire.
+export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomChange, mode = 'product', continuous = false, refireAfterGapMs = 0 }) {
   const videoRef = useRef(null);
   const controlsRef = useRef(null);
   const trackRef = useRef(null);
@@ -27,6 +31,9 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
   const onDetectedRef = useRef(onDetected);
   useEffect(() => { onDetectedRef.current = onDetected; }, [onDetected]);
   const firedRef = useRef(null); // last code fired in continuous mode (don't re-fire while it sits in view)
+  const seenAtRef = useRef(0);    // when firedRef's code was last decoded (refireAfterGapMs)
+  const gapRef = useRef(refireAfterGapMs);
+  gapRef.current = refireAfterGapMs;
   const [error, setError] = useState('');
   const [devices, setDevices] = useState([]);
   const [deviceId, setDeviceId] = useState(undefined); // only set by the user switcher
@@ -105,8 +112,14 @@ export default function CameraScanner({ onDetected, onClose, zoom = 1, onZoomCha
               if (rawMode && lastTextRef.current !== text) { lastTextRef.current = text; return; }
               // Continuous mode: fire a given code once, not every frame it stays in view.
               // (Re-firing spammed the caller and, before the dedupe fix, added dupes.)
-              if (continuous && firedRef.current === text) return;
+              const now = Date.now();
+              if (continuous && firedRef.current === text) {
+                const gone = gapRef.current > 0 && now - seenAtRef.current > gapRef.current;
+                seenAtRef.current = now;
+                if (!gone) return;
+              }
               firedRef.current = text;
+              seenAtRef.current = now;
               if (!continuous) { doneRef.current = true; try { controls.stop(); } catch { /* noop */ } }
               onDetectedRef.current(text);
             }

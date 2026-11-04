@@ -3256,6 +3256,57 @@ await sql(`
 `);
 await sql(`CREATE INDEX IF NOT EXISTS inbound_issue_events_idx ON inbound_issue_events (issue_id, created_at)`);
 
+// Stock Check + My Scans (docs/context/inventory.md "Stock Check"). Every scan the Stock
+// Check screen makes is recorded HERE by the server, and a count's tally is the server's —
+// the browser never says what was counted, so a report can't be edited into agreement.
+await sql(`
+  CREATE TABLE IF NOT EXISTS stock_counts (
+    id              BIGSERIAL PRIMARY KEY,
+    username        TEXT NOT NULL,
+    user_name       TEXT,
+    sku             TEXT NOT NULL,
+    size            TEXT NOT NULL,
+    name            TEXT,
+    vin_only        BOOLEAN NOT NULL DEFAULT false,
+    expected_start  INTEGER,
+    expected_end    INTEGER,
+    counted         INTEGER,
+    status          TEXT NOT NULL DEFAULT 'open',
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at     TIMESTAMPTZ
+  )
+`);
+await sql(`ALTER TABLE stock_counts DROP CONSTRAINT IF EXISTS stock_counts_status_check`);
+await sql(`ALTER TABLE stock_counts ADD CONSTRAINT stock_counts_status_check CHECK (status IN ('open','finished','cancelled'))`);
+await sql(`CREATE INDEX IF NOT EXISTS stock_counts_user_idx ON stock_counts (username, started_at DESC)`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS stock_check_scans (
+    id           BIGSERIAL PRIMARY KEY,
+    username     TEXT NOT NULL,
+    user_name    TEXT,
+    count_id     BIGINT REFERENCES stock_counts(id) ON DELETE CASCADE,
+    code         TEXT NOT NULL,
+    kind         TEXT,
+    via          TEXT,
+    sku          TEXT,
+    size         TEXT,
+    name         TEXT,
+    vin          TEXT,
+    item_status  TEXT,
+    verdict      TEXT,
+    shopify_qty  INTEGER,
+    counted      BOOLEAN NOT NULL DEFAULT false,
+    undone       BOOLEAN NOT NULL DEFAULT false,
+    note         TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS stock_check_scans_user_idx ON stock_check_scans (username, created_at DESC)`);
+await sql(`CREATE INDEX IF NOT EXISTS stock_check_scans_count_idx ON stock_check_scans (count_id, created_at)`);
+// One pair counts once per count, whatever two tabs or a double-fired gun send at once.
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS stock_check_scans_vin_once
+             ON stock_check_scans (count_id, vin) WHERE counted AND NOT undone AND vin IS NOT NULL`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -3275,6 +3326,7 @@ const LIVE_TABLES = [
   'shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_jobs', 'shein_listing_job_items',
   'cancellations', 'cancellation_photos', 'cancellation_events',
   'inbound_issues', 'inbound_issue_events',
+  'stock_counts', 'stock_check_scans',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

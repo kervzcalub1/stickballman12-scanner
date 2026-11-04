@@ -1963,8 +1963,12 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
            b.batch_code, b.supplier_name, b.buyer_name, b.date_received, b.kind
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
-    WHERE (${from}::date IS NULL OR coalesce(b.date_received, i.created_at::date) >= ${from}::date)
-      AND (${to}::date   IS NULL OR coalesce(b.date_received, i.created_at::date) <= ${to}::date)
+    -- The item's own date is its EST day, like the batch queries above — a bare
+    -- created_at::date is the DATABASE's (UTC) day, so every pair received after ~7-8 PM
+    -- EST fell off Inventory's "Day" view onto tomorrow (caught by inventory-search-date
+    -- once CI ran in the evening, 2026-11-04).
+    WHERE (${from}::date IS NULL OR coalesce(b.date_received, (i.created_at AT TIME ZONE 'America/New_York')::date) >= ${from}::date)
+      AND (${to}::date   IS NULL OR coalesce(b.date_received, (i.created_at AT TIME ZONE 'America/New_York')::date) <= ${to}::date)
       AND (${supplier}::text IS NULL OR b.supplier_name = ${supplier})
       AND (${status}::text   IS NULL OR i.status = ${status})
       AND (${kind}::text     IS NULL OR b.kind = ${kind})
@@ -12698,4 +12702,159 @@ export async function recentStockxEdits(limit = 300) {
     SELECT e.*, s.ended_at AS listing_ended_at
       FROM stockx_price_edits e LEFT JOIN stockx_listings s ON s.listing_id = e.listing_id
      ORDER BY e.id DESC LIMIT ${limit}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Stock Check + My Scans (docs/context/inventory.md "Stock Check").    */
+/* The server records every scan and owns every count's tally.          */
+/* ------------------------------------------------------------------ */
+
+// One scan, as the server answered it. A counted VIN that is already counted in this
+// count (two tabs, a gun double-firing) hits the partial unique index and is filed
+// NOT counted instead — the index is the guard, not the check before it.
+export async function recordStockScan(r) {
+  const vals = [r.username, r.userName || null, r.countId || null, String(r.code).slice(0, 80), r.kind || null,
+    r.via || null, r.sku || null, r.size || null, r.name || null, r.vin || null, r.itemStatus || null,
+    r.verdict || null, r.shopifyQty ?? null];
+  try {
+    const [row] = await db()`
+      INSERT INTO stock_check_scans (username, user_name, count_id, code, kind, via, sku, size, name, vin,
+                                     item_status, verdict, shopify_qty, counted, note)
+      VALUES (${vals[0]}, ${vals[1]}, ${vals[2]}, ${vals[3]}, ${vals[4]}, ${vals[5]}, ${vals[6]}, ${vals[7]},
+              ${vals[8]}, ${vals[9]}, ${vals[10]}, ${vals[11]}, ${vals[12]}, ${!!r.counted}, ${r.note || null})
+      RETURNING *`;
+    return row;
+  } catch (e) {
+    if (e.code !== '23505' || !r.counted) throw e;
+    const [row] = await db()`
+      INSERT INTO stock_check_scans (username, user_name, count_id, code, kind, via, sku, size, name, vin,
+                                     item_status, verdict, shopify_qty, counted, note)
+      VALUES (${vals[0]}, ${vals[1]}, ${vals[2]}, ${vals[3]}, ${vals[4]}, ${vals[5]}, ${vals[6]}, ${vals[7]},
+              ${vals[8]}, ${vals[9]}, ${vals[10]}, ${vals[11]}, ${vals[12]}, false, 'this pair is already counted')
+      RETURNING *`;
+    return row;
+  }
+}
+
+export async function getStockCount(id) {
+  const [row] = await db()`SELECT * FROM stock_counts WHERE id = ${id}`;
+  return row || null;
+}
+// The user's count still open from the last 12 hours — a refresh or a closed tab picks it up.
+export async function getOpenStockCount(username) {
+  const [row] = await db()`
+    SELECT * FROM stock_counts WHERE username = ${username} AND status = 'open'
+       AND started_at > now() - interval '12 hours'
+     ORDER BY started_at DESC LIMIT 1`;
+  return row || null;
+}
+export async function startStockCount({ username, userName, sku, size, name, vinOnly, expected }) {
+  // One open count per person: starting another closes the old one as cancelled.
+  await db()`UPDATE stock_counts SET status = 'cancelled', finished_at = now() WHERE username = ${username} AND status = 'open'`;
+  const [row] = await db()`
+    INSERT INTO stock_counts (username, user_name, sku, size, name, vin_only, expected_start)
+    VALUES (${username}, ${userName || null}, ${sku}, ${size}, ${name || null}, ${!!vinOnly}, ${expected ?? null})
+    RETURNING *`;
+  return row;
+}
+// Attach the scan that started the count as its #1 — only the user's own, recent, and
+// for the same shoe + size (checked by the caller).
+export async function claimScanForCount(scanId, countId, username) {
+  try {
+    const [row] = await db()`
+      UPDATE stock_check_scans SET count_id = ${countId}, counted = true, note = 'the one scanned first'
+       WHERE id = ${scanId} AND username = ${username} AND count_id IS NULL
+         AND created_at > now() - interval '30 minutes'
+      RETURNING *`;
+    return row || null;
+  } catch (e) { if (e.code === '23505') return null; throw e; }
+}
+export async function getStockScan(id) {
+  const [row] = await db()`SELECT * FROM stock_check_scans WHERE id = ${id}`;
+  return row || null;
+}
+export async function stockCountTally(countId) {
+  const [row] = await db()`
+    SELECT count(*) FILTER (WHERE counted AND NOT undone)::int AS counted,
+           count(*) FILTER (WHERE counted AND NOT undone AND kind = 'vin')::int AS by_vin,
+           count(*) FILTER (WHERE counted AND NOT undone AND kind = 'upc')::int AS by_barcode,
+           count(*) FILTER (WHERE counted AND NOT undone AND via = 'typed')::int AS typed,
+           count(*) FILTER (WHERE counted AND NOT undone AND verdict IN ('out','warn'))::int AS flagged,
+           count(*) FILTER (WHERE NOT counted)::int AS refused
+      FROM stock_check_scans WHERE count_id = ${countId}`;
+  return row;
+}
+export async function stockCountScans(countId) {
+  return await db()`SELECT * FROM stock_check_scans WHERE count_id = ${countId} ORDER BY created_at DESC, id DESC LIMIT 200`;
+}
+// Undo = the newest counted scan stops counting. Kept, marked undone, so the report shows it.
+export async function undoLastStockCountScan(countId) {
+  const [row] = await db()`
+    UPDATE stock_check_scans SET undone = true
+     WHERE id = (SELECT id FROM stock_check_scans WHERE count_id = ${countId} AND counted AND NOT undone
+                  ORDER BY created_at DESC, id DESC LIMIT 1)
+    RETURNING *`;
+  return row || null;
+}
+export async function finishStockCount(id, { expectedEnd }) {
+  const [row] = await db()`
+    UPDATE stock_counts c SET status = 'finished', finished_at = now(), expected_end = ${expectedEnd ?? null},
+           counted = (SELECT count(*)::int FROM stock_check_scans s WHERE s.count_id = c.id AND s.counted AND NOT s.undone)
+     WHERE c.id = ${id} AND c.status = 'open'
+    RETURNING *`;
+  return row || null;
+}
+export async function cancelStockCount(id) {
+  const [row] = await db()`UPDATE stock_counts SET status = 'cancelled', finished_at = now() WHERE id = ${id} AND status = 'open' RETURNING *`;
+  return row || null;
+}
+
+// My Scans: scans + counts in an EST date range, one person's or everyone's (username null).
+export async function listStockScans({ username, from, to, limit = 5000 }) {
+  const lim = Math.min(20000, Math.max(1, Number(limit) || 5000));
+  if (username) {
+    return await db()`
+      SELECT * FROM stock_check_scans
+       WHERE username = ${username}
+         AND (created_at AT TIME ZONE 'America/New_York')::date BETWEEN ${from}::date AND ${to}::date
+       ORDER BY created_at DESC, id DESC LIMIT ${lim}`;
+  }
+  return await db()`
+    SELECT * FROM stock_check_scans
+     WHERE (created_at AT TIME ZONE 'America/New_York')::date BETWEEN ${from}::date AND ${to}::date
+     ORDER BY created_at DESC, id DESC LIMIT ${lim}`;
+}
+export async function listStockCounts({ username, from, to }) {
+  if (username) {
+    return await db()`
+      SELECT c.*, t.* FROM stock_counts c
+      CROSS JOIN LATERAL (
+        SELECT count(*) FILTER (WHERE s.counted AND NOT s.undone)::int AS tally,
+               count(*) FILTER (WHERE s.counted AND NOT s.undone AND s.kind = 'vin')::int AS by_vin,
+               count(*) FILTER (WHERE s.counted AND NOT s.undone AND s.kind = 'upc')::int AS by_barcode,
+               count(*) FILTER (WHERE s.counted AND NOT s.undone AND s.via = 'typed')::int AS typed,
+               count(*) FILTER (WHERE s.counted AND NOT s.undone AND s.verdict IN ('out','warn'))::int AS flagged,
+               count(*) FILTER (WHERE NOT s.counted)::int AS refused
+          FROM stock_check_scans s WHERE s.count_id = c.id) t
+       WHERE c.username = ${username}
+         AND (c.started_at AT TIME ZONE 'America/New_York')::date BETWEEN ${from}::date AND ${to}::date
+       ORDER BY c.started_at DESC`;
+  }
+  return await db()`
+    SELECT c.*, t.* FROM stock_counts c
+    CROSS JOIN LATERAL (
+      SELECT count(*) FILTER (WHERE s.counted AND NOT s.undone)::int AS tally,
+             count(*) FILTER (WHERE s.counted AND NOT s.undone AND s.kind = 'vin')::int AS by_vin,
+             count(*) FILTER (WHERE s.counted AND NOT s.undone AND s.kind = 'upc')::int AS by_barcode,
+             count(*) FILTER (WHERE s.counted AND NOT s.undone AND s.via = 'typed')::int AS typed,
+             count(*) FILTER (WHERE s.counted AND NOT s.undone AND s.verdict IN ('out','warn'))::int AS flagged,
+             count(*) FILTER (WHERE NOT s.counted)::int AS refused
+        FROM stock_check_scans s WHERE s.count_id = c.id) t
+     WHERE (c.started_at AT TIME ZONE 'America/New_York')::date BETWEEN ${from}::date AND ${to}::date
+     ORDER BY c.started_at DESC`;
+}
+export async function listStockScanUsers() {
+  return await db()`
+    SELECT username, max(user_name) AS user_name, count(*)::int AS scans, max(created_at) AS last_at
+      FROM stock_check_scans GROUP BY username ORDER BY max(created_at) DESC`;
 }

@@ -289,7 +289,7 @@ test('the gift card desk hears when a request is re-opened, and when it closes a
   t = calls.length;
   expect((await post(request, 'buyer', 'cart/submit', { cartId })).status).toBe(200);
   await expect.poll(() => issuerSays(t).length).toBe(1);
-  expect(issuerSays(t)[0]).toContain(`closed ${code} again with no changes.\nNothing more to issue — $100.00 on cards covers the $100.00 approved.`);
+  expect(issuerSays(t)[0]).toContain(`closed ${code} again with no changes.\nNothing more to issue — $100.00 on cards covers the $100.00 to fund.`);
 
   // 3. Re-opened, a pair added, closed again → what was added, and that it needs approving first.
   expect((await post(request, 'buyer', 'cart/submit', { cartId, reopen: true })).status).toBe(200);

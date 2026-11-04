@@ -30,6 +30,8 @@ import { ItemCosts } from './screens/ItemCosts.jsx';
 import { BoxLabels } from './screens/BoxLabels.jsx';
 import { Inbound } from './screens/Inbound.jsx';
 import { BoxStock } from './screens/BoxStock.jsx';
+import { StockCheck } from './screens/StockCheck.jsx';
+import { MyScans } from './screens/MyScans.jsx';
 import { StatusScanPage } from './screens/StatusScanPage.jsx';
 import { RescaleRequestsReport } from './screens/RescaleRequests.jsx';
 import { ShelvePage } from './screens/ShelvePage.jsx';
@@ -250,6 +252,8 @@ export default function App() {
   // Replacement box labels — admin/warehouse (ph_team short-circuits to PHTeamApp above).
   if (view === 'costs') return withAdvisor(<ItemCosts onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'box-labels') return withAdvisor(<BoxLabels navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'stock-check') return withAdvisor(<StockCheck onMyScans={() => go('my-scans')} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'my-scans') return withAdvisor(<MyScans user={user} onStockCheck={() => go('stock-check')} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'box-stock') return withAdvisor(<BoxStock onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'sold') return withAdvisor(<StatusScanPage target="sold" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'shipped') return withAdvisor(<StatusScanPage target="shipped" navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);

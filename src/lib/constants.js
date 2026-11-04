@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'shein-check', 'shein-listings', 'cancellations', 'inbound-issues'];
+export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'shein-check', 'shein-listings', 'cancellations', 'inbound-issues', 'stock-check', 'my-scans'];
 // No Box lives at /no-box (and /no-box/box-swap, /no-box/print-box-labels — no-box.md);
 // the old /nobox still opens it.
 const PATH_ALIAS = { nobox: 'no-box' };
@@ -187,6 +187,9 @@ export const HOME_SECTIONS = [
   ] },
   { title: 'Browse & Listings', accent: 'listing', cards: [
     { key: 'inventory', icon: '🔎', title: 'Inventory', sub: 'Search, scan & print labels' },
+    // Scan anything, get one answer — and count a size against Shopify (inventory.md).
+    { key: 'stock-check', icon: '🔢', title: 'Stock Check', sub: 'Scan a box: how many Shopify has in that size. Scan a VIN: is this pair still in inventory. Then count a size' },
+    { key: 'my-scans', icon: '🧾', title: 'My Scans', sub: 'Your scan history — every shoe you scanned on Stock Check, and your counts. CSV and PDF reports' },
     { key: 'locations', icon: '🗺️', title: 'Locate Shoe', sub: 'Find which shelf a shoe is on' },
     { key: 'report', icon: '📊', title: 'Listings & Sync', sub: 'Store listings & sync status' },
     { key: 'deleted', icon: '🗑️', title: 'Deleted', sub: 'Pairs removed from inventory — search by SKU, history kept' },

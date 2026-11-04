@@ -230,6 +230,12 @@ export const api = {
   batchGet: (id) => get(`/api/batches/get?id=${encodeURIComponent(id)}`),
   itemLookup: (code) => get(`/api/items/lookup?code=${encodeURIComponent(code)}`),
   shopifyCheck: (sku) => get(`/api/items/shopify-check?sku=${encodeURIComponent(sku)}`),
+  // Stock Check: one scan (VIN / UPC / SKU) → the shoe, size, Shopify's count, the pair's state.
+  stockCheck: (code, { size = '', countId = null, via = null, recheck = false } = {}) =>
+    post('/api/items/stock-check', { code, ...(size ? { size } : {}), ...(countId != null ? { countId } : {}), ...(via ? { via } : {}), ...(recheck ? { recheck } : {}) }),
+  stockCountOpen: () => get('/api/items/stock-count'),
+  stockCount: (action, body = {}) => post('/api/items/stock-count', { action, ...body }),
+  myScans: ({ from, to, user = '' }) => get(`/api/items/my-scans?${new URLSearchParams({ from, to, ...(user ? { user } : {}) })}`),
   // Exact UPC/SKU match against our own stock (Box Labels asks this before the catalogue).
   itemsFind: (code) => get(`/api/items/find?code=${encodeURIComponent(code)}`),
   // Shelf locations (put-away + management)

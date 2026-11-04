@@ -334,7 +334,7 @@ function Answer({ a, busy, vinOnly, onVinOnly, onPickSize, onRecheck, onCount })
             </div>
           )}
           {shopify && !shopify.error && !sizes.length && <p className="muted">Shopify has no live listing for {shoe.sku}.</p>}
-          {shopify?.checkedAt && <p className="muted sm">Live from Shopify at {PH_DATETIME.format(new Date(shopify.checkedAt))} EST.</p>}
+          {shopify?.checkedAt && !shopify.error && <p className="muted sm">Live from Shopify at {PH_DATETIME.format(new Date(shopify.checkedAt))} EST.</p>}
 
           <div className="stkchk-actions">
             <button type="button" className="btn ghost" onClick={onRecheck} disabled={busy}>{busy ? 'Checking…' : 'Check again'}</button>

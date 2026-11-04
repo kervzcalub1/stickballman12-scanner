@@ -1963,8 +1963,12 @@ export async function queryItems({ q = null, from = null, to = null, supplier = 
            b.batch_code, b.supplier_name, b.buyer_name, b.date_received, b.kind
     FROM items i
     LEFT JOIN batches b ON b.id = i.batch_id
-    WHERE (${from}::date IS NULL OR coalesce(b.date_received, i.created_at::date) >= ${from}::date)
-      AND (${to}::date   IS NULL OR coalesce(b.date_received, i.created_at::date) <= ${to}::date)
+    -- The item's own date is its EST day, like the batch queries above — a bare
+    -- created_at::date is the DATABASE's (UTC) day, so every pair received after ~7-8 PM
+    -- EST fell off Inventory's "Day" view onto tomorrow (caught by inventory-search-date
+    -- once CI ran in the evening, 2026-11-04).
+    WHERE (${from}::date IS NULL OR coalesce(b.date_received, (i.created_at AT TIME ZONE 'America/New_York')::date) >= ${from}::date)
+      AND (${to}::date   IS NULL OR coalesce(b.date_received, (i.created_at AT TIME ZONE 'America/New_York')::date) <= ${to}::date)
       AND (${supplier}::text IS NULL OR b.supplier_name = ${supplier})
       AND (${status}::text   IS NULL OR i.status = ${status})
       AND (${kind}::text     IS NULL OR b.kind = ${kind})

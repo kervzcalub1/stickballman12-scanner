@@ -1659,9 +1659,27 @@ scoped to own POs on every one; admin/superadmin auto-allowed):
 
 **Box lifecycle:** `pending` (filling — scan items) → `packed` (reviewed & closed, ready to
 ship; reopenable) → `shipped` → `in_transit`/`delivered` (tracking). The supplier `ScanModal`
-mirrors the warehouse Add-Item dialog (inline continuous camera, 1.2s de-dup, auto-filled size
-+ size chips + "+ Custom", re-scan bumps qty, different-shoe switch prompt). "Review & close
-box" opens a contents review before closing.
+mirrors the warehouse Add-Item dialog (inline continuous camera, auto-filled size
++ size chips + "+ Custom", re-scan bumps qty). "Review & close box" opens a contents review
+before closing.
+
+**Rapid scan (2026-11-04, "suppliers cannot rapid scan"; shared by the PH side):**
+- The scan field and its Add button are **never disabled**. Scans **queue** and resolve one
+  at a time, in order (`enqueue`). The old `disabled={busy}` dropped focus after the first
+  scan, so every later gun scan went nowhere. A disabled submit button also blocks the gun's
+  implicit Enter.
+- The 1.2s re-read cooldown is **camera only** (`isCameraReread`). Three boxes of one size
+  scanned back to back are 3 pairs. Same rule as warehouse receiving.
+- **A different shoe adds the current one by itself** and opens the new one. The "Different
+  shoe detected" prompt only appears when the current shoe can't be added yet (a size or
+  carton missing, or an Alias style-code check open).
+- After tapping a size chip or ± (any button except "+ Custom"), focus goes back to the scan
+  field on mouse/trackpad devices. Otherwise the gun's Enter presses that chip again.
+- Scans that fail stay listed (`.po-scan-failed`) until cleared, because the next scan
+  would overwrite a flash.
+- The draft is read through `draftRef` (`openDraft` sets the ref and the state together), so
+  a queued scan sees the shoe the previous one opened.
+- Test: `e2e/po-supplier-rapid-scan.spec.js`.
 
 **UI:** PH `CreatePO` lives in PHTeamApp (`/ph/purchase-orders`). Supplier `SupplierApp`
 renders for `role === 'supplier'` (any host) and on the `supplier.` subdomain

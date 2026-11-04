@@ -126,7 +126,7 @@ async function handleTap(update, cq) {
       action: kind,
       ...(kind === 'approve' ? { qty: Number(parts[3]) } : {}),
     });
-    return answerOnCard(chatId, messageId, out, cardEnv);
+    return answerOnCard(chatId, messageId, await alreadyRecorded(out, cartId, lineId, kind, Number(parts[3])), cardEnv);
   }
   // A premium pair's tip buttons (one-size card): the same decision a "tip ok" reply makes.
   if (kind === 'tipok' || kind === 'tipno') {
@@ -228,7 +228,29 @@ async function handleMessage(update, msg) {
     action: 'approve',
     qty: Number(String(msg.text).trim()),
   });
-  return answerOnCard(msg.chat.id, Number(pending.card_message_id), out, pending.env);
+  return answerOnCard(msg.chat.id, Number(pending.card_message_id),
+    await alreadyRecorded(out, Number(pending.cart_id), Number(pending.line_id), 'approve', Number(String(msg.text).trim())), pending.env);
+}
+
+// A tap (Buy N / Turn it down / a picker number) that asks for what the pair ALREADY says
+// changes nothing, and the decide path answers 409 "Nothing was still awaiting a decision —
+// someone may have got there first". That read as a conflict or a lost tap, when it was a
+// double tap or two approvers agreeing (floor feedback, 2026-11-04). Typed replies got the
+// same fix on 11-02 (decideGroup). Checked AFTER the decision path, so the identity rules
+// (unlinked tapper, no approve_buying) still answer first; only a 409 whose line now holds
+// exactly what was asked is reworded — anything else is passed through untouched.
+async function alreadyRecorded(out, cartId, lineId, action, qty) {
+  if (out?.body?.ok || out?.code !== 409) return out;
+  const line = await getBuyCartLine(cartId, lineId).catch(() => null);
+  if (!line) return out;
+  const same = action === 'reject'
+    ? line.status === 'rejected'
+    : line.status === 'approved' && Number(line.qty) === Number(qty);
+  if (!same) return out;
+  const by = line.decided_by ? ` by ${line.decided_by}` : '';
+  const size = line.size ? `size ${line.size}` : 'this pair';
+  const said = action === 'reject' ? `${size} turned down${by}` : `${size} ×${line.qty}, approved${by}`;
+  return { code: 200, body: { ok: true, outcome: `✅ Already recorded — nothing changed (${said}).`, reaction: action === 'reject' ? '👎' : '👍' } };
 }
 
 // "11 x 3 / 10.5 x 4" under a shoe's card → those sizes approved at those quantities, every

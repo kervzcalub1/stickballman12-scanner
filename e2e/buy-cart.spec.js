@@ -3041,6 +3041,69 @@ test.describe('gift cards read off a file', () => {
     expect(wrong.body.error).toMatch(/not on this request/);
   });
 
+  // The cardwell card face: an image, no labels beside the values, and the balance added
+  // as "BALANCE = $200". It reads with the OpenAI account empty, on this server.
+  test('a card face image reads number, PIN and balance here, and two readings must agree', async () => {
+    const { cardFromTwoReadings, cardsFromPages } = await import('../api/cart/gift-card-read.js');
+    const face = (number, pin) => `(mm) cardwell\nNike\nCARD NUMBER PIN\n${number} ${pin}\nBALANCE = $200\n`;
+    const good = face('6060100000000004444', '444444');
+    expect(cardFromTwoReadings(good, good)).toEqual({ number: '6060100000000004444', pin: '444444', balance: 200, retailer: '' });
+    // A single digit of difference is not a card we can vouch for: it goes to the AI reader.
+    expect(cardFromTwoReadings(good, face('6060100000000004445', '444444'))).toBeNull();
+    expect(cardFromTwoReadings(good, face('6060100000000004444', '444445'))).toBeNull();
+    // No balance on one reading: the other's stands. Different balances: a person types it.
+    expect(cardFromTwoReadings(good, good.replace('BALANCE = $200', '')).balance).toBe(200);
+    expect(cardFromTwoReadings(good, good.replace('$200', '$300')).balance).toBeNull();
+    // A table is not a card face.
+    const table = '$200.00 6060100000000005555 555555\n$200.00 6060100000000006666 666666';
+    expect(cardFromTwoReadings(table, table)).toBeNull();
+    // The same face as a PDF keeps its PIN once the balance label is recognised.
+    expect(cardsFromPages([good.trim().split('\n')])).toEqual([{ number: '6060100000000004444', pin: '444444', balance: 200, retailer: '' }]);
+  });
+
+  test('a card face image really reads, end to end, off a made-up card', async () => {
+    const sharp = (await import('sharp')).default;
+    const { readCardFaceLocally } = await import('../api/cart/gift-card-read.js');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1208" height="767"><rect width="1208" height="767" fill="#2c6652"/>
+      <text x="72" y="100" font-family="sans-serif" font-size="28" font-weight="bold" fill="#fff">cardwell</text>
+      <text x="72" y="250" font-family="sans-serif" font-size="80" font-weight="bold" fill="#fff">Nike</text>
+      <text x="72" y="350" font-family="monospace" font-size="16" fill="#cde">CARD NUMBER</text><text x="933" y="350" font-family="monospace" font-size="16" fill="#cde">PIN</text>
+      <text x="72" y="392" font-family="monospace" font-size="28" font-weight="bold" fill="#fff">6060100000000007777</text><text x="933" y="392" font-family="monospace" font-size="28" font-weight="bold" fill="#fff">777777</text>
+      <text x="505" y="472" font-family="serif" font-size="40" font-weight="bold" fill="#fff">BALANCE = $200</text></svg>`;
+    const jpeg = await sharp(Buffer.from(svg)).jpeg({ quality: 70 }).toBuffer();
+    expect(await readCardFaceLocally(jpeg)).toEqual({ number: '6060100000000007777', pin: '777777', balance: 200, retailer: '' });
+  });
+
+  test('a card face uploaded to a request comes back from Read the cards, read here', async ({ request }) => {
+    test.skip(!process.env.R2_ACCOUNT_ID, 'R2 is not configured in this env — file-sign answers 503');
+    const sharp = (await import('sharp')).default;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1208" height="767"><rect width="1208" height="767" fill="#2c6652"/>
+      <text x="72" y="350" font-family="monospace" font-size="16" fill="#cde">CARD NUMBER</text><text x="933" y="350" font-family="monospace" font-size="16" fill="#cde">PIN</text>
+      <text x="72" y="392" font-family="monospace" font-size="28" font-weight="bold" fill="#fff">6060100000000008888</text><text x="933" y="392" font-family="monospace" font-size="28" font-weight="bold" fill="#fff">888888</text>
+      <text x="505" y="472" font-family="serif" font-size="40" font-weight="bold" fill="#fff">BALANCE = $150</text></svg>`;
+    const jpeg = await sharp(Buffer.from(svg)).jpeg({ quality: 70 }).toBuffer();
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const signed = await call(request, 'issuer', 'cart/file-sign', { cartId, kind: 'gift_card', contentType: 'image/jpeg' });
+    expect(signed.status).toBe(200);
+    expect((await fetch(signed.body.uploadUrl, { method: 'PUT', body: jpeg })).ok).toBe(true);
+    const attached = await call(request, 'issuer', 'cart/file-attach', { cartId, kind: 'gift_card', key: signed.body.key, name: 'face.jpg', contentType: 'image/jpeg', sizeBytes: jpeg.length });
+    expect(attached.status).toBe(200);
+    const fileId = Number((await pool.query(`SELECT id FROM buy_cart_files WHERE cart_id = $1 AND r2_key = $2`, [cartId, signed.body.key])).rows[0].id);
+    try {
+      const read = await call(request, 'issuer', 'cart/gift-card-read', { cartId, fileId });
+      expect(read.status).toBe(200);
+      expect(read.body.source).toBe('local');
+      expect(read.body.cards).toEqual([{ number: '6060100000000008888', pin: '888888', balance: 150, retailer: null, already: false }]);
+      // On the trail: how many and how, never a digit.
+      const ev = (await pool.query(`SELECT body FROM buy_cart_events WHERE cart_id = $1 AND kind = 'gc_read'`, [cartId])).rows;
+      expect(ev.length).toBe(1);
+      expect(ev[0].body).toContain('this server, read twice');
+      expect(ev[0].body).not.toMatch(/\d{4,}/);
+    } finally {
+      await call(request, 'issuer', 'cart/file-delete', { cartId, fileId });
+    }
+  });
+
   // Nike's e-gift PDF: one card a page, "Pin:" and "Gift Card Value:" on lines of their
   // own. The row reader found every number in such a file and not one PIN or balance.
   test('an e-gift PDF, one card a page, reads its PIN and value off their labels', async () => {

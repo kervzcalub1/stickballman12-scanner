@@ -10,9 +10,13 @@
 //     own ("Gift Card Value: 200.00" / "Card Number: …" / "Pin: …" — Nike's layout);
 //   · a CSV the card seller exports (number · PIN · balance), usually sent alongside
 //     card-face images that carry no balance.
-// An IMAGE goes to the vision model, the same reader and the same rules as the receipt
-// (`receipt-read.js`). A PDF is text already, so it is read with pdfjs and a regex —
-// paying a model to look at a picture of text would spend money to lose accuracy.
+// An IMAGE is read HERE first, with tesseract: a card face is clean printed text on a
+// flat picture, so it costs nothing, works with the OpenAI account empty, and the card
+// never leaves the building. It is read twice and both readings must agree. Anything else
+// (a table, a phone photo, two readings that differ) goes to the vision model, the same
+// reader and the same rules as the receipt (`receipt-read.js`). A PDF is text already, so
+// it is read with pdfjs and a regex — paying a model to look at a picture of text would
+// spend money to lose accuracy.
 //
 // THE MODEL IS A READER, NOT A DECIDER. Nothing here records a card: every row goes back
 // to a review table, a person ticks it, and only then does `cart/gift-card` encrypt and
@@ -26,12 +30,17 @@ import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import { getBuyCart, getBuyCartFile, listBuyCartCardTails, logCartEvent, dbConfigured, setBuyCartFileCardTail } from '../_lib/db.js';
 import { requirePrivilege } from '../_lib/buycart.js';
 import { getObject, r2Configured } from '../_lib/r2.js';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 const MODEL = process.env.RECEIPT_AI_MODEL || process.env.PAYOUT_AI_MODEL || 'gpt-5.4-mini';
 const MAX_EDGE = 1500;
 const TIMEOUT_MS = 45_000;
 const MAX_CARDS = 60;
+const LOCAL_TIMEOUT_MS = 30_000;
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..'); // eng.traineddata is checked in
 
 const aiConfigured = () => !!process.env.OPENAI_API_KEY;
 
@@ -100,6 +109,26 @@ export function cardsFromText(lines) {
 const LONG_RUN = /\b\d{12,24}\b/g;
 
 /**
+ * One card off its face, from lines holding exactly one card number. The PIN and value
+ * are read off their LABELS anywhere on the face; a PIN with no label of its own is the
+ * short run beside the number, which is the cardwell face: "CARD NUMBER   PIN" on one
+ * line, both values on the next. `labelled` says a label was actually found.
+ */
+export function cardFromFaceLines(lines) {
+  const text = lines.join('\n');
+  const number = (text.match(LONG_RUN) || [])[0];
+  const labelledPin = (text.match(/\bpin(?:\s*(?:number|code|#))?\s*[:#=]?\s*(\d{4,8})\b/i) || [])[1] || null;
+  const value = text.match(/\b(?:gift\s*card\s*value|card\s*value|value|balance|amount|denomination)\s*[:=]?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i);
+  const balance = value ? Number(value[1].replace(/,/g, '')) : null;
+  const row = lines.find((l) => l.includes(number)) || '';
+  const pin = labelledPin || (row.replace(number, ' ').match(/\b\d{4,8}\b/) || [])[0] || null;
+  return {
+    labelled: !!(labelledPin || value),
+    card: { number, pin, balance: Number.isFinite(balance) && balance > 0 ? balance : null, retailer: '' },
+  };
+}
+
+/**
  * Cards out of a PDF, page by page. A page carrying exactly ONE card number is a card
  * face — an e-gift PDF, one card a page — and its PIN and value are read off their
  * LABELS anywhere on that page. Nike prints "Pin:" and "Gift Card Value:" on lines of
@@ -113,14 +142,10 @@ export function cardsFromPages(pages) {
     const lines = (page || []).map((l) => String(l || ''));
     const numbers = new Set(lines.flatMap((l) => [...l.matchAll(LONG_RUN)].map((m) => m[0])));
     if (numbers.size !== 1) { out.push(...cardsFromText(lines)); continue; }
-    const [number] = numbers;
-    const text = lines.join('\n');
-    const pin = (text.match(/\bpin(?:\s*(?:number|code|#))?\s*[:#]?\s*(\d{4,8})\b/i) || [])[1] || null;
-    const value = text.match(/\b(?:gift\s*card\s*value|card\s*value|value|balance|amount|denomination)\s*:?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i);
-    const balance = value ? Number(value[1].replace(/,/g, '')) : null;
+    const face = cardFromFaceLines(lines);
     // No labels at all (a card face with the digits and nothing else): the row reader.
-    if (!pin && !value) { out.push(...cardsFromText(lines)); continue; }
-    out.push({ number, pin, balance: Number.isFinite(balance) && balance > 0 ? balance : null, retailer: '' });
+    if (!face.labelled) { out.push(...cardsFromText(lines)); continue; }
+    out.push(face.card);
   }
   return out;
 }
@@ -195,6 +220,66 @@ export function cardsFromCsv(text) {
   return { cards, mangled };
 }
 
+/**
+ * The two readings of one card face → the card, or null when this is not a job for
+ * tesseract. Null covers no number, more than one number (a table), and readings that
+ * differ on the number or the PIN: a wrong digit is a card that cannot be spent, so a
+ * disagreement goes to the vision model rather than to a guess. The balance may come from
+ * either reading, and a person fills it in if neither has one.
+ */
+export function cardFromTwoReadings(a, b) {
+  const read = (text) => {
+    const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+    const numbers = new Set(lines.flatMap((l) => [...l.matchAll(LONG_RUN)].map((m) => m[0])));
+    return numbers.size === 1 ? cardFromFaceLines(lines).card : null;
+  };
+  const [x, y] = [read(a), read(b)];
+  if (!x || !y || x.number !== y.number || x.pin !== y.pin) return null;
+  if (x.balance != null && y.balance != null && x.balance !== y.balance) return { ...x, balance: null };
+  return { ...x, balance: x.balance ?? y.balance };
+}
+
+/**
+ * Tesseract, twice: the picture as it is and with its light and dark swapped, because a
+ * card prints white digits on colour. On this server, on purpose, with the language file
+ * we ship — no download, nothing sent anywhere. Any failure is "could not read it" (null),
+ * and the caller moves on to the vision model.
+ */
+async function readFaceOnce(buf) {
+  let worker;
+  let timer;
+  try {
+    const sharp = (await import('sharp')).default;
+    const { createWorker } = await import('tesseract.js');
+    const base = sharp(buf).rotate().resize({ width: 2400 }).greyscale();
+    const plain = await base.clone().png().toBuffer();
+    const swapped = await base.clone().negate().normalise().png().toBuffer();
+    worker = await createWorker('eng', 1, { langPath: REPO_ROOT, gzip: false, cachePath: tmpdir() });
+    const read = async () => {
+      const a = (await worker.recognize(plain)).data.text;
+      const b = (await worker.recognize(swapped)).data.text;
+      return cardFromTwoReadings(a, b);
+    };
+    const late = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('local read timed out')), LOCAL_TIMEOUT_MS); });
+    return await Promise.race([read(), late]);
+  } catch (e) {
+    console.error('[cart/gift-card-read] local', e.message); // the message only: never the text it read
+    return null;
+  } finally {
+    clearTimeout(timer);
+    if (worker) await worker.terminate().catch(() => {});
+  }
+}
+
+// One at a time: each worker loads the language model into memory, and the all-cards PDF
+// can ask about a whole request's images at once. readFaceOnce never rejects.
+let localQueue = Promise.resolve();
+export function readCardFaceLocally(buf) {
+  const run = localQueue.then(() => readFaceOnce(buf));
+  localQueue = run;
+  return run;
+}
+
 /** One image through the vision model → the raw card list it answered with. */
 export async function readCardImage(key) { return readCardImageBytes(await getObject(key)); }
 export async function readCardImageBytes(buf) {
@@ -217,7 +302,11 @@ export async function readCardImageBytes(buf) {
     });
     if (!r.ok) {
       console.error('[cart/gift-card-read] openai', r.status);
-      const err = new Error('The reader did not answer. Try again, or type the numbers in.'); err.status = 502; throw err;
+      // Out of credit never fixes itself, so "try again" would be a wrong instruction.
+      const err = new Error(r.status === 429
+        ? 'The AI image reader is out of credit or busy, and this file needs it. Type the numbers in, and tell an admin.'
+        : 'The reader did not answer. Try again, or type the numbers in.');
+      err.status = 502; throw err;
     }
     payload = await r.json();
   } finally { clearTimeout(timer); }
@@ -291,11 +380,18 @@ export default async function handler(req, res) {
       mangled = parsed.mangled;
       cards = cleanCards(parsed.cards, tails);
     } else {
-      if (!aiConfigured())
-        return send(res, 503, { ok: false, error: 'Reading card images with AI is not configured on this server — type the numbers in.' });
-      source = 'ai';
-      try { cards = cleanCards(await readCardImage(file.r2_key), tails); }
-      catch (e) { if (e.status) return send(res, e.status, { ok: false, error: e.message }); throw e; }
+      const buf = await getObject(file.r2_key);
+      const face = await readCardFaceLocally(buf);
+      if (face) {
+        source = 'local';
+        cards = cleanCards([face], tails);
+      } else {
+        if (!aiConfigured())
+          return send(res, 503, { ok: false, error: 'This image could not be read here, and reading it with AI is not configured on this server — type the numbers in.' });
+        source = 'ai';
+        try { cards = cleanCards(await readCardImageBytes(buf), tails); }
+        catch (e) { if (e.status) return send(res, e.status, { ok: false, error: e.message }); throw e; }
+      }
       // A card face is ONE card: remember which (its last four — shown on screen anyway,
       // never the number) so the gift-card PDF can put this picture on that card's page.
       if (cards.length === 1) await setBuyCartFileCardTail(cartId, fileId, cards[0].number.slice(-4)).catch(() => {});
@@ -304,7 +400,7 @@ export default async function handler(req, res) {
     // On the trail: HOW MANY, by what, from which file. Never a digit of any of them.
     await logCartEvent({
       cartId, kind: 'gc_read', actor: user,
-      body: `${cards.length} card${cards.length === 1 ? '' : 's'} read from “${file.name || 'file'}” by ${source === 'pdf' ? 'the PDF text' : source === 'csv' ? 'the CSV' : MODEL} — nothing recorded until reviewed`,
+      body: `${cards.length} card${cards.length === 1 ? '' : 's'} read from “${file.name || 'file'}” by ${source === 'pdf' ? 'the PDF text' : source === 'csv' ? 'the CSV' : source === 'local' ? 'this server, read twice' : MODEL} — nothing recorded until reviewed`,
     });
     return send(res, 200, { ok: true, cards, source, mangled, file: { id: Number(file.id), name: file.name } });
   } catch (e) {

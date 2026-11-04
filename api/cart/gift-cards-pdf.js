@@ -31,7 +31,7 @@ import {
 import { decryptSecret, secretsConfigured } from '../_lib/secrets.js';
 import { hasPrivilege, requireBuyerAccess } from '../_lib/buycart.js';
 import { getObject, r2Configured } from '../_lib/r2.js';
-import { pdfPages, readCardImage, aiConfigured, cardsFromCsv } from './gift-card-read.js';
+import { pdfPages, readCardImage, readCardFaceLocally, aiConfigured, cardsFromCsv } from './gift-card-read.js';
 
 const PAGE_W = 612; // US Letter
 const PAGE_H = 792;
@@ -207,9 +207,11 @@ export default async function handler(req, res) {
       }
       let tail = f.gc_last4 || null;
       let fullNumber = null;
-      if (!tail && aiConfigured()) {
+      if (!tail) {
         try {
-          const read = await readCardImage(f.r2_key);
+          // Here first, as on Read the cards; the AI reader only for what this can't read.
+          const face = await readCardFaceLocally(bytes);
+          const read = face ? [face] : aiConfigured() ? await readCardImage(f.r2_key) : [];
           const nums = [...new Set((read || []).map((c) => String(c?.number || '').replace(/\D/g, '')).filter((n) => n.length >= 8))];
           if (nums.length === 1) {
             fullNumber = nums[0];

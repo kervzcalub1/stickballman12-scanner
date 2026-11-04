@@ -457,6 +457,7 @@ export const api = {
   // Read card numbers / PINs / balances off an uploaded card image or PDF (review first).
   cartGiftCardRead: (cartId, fileId) => post('/api/cart/gift-card-read', { cartId, fileId }),
   cartReceiptEmail: (cartId, transactionId) => post('/api/cart/receipt-email', { cartId, transactionId }),
+  cartReceiptEmailFile: (cartId, fileId) => post('/api/cart/receipt-email', { cartId, fileId }),
   // The bytes are PROXIED — the bucket never serves a card photo or a receipt by URL,
   // so there is no `src` an <img> could point at. Both of these fetch WITH the session
   // token and hand back a blob; the viewer turns it into an object URL and revokes it

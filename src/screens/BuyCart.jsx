@@ -880,6 +880,8 @@ function Audit({ cart, onChanged, onSignOut }) {
   const [saved, setSaved] = useState(false);
 
   const spentSum = cards.reduce((n, c) => n + (Number(vals[c.id]?.spent) || 0), 0);
+  // No total is not a $0 receipt: blank cards against it used to read "balanced".
+  const notRead = cart.receipt_total == null;
   const receipt = Number(cart.receipt_total) || 0;
   const gap = Math.round((spentSum - receipt) * 100) / 100;
 
@@ -905,7 +907,7 @@ function Audit({ cart, onChanged, onSignOut }) {
     <section className="card bc-audit">
       <h3 className="bc-h">Financial audit</h3>
       <p className="muted sm">
-        Cards issued {money(cart.gc_total)} → receipt {money(receipt)}. Say what each card was
+        Cards issued {money(cart.gc_total)} → receipt {notRead ? 'not read in yet' : money(receipt)}. Say what each card was
         actually spent and what is left sitting on it.
       </p>
       {/* SAYS IT WAS RECORDED. Pressing the button used to save and then re-render the
@@ -939,11 +941,15 @@ function Audit({ cart, onChanged, onSignOut }) {
         ))}
       </ul>
       <div className="bc-audit-foot">
-        <span className={Math.abs(gap) > 0.01 ? 'bc-short' : 'bc-covered'}>
-          Cards account for {money(spentSum)} against a {money(receipt)} receipt
-          {Math.abs(gap) > 0.01 ? ` — a ${money(Math.abs(gap))} gap` : ' — balanced'}
-        </span>
-        <button type="button" className="btn primary" disabled={busy} onClick={save}>
+        {notRead ? (
+          <span className="bc-short">The receipt’s lines have not been saved, so there is no total to audit against. Read it in above first.</span>
+        ) : (
+          <span className={Math.abs(gap) > 0.01 ? 'bc-short' : 'bc-covered'}>
+            Cards account for {money(spentSum)} against a {money(receipt)} receipt
+            {Math.abs(gap) > 0.01 ? ` — a ${money(Math.abs(gap))} gap` : ' — balanced'}
+          </span>
+        )}
+        <button type="button" className="btn primary" disabled={busy || notRead} onClick={save}>
           {busy ? 'Saving…' : recorded ? 'Record it again' : 'Record the audit'}
         </button>
       </div>

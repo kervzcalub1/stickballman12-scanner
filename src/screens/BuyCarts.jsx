@@ -256,6 +256,7 @@ export function BuyCarts({ user, onHome, onSignOut }) {
                   </span>
                   <span className="bc-card-money">
                     <span><i>Approved</i> {moneyOr(c.approved_amount)}</span>
+                    <span><i>Needed</i> {moneyOr(c.funding_target)}</span>
                     <span><i>Cards</i> {moneyOr(c.gc_total)}</span>
                   </span>
                 </button>
@@ -271,7 +272,7 @@ export function BuyCarts({ user, onHome, onSignOut }) {
             <thead>
               <tr>
                 <th>Request</th><th>Status</th>{!isBuyer && <th>Buyer</th>}<th>Store</th><th className="bc-purpose-cell">Buying</th>
-                <th className="num">Approved</th><th className="num">Cards</th><th>Order</th><th>Opened</th>
+                <th className="num">Approved</th><th className="num" title="Shelf price + sales tax — what the gift cards must cover">Needed</th><th className="num">Cards</th><th>Order</th><th>Opened</th>
               </tr>
             </thead>
             <tbody>
@@ -293,6 +294,7 @@ export function BuyCarts({ user, onHome, onSignOut }) {
                         was a dash. The pairs are the answer to "what is being bought". */}
                     <td className="bc-purpose-cell">{c.purpose || <span className="muted">{pairs(c)}</span>}</td>
                     <td className="num">{moneyOr(c.approved_amount)}</td>
+                    <td className="num">{moneyOr(c.funding_target)}</td>
                     <td className="num">{moneyOr(c.gc_total)}</td>
                     <td>{c.po_code ? <a className="bc-po-link" href={poHref(user, c.po_id)} onClick={(e) => e.stopPropagation()}>{c.po_code}</a> : '—'}</td>
                     <td className="muted sm">{estDate(c.created_at)}</td>

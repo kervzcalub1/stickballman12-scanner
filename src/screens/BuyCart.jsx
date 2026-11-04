@@ -24,7 +24,7 @@ import { BuyCartTasks } from '../components/BuyCartTasks.jsx';
 import { estDate, estTime, PH_DATE, estClock } from '../lib/format.js';
 import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
-import { LIST_ADDABLE, decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep } from '../lib/buycartRules.js';
+import { fundingBreakdown, LIST_ADDABLE, decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep } from '../lib/buycartRules.js';
 import { NudgeButton } from '../components/NudgeButton.jsx';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
@@ -1130,6 +1130,19 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         {cart.restrictions && <p className="muted sm"><b>Limits:</b> {cart.restrictions}</p>}
         <div className="bc-money">
           <span>Approved <b>{money(cart.approved_amount)}</b></span>
+          {cart.funding_method !== 'company_card' && (() => {
+            const f = fundingBreakdown(cart);
+            return (
+              <>
+                {f.tax > 0
+                  ? <span>Tax{f.pct != null ? ` (${f.pct}%)` : ''} <b>{money(f.tax)}</b></span>
+                  : f.rate > 0
+                    ? f.shelf === 0 && <span>Tax <b>{f.rate}%</b></span>
+                    : <span>Tax <b>none declared</b></span>}
+                <span>Gift cards needed <b>{money(f.target)}</b></span>
+              </>
+            );
+          })()}
           {cart.funding_method === 'company_card'
             ? <span>Card charge <b>{money(cart.card_authorized)}</b></span>
             : <span>Cards <b>{money(cart.gc_total)}</b></span>}

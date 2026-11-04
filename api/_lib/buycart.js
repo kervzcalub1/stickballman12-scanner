@@ -8,7 +8,7 @@
 import { send, requireAuth, isPrivileged, blockIfMustChange } from './util.js';
 import { getPoReconciliation, userHasPrivilege, decideBuyCartLines, linesAwaitingQty, decideBuyCartTip, getBuyCartLine } from './db.js';
 import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../../src/lib/payout.js';
-import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly } from '../../src/lib/buycartRules.js';
+import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, fundingWords } from '../../src/lib/buycartRules.js';
 import { alertLinesDecided } from './alerts.js';
 
 // ---------------------------------------------------------------------------
@@ -175,12 +175,10 @@ export function cartVisibleTo(user, cart) {
 // ---------------------------------------------------------------------------
 // Money
 //
-// The funding target is the SHELF price of every approved pair — `buy_carts.funding_target`,
-// recomputed with the lines (recalcCartMoney). The sticker, no discount assumed and NO
-// TAX added: the gift cards cover the approved shoes and nothing else (owner's rule,
-// 2026-10-02 — it carried the cost stack's sales tax from 2026-09-16 until then). A till
-// that charges more than the cards hold is a top-up the buyer asks for, not money the
-// cards were sized to include.
+// The funding target is the SHELF price of every approved pair PLUS THE SALES TAX declared
+// on the cost stack — `buy_carts.funding_target`, recomputed with the lines and the stack
+// (recalcCartMoney). No discount assumed, and no tip or shipping: those are internal, for
+// the audit (owner's rule, 2026-11-05). fundingBreakdown has the parts.
 export const fundingTarget = (cart) => {
   const t = Number(cart?.funding_target);
   if (Number.isFinite(t) && cart?.funding_target != null) return t;
@@ -567,7 +565,7 @@ export async function cartCloseChecks(full) {
         detail: cards.length === 0
           ? 'No gift cards recorded.'
           : Number(c.gc_total) < target
-            ? `Cards total $${Number(c.gc_total).toFixed(2)} against $${target.toFixed(2)} approved — $${(target - Number(c.gc_total)).toFixed(2)} short.`
+            ? `Cards total $${Number(c.gc_total).toFixed(2)} against ${fundingWords(c)} — $${(target - Number(c.gc_total)).toFixed(2)} short.`
             : null,
       }
       : {

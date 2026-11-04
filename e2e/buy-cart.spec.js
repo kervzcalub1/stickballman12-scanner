@@ -191,34 +191,33 @@ test('a buyer cannot approve their own request', async ({ request }) => {
   expect(body.cart.approved_amount).toBe(0);
 });
 
-test('gift cards must cover the approved total — shelf price, no tax — before anything is released', async ({ request }) => {
+test('gift cards must cover shelf price + declared tax — tip and shipping not — before anything is released', async ({ request }) => {
   const cartId = await newRequest(request, { lines: [LINE] });          // 2 × $50 = $100 approved
   await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
 
-  // The owner's rule (2026-10-02): the cards cover the shelf price of the approved
-  // shoes and nothing else — this buyer's stack has 8.25% tax and it is NOT added.
+  // The owner's rule (2026-11-05): shelf price + declared tax. This buyer's stack also has
+  // a $5 tip and $8.25 shipping — internal, for the audit, and NOT on the cards.
   const { body: g } = await read_(request, 'issuer', `cart/get?id=${cartId}`);
   expect(g.cart.approved_amount).toBe(100);
-  expect(g.cart.funding_target).toBe(100);
-  expect(g.cart.fundingTaxPct).toBeUndefined();
+  expect(g.cart.funding_target).toBeCloseTo(108.25, 2);
+  expect(g.cart.funding_tax_pct).toBe(8.25);
 
   await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '1111222233334444', balance: 60 } });
   const short = await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
   expect(short.status).toBe(409);
   // The shortfall is NAMED — "not enough" without a number sends somebody to a
   // spreadsheet to work out what to add.
-  expect(short.body.error).toContain('$40.00 short');
-  expect(short.body.error).toContain('$100.00 approved');
-  expect(short.body.error).not.toContain('tax');
+  expect(short.body.error).toContain('$48.25 short');
+  expect(short.body.error).toContain('$108.25 to fund ($100.00 shelf + $8.25 tax)');
 
-  await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '5555666677778888', balance: 40 } });
+  await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '5555666677778888', balance: 48.25 } });
   const ok = await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
   expect(ok.status).toBe(200);
   expect(ok.body.cart.status).toBe('funded');
 });
 
 test('a card the buyer spent can still be recorded after the receipt and the audit', async ({ request }) => {
-  const cartId = await newRequest(request, { lines: [LINE] });          // $100 to fund
+  const cartId = await newRequest(request, { lines: [LINE] });          // $108.25 to fund
   await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
   await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '4000400040004000', balance: 108.25 } });
   expect((await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true })).status).toBe(200);
@@ -987,21 +986,30 @@ test('a request needs a store before it can be closed, but no written purpose', 
   expect(row.list_closed_at).not.toBeNull();
 });
 
-test('the funding target is the shelf price of the approved pairs — the cost stack never moves it', async ({ request }) => {
+test('the funding target carries the declared tax, the supplier sees it, and only the tax moves it', async ({ request }) => {
   const cartId = await newRequest(request, { lines: [LINE] });
   await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
   const { body } = await read_(request, 'issuer', `cart/get?id=${cartId}`);
-  // This buyer's stack is 0% off + 8.25% tax; the cards still carry exactly the $100
-  // approved (owner's rule, 2026-10-02 — it was $108.25 with the tax on top before).
   expect(body.cart.approved_amount).toBe(100);
-  expect(body.cart.funding_target).toBe(100);
+  expect(body.cart.funding_target).toBeCloseTo(108.25, 2);
+  // The supplier sees the tax and the exact total — and still nothing else off the stack.
   const mine = await read_(request, 'buyer', `cart/get?id=${cartId}`);
-  expect(mine.body.cart.funding_target).toBe(100);
+  expect(mine.body.cart.funding_target).toBeCloseTo(108.25, 2);
+  expect(mine.body.cart.funding_tax_pct).toBe(8.25);
   expect(mine.body.cart.cost_stack).toBeNull();
-  // Correcting the tax re-prices the lines but not the money the cards must carry.
+  // A corrected tax moves it. Tip and shipping never do.
   await call(request, 'approver', 'cart/costs', { cartId, stack: { taxPct: 6, giftPct: 8, tipAmt: 5, shippingAmt: 8.25 } });
-  const after = await read_(request, 'issuer', `cart/get?id=${cartId}`);
-  expect(after.body.cart.funding_target).toBe(100);
+  expect((await read_(request, 'issuer', `cart/get?id=${cartId}`)).body.cart.funding_target).toBeCloseTo(106, 2);
+  await call(request, 'approver', 'cart/costs', { cartId, stack: { taxPct: 6, giftPct: 8, tipAmt: 50, shippingAmt: 99 } });
+  expect((await read_(request, 'issuer', `cart/get?id=${cartId}`)).body.cart.funding_target).toBeCloseTo(106, 2);
+
+  // Once released, an auditor correcting the rate states what it cost; it asks for no money.
+  await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6161616161616161', balance: 106 } });
+  expect((await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true })).status).toBe(200);
+  await call(request, 'auditor', 'cart/costs', { cartId, stack: { taxPct: 9, giftPct: 8, tipAmt: 5, shippingAmt: 8.25 } });
+  const released = (await read_(request, 'issuer', `cart/get?id=${cartId}`)).body.cart;
+  expect(released.funding_target).toBeCloseTo(106, 2);
+  expect(released.checks.find((c) => c.key === 'cards_recorded').ok).toBe(true);
 });
 
 // Opening a request asks ONE question: which store. "What are you buying, and why?" was
@@ -1158,7 +1166,7 @@ test('the desk can correct a shelf price after submission, until the cards are o
   // Once the cards are out, the sticker is what the money was released against and it
   // freezes. The COST stack does not — an auditor still has to be able to state what a
   // transaction they are closing actually cost.
-  await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '4111111111119999', balance: 100 } });
+  await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '4111111111119999', balance: 108.25 } });
   await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
   const late = await call(request, 'approver', 'cart/line', { cartId, lineId, patch: { shelfPrice: 10 } });
   expect(late.status).toBe(409);
@@ -1998,7 +2006,7 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
   // buyer's add → background market read → notify) is unchanged and waits on a live Alias
   // read measured in minutes, which is not what this test is about.
   // The gift card desk is told in a PRIVATE chat, not the group, the moment the request
-  // can take cards — who is waiting, which request, how much (shelf price, no tax).
+  // can take cards — who is waiting, which request, how much (shelf price + declared tax).
   test('the gift card issuer gets a direct message when a request is ready for cards — once per amount', async ({ request }) => {
     const ISSUER_TG = 771009002;
     await pool.query('UPDATE users SET telegram_user_id = $1 WHERE id = $2', [ISSUER_TG, people.issuer.uid]);
@@ -2010,8 +2018,8 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
       const dmTo = (from) => since(from).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(ISSUER_TG));
       await expect.poll(() => dmTo(t0).length, { timeout: 10_000 }).toBe(1);
       const dm = dmTo(t0)[0];
-      expect(dm.body.text).toContain(`${people.buyer.name} is waiting for gift cards on ${code} — $100.00`);
-      expect(dm.body.text).not.toMatch(/tax/i);
+      expect(dm.body.text).toContain(`${people.buyer.name} is waiting for gift cards on ${code} — $108.25`);
+      expect(dm.body.text).toContain('$108.25 to fund ($100.00 shelf + $8.25 tax)');
       // Nothing went to the group for this.
       expect(since(t0).some((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT) && /waiting for gift cards/.test(c.body.text || ''))).toBe(false);
       await expect.poll(async () => (await pool.query(`SELECT count(*)::int AS n FROM buy_cart_events WHERE cart_id = $1 AND kind = 'cards_requested'`, [cartId])).rows[0].n).toBe(1);
@@ -2820,9 +2828,9 @@ test.describe('the list stays open until the buyer closes it', () => {
   });
 
   test('a funded request can be re-opened for more: the cards stay, the new line is decided, the target grows', async ({ request }) => {
-    const cartId = await newRequest(request, { lines: [LINE] });          // $100 to fund
+    const cartId = await newRequest(request, { lines: [LINE] });          // $108.25 to fund
     await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
-    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '5656565656565656', balance: 100 } });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '5656565656565656', balance: 108.25 } });
     expect((await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true })).body.cart.status).toBe('funded');
 
     // Short at the till — the buyer re-opens and asks about one more pair.
@@ -2846,14 +2854,14 @@ test.describe('the list stays open until the buyer closes it', () => {
     ({ body } = await read_(request, 'approver', `cart/get?id=${cartId}`));
     expect(body.cart.status).toBe('funded');
     expect(body.cart.approved_amount).toBe(150);
-    expect(body.cart.funding_target).toBe(150);
+    expect(body.cart.funding_target).toBeCloseTo(162.38, 2);               // $108.25 + $50 × 1.0825
     expect(body.cart.lines.find((l) => Number(l.id) === oldId).status).toBe('approved');
 
     // The desk records the top-up once the buyer closes the list again; the first
     // card is untouched and the funding check reads the sum.
     expect((await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '7878787878787878', balance: 50 } })).status).toBe(409);
     expect((await call(request, 'buyer', 'cart/submit', { cartId })).status).toBe(200);
-    const topUp = await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '7878787878787878', balance: 50 } });
+    const topUp = await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '7878787878787878', balance: 54.13 } });
     expect(topUp.status).toBe(200);
     expect(topUp.body.short).toBe(0);
     ({ body } = await read_(request, 'approver', `cart/get?id=${cartId}`));
@@ -3023,7 +3031,7 @@ test.describe('gift cards read off a file', () => {
   // gc-reveal's rules exactly: the desk, or the buyer once released; trail row first.
   test('all the cards as one PDF: the desk any time, the buyer only once released, and it is on the trail', async ({ request }) => {
     const { PDFDocument } = await import('pdf-lib');
-    const cartId = await newRequest(request, { lines: [LINE] });          // $100 to fund; the cards over-cover it
+    const cartId = await newRequest(request, { lines: [LINE] });          // $108.25 to fund
     await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
     await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000001111', pin: '111111', balance: 100 } });
     await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000002222', balance: 8.25 } });
@@ -3278,6 +3286,17 @@ test.describe('floor feedback, November', () => {
     expect(full.capped).toBe(true);
     expect(salesSentence(full)).toMatch(/^3\+ sold/);
     expect(salesSentence(summarizeSales([], { now }))).toBe('No recent sales');
+  });
+
+  test('on screen: the supplier sees the tax and the exact gift card total', async ({ page, request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: 2 });
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    const strip = page.locator('.bc-money');
+    await expect(strip).toContainText('Approved $100.00');
+    await expect(strip).toContainText('Tax (8.25%) $8.25');
+    await expect(strip).toContainText('Gift cards needed $108.25');
   });
 
   test('on screen: the approver has Change on a decided pair, the buyer ✕ Not buying', async ({ page, request }) => {

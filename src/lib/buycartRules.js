@@ -21,6 +21,31 @@ export const DECISIONS_FROZEN = ['closed', 'cancelled', 'written_off'];
 // overridden. The server filters the targets; the screen only ever offers pending lines.
 export const DECISIONS_PENDING_ONLY = ['funded', 'receipted', 'audited'];
 
+// What the gift cards must carry, in its parts (owner's rule, 2026-11-05): the shelf price
+// of the approved pairs + the sales tax declared on the request. NOTHING else — tips and
+// shipping are internal, for the audit. Read by the server's messages and by every screen,
+// the supplier's included, so the buyer sees the exact amount they will get.
+//
+// The tax is the DOLLARS actually in `funding_target`, not rate × shelf: once cards are out
+// the target no longer follows a corrected rate, and a request released before this rule has
+// no tax in it at all. `pct` is printed only when it really is what produced those dollars.
+export function fundingBreakdown(cart) {
+  const cents = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const shelf = cents(cart?.approved_amount);
+  const target = cart?.funding_target == null ? shelf : cents(cart.funding_target);
+  const tax = Math.max(0, cents(target - shelf));
+  const rate = Number(cart?.funding_tax_pct ?? cart?.cost_stack?.taxPct) || 0;
+  const pct = tax > 0 && Math.abs(cents((shelf * rate) / 100) - tax) <= 0.01 ? rate : null;
+  return { shelf, tax, target, rate, pct };
+}
+
+// "$108.25 to fund ($100.00 shelf + $8.25 tax)", or just "$100.00 to fund" with no tax.
+export function fundingWords(cart) {
+  const { shelf, tax, target } = fundingBreakdown(cart);
+  const d = (n) => `$${n.toFixed(2)}`;
+  return tax > 0 ? `${d(target)} to fund (${d(shelf)} shelf + ${d(tax)} tax)` : `${d(target)} to fund`;
+}
+
 export const decisionsOpen = (status) =>
   !DECISIONS_NOT_YET.includes(status) && !DECISIONS_FROZEN.includes(status);
 
@@ -148,7 +173,12 @@ export function nextStep(cart, who) {
       }
       if (cart.status === 'denied') return { mine: false, text: 'Turned down. Anything else is a new request.' };
       if (canIssue) return { mine: true, text: `Record the gift cards — ${money(cart.funding_target || cart.approved_amount)} to fund.`, action: 'Record cards', target: 'cards' };
-      return { mine: false, text: 'Waiting on the gift card desk to release the cards.' };
+      return {
+        mine: false,
+        text: isBuyer
+          ? `Waiting on the gift card desk to release the cards — ${money(cart.funding_target || cart.approved_amount)} including tax.`
+          : 'Waiting on the gift card desk to release the cards.',
+      };
     }
     case 'funded':
       return isBuyer

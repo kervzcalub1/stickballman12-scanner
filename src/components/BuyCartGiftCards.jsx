@@ -13,7 +13,7 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { PriceInput, CopyText, ImageZoomModal, FormModal } from './common.jsx';
-import { cardsIssuable, cardsRefusedBecause, cardsAfterPurchase } from '../lib/buycartRules.js';
+import { cardsIssuable, cardsRefusedBecause, cardsAfterPurchase, fundingBreakdown } from '../lib/buycartRules.js';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -105,9 +105,9 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
   const cards = cart.giftCards || [];
   const live = cards.filter((c) => !c.voided_at);
   const images = (cart.files || []).filter((f) => f.kind === 'gift_card');
-  // What the cards must carry: the shelf price of the approved pairs (`funding_target`,
-  // computed server-side) — no tax on top.
-  const target = Number(cart.funding_target ?? cart.approved_amount) || 0;
+  // What the cards must carry: the shelf price of the approved pairs + the declared tax
+  // (`funding_target`, computed server-side). Tips and shipping are not on the cards.
+  const { shelf, tax: fundTax, target, pct: fundPct } = fundingBreakdown(cart);
   const total = Number(cart.gc_total) || 0;
   const short = Math.max(0, Math.round((target - total) * 100) / 100);
   // Only against a list the buyer has CLOSED, with every line decided — the same rule
@@ -270,12 +270,14 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
         <div className="bc-fund-nums">
           <span><b>{money(total)}</b> on {live.length} card{live.length === 1 ? '' : 's'}</span>
           <span className="muted">
-            against <b>{money(target)}</b> approved
+            against <b>{money(target)}</b> needed
+            {fundTax > 0 && <> ({money(shelf)} shelf + {money(fundTax)} tax{fundPct != null ? ` at ${fundPct}%` : ''})</>}
           </span>
           {short > 0
             ? <span className="bc-short">{money(short)} short</span>
             : target > 0 && <span className="bc-covered">covered</span>}
         </div>
+        <p className="muted xs">Gift cards cover the shelf price and sales tax only. Tips and shipping are not on the cards.</p>
         {/* Why no card can be recorded yet, in the endpoint's own words — "the buyer is
             still adding" is the one the desk most needs, because the total is not final. */}
         {whyNot && <p className="bc-till-warn">{whyNot}</p>}

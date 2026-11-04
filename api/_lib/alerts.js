@@ -19,6 +19,7 @@ import { telegramConfigured, sendAlertMessage, sendAlertDocument } from './teleg
 import { alertCandidates, logAlert, setTelegramBroken, alertSentRecently, cartParticipantIds, poParticipantIds,
   getBuyCart, cartListChangesSince } from './db.js';
 import { fundingTarget } from './buycart.js';
+import { fundingWords } from '../../src/lib/buycartRules.js';
 import { issueHeadline, outcomeLabel, ageFlags, ago, STALE_DAYS } from '../../src/lib/inboundIssues.js';
 
 const isAdminRole = (role) => role === 'admin' || role === 'superadmin';
@@ -621,9 +622,9 @@ export function alertListReclosed(cartId, actor) {
     ];
     const next = pending > 0
       ? `${pending} line${pending === 1 ? ' still needs' : 's still need'} approving — you will get “Gift cards needed” with any top-up once they are decided.`
-      : owed > 0 ? `${money(owed)} more to issue (${money(target)} approved, ${money(issued)} on cards).`
-      : owed < 0 ? `The cards (${money(issued)}) now cover more than is approved (${money(target)}) — ${money(-owed)} over.`
-      : `Nothing more to issue — ${money(issued)} on cards covers the ${money(target)} approved.`;
+      : owed > 0 ? `${money(owed)} more to issue (${fundingWords(cart)}, ${money(issued)} on cards).`
+      : owed < 0 ? `The cards (${money(issued)}) now cover more than is needed (${money(target)}) — ${money(-owed)} over.`
+      : `Nothing more to issue — ${money(issued)} on cards covers the ${fundingWords(cart)}.`;
     return alertUsers('buy.list_reclosed', {
       actorUid: actor?.uid, ref: `cart:${cart.id}:reclosed:${new Date(cart.list_reopened_at).getTime()}`,
       code: cart.cart_code,

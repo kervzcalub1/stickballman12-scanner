@@ -16,6 +16,7 @@ import { ROLL_VIN_RE, VIN_RE } from './vins.js';
 // box. Since 2026-10-23 that is the same alphanumeric rule (store-orders-plan §8b).
 import { trackKey as searchTrackKey, expectsAtOrderLevel, declaresPerBox, hasOrderedList } from '../../src/lib/postatus.js';
 import { presellUnitCost } from '../../src/lib/presellDetails.js';
+import { fundingWords } from '../../src/lib/buycartRules.js';
 import { productAnswered } from '../../src/lib/sheinCutover.js';
 import { BLOCKERS as SHEIN_BLOCKERS } from '../../src/lib/sheinListings.js';
 // Registration now sends the canonical form of a number, so anything that MATCHES a
@@ -7433,9 +7434,12 @@ const cartMoney = (r) => ({
   gc_total: r.gc_total == null ? 0 : Number(r.gc_total),
   receipt_total: r.receipt_total == null ? null : Number(r.receipt_total),
   balance_remaining: r.balance_remaining == null ? null : Number(r.balance_remaining),
-  // What the cards must cover: approved sticker total + sales tax. Falls back to the
-  // sticker sum for a row written before the column existed (db:setup backfills it).
+  // What the cards must cover: approved shelf total + the declared sales tax. Falls back to
+  // the shelf sum for a row written before the column existed (db:setup backfills it).
   funding_target: r.funding_target == null ? (r.approved_amount == null ? 0 : Number(r.approved_amount)) : Number(r.funding_target),
+  // The declared rate alone, kept apart from `cost_stack` because a supplier's copy has the
+  // stack stripped (redactCartForViewer) and they must still see the tax on their cards.
+  funding_tax_pct: Number(r.cost_stack?.taxPct) > 0 ? Number(r.cost_stack.taxPct) : 0,
 });
 const cartOut = (r) => (r ? { ...r, ...cartMoney(r) } : null);
 
@@ -7466,9 +7470,13 @@ const lineOut = (r) => (r ? {
 // reads the tax rate off it.
 //
 // `approved_amount` is the SHELF price of every approved pair — the sticker, with no
-// discount assumed — and `funding_target` is that same figure: the gift cards cover the
-// approved shoes' shelf price and nothing else (owner's rule, 2026-10-02; from
-// 2026-09-16 it had the cost stack's sales tax added on top — docs/context/buy-cart.md).
+// discount assumed. `funding_target` is that PLUS the sales tax declared on the cost stack:
+// the gift cards cover shelf + tax and nothing else — tips and shipping are internal, for
+// the audit (owner's rule, 2026-11-05, docs/context/buy-cart.md).
+//
+// Once cards are RELEASED the target stops following the rate: an auditor correcting the tax
+// off the receipt is stating what it cost, not asking for more money. It moves only by what
+// the approved pairs moved (a top-up pair, or one X'd out), taxed at the rate of the day.
 async function recalcCartMoney(sql, cartId) {
   await sql`
     UPDATE buy_carts c SET
@@ -7477,7 +7485,12 @@ async function recalcCartMoney(sql, cartId) {
       pending_count  = l.pending,
       skipped_count  = l.skipped,
       approved_amount = l.approved_amount,
-      funding_target  = l.approved_amount,
+      funding_target  = CASE
+        WHEN c.status IN ('funded', 'receipted', 'audited', 'closed', 'cancelled', 'written_off')
+          THEN GREATEST(0, coalesce(c.funding_target, c.approved_amount, 0)
+                 + round((l.approved_amount - coalesce(c.approved_amount, 0)) * (1 + coalesce(nullif(c.cost_stack->>'taxPct', '')::numeric, 0) / 100), 2))
+        ELSE round(l.approved_amount * (1 + coalesce(nullif(c.cost_stack->>'taxPct', '')::numeric, 0) / 100), 2)
+      END,
       gc_total        = g.total,
       balance_remaining = CASE WHEN c.receipt_total IS NULL THEN NULL
                                ELSE g.total - c.receipt_total END,
@@ -7925,8 +7938,8 @@ export async function setBuyCartCostStack(cartId, stack, calls, actor, note) {
         profit = ${c.profit}, roi = ${c.roi}, updated_at = now()
        WHERE id = ${c.id} AND cart_id = ${cartId}`;
   }
-  // The tax rate lives on the stack, and the funding target reads it — a corrected
-  // tax has to move what the cards must cover.
+  // The tax rate lives on the stack, and the funding target reads it — a corrected tax
+  // moves what the cards must cover, until they are released (recalcCartMoney).
   await recalcCartMoney(sql, cartId);
   await logCartEvent({ cartId, kind: 'costs_edited', actor, body: note });
   return getBuyCart(cartId);
@@ -8649,7 +8662,7 @@ export async function fundBuyCart(cartId, actor, note = null) {
   if (!rows[0]) return null;
   await logCartEvent({
     cartId, kind: 'funded', actor,
-    body: note || `$${Number(rows[0].gc_total).toFixed(2)} issued against $${Number(rows[0].approved_amount).toFixed(2)} approved`,
+    body: note || `$${Number(rows[0].gc_total).toFixed(2)} issued against ${fundingWords(cartOut(rows[0]))}`,
   });
   return cartOut(rows[0]);
 }

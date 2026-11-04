@@ -152,21 +152,31 @@ holds both.
 - **buyer** — supplier portal → *Buying Requests* (`/buying`).
 
 ## The money
-**Funding target = Σ (shelf_price × qty) over APPROVED lines — nothing added.**
-`buy_carts.funding_target`, recomputed by `recalcCartMoney` with every change to the lines
-or the cards; since 2026-10-02 it always equals `approved_amount`. `fundingTarget(cart)` in
-`buycart.js` is still what every consumer reads — the gift-card release check, the
-`cards_recorded` closing condition, the panel, the Telegram summary, the issuer DM.
+**Funding target = Σ (shelf_price × qty) over APPROVED lines + the sales tax declared on the
+cost stack (`cost_stack.taxPct`).** $100 approved at 8.25% → **$108.25** on the cards. **Nothing
+else:** tips (stack and per-shoe premium) and shipping are internal, for the audit, and are never on
+the cards (owner's rule, 2026-11-05). `buy_carts.funding_target`, recomputed by `recalcCartMoney`
+with every change to the lines, the cards or the stack. `fundingTarget(cart)` in `buycart.js` is
+what every consumer reads — the gift-card release check, the `cards_recorded` closing condition,
+the panel, the Telegram summary, the issuer DM. `fundingBreakdown` / `fundingWords`
+(`src/lib/buycartRules.js`) give the parts: "$108.25 to fund ($100.00 shelf + $8.25 tax)".
 
-**History: tax in, then out again.** From 2026-09-16 the target was the sticker PLUS the
-cost stack's sales tax ($400 approved → $422.18 to fund), because full-price purchases
-kept coming up short by exactly the tax. On 2026-10-02 the owner's rule replaced it: **the
-gift cards cover the shelf price of the approved shoes, and only that.** A till that
-charges more is a top-up the buyer asks for (re-open → add → approve), not money the cards
-were sized to include. The `fundingTaxPct` field, the "To fund … incl. X% tax" strip and
-the "+ X% tax" wording are gone. `db:setup` brings every request still in play
-(`status NOT IN closed/cancelled/written_off`) to `funding_target = approved_amount`;
-finished ones keep the figure they were funded and closed against.
+- **The supplier sees it.** `cost_stack` is still stripped from a buyer's copy (discounts, cashback
+  and tips stay ours), but `funding_tax_pct` and `funding_target` are not. The request page's money
+  strip reads Approved · Tax (8.25%) · **Gift cards needed**; the list has a **Needed** column; the
+  gift-card panel prints shelf + tax; a request with no rate says "Tax none declared".
+- **Until the cards are released the target follows the rate.** A corrected tax moves it, and the desk
+  is told the new amount (`cart/costs` → `notifyIssuersIfReady`, once per amount).
+- **From `funded` on it does NOT follow the rate.** An auditor correcting the tax off the receipt is
+  stating what it cost, not asking for more money. The target moves only by what the approved pairs
+  moved (a top-up pair, a pair X'd out), taxed at the rate of the day — that is why the tax printed is
+  `target − shelf` in dollars, with the % shown only when it really produced those dollars.
+- **`db:setup` brings requests whose cards are not out yet to the rule, and leaves released ones
+  alone.** Requests released under the old rule keep their shelf-only figure, so none suddenly reads
+  short; a top-up on one is taxed on the new pair only. Never overwrite a released request's target
+  in `db:setup` — a top-up's tax is in that figure and can't be derived from the row.
+
+**History:** 2026-09-16 shelf + tax → 2026-10-02 shelf only → **2026-11-05 shelf + tax, again.**
 
 ## The cost stack — and who may write it
 A request's stack is snapshotted from the **buyer's** payout preset when it is opened
@@ -217,8 +227,9 @@ costs us** card above the lines.
 - **Saving re-prices every line**, pending ones included — a pending line is exactly the
   one an approver is about to judge. `repriceLine` re-derives `final_cost`, `verdict`,
   `best_platform`, `best_payout`, `profit`, `roi`.
-- **The funding target does not move.** It is shelf × qty over approved lines; a discount
-  we hope for is not money the cards can be short by.
+- **The funding target moves only with the TAX**, and only until the cards are released. It is
+  shelf × qty over approved lines + the tax; a discount we hope for is not money the cards can be
+  short by, and tip and shipping are internal.
 - **It is not frozen by `funded`** — an auditor still has to be able to state what a
   transaction they are closing actually cost. Only `closed`/`cancelled` stops it.
 
@@ -755,7 +766,7 @@ and how many to buy is the decision being asked for, not part of the question.
   worse than that: it was wrong in the place people read.)
 - `lineOut` no longer coerces `qty` to 0. `Number(null) || 0` printed "×0" on screen and,
   worse, made "does this have a quantity" look answered when it is the question.
-- The funding target is unchanged — shelf × qty over approved lines — and now every
+- The funding target is unchanged — shelf × qty over approved lines, plus the tax — and now every
   approved line has a quantity a person chose.
 
 ### …but they DO state how many the shop has (2026-09-17)

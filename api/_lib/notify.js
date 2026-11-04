@@ -23,7 +23,7 @@ import { fundingTarget } from './buycart.js';
 import { stockForPair, stockForSizes, stockSentence } from './buyingStock.js';
 import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js';
 import { telegramConfigured, telegramChatId, sendApprovalCard, sendNote, cardKeyboard, groupCardKeyboard } from './telegram.js';
-import { cardsIssuable } from '../../src/lib/buycartRules.js';
+import { cardsIssuable, fundingWords } from '../../src/lib/buycartRules.js';
 import { compareSizes } from '../../src/lib/codes.js';
 import { stockxConfigured, stockxProductBySku } from './stockx.js';
 import { salesSentence } from './marketSales.js';
@@ -539,7 +539,7 @@ export async function notifyLineSkipped(cartId, line, actor, { undo = false } = 
       undo
         ? `↩️ ${cart.cart_code} — ${who} IS buying ${pair} after all`
         : `✕ ${cart.cart_code} — ${who} is NOT buying ${pair} (it was approved)`,
-      `To fund now: ${dollars(fundingTarget(cart))} · ${Number(cart.approved_count) || 0} size${Number(cart.approved_count) === 1 ? '' : 's'} approved`,
+      `To fund now: ${fundingWords(cart)} · ${Number(cart.approved_count) || 0} size${Number(cart.approved_count) === 1 ? '' : 's'} approved`,
       ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
     ].join('\n');
     // Said where the pair's card is: a premium pair's in the buyer's premium group.
@@ -592,7 +592,7 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
         : `${cart.cart_code} — ${cart.buyer_name} re-opened the request and is adding more pairs`,
       `${pairs(n(cart.line_count))} asked · ${n(cart.approved_count)} approved · ${n(cart.pending_count)} still waiting${rejected > 0 ? ` · ${rejected} turned down` : ''}${skipped > 0 ? ` · ${skipped} not buying` : ''}`,
       closed
-        ? `Approved ${dollars(target)} to fund${n(cart.gc_total) > 0 ? ` · ${dollars(cart.gc_total)} in cards already issued` : ''}`
+        ? `Approved: ${fundingWords(cart)}${n(cart.gc_total) > 0 ? ` · ${dollars(cart.gc_total)} in cards already issued` : ''}`
         : n(cart.gc_total) > 0
           ? `Cards issued so far: ${dollars(cart.gc_total)} — a top-up may be needed once the new lines are approved.`
           : 'No cards issued yet.',
@@ -681,8 +681,8 @@ export async function notifyIssuersIfReady(cartId) {
     const body = [
       `${cart.buyer_name || 'The buyer'} is waiting for gift cards on ${cart.cart_code} — ${dollars(owed)}`,
       issued > 0
-        ? `${dollars(issued)} is already on cards; ${dollars(target)} approved in all (${n} pair${n === 1 ? '' : 's'}).`
-        : `${n} pair${n === 1 ? '' : 's'} approved, at shelf price.`,
+        ? `${dollars(issued)} is already on cards; ${fundingWords(cart)} in all (${n} pair${n === 1 ? '' : 's'}).`
+        : `${n} pair${n === 1 ? '' : 's'} approved: ${fundingWords(cart)}.`,
       ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
     ].join('\n');
     const { sentTo } = await alertUsers('buy.cards_needed', {

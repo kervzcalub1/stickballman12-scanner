@@ -21,6 +21,7 @@ import { getBuyCartFull, setBuyCartCostStack, dbConfigured } from '../_lib/db.js
 import {
   cartVisibleTo, canWriteCosts, costStackEditable,
   normaliseCostStack, describeCostChange, repriceLine, redactCartForViewer } from '../_lib/buycart.js';
+import { notifyIssuersIfReady } from '../_lib/notify.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -63,6 +64,7 @@ export default async function handler(req, res) {
     const cart = await setBuyCartCostStack(cartId, stack, calls, user,
       `${note || 'Cost stack set'}${calls.length ? ` — ${calls.length} line${calls.length === 1 ? '' : 's'} re-priced` : ''}`);
     if (!cart) return send(res, 404, { ok: false, error: 'That buying request does not exist.' });
+    notifyIssuersIfReady(cartId);   // a corrected tax is a new amount to fund; said once per amount
     return send(res, 200, { ok: true, cart, repriced: calls.length });
   } catch (e) {
     console.error('[cart/costs]', e.message);

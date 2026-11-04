@@ -1819,10 +1819,9 @@ await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS write_off_reason TEXT`
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS list_closed_at TIMESTAMPTZ`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS list_closed_by TEXT`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS list_reopened_at TIMESTAMPTZ`);
-// What the cards must cover: the shelf price of the approved pairs — the same figure as
-// `approved_amount` since 2026-10-02 (owner's rule: gift cards cover the approved shoes,
-// no tax on top; 2026-09-16 → 10-01 it carried the cost stack's sales tax). Recomputed by
-// recalcCartMoney with every change to the lines.
+// What the cards must cover: the shelf price of the approved pairs + the sales tax declared
+// on the cost stack (owner's rule, 2026-11-05; tips and shipping are internal). Recomputed
+// by recalcCartMoney with every change to the lines or the stack.
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS funding_target NUMERIC(12,2)`);
 // ONE-SHOT backfill, guarded by a marker row: every request that had already been sent
 // in under the old flow is treated as a closed list, so nothing already approved is
@@ -1835,12 +1834,14 @@ if (!listBackfill.rows.length) {
               WHERE list_closed_at IS NULL AND status <> 'draft'`);
   await sql(`INSERT INTO app_settings (key, value) VALUES ('migr_buy_carts_list_closed', 'done') ON CONFLICT (key) DO NOTHING`);
 }
-// Idempotent: any request still in play is brought to the rule; a finished one keeps
-// the figure it was funded and closed against.
-await sql(`UPDATE buy_carts SET funding_target = approved_amount
-            WHERE funding_target IS NULL
-               OR (funding_target IS DISTINCT FROM approved_amount
-                   AND status NOT IN ('closed', 'cancelled', 'written_off'))`);
+// Idempotent: a request whose cards are not out yet is brought to the rule. One already
+// released keeps the figure it was released against — never overwrite it here, a top-up's
+// tax is in that figure and is not derivable from the row.
+await sql(`UPDATE buy_carts SET funding_target = coalesce(approved_amount, 0) WHERE funding_target IS NULL`);
+await sql(`UPDATE buy_carts
+              SET funding_target = round(coalesce(approved_amount, 0) * (1 + coalesce(nullif(cost_stack->>'taxPct', '')::numeric, 0) / 100), 2)
+            WHERE status NOT IN ('funded', 'receipted', 'audited', 'closed', 'cancelled', 'written_off')
+              AND funding_target IS DISTINCT FROM round(coalesce(approved_amount, 0) * (1 + coalesce(nullif(cost_stack->>'taxPct', '')::numeric, 0) / 100), 2)`);
 
 // Every open task, in ONE table rather than a return-case table beside a follow-up
 // table. The deck's rule is a single sentence — "owner + next action + due date +

@@ -1443,6 +1443,29 @@ for (const col of [
 await sql(`ALTER TABLE shipment_tracking ADD COLUMN IF NOT EXISTS eta_from DATE`);
 await sql(`ALTER TABLE shipment_tracking ADD COLUMN IF NOT EXISTS eta_to DATE`);
 
+// The supplier's drop-off receipt: proof a box was handed to the courier. One order can have
+// several, one drop-off covering a few boxes or a few trips. docs/context/purchase-orders.md.
+await sql(`
+  CREATE TABLE IF NOT EXISTS po_dropoff_receipts (
+    id             BIGSERIAL PRIMARY KEY,
+    po_id          BIGINT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    r2_key         TEXT NOT NULL,
+    name           TEXT,
+    content_type   TEXT,
+    size_bytes     BIGINT,
+    uploaded_by    TEXT,
+    uploaded_by_id BIGINT,
+    uploaded_role  TEXT,
+    uploaded_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS po_dropoff_receipts_po_idx ON po_dropoff_receipts (po_id, id)`);
+// When the team was told this box left the supplier: set once, so the supplier's tap and the
+// carrier's first scan can't both announce it. Boxes that already left aren't news.
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS dropoff_alerted_at TIMESTAMPTZ`);
+await sql(`UPDATE po_boxes SET dropoff_alerted_at = coalesce(shipped_at, now())
+            WHERE dropoff_alerted_at IS NULL AND status IN ('shipped', 'in_transit', 'delivered')`);
+
 // Which parcels the team has been told have stopped moving (tracking-delay-worker), so a stall
 // is announced once and reminded weekly. `last_move_at` is the stall it was about: a parcel that
 // moves and then stops again is a new delay.
@@ -3340,7 +3363,7 @@ const LIVE_TABLES = [
   'shein_category_map', 'shein_brand_map',
   'app_settings', 'payout_presets', 'shipment_issues', 'shipment_tracking',
   'purchase_orders', 'po_boxes', 'po_lines', 'po_comments', 'po_resolutions', 'deleted_pos',
-  'po_stores', 'po_store_charges', 'po_store_receipts', 'presell_stock_po', 'presell_box_lines',
+  'po_stores', 'po_store_charges', 'po_store_receipts', 'po_dropoff_receipts', 'presell_stock_po', 'presell_box_lines',
   'rescale_requests', 'rescale_request_items',
   'buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_gift_cards',
   'buy_cart_receipt_lines', 'buy_cart_tasks', 'deleted_buy_carts',

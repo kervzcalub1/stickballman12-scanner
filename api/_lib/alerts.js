@@ -16,7 +16,7 @@
 // Like notify.js this runs AFTER the response has gone (`fireAlert`), and it swallows
 // everything: an alert that fails costs the person a message, never a request.
 import { telegramConfigured, sendAlertMessage, sendAlertDocument } from './telegram.js';
-import { alertCandidates, logAlert, setTelegramBroken, alertSentRecently, cartParticipantIds, poParticipantIds,
+import { listPoDropoffReceipts, alertCandidates, logAlert, setTelegramBroken, alertSentRecently, cartParticipantIds, poParticipantIds,
   getBuyCart, cartListChangesSince } from './db.js';
 import { fundingTarget } from './buycart.js';
 import { fundingWords } from '../../src/lib/buycartRules.js';
@@ -98,6 +98,18 @@ export const ALERT_EVENTS = [
     title: 'Boxes shipped',
     when: 'A supplier ships boxes on a purchase order',
     who: (u) => u.role === 'warehouse' || isAdminRole(u.role),
+  },
+  {
+    key: 'po.dropped_off', group: 'Purchase orders', emoji: '📮', required: false,
+    title: 'Dropped off: ask for the receipt',
+    when: 'A supplier ships a box or the carrier first scans it, and whether its drop-off receipt is in',
+    who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
+  },
+  {
+    key: 'po.dropoff_receipt', group: 'Purchase orders', emoji: '🧾', required: false,
+    title: 'Drop-off receipt uploaded',
+    when: 'A supplier uploads a drop-off receipt',
+    who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
   },
   {
     key: 'po.delivered', group: 'Purchase orders', emoji: '📦', required: false,
@@ -323,6 +335,7 @@ const ROUTES = {
   cancellations: { main: '/cancellations', ph: '/ph/cancellations' },
   inboundissues: { main: '/inbound-issues', ph: '/ph/inbound-issues' },
   expected:  { main: '/expected',      ph: '/ph/undelivered' },
+  postatus:  { main: '/reconcile',     ph: '/ph/po-status' },
 };
 export const at = (page, query = '') => (u) => {
   const r = ROUTES[page];
@@ -480,6 +493,49 @@ export function alertPoShipped(po, box, actor) {
       path: at('inbound'),
     });
   });
+}
+
+// A box has left the supplier: they tapped ship, or the carrier scanned it first. The team asks
+// for the drop-off receipt, so the message says whether one is already in. One per order.
+export function dropoffBody({ supplier, boxes, receipts }) {
+  const nums = boxes.map((b) => b.tracking_number).filter(Boolean);
+  return `${supplier || 'The supplier'} dropped off ${boxes.length} box${boxes.length === 1 ? '' : 'es'}`
+    + `${nums.length ? `, tracking ${listOf(nums, 5)}` : ''}.\n`
+    + (receipts > 0
+      ? `Drop-off receipt on file (${receipts}).`
+      : 'No drop-off receipt yet. Ask them for it, or upload it on the order.');
+}
+
+export function alertPoDroppedOff(rows) {
+  const byPo = new Map();
+  for (const r of rows || []) {
+    if (!byPo.has(r.po_id)) byPo.set(r.po_id, []);
+    byPo.get(r.po_id).push(r);
+  }
+  for (const [poId, boxes] of byPo) {
+    batchAlert(`podrop:${poId}`, (d) => {
+      const data = d || { poId, code: boxes[0].po_code, supplier: boxes[0].supplier_name, boxes: new Map() };
+      for (const b of boxes) data.boxes.set(Number(b.id), b);
+      return data;
+    }, async (data) => {
+      const list = [...data.boxes.values()];
+      const receipts = (await listPoDropoffReceipts(data.poId)).length;
+      return alertUsers('po.dropped_off', {
+        ref: `po:${data.poId}:dropoff:${list.map((b) => b.id).sort().join(',')}`,
+        code: data.code,
+        body: dropoffBody({ supplier: data.supplier, boxes: list, receipts }),
+        path: at('postatus', `po=${data.poId}`),
+      });
+    });
+  }
+}
+
+export function alertDropoffReceiptUploaded(po, actor) {
+  fireAlert(() => alertUsers('po.dropoff_receipt', {
+    actorUid: actor?.uid, ref: `po:${po.id}:dropoff-receipt`, code: po.po_code,
+    body: `${po.supplier_name || 'The supplier'} uploaded a drop-off receipt.`,
+    path: at('postatus', `po=${po.id}`),
+  }));
 }
 
 // A tracking push → anything that just became DELIVERED (not every repeat push).

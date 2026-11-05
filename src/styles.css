@@ -2787,6 +2787,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-chip.kind { font-weight: 600; letter-spacing: 0.01em; }
 /* The shoes/boxes choice on the create + edit forms: full width inside its field label,
    above the sentence explaining what the choice changes. */
+.po-dropoff { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.po-dropoff-h { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.po-dropoff-actions { margin-left: auto; display: flex; gap: 6px; }
+.po-dropoff-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.po-dropoff-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 0; }
+.po-dropoff-name { font-size: 14px; overflow-wrap: anywhere; }
+.po-chip.dropoff-missing { color: #c6871a; border-color: #c6871a; }
 .po-kind-seg { margin: 4px 0 2px; }
 .po-kind-seg .seg-btn { padding: 10px; font-size: 13px; }
 .po-kind-warn { display: block; margin-top: 6px; color: #c6871a; }

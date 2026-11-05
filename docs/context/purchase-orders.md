@@ -1813,3 +1813,18 @@ Supplier deletes from the portal land there too.
   `[po/delete] <code> deleted by <user> (<role>)` server log line, and the order raised again
   right after. Shown as **Recovered**; no Restore (there are no rows to put back).
 - ⚠ `deleted_pos` is new: **`db:setup` before this deploys**, or every PO delete fails.
+
+## Drop-off receipts (2026-11-06)
+Proof a box was handed to the courier. **The supplier uploads it, or PH does for them** (`api/po/dropoff.js`,
+`PoDropoffReceipts`, table `po_dropoff_receipts`, **needs db:setup**). An order can hold several; a photo or PDF,
+checked by its bytes on attach, proxied on read. A supplier reaches only their own orders and removes only their own
+uploads. They see our uploads as "Our team".
+- **The team is told when a box leaves** (`po.dropped_off`, PH + admins, on by default): the supplier tapped ship, or
+  the carrier first scanned it, since a supplier who drops at UPS may never tap. `po_boxes.dropoff_alerted_at` is
+  claimed in one statement, so the two can't both announce a box. Batched per order. It says whether a receipt is in.
+  Boxes that had left before this shipped are marked as told, so nothing floods on deploy.
+- **Asking:** **Ask supplier** on the order sends a nudge (`api/nudge`, once an hour). A supplier upload alerts PH + admins
+  (`po.dropoff_receipt`).
+- **Where:** the order's page for PH, the supplier's order page, and PO Reconciliation for admins, who have no PH app.
+- **On screen:** "No drop-off receipt" on the PO list and "Upload drop-off receipt" on the supplier's, for an open order
+  with a box gone and no receipt. That includes orders already on their way when this shipped.

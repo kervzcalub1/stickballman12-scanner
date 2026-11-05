@@ -47,6 +47,7 @@ import { Reconciliation } from './screens/Reconciliation.jsx';
 import { Sop } from './screens/Sop.jsx';
 import { DeletedItems } from './screens/DeletedItems.jsx';
 import { OnlineOrders } from './screens/OnlineOrders.jsx';
+import { Expected } from './screens/Expected.jsx';
 import { TrackingDuplicates } from './screens/TrackingDuplicates.jsx';
 import { Undelivered } from './screens/Undelivered.jsx';
 import { Cancellations } from './screens/Cancellations.jsx';
@@ -203,6 +204,7 @@ export default function App() {
   if (view === 'receiving') return withAdvisor(<Receiving user={user} navBack={navBack} batchContext={batchContext} onBatchDone={() => { setBatchContext(null); go('batches'); }} onOpenItem={openItem} onOpenReconcile={openReconcile} onHome={() => { setBatchContext(null); go('home'); }} onSignOut={signOut} />);
   // Pre-sell lives with the warehouse, not PH: the team holding the shipment is the one
   // that knows which pairs an order covers. PH's part comes after freeing, on New Inventory.
+  if (view === 'expected') return withAdvisor(<Expected onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'inbound') return withAdvisor(<Inbound onHome={() => go('home')} onSignOut={signOut}
     onOpenPo={openReconcile} />);
   if (view === 'presell') return withAdvisor(<PreSell onHome={() => go('home')} onSignOut={signOut} />);

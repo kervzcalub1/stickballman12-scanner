@@ -193,6 +193,12 @@ export const ALERT_EVENTS = [
     defaultFor: (u) => isAdminRole(u.role),
   },
   {
+    key: 'tracking.delayed', group: 'Shipments', emoji: '🚨', required: false,
+    title: 'Shipments delayed',
+    when: 'A tracking number has not moved in 7 days: who to follow up with, once a day at most',
+    who: (u) => u.role === 'warehouse' || u.role === 'ph_team' || isAdminRole(u.role),
+  },
+  {
     key: 'nudge', group: 'Nudges', emoji: '🔔', required: true,
     title: 'Nudges',
     when: 'Someone nudges you about a request or an order',
@@ -316,6 +322,7 @@ const ROUTES = {
   newinv:    { main: '/report',        ph: '/ph/new-inventory' },
   cancellations: { main: '/cancellations', ph: '/ph/cancellations' },
   inboundissues: { main: '/inbound-issues', ph: '/ph/inbound-issues' },
+  expected:  { main: '/expected',      ph: '/ph/undelivered' },
 };
 export const at = (page, query = '') => (u) => {
   const r = ROUTES[page];
@@ -791,6 +798,46 @@ export async function alertInboundIssuesDaily({ day, rows, closedYesterday = 0, 
     code: day,
     body,
     path: at('inboundissues', 'view=all'),
+  });
+}
+
+// Parcels that have stopped moving, once a morning at most. New ones are spelled out with who
+// to chase; a reminder is shorter. Telegram caps a message at 4,096 characters, and the page
+// holds the rest.
+export function trackingDelayBody({ fresh = [], reminders = [] }) {
+  const line = (r) => {
+    const what = `${r.party} ${r.code}${r.box_number != null ? ` box ${r.box_number}` : ''}${r.pairs ? ` · ${r.pairs} pairs` : ''}`;
+    const where = `${r.carrier ? `${r.carrier} ` : ''}${r.tracking_number} · ${r.days} days${r.last_location ? `, last seen ${r.last_location}` : ''}`;
+    return `• ${what}\n  ${where}\n  ${r.followUp}`;
+  };
+  const short = (r) => `• ${r.party} ${r.code} · ${r.tracking_number} · ${r.days} days`;
+  const parts = [`${fresh.length + reminders.length} shipment${fresh.length + reminders.length === 1 ? '' : 's'} with no tracking movement in 7+ days. Please follow up.`];
+  const room = 3500;
+  let used = parts[0].length;
+  const take = (xs, fmt, heading) => {
+    if (!xs.length) return;
+    const shown = [];
+    for (const r of xs) {
+      const t = fmt(r);
+      if (used + t.length + 2 > room) break;
+      shown.push(t);
+      used += t.length + 2;
+    }
+    const more = xs.length - shown.length;
+    parts.push(`\n${heading}\n${shown.join('\n')}${more ? `\n…and ${more} more on the page.` : ''}`);
+  };
+  take(fresh, line, 'New:');
+  take(reminders, short, 'Still not moving:');
+  return parts.join('\n');
+}
+
+export async function alertTrackingDelayed({ day, fresh, reminders }) {
+  return alertUsers('tracking.delayed', {
+    once: true,
+    ref: `tracking-delayed:${day}`,
+    code: day,
+    body: trackingDelayBody({ fresh, reminders }),
+    path: at('expected'),
   });
 }
 

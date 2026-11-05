@@ -4986,7 +4986,7 @@ export async function tiePoReceivedBox({ poId, batchBoxId, poBoxId = null, actor
 // COALESCE on each field: a later push that omits a field must not blank what an
 // earlier one told us.
 export async function upsertShipmentTracking(trackingNumber, {
-  carrier, carrierKey, trackingStatus, subStatus, subStatusDescr, lastCheckpoint, events,
+  carrier, carrierKey, trackingStatus, subStatus, subStatusDescr, lastCheckpoint, events, etaFrom, etaTo,
 } = {}) {
   // Canonical key: the same parcel typed with spaces in one field and without in
   // another must be ONE row, or the page reads the empty one.
@@ -4994,10 +4994,10 @@ export async function upsertShipmentTracking(trackingNumber, {
   if (!num) return null;
   const rows = await db()`
     INSERT INTO shipment_tracking (tracking_number, carrier, carrier_key, tracking_status,
-      tracking_sub_status, tracking_sub_status_descr, last_checkpoint, tracking_events, checked_at)
+      tracking_sub_status, tracking_sub_status_descr, last_checkpoint, tracking_events, eta_from, eta_to, checked_at)
     VALUES (${num}, ${carrier ?? null}, ${carrierKey ?? null}, ${trackingStatus ?? null},
       ${subStatus ?? null}, ${subStatusDescr ?? null}, ${lastCheckpoint ?? null},
-      ${events ? JSON.stringify(events) : null}::jsonb, now())
+      ${events ? JSON.stringify(events) : null}::jsonb, ${etaFrom ?? null}::date, ${etaTo ?? null}::date, now())
     ON CONFLICT (tracking_number) DO UPDATE SET
       carrier             = COALESCE(EXCLUDED.carrier, shipment_tracking.carrier),
       carrier_key         = COALESCE(EXCLUDED.carrier_key, shipment_tracking.carrier_key),
@@ -5012,6 +5012,9 @@ export async function upsertShipmentTracking(trackingNumber, {
       last_checkpoint     = CASE WHEN shipment_tracking.manual_at IS NOT NULL THEN shipment_tracking.last_checkpoint
                                  ELSE COALESCE(EXCLUDED.last_checkpoint, shipment_tracking.last_checkpoint) END,
       tracking_events     = COALESCE(EXCLUDED.tracking_events, shipment_tracking.tracking_events),
+      -- Tied to the update that carried it, as on po_boxes: a re-quote replaces the old window.
+      eta_from            = CASE WHEN ${trackingStatus != null} THEN EXCLUDED.eta_from ELSE shipment_tracking.eta_from END,
+      eta_to              = CASE WHEN ${trackingStatus != null} THEN EXCLUDED.eta_to ELSE shipment_tracking.eta_to END,
       checked_at          = now()
     RETURNING tracking_number`;
   return rows[0] || null;
@@ -5073,6 +5076,87 @@ export async function listInboundBoxes() {
      WHERE p.status NOT IN ('reconciled', 'closed')
      ORDER BY p.created_at DESC, b.box_number NULLS LAST, b.id
   `;
+}
+
+// Online orders still to arrive, with what the courier last said: not counted in, and at
+// least one pair not cancelled. The parcel's row is matched on the whitespace-free number.
+export async function listExpectedOnlineOrders() {
+  return db()`
+    SELECT o.id AS order_id, o.store, o.order_number, o.tracking_number,
+           t.carrier, t.tracking_status, t.tracking_sub_status,
+           to_char(t.eta_from, 'YYYY-MM-DD') AS eta_from, to_char(t.eta_to, 'YYYY-MM-DD') AS eta_to,
+           -- No scan yet counts from when the carrier was told about it, or else the order.
+           coalesce((t.tracking_events -> 0 ->> 'time')::timestamptz, t.checked_at, t.registered_at, o.created_at) AS last_move_at,
+           (t.tracking_events -> 0 ->> 'location') AS last_location,
+           (SELECT coalesce(sum(l.qty), 0) FROM online_order_lines l
+             WHERE l.order_id = o.id AND l.cancelled_at IS NULL)::int AS pairs
+      FROM online_orders o
+      LEFT JOIN shipment_tracking t
+        ON regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')
+         = regexp_replace(upper(o.tracking_number), '[^A-Z0-9]', '', 'g')
+     WHERE o.received_at IS NULL
+       AND EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL)
+     ORDER BY o.created_at DESC`;
+}
+
+// Of these boxes, the ones already received: tied to a batch box, or sharing its tracking number.
+export async function receivedPoBoxIds(ids) {
+  const list = [...new Set((ids || []).map(Number).filter(Number.isInteger))];
+  if (!list.length) return [];
+  const rows = await db()`
+    SELECT b.id FROM po_boxes b
+     WHERE b.id = ANY(${list}::bigint[])
+       AND EXISTS (SELECT 1 FROM batch_boxes x WHERE x.po_box_id = b.id
+                    OR (coalesce(btrim(b.tracking_number), '') <> ''
+                        AND regexp_replace(upper(x.tracking_number), '[^A-Z0-9]', '', 'g')
+                          = regexp_replace(upper(b.tracking_number), '[^A-Z0-9]', '', 'g')))`;
+  return rows.map((r) => Number(r.id));
+}
+
+// Everything expected, as `api/expected` and the delay worker both read it.
+export async function listExpectedShipments() {
+  const [all, online] = await Promise.all([listInboundBoxes(), listExpectedOnlineOrders()]);
+  // A box already received isn't coming. A replacement label re-sends a box, so it stays in.
+  const received = new Set(await receivedPoBoxIds(all.map((b) => b.box_id)));
+  return { boxes: all.filter((b) => !received.has(Number(b.box_id))), online };
+}
+
+// Open online orders whose number was never given to 17TRACK. Recent ones only: a number from
+// months ago costs quota and tells nobody anything now.
+export async function listUnregisteredOnlineTracking(limit = 40) {
+  const rows = await db()`
+    SELECT DISTINCT o.tracking_number
+      FROM online_orders o
+      LEFT JOIN shipment_tracking t
+        ON regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')
+         = regexp_replace(upper(o.tracking_number), '[^A-Z0-9]', '', 'g')
+     WHERE o.received_at IS NULL AND coalesce(btrim(o.tracking_number), '') <> ''
+       AND o.created_at > now() - interval '60 days'
+       AND t.registered_at IS NULL
+       AND EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL)
+     LIMIT ${limit}`;
+  return rows.map((r) => r.tracking_number);
+}
+
+// What has been said about these parcels: { number: { last_move_at, last_alerted_at } }.
+export async function trackingDelayState(numbers) {
+  const list = [...new Set(numbers || [])];
+  if (!list.length) return {};
+  const rows = await db()`
+    SELECT tracking_number, last_move_at, last_alerted_at FROM tracking_delay_alerts
+     WHERE tracking_number = ANY(${list}::text[])`;
+  return Object.fromEntries(rows.map((r) => [r.tracking_number, r]));
+}
+
+export async function markTrackingDelayAlerted(rows) {
+  const sql = db();
+  for (const r of rows || []) {
+    await sql`
+      INSERT INTO tracking_delay_alerts (tracking_number, last_move_at)
+      VALUES (${r.number}, ${r.last_move_at ?? null})
+      ON CONFLICT (tracking_number) DO UPDATE
+        SET last_move_at = EXCLUDED.last_move_at, last_alerted_at = now()`;
+  }
 }
 
 // The audit snapshot is the frozen store-by-store audit (store orders) — a big JSON blob

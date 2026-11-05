@@ -7,6 +7,8 @@
 import { send, applySecurity, rateLimit, requireRole, getJsonBody } from '../_lib/util.js';
 import { dbConfigured, createOnlineOrder, updateOnlineOrder, getOnlineOrder, onlineOrderByTracking } from '../_lib/db.js';
 import { actorOf, MAX_MONEY, realDate } from './_shared.js';
+import { claimForTracking } from '../_lib/db.js';
+import { registerWarehouseTracking, normalizeTrackingNumber } from '../_lib/tracking.js';
 import { orderCode, orderCosts } from '../../src/lib/onlineOrders.js';
 
 const text = (v, max) => { const t = String(v ?? '').trim().slice(0, max); return t || null; };
@@ -90,6 +92,12 @@ export default async function handler(req, res) {
           error: `${orderCode(dup.id)} (${dup.store}) already has this tracking number.`,
         });
       }
+    }
+    // Tell the courier feed, so the parcel gets a status and an arrival estimate. After the
+    // response is decided, never in its way; a number already registered costs nothing.
+    if (o.tracking_number) {
+      registerWarehouseTracking([normalizeTrackingNumber(o.tracking_number)], { claim: claimForTracking, label: 'online-orders/save' })
+        .catch((e) => console.warn('[online-orders/save] register:', e.message));
     }
     const actor = actorOf(user);
     if (!id) {

@@ -211,6 +211,11 @@ import('./api/_lib/waitlist-worker.js')
 
 // Inbound issues — the daily oversight summary (docs/context/inbound-issues.md).
 // Production only by default: dev and prod share one Telegram bot.
+// Online tracking registration + the morning "these haven't moved in a week" alert.
+import('./api/_lib/tracking-delay-worker.js')
+  .then((m) => m.startTrackingDelayWorker())
+  .catch((e) => console.error('[tracking-delay-worker] failed to start:', e.message));
+
 import('./api/_lib/inbound-issues-worker.js')
   .then((m) => m.startInboundIssuesWorker())
   .catch((e) => console.error('[inbound-issues-worker] failed to start:', e.message));

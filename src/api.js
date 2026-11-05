@@ -135,6 +135,7 @@ export const api = {
   // The day's inbound feed. Read-only and courier-free: the tracking webhook has
   // already written every field this returns.
   inbound: () => get('/api/inbound'),
+  expected: () => get('/api/expected'),
   // PO labels + online orders not delivered and not received (Undelivered Tracking).
   undelivered: (days = '90') => get(`/api/undelivered?days=${encodeURIComponent(days)}`),
   markDelivered: (number, on, note) => post('/api/undelivered/mark', { number, on, note }),

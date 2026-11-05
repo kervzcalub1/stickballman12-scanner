@@ -38,6 +38,10 @@ export default async function handler(req, res) {
     // Saving replaces every row, which would quietly put removed shoes back on the receipt.
     if (cart.receipt_printed_total != null)
       return send(res, 409, { ok: false, error: 'Shoes were taken off this receipt by the auditor or approver. Put them back before reading it again.' });
+    // The order was raised from these lines and saving doesn't touch it, so a new reading
+    // would leave the order expecting the old list, and a real shortage could hide in the gap.
+    if (cart.po_id)
+      return send(res, 409, { ok: false, error: 'The order was raised from this receipt, so it can’t be read again. An auditor or approver can take off shoes that aren’t ours.' });
 
     const lines = (Array.isArray(body.lines) ? body.lines : []).slice(0, 300).map((l) => ({
       sku: String(l.sku ?? '').trim().toUpperCase().slice(0, 40) || null,

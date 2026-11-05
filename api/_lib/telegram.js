@@ -172,41 +172,53 @@ export async function sendApprovalCard({ caption, keyboard, photoFileId = null, 
     const e = [...lineLinks(text, links), ...lineMentions(text, mentions)].sort((a, b) => a.offset - b.offset);
     return e.length ? e : undefined;
   };
+  // A card past Telegram's caption limit can't sit on its photo, so the photo goes first on
+  // its own and the card follows with the buttons. It used to drop the picture and say nothing.
+  const long = caption.length > CAPTION_MAX;
+  const cardOnPhoto = long ? {} : { caption, caption_entities: ents(caption), reply_markup: keyboard };
+  // Outside the job: a 429 on the card re-runs it, and that must not post the photo twice.
+  let pictureSent = false;
+  let why = null;
   return enqueue(async () => {
-    if (photoFileId && caption.length <= CAPTION_MAX) {
+    if (photoFileId && !pictureSent && !why) {
       const cached = photoCache.get(Number(photoFileId));
       if (cached) {
         try {
-          return await tg('sendPhoto', { chat_id: chatId, photo: cached, caption, caption_entities: ents(caption), reply_markup: keyboard });
+          const msg = await tg('sendPhoto', { chat_id: chatId, photo: cached, ...cardOnPhoto });
+          if (!long) return msg;
+          pictureSent = true;
         } catch (e) {
           if (e.status === 429) throw e;
           photoCache.delete(Number(photoFileId)); // a stale id — upload it fresh below
         }
       }
-      let why = null;
-      try {
-        const file = await getBuyCartFileById(Number(photoFileId));
-        if (!file || file.kind !== 'shoe') throw new Error('no shoe photo with that id');
-        const { bytes, contentType } = await imageForCard(await getObject(file.r2_key));
-        const form = new FormData();
-        form.set('chat_id', chatId);
-        form.set('caption', caption);
-        if (ents(caption)) form.set('caption_entities', JSON.stringify(ents(caption)));
-        form.set('reply_markup', reply_markup);
-        const name = `${String(file.sku || 'shoe').replace(/[^A-Za-z0-9._-]/g, '_')}.jpg`;
-        form.set('photo', new Blob([bytes], { type: contentType || 'image/jpeg' }), name);
-        const msg = await tg('sendPhoto', {}, { form, timeoutMs: 60_000 });
-        const sizes = msg?.photo || [];
-        if (sizes.length) photoCache.set(Number(photoFileId), sizes[sizes.length - 1].file_id);
-        return msg;
-      } catch (e) {
-        if (e.status === 429) throw e;
-        why = e.message;
+      if (!pictureSent) {
+        try {
+          const file = await getBuyCartFileById(Number(photoFileId));
+          if (!file || file.kind !== 'shoe') throw new Error('no shoe photo with that id');
+          const { bytes, contentType } = await imageForCard(await getObject(file.r2_key));
+          const form = new FormData();
+          form.set('chat_id', chatId);
+          if (!long) {
+            form.set('caption', caption);
+            if (ents(caption)) form.set('caption_entities', JSON.stringify(ents(caption)));
+            form.set('reply_markup', reply_markup);
+          }
+          const name = `${String(file.sku || 'shoe').replace(/[^A-Za-z0-9._-]/g, '_')}.jpg`;
+          form.set('photo', new Blob([bytes], { type: contentType || 'image/jpeg' }), name);
+          const msg = await tg('sendPhoto', {}, { form, timeoutMs: 60_000 });
+          const sizes = msg?.photo || [];
+          if (sizes.length) photoCache.set(Number(photoFileId), sizes[sizes.length - 1].file_id);
+          if (!long) return msg;
+          pictureSent = true;
+        } catch (e) {
+          if (e.status === 429) throw e;
+          why = e.message;
+        }
       }
-      const text = `⚠️ Photo unavailable (${why})\n\n${caption}`;
-      return tg('sendMessage', { chat_id: chatId, text, entities: ents(text), reply_markup: keyboard });
     }
-    return tg('sendMessage', { chat_id: chatId, text: caption, entities: ents(caption), reply_markup: keyboard });
+    const text = why ? `⚠️ Photo unavailable (${why})\n\n${caption}` : caption;
+    return tg('sendMessage', { chat_id: chatId, text, entities: ents(text), reply_markup: keyboard });
   });
 }
 

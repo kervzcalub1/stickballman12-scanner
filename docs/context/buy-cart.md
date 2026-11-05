@@ -205,6 +205,24 @@ but the only way to a new reading was uploading the file again.
 - The button gives way to the reason after the audit, with shoes removed, or with a PO. An upload in
   those states still files the evidence, with no review table.
 
+## A shoe photo is required, at every step (2026-11-06)
+The add (buyer) and the close already asked for one. Added after a buyer's request reached the desk
+with no picture:
+- **Approving is refused** for a shoe with no photo (`decideLines`, so the screen and Telegram alike).
+  This covers a line a desk added and one from before the rules.
+- **The last photo of a live shoe can't be removed** (`cart/file-delete`), by anyone.
+- **A photo has to be one:** `cart/file-attach` reads the uploaded bytes and refuses anything but
+  JPEG, PNG or WebP, and removes the object. A row alone used to satisfy the check.
+
+A Telegram card still goes out as text with "⚠️ Photo unavailable" if the picture can't be sent.
+
+**Why a photo could look missing when it wasn't:**
+- **Telegram:** a card over the 1,024-character caption limit (many sizes, market sales per size, a
+  premium note) dropped the picture with no warning. The photo now goes first and the card follows
+  with the buttons. The card's message id is still what replies attach to.
+- **The screen:** every row fetched the full-size file separately, so a long run could sit on
+  "photo…" or fail until a refresh. `shotUrl` now fetches each photo once and retries a failure.
+
 ## Filed is not read (2026-11-05)
 Finding an email by order number FILES it at once (`receipt_at`, status `receipted`), but its rows
 live only on the screen until someone ticks and saves them. A supplier who left at that point left a

@@ -68,7 +68,7 @@ export async function buildCostPlan({ poId = null } = {}) {
       noPresetBy.set(k, r);
       continue;
     }
-    const cost = landedFromShelf(m.shelf, m.tip, preset);
+    const cost = landedFromShelf(m.shelf, m.tip, preset, { sku: c.sku, size: c.size });
     if (cost == null) { noLine++; continue; }
     const byTracking = c.by_tracking === true;
     const k = `${cost}|${m.shelf}|${poCode}|${preset?.id || ''}|${byTracking ? c.tracking : ''}`;

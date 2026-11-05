@@ -283,7 +283,9 @@ export function repriceLine(line, stack) {
   const r2 = (n) => Math.round(Number(n) * 100) / 100;
   // A premium shoe's own tip rides on top of the request's tip (`lineTip`).
   const tipAmt = (Number(stack?.tipAmt) || 0) + lineTip(line);
-  const cost = calcCostBreakdown({ ...(stack || {}), tipAmt, shelfPrice: shelf });
+  // No shipping yet. It is per LABEL and shared across the request, and the labels are only
+  // known when the buyer is about to ship (`requestShipping`), so it joins at receiving.
+  const cost = calcCostBreakdown({ ...(stack || {}), tipAmt, shippingAmt: 0, shelfPrice: shelf });
   const alias = Number(line.alias_price) > 0 ? Number(line.alias_price) : null;
   const stockx = Number(line.stockx_price) > 0 ? Number(line.stockx_price) : null;
   const payouts = [

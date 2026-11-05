@@ -213,6 +213,22 @@ but the only way to a new reading was uploading the file again.
 - The button gives way to the reason after the audit, with shoes removed, or with a PO. An upload in
   those states still files the evidence, with no review table.
 
+## What a pair from a request costs (2026-11-06)
+Owner's formula: **shelf price, less the gift card and other discounts, + tax + tip + shipping ÷ pairs.**
+Shipping is **per label**: 3 labels at $8.25 = $24.75, shared across all 30 pairs = $0.83 a pair.
+- **Where:** `presetForShipment` answers for an order raised from a request with that request's costs
+  (`via: 'request'`), so receiving and Costs → Fill costs from POs both follow it. Other orders keep
+  the supplier preset, and there `shippingAmt` is still per pair.
+- **Whose numbers:** the request's own `cost_stack`, including the desk's corrections, so each
+  supplier and each request has its own. Each shoe uses its own approved shelf price (shoes differ by
+  store), not the receipt's, so a store discount isn't taken twice. Unmatched shoes use the receipt's.
+- **Tip:** the request's, plus a premium tip only if it was approved.
+- **Labels:** the order's labels, not counting replacements. Removed receipt rows don't count as pairs.
+- **At approval there is no shipping** in the cost or the buy call (`repriceLine`), because labels
+  aren't known yet. A line priced before this keeps its old figure until it is re-priced.
+- **A pair's cost is written once.** Pairs already costed stay as they are; a label added after a
+  pair was received doesn't change that pair.
+
 ## A shoe photo is required, at every step (2026-11-06)
 The add (buyer) and the close already asked for one. Added after a buyer's request reached the desk
 with no picture:

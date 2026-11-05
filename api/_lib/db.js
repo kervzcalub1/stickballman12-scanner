@@ -17,6 +17,7 @@ import { ROLL_VIN_RE, VIN_RE } from './vins.js';
 import { trackKey as searchTrackKey, expectsAtOrderLevel, declaresPerBox, hasOrderedList } from '../../src/lib/postatus.js';
 import { presellUnitCost } from '../../src/lib/presellDetails.js';
 import { fundingWords, receiptAfterRemoval } from '../../src/lib/buycartRules.js';
+import { requestShipping } from '../../src/lib/costs.js';
 import { productAnswered } from '../../src/lib/sheinCutover.js';
 import { BLOCKERS as SHEIN_BLOCKERS } from '../../src/lib/sheinListings.js';
 // Registration now sends the canonical form of a number, so anything that MATCHES a
@@ -7367,6 +7368,42 @@ export async function savePayoutPreset(p, updatedBy) {
 }
 
 /**
+ * The costs of an order raised from a buying request: the request's OWN stack (the supplier's
+ * at the time, with the desk's corrections), each shoe's own shelf price and approved tip, and
+ * shipping as the stack's rate PER LABEL x the order's labels / the request's pairs. A
+ * replacement label re-sends what was already paid for, so it isn't counted. Null when the
+ * order isn't from a request or the request has no stack: the supplier's preset then applies.
+ */
+async function requestCostForPo(poId) {
+  const sql = db();
+  const cart = (await sql`SELECT id, cart_code, cost_stack FROM buy_carts WHERE po_id = ${poId} ORDER BY id LIMIT 1`)[0];
+  const stack = cart?.cost_stack;
+  if (!stack) return null;
+  const lines = await sql`
+    SELECT sku, size, shelf_price, qty, tip_status, tip_approved, tip_proposed FROM buy_cart_lines
+     WHERE cart_id = ${cart.id} AND status = 'approved'`;
+  const receipt = (await sql`SELECT coalesce(sum(qty), 0)::int AS n FROM buy_cart_receipt_lines
+     WHERE cart_id = ${cart.id} AND removed_at IS NULL`)[0].n;
+  const labels = (await sql`SELECT count(*)::int AS n FROM po_boxes WHERE po_id = ${poId} AND kind <> 'replacement'`)[0].n;
+  const pairs = receipt || lines.reduce((n, l) => n + (Number(l.qty) || 0), 0);
+  const shipping = requestShipping({ perLabel: stack.shippingAmt, labels, pairs });
+  const num = (v) => Number(v) || 0;
+  return {
+    id: `request-${cart.id}`,
+    name: cart.cart_code,
+    storePct: num(stack.storePct), promoPct: num(stack.promoPct), giftPct: num(stack.giftPct),
+    cashbackPct: num(stack.cashbackPct), taxPct: num(stack.taxPct), tipAmt: num(stack.tipAmt),
+    shippingAmt: shipping?.each ?? 0,
+    perLabel: num(stack.shippingAmt), labels, pairs,
+    requestLines: lines.map((l) => ({
+      sku: l.sku, size: l.size,
+      shelf: l.shelf_price == null ? null : Number(l.shelf_price),
+      tip: l.tip_status === 'approved' ? num(l.tip_approved ?? l.tip_proposed) : 0,
+    })),
+  };
+}
+
+/**
  * The cost stack a shipment was bought at — what turns a supplier's SHELF price into
  * the landed cost at receiving. Most specific first:
  *   1. received against a PO → the preset linked to that PO's supplier ACCOUNT
@@ -7377,6 +7414,8 @@ export async function savePayoutPreset(p, updatedBy) {
 export async function presetForShipment({ poId = null, supplierName = '' } = {}) {
   const sql = db();
   if (poId != null && Number.isInteger(Number(poId)) && Number(poId) > 0) {
+    const fromRequest = await requestCostForPo(Number(poId));
+    if (fromRequest) return { preset: fromRequest, via: 'request' };
     const rows = await sql`
       SELECT p.id, p.name, p.tip_amt, p.shipping_amt, p.tax_pct, p.gift_pct, p.store_pct,
              p.promo_pct, p.cashback_pct, p.note, p.supplier_user_id, p.supplier_name,

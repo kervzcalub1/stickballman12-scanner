@@ -1438,6 +1438,23 @@ for (const col of [
   'manual_delivered_on DATE', 'manual_by TEXT', 'manual_at TIMESTAMPTZ', 'manual_note TEXT', 'manual_prev JSONB',
 ]) await sql(`ALTER TABLE shipment_tracking ADD COLUMN IF NOT EXISTS ${col}`);
 
+// The carrier's arrival estimate, by number, so an online order's parcel has a "when" as a
+// supplier's box already does (po_boxes.eta_from/eta_to). Fills in as updates arrive.
+await sql(`ALTER TABLE shipment_tracking ADD COLUMN IF NOT EXISTS eta_from DATE`);
+await sql(`ALTER TABLE shipment_tracking ADD COLUMN IF NOT EXISTS eta_to DATE`);
+
+// Which parcels the team has been told have stopped moving (tracking-delay-worker), so a stall
+// is announced once and reminded weekly. `last_move_at` is the stall it was about: a parcel that
+// moves and then stops again is a new delay.
+await sql(`
+  CREATE TABLE IF NOT EXISTS tracking_delay_alerts (
+    tracking_number  TEXT PRIMARY KEY,
+    last_move_at     TIMESTAMPTZ,
+    first_alerted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_alerted_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+
 // Seed from what the webhook has already written to po_boxes, so the warehouse pages
 // keep every status they can show today rather than going blank until the next push.
 // ON CONFLICT DO NOTHING: po_boxes is the older record, never the authority once a

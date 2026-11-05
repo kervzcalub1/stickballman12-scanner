@@ -79,6 +79,7 @@ connection brings it back as **Reconnect** with no "Not now". No migration.
 | `inbound.warehouse_task` | warehouse (admins: shown, off) | `inbound-issues/action` ask_warehouse | on |
 | `inbound.issue_resolved` | the person who reported it | `inbound-issues/action` resolve | on |
 | `inbound.issue_daily` | admins (PH: shown, off) — `once` per EST day, 10:00 EST | `inbound-issues-worker.js` | on |
+| `tracking.delayed` | warehouse, PH and admins — one message a morning, 10:00 EST | `tracking-delay-worker.js` (online-orders.md) | on |
 | `nudge` | whoever the record waits on | `api/nudge.js` | required |
 
 **Links are per reader** (`at(page, query)`): PH lands under `/ph/*`, a supplier on its

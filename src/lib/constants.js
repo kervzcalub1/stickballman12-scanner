@@ -3,7 +3,7 @@
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'shein-check', 'shein-listings', 'cancellations', 'inbound-issues', 'stock-check', 'my-scans'];
+export const ROUTES = ['receiving', 'inbound', 'expected', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'shein-check', 'shein-listings', 'cancellations', 'inbound-issues', 'stock-check', 'my-scans'];
 // No Box lives at /no-box (and /no-box/box-swap, /no-box/print-box-labels — no-box.md);
 // the old /nobox still opens it.
 const PATH_ALIAS = { nobox: 'no-box' };
@@ -140,6 +140,7 @@ export function homeCardBadges(key, c) {
 export const HOME_SECTIONS = [
   { title: 'Receiving Shipment Orders', accent: 'shipping', cards: [
     { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
+    { key: 'expected', icon: '📅', title: 'Expected This Week', sub: 'What is coming today and this week, by supplier and by online store' },
     { key: 'inbound', icon: '🚚', title: 'Inbound', sub: 'What is coming, from whom, and what has stopped moving — every box still on its way' },
     { key: 'online-orders', icon: '🛍️', title: 'Online Orders', sub: 'Shoes the PH team bought online — what is on its way, and count each parcel in when it lands' },
     { key: 'vin-stock', icon: '🏷️', title: '1ID Stickers', sub: 'Print blank 1ID stickers in bulk so intake never waits on a printer' },

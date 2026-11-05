@@ -135,4 +135,30 @@ a short count becomes a refund to chase). E2E: `e2e/receiving-online-order.spec.
 
 ## Not yet
 - No home badge for "Expected" / follow-ups (the page's tab counts only).
-- No 17TRACK registration of the tracking numbers. They appear on **Undelivered Tracking** as "No courier feed" with a link to the courier's site (`docs/context/undelivered.md`).
+- (Until 2026-11-06) no 17TRACK registration of the tracking numbers. They appeared on **Undelivered Tracking** as "No courier feed" with a link to the courier's site (`docs/context/undelivered.md`).
+
+## Expected This Week (2026-11-06)
+`/expected` (`src/screens/Expected.jsx`, `api/expected.js`, sums in `src/lib/expected.js`): the warehouse's
+view of what is coming, **one table per supplier and one per online store**, with Today, Rest of the week,
+Later, No date yet, Overdue and Here-not-counted-in columns, in boxes or parcels and pairs. A row opens to
+its orders with a link to the courier. Home's **Expected today** adds online parcels and opens this screen.
+- **The week is a plan, not a timetable:** today plus the next 7 days, one column, no date per parcel.
+- **Days come from the carrier's estimate**, through the same `arrivalBucket` as Inbound. `shipment_tracking`
+  gained `eta_from`/`eta_to` (**needs db:setup**), written by the webhook and refresh.
+- **Online numbers now go to 17TRACK** (owner, 2026-11-06, reversing the earlier quota call): on save, and
+  `tracking-delay-worker` works through open orders from the last 60 days, 40 at a time. Claimed first, so a
+  number is only paid for once.
+- **Left out:** supplier boxes already received, and online orders counted in or wholly cancelled. An online
+  order with no tracking number shows under No date yet.
+
+## Delayed shipments (2026-11-06)
+A tracking number with **no movement in 7 days** is **Delayed** on Expected This Week (its own column, ahead of
+any estimate), and the team hears about it on Telegram (`tracking.delayed`, `tracking-delay-worker.js`).
+- **Who:** warehouse, PH and admins with Telegram connected, on by default and switchable in the bell panel.
+  PH's link opens Undelivered Tracking, since Expected is on the warehouse app.
+- **When:** one message from 10:00 EST. A stall is announced once and reminded every 7 days. A parcel that moves
+  and stops again is a new delay (`tracking_delay_alerts`, **needs db:setup**).
+- **What it says:** supplier or store, order, box, pairs, carrier and number, days, last location, and who to chase
+  (`delayFollowUp`): never scanned → the sender; carrier exception → call the carrier; stopped → ask for a trace.
+- **Not alerted:** no tracking number, delivered, received, or stopped over 60 days ago. Those last still show
+  as Delayed on the screen. Inbound's own states are separate: it calls 4 days Delayed and 8 days Investigate.

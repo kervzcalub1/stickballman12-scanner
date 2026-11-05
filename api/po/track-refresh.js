@@ -73,6 +73,7 @@ export default async function handler(req, res) {
       await upsertShipmentTracking(u.trackingNumber, {
         carrier: u.carrier, trackingStatus: u.trackingStatus, subStatus: u.subStatus,
         subStatusDescr: u.subStatusDescr, lastCheckpoint: u.lastCheckpoint, events: u.events,
+        etaFrom: u.etaFrom, etaTo: u.etaTo,
       }).catch((e) => console.warn('[po/track-refresh] shipment_tracking:', e.message));
       await setPoBoxTracking(u.trackingNumber, u);
     }

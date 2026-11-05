@@ -63,6 +63,7 @@ export default async function handler(req, res) {
       await upsertShipmentTracking(u.trackingNumber, {
         carrier: u.carrier, trackingStatus: u.trackingStatus, subStatus: u.subStatus,
         subStatusDescr: u.subStatusDescr, lastCheckpoint: u.lastCheckpoint, events: u.events,
+        etaFrom: u.etaFrom, etaTo: u.etaTo,
       }).catch((e) => console.warn('[po/tracking-webhook] shipment_tracking:', e.message));
       const rows = await setPoBoxTracking(u.trackingNumber, u);
       for (const r of (rows || [])) if (r?.po_id != null) affectedPoIds.add(Number(r.po_id));

@@ -4449,6 +4449,20 @@ body.keypad-open .keypad-fab, body.keypad-open .advisor-fab { display: none; }
    The headline and the bar only. Home is a chore list; the day strip, the state
    strip and the shipment list stay on Inbound, or the chores get buried under a
    second copy of that page. */
+.exp-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 8px; }
+.exp-tile { background: var(--card, var(--surface)); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.exp-tile-late { border-color: var(--err); }
+.exp-tile-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+.exp-tile-row { font-size: 15px; margin-top: 4px; }
+.exp-tile-row b { font-size: 22px; font-weight: 800; }
+.exp-note { margin: 8px 0 14px; }
+.exp-side { margin-bottom: 14px; }
+.exp-table th { white-space: nowrap; }
+.exp-row { cursor: pointer; }
+.exp-name { background: none; border: 0; padding: 0; color: inherit; font: inherit; font-weight: 600; cursor: pointer; text-align: left; }
+.exp-late, .exp-late b { color: var(--err); }
+.exp-detail ul { margin: 0; padding-left: 18px; font-size: 13px; }
+.exp-detail li { margin: 4px 0; }
 .inb-today { display: flex; flex-direction: column; gap: 8px; width: 100%; text-align: left;
   padding: 14px 16px; border-radius: 12px; cursor: pointer;
   background: var(--panel); border: 1px solid var(--border); color: var(--text); }

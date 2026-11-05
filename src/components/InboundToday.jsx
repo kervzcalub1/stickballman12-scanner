@@ -17,14 +17,17 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { arrivalPlan, inboundProgress } from '../lib/inbound.js';
+import { expectedDashboard } from '../lib/expected.js';
 import { estToday } from '../lib/format.js';
 
 const plural = (n, s) => `${n} ${n === 1 ? s : `${s}es`}`;
 
 export function InboundToday({ onOpen }) {
   const [rows, setRows] = useState(null);
+  const [expected, setExpected] = useState(null);
 
   useEffect(() => {
+    api.expected().then((r) => setExpected(r)).catch(() => {});
     let on = true;
     // Silent on failure. A warehouse hand's home screen must not show an error because a
     // summary could not load — the chores below it are the point, and this is context.
@@ -34,15 +37,17 @@ export function InboundToday({ onOpen }) {
   // Live (docs/context/live-updates.md): a box shipping, a tracking status landing or a
   // box being received moves the headline and the bar without a reload. `items` changes
   // on every scan, so this re-reads at most every 5s while the floor is busy.
-  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'batches', 'items'], async () => {
+  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'batches', 'items', 'online_orders', 'online_order_lines', 'shipment_tracking'], async () => {
     const r = await api.inbound();
     const next = r.boxes || [];
     setRows((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
+    setExpected(await api.expected());
   }, { mount: false, minGap: 5000 });
 
   // Nothing to say until it has loaded, and nothing to say when every order is
   // reconciled. A card reading "0 boxes" every day is a card people stop seeing.
-  if (!rows || !rows.length) return null;
+  const online = expected ? expectedDashboard(expected, estToday()).stores.total : null;
+  if (!rows || (!rows.length && !online?.today?.count && !online?.week?.count)) return null;
 
   const today = estToday();
   const plan = arrivalPlan(rows, today);
@@ -66,6 +71,9 @@ export function InboundToday({ onOpen }) {
               {due.units > 0 && <span> · <b>{due.units}</b> pairs</span>}
             </>
           )}
+          {online?.today?.count > 0 && (
+            <span> · <b>{online.today.count}</b> online {online.today.count === 1 ? 'parcel' : 'parcels'}</span>
+          )}
           {overdue.boxes > 0 && (
             <span className="inb-today-overdue"> · {plural(overdue.boxes, 'box')} overdue</span>
           )}
@@ -77,7 +85,7 @@ export function InboundToday({ onOpen }) {
         </span>
 
         <span className="inb-today-foot muted sm">
-          {progress.landed} of {progress.total} inbound boxes landed ({progress.pct}%) · open Inbound →
+          {progress.landed} of {progress.total} inbound boxes landed ({progress.pct}%) · see the whole week →
         </span>
       </button>
     </section>

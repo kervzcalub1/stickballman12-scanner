@@ -70,7 +70,7 @@ export function Home({ user, onPick, onSignOut }) {
       {/* Above the chores, because it is the thing that decides what the morning looks
           like. It renders nothing at all when there is no inbound stock, so a quiet
           week does not leave a permanent empty card people learn to skip past. */}
-      <InboundToday onOpen={() => onPick('inbound')} />
+      <InboundToday onOpen={() => onPick('expected')} />
       {attention.length > 0 && (
         <section className="home-section" data-accent="attention">
           <h2 className="home-section-title">Needs attention</h2>

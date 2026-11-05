@@ -3445,3 +3445,102 @@ test('plain-words replies and amount-first tips are read; anything else is still
     expect(splitTipReply(t).tip).toEqual({ action: 'approve', amount: 5 });
   expect(splitTipReply('take all, $5 tip')).toMatchObject({ tip: { action: 'approve', amount: 5 }, rest: 'take all' });
 });
+
+// ---------------------------------------------------------------------------
+// The cost stack must not reach a supplier by ANY route. These assert on the raw JSON a
+// buyer's browser receives (the whole response, stringified), not on the one field a
+// screen happens to read: a hidden column is not a control. The stack's other keys are
+// searched for by NAME, so a copy sitting under a different property would still fail.
+test.describe('the cost stack never reaches a supplier’s browser', () => {
+  const STACK_KEYS = ['cashbackPct', 'shippingAmt', 'tipAmt', 'storePct', 'promoPct', 'giftPct', 'presetName'];
+  const noStack = (body) => {
+    const raw = JSON.stringify(body);
+    for (const k of STACK_KEYS) expect(raw, `response leaks "${k}"`).not.toContain(k);
+  };
+
+  test('cart/list: a buyer’s rows carry the tax and the total, never the stack; staff still get it', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+
+    const mine = await read_(request, 'buyer', 'cart/list');
+    expect(mine.status).toBe(200);
+    const row = mine.body.carts.find((c) => Number(c.id) === cartId);
+    expect(row).toBeTruthy();
+    noStack(mine.body);
+    expect(row.cost_stack).toBeNull();
+    // The Needed column: shelf + declared tax, exactly.
+    expect(row.funding_tax_pct).toBe(8.25);
+    expect(row.funding_target).toBeCloseTo(108.25, 2);
+    expect(row.approved_amount).toBe(100);
+    // The queue's rows are still bare rows (no invented lines/events arrays).
+    expect(row.lines).toBeUndefined();
+
+    for (const who of ['approver', 'auditor', 'issuer']) {
+      const staff = await read_(request, who, 'cart/list');
+      const s = staff.body.carts.find((c) => Number(c.id) === cartId);
+      expect(s.cost_stack.cashbackPct, who).toBe(0);
+      expect(s.cost_stack.shippingAmt, who).toBe(8.25);
+      expect(s.funding_target, who).toBeCloseTo(108.25, 2);
+    }
+  });
+
+  test('cart/create: the new request a buyer gets back has no stack; staff opening one for them do', async ({ request }) => {
+    const mine = await call(request, 'buyer', 'cart/create', { retailer: 'E2E Leak Store' });
+    expect(mine.status).toBe(200);
+    noStack(mine.body);
+    expect(mine.body.cart.cost_stack).toBeNull();
+    expect(mine.body.cart.funding_tax_pct).toBe(8.25);   // the preset's rate, kept for the cards
+
+    const staff = await call(request, 'approver', 'cart/create', { retailer: 'E2E Leak Store', buyerUserId: people.buyer.uid });
+    expect(staff.status).toBe(200);
+    expect(staff.body.cart.cost_stack.shippingAmt).toBe(8.25);
+  });
+
+  test('cart/costs: a buyer is refused with no cart in the answer; the desk’s answer keeps the stack', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const buyer = await call(request, 'buyer', 'cart/costs', { cartId, stack: { storePct: 40, taxPct: 8.25 } });
+    expect(buyer.status).toBe(403);
+    expect(buyer.body.cart).toBeUndefined();
+    noStack(buyer.body);
+
+    const desk = await call(request, 'approver', 'cart/costs', { cartId, stack: { storePct: 10, taxPct: 8.25, tipAmt: 5, shippingAmt: 8.25 } });
+    expect(desk.status).toBe(200);
+    expect(desk.body.cart.cost_stack.storePct).toBe(10);
+    // The no-change early return is the other `cart` the endpoint sends.
+    const again = await call(request, 'approver', 'cart/costs', { cartId, stack: { storePct: 10, taxPct: 8.25, tipAmt: 5, shippingAmt: 8.25 } });
+    expect(again.body.cart.cost_stack.storePct).toBe(10);
+  });
+
+  test('the trail does not replay the stack: costs_edited is redacted for a buyer on every cart read', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+    await call(request, 'approver', 'cart/costs', { cartId, stack: { storePct: 12, cashbackPct: 3, taxPct: 8.25, tipAmt: 7, shippingAmt: 9 } });
+
+    // Staff keep the full before/after — it is the audit trail.
+    const staff = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart;
+    const edit = staff.events.find((e) => e.kind === 'costs_edited');
+    expect(edit.body).toMatch(/→ 12%/);
+    expect(edit.body).toMatch(/→ \$7\.00/);
+
+    // The buyer sees THAT the desk updated the costs, not what moved.
+    const mine = await read_(request, 'buyer', `cart/get?id=${cartId}`);
+    noStack(mine.body);
+    const seen = mine.body.cart.events.find((e) => e.kind === 'costs_edited');
+    expect(seen).toBeTruthy();
+    expect(seen.body).not.toMatch(/→|%|\$/);
+    // …and the whole response has none of the new figures either.
+    expect(JSON.stringify(mine.body)).not.toMatch(/→ 12%|→ \$7\.00|→ \$9\.00/);
+  });
+
+  test('redactCartForViewer (pure): bare queue rows stay bare, the tax survives, staff are untouched', async () => {
+    const { redactCartForViewer } = await import('../api/_lib/buycart.js');
+    const stack = { taxPct: 8.25, tipAmt: 5, shippingAmt: 8.25, cashbackPct: 2 };
+    const row = { id: 1, cost_stack: stack, funding_tax_pct: 8.25, funding_target: 108.25 };
+    const supplier = { role: 'supplier', uid: 1 };
+    expect(redactCartForViewer(row, supplier)).toEqual({ id: 1, cost_stack: null, funding_tax_pct: 8.25, funding_target: 108.25 });
+    expect(redactCartForViewer(row, { role: 'warehouse', uid: 2 })).toBe(row);
+    expect(redactCartForViewer(row, { role: 'admin', uid: 3 })).toBe(row);
+    const ev = redactCartForViewer({ ...row, lines: [], events: [{ kind: 'costs_edited', body: 'Tip $ 5.00 → $ 9.00' }] }, supplier);
+    expect(ev.events[0].body).not.toContain('9.00');
+  });
+});

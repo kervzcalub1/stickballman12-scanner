@@ -731,6 +731,10 @@ whole request.
   (closed / re-opened) stay in the main group. The bot must be in the group. `e2e/buy-cart.spec.js`
   "a buyer’s premium group…".
 
+> **Stale below:** "The BUYER writes it first" (the section above) was reversed on 2026-09-11 — the
+> buyer is refused by `canWriteCosts` and never reads the stack. Only the tax RATE
+> (`funding_tax_pct`) reaches them.
+
 ### The cost stack is the desk's too (2026-09-11)
 It moved the same way the buy call did, and for the same reason: **the stack is what turns
 a shelf price into a profit, so it is the basis on which a request gets approved or turned
@@ -993,7 +997,19 @@ are derived); a supplier's is discarded.
   through a cost stack they can read and edit on the same screen — hiding an arithmetic
   result from its own inputs would be theatre. "Lands at" stays on their table, and is
   derived server-side so it is true even when the market cannot be read at all.
-- **Redaction is applied at every endpoint that returns a cart**, including the ones a
+- **Redaction is applied at every endpoint that returns a cart — and the QUEUE (2026-11-05).**
+  `cart/list` selects `c.*` (so the stack) and used to send it to every buyer; `cart/create`
+  returned the fresh row, preset stack and all. Both now go through `redactCartForViewer`
+  (it leaves bare list rows bare: `lines`/`events` are redacted only if present), and
+  `cart/costs` does too (a buyer can't reach it — `canWriteCosts` is false for them — so that one
+  is defence in depth). The funding figures stay: `funding_tax_pct`, `funding_target`,
+  `approved_amount` ride the row beside `cost_stack: null`, so the list's Needed column and the
+  request page's shelf + tax breakdown are unchanged. **The trail leaked the stack too:** a
+  `costs_edited` event's body is `describeCostChange` output ("Tip $5.00 → $9.00"), i.e. the stack
+  one edit at a time; for a buyer it now reads "The costs on this request were updated by the
+  desk." (`CALL_EVENT_BODY`). Staff keep the full before/after. Tests: `buy-cart.spec.js` "the cost
+  stack never reaches a supplier's browser" (asserts on the raw response JSON, by key name).
+  Still true after that: includes the ones a
   supplier cannot reach today. It is a no-op for staff, so it costs nothing, and a
   privilege that changes later cannot open a hole nobody re-audited.
 - The buyer's screen loses the Buy call column, the call panel and the verdict on *Add a

@@ -462,8 +462,13 @@ const CALL_FIELDS = [
 // The trail says a line was priced and by whom, but not to what. A record that
 // disappears for one reader is worse than one that is brief: the buyer can still see
 // that somebody re-read the market against their request, and when.
+//
+// `costs_edited` is the same kind of record: its body is `describeCostChange` output —
+// "Store % 0% → 10% · Tip $ 5.00 → 0.00" — i.e. the cost stack, one edit at a time. Hiding
+// `cost_stack` while the trail replays every rate that ever moved would be theatre.
 const CALL_EVENT_BODY = {
   line_priced: 'Priced. The figures are on the approver’s copy of this request.',
+  costs_edited: 'The costs on this request were updated by the desk.',
 };
 
 /**
@@ -488,26 +493,26 @@ export function redactLineForViewer(line, user) {
  */
 export function redactCartForViewer(cart, user) {
   if (!cart || canSeeBuyCall(user)) return cart;
-  return {
+  const out = {
     ...cart,
     // The stack itself, not just what it produces. Discounts, cashback and the tip we
     // pay are how the company buys — a supplier who can read them can price against them.
+    // `funding_tax_pct` (the declared rate, on its own) is NOT part of this and stays.
     cost_stack: null,
-    lines: (cart.lines || []).map((l) => {
-      const out = { ...l };
-      for (const f of CALL_FIELDS) out[f] = null;
-      return out;
-    }),
-    events: (cart.events || []).map((e) => {
-      if (CALL_EVENT_BODY[e.kind]) return { ...e, body: CALL_EVENT_BODY[e.kind] };
-      // `line_added` used to end "— buy". The verdict was never the point of that line
-      // (it says what was added, and for how much); it is stripped rather than the whole
-      // entry being replaced.
-      if (e.kind === 'line_added' && typeof e.body === 'string')
-        return { ...e, body: e.body.replace(/\s+—\s+(buy|watch|pass)\s*$/i, '') };
-      return e;
-    }),
   };
+  // `lines` / `events` only when the row has them: the QUEUE (`cart/list`) hands back
+  // bare rows, and inventing empty arrays on them would change their shape.
+  if (cart.lines) out.lines = cart.lines.map((l) => redactLineForViewer(l, user));
+  if (cart.events) out.events = cart.events.map((e) => {
+    if (CALL_EVENT_BODY[e.kind]) return { ...e, body: CALL_EVENT_BODY[e.kind] };
+    // `line_added` used to end "— buy". The verdict was never the point of that line
+    // (it says what was added, and for how much); it is stripped rather than the whole
+    // entry being replaced.
+    if (e.kind === 'line_added' && typeof e.body === 'string')
+      return { ...e, body: e.body.replace(/\s+—\s+(buy|watch|pass)\s*$/i, '') };
+    return e;
+  });
+  return out;
 }
 
 /**

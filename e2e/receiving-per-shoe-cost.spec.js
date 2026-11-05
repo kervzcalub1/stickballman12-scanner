@@ -29,6 +29,7 @@ const SKU_R = `E2E-COST-R-${stamp}`;   // buying request: shelf 100, receipt 90,
 const ALL = [SKU_A, SKU_B, SKU_C, SKU_X, SKU_Y, SKU_Z, SKU_P, SKU_Q, SKU_N, SKU_R];
 let requestPoId = null;
 let requestCartId = null;
+let requestBuyerId = null;
 // A zero-cost stack for the per-size test: with it, landed = shelf exactly, so that test
 // stays about the PO's per-size prices. (With NO preset a pair's cost is not known —
 // the declared figure is only the shelf price — and it lands blank; its own test below.)
@@ -65,6 +66,7 @@ test.afterAll(async () => {
     await q('DELETE FROM purchase_orders WHERE id = $1', [id]);
   }
   await q('DELETE FROM payout_presets WHERE supplier_name = ANY($1)', [[PRESET_SUPPLIER, COST_SUPPLIER]]);
+  if (requestBuyerId) await q('DELETE FROM users WHERE id = $1', [requestBuyerId]);
   await pool.end();
 });
 
@@ -231,10 +233,13 @@ test('a pair from a buying request lands at the request’s costs, with shipping
   }
   await q(`INSERT INTO po_lines (po_id, po_box_id, sku, size, name, qty_expected, unit_cost, entered_on_behalf)
            VALUES ($1, $2, $3, '9', 'E2E Request Shoe', 1, 90, true)`, [requestPoId, boxes[0].id, SKU_R]);
+  requestBuyerId = Number((await q(
+    `INSERT INTO users (name, username, pass_hash, role, status) VALUES ('E2E Request Buyer', $1, 'x', 'supplier', 'approved') RETURNING id`,
+    [`e2e_cost_req_${stamp}`]))[0].id);
   const cart = (await q(
     `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, status, po_id, cost_stack)
-     VALUES ((SELECT id FROM users ORDER BY id LIMIT 1), 'E2E', 'E2E Store', 'receipted', $1, $2) RETURNING id, cart_code`,
-    [requestPoId, JSON.stringify({ taxPct: 8.25, tipAmt: 5, giftPct: 8, shippingAmt: 8.25 })]))[0];
+     VALUES ($1, 'E2E', 'E2E Store', 'receipted', $2, $3) RETURNING id, cart_code`,
+    [requestBuyerId, requestPoId, JSON.stringify({ taxPct: 8.25, tipAmt: 5, giftPct: 8, shippingAmt: 8.25 })]))[0];
   requestCartId = Number(cart.id);
   await q(`INSERT INTO buy_cart_lines (cart_id, sku, size, qty, shelf_price, status) VALUES ($1, $2, '9', 30, 100, 'approved')`, [requestCartId, SKU_R]);
   await q(`INSERT INTO buy_cart_receipt_lines (cart_id, sku, size, qty, unit_price, total_price) VALUES ($1, $2, '9', 30, 90, 2700)`, [requestCartId, SKU_R]);

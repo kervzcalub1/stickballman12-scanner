@@ -23,7 +23,6 @@ export default async function handler(req, res) {
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
-  if (!r2Configured()) return send(res, 503, { ok: false, error: 'File storage is not configured.' });
 
   const params = new URL(req.url, 'http://x').searchParams;
   const cartId = Number(params.get('cartId'));
@@ -46,13 +45,15 @@ export default async function handler(req, res) {
     }
     const file = await getBuyCartFile(cartId, fileId);
     if (!file) return send(res, 404, { ok: false, error: 'That file does not exist.' });
+    // A supplier never opens the desk's card files. A bad upload stays out of their hands, and
+    // the recorded cards reach them as the one PDF (`cart/gift-cards-pdf`).
+    if (user.role === 'supplier' && !isPrivileged(user.role) && file.kind === 'gift_card')
+      return send(res, 403, { ok: false, error: 'Download the cards as one PDF.' });
     // Keyed on the FILE's kind, never the `?kind=` the caller sent: that parameter is the
-    // client's description of what it is asking for, and leaving it off used to fetch a
-    // card image before release (found 2026-09-30).
-    if (user.role === 'supplier' && !isPrivileged(user.role) && file.kind === 'gift_card'
-      && !['funded', 'receipted', 'audited', 'closed'].includes(cart.status))
-      return send(res, 409, { ok: false, error: 'These cards have not been released to you yet.' });
+    // client's description of what it is asking for (found 2026-09-30).
 
+    // After the access checks, so who may see what doesn't depend on the storage being up.
+    if (!r2Configured()) return send(res, 503, { ok: false, error: 'File storage is not configured.' });
     const bytes = await getObject(file.r2_key);
     const ext = String(file.r2_key).split('.').pop().toLowerCase();
     res.statusCode = 200;

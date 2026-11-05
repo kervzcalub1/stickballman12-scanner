@@ -9,6 +9,7 @@
 //
 // It prints every code on the request, so it is the bulk form of `cart/gc-reveal` and
 // follows the same rules exactly:
+//   · only RECORDED cards: a file that matches none (a bad upload) is not printed;
 //   · who: the issuing desk, the buyer on their own request once it is released, and the
 //     auditor once it is released (auditing the spend means checking the cards);
 //   · the trail row is written BEFORE anything is decrypted — "who could have spent
@@ -21,9 +22,8 @@
 // Pairing a picture with its card:
 //   · a PDF page is matched by the FULL number in its text layer;
 //   · an image by the last four remembered when it was read (`buy_cart_files.gc_last4`),
-//     and an image never read is read now, once (the vision model, ~$0.003), and
-//     remembered. A picture that matches no live card is still printed, at the end,
-//     under a heading that says so — dropping it would hide a card nobody recorded.
+//     and an image never read is read now, once, on this server, and remembered;
+//   · a PDF page with no text is a picture, and is read the same way.
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { send, applySecurity, rateLimit, requireAuth, isPrivileged, blockIfMustChange } from '../_lib/util.js';
 import {
@@ -32,7 +32,7 @@ import {
 import { decryptSecret, secretsConfigured } from '../_lib/secrets.js';
 import { hasPrivilege, requireBuyerAccess } from '../_lib/buycart.js';
 import { getObject, r2Configured } from '../_lib/r2.js';
-import { pdfPages, readCardImage, readCardFaceLocally, aiConfigured, cardsFromCsv } from './gift-card-read.js';
+import { pdfPages, pdfPageImage, readCardsLocally, cardsFromCsv } from './gift-card-read.js';
 
 const PAGE_W = 612; // US Letter
 const PAGE_H = 792;
@@ -69,10 +69,10 @@ async function mapLimit(list, n, fn) {
 /**
  * The document itself: a page per card (`cards` carry the DECRYPTED code/pin — the
  * caller has already written the trail row), its picture from `pictureFor` (card id →
- * { kind:'img', bytes } | { kind:'pdf', bytes, page }), then any `loose` pictures.
+ * { kind:'img', bytes } | { kind:'pdf', bytes, page }).
  * Separate from the handler so it can be rendered without a request or a bucket.
  */
-export async function buildGiftCardPdf({ cards, pictureFor = new Map(), loose = [], cartCode = '', printedFor = '' }) {
+export async function buildGiftCardPdf({ cards, pictureFor = new Map(), cartCode = '', printedFor = '' }) {
 // ---- The document ---------------------------------------------------------------
 const doc = await PDFDocument.create();
 doc.setTitle(`${cartCode} gift cards`);
@@ -116,7 +116,8 @@ for (const [i, c] of cards.entries()) {
   const page = doc.addPage([PAGE_W, PAGE_H]);
   let y = PAGE_H - M;
   page.drawText(`Gift card ${i + 1} of ${cards.length}`, { x: M, y: y - 12, size: 12, font: bold, color: MUTED });
-  const who = [c.retailer, c.label].filter(Boolean).map(ascii).join(' · ');
+  // Not the label: it is usually the uploaded file's name, which is the desk's business.
+  const who = c.retailer ? ascii(c.retailer) : '';
   if (who) page.drawText(who.slice(0, 80), { x: M + 150, y: y - 12, size: 10, font, color: MUTED });
   y -= 48;
   page.drawText(money(c.balance), { x: M, y, size: 30, font: bold, color: INK });
@@ -129,13 +130,6 @@ for (const [i, c] of cards.entries()) {
   y -= 44;
   page.drawLine({ start: { x: M, y }, end: { x: PAGE_W - M, y }, thickness: 1, color: RULE });
   await drawPicture(page, pictureFor.get(c.id), y - 14);
-  page.drawText(stamp, { x: M, y: M - 20, size: 8, font, color: MUTED });
-}
-for (const [i, p] of loose.entries()) {
-  const page = doc.addPage([PAGE_W, PAGE_H]);
-  page.drawText(`Picture not matched to a recorded card (${i + 1} of ${loose.length})`, { x: M, y: PAGE_H - M - 12, size: 12, font: bold, color: MUTED });
-  page.drawText(ascii(p.name || '').slice(0, 90), { x: M, y: PAGE_H - M - 30, size: 9, font, color: MUTED });
-  await drawPicture(page, { kind: 'img', bytes: p.bytes }, PAGE_H - M - 44);
   page.drawText(stamp, { x: M, y: M - 20, size: 8, font, color: MUTED });
 }
   return Buffer.from(await doc.save());
@@ -192,7 +186,6 @@ export default async function handler(req, res) {
 
     // ---- Pictures → cards ---------------------------------------------------------
     const pictureFor = new Map();   // card id -> { kind:'img', bytes } | { kind:'pdf', bytes, page }
-    const loose = [];               // pictures that match no live card
     const byTail = (t) => cards.filter((c) => c.code.slice(-4) === t);
     await mapLimit(files, 4, async (f) => {
       const isPdf = String(f.content_type || '').includes('pdf') || /\.pdf$/i.test(f.name || '');
@@ -208,29 +201,40 @@ export default async function handler(req, res) {
           const hit = cards.find((c) => !pictureFor.has(c.id) && c.code.length >= 8 && text.includes(c.code));
           if (hit) pictureFor.set(hit.id, { kind: 'pdf', bytes, page, name: f.name });
         });
+        // A page with no text is a picture of a card, and its barcode is what the till scans.
+        // Only read while a card still needs a picture: reading takes a second or so a page.
+        const pictures = pages.flatMap((lines, page) => (lines.length ? [] : [page]));
+        if (pictures.length && cards.some((c) => !pictureFor.has(c.id))) {
+          try {
+            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+            const doc = await pdfjs.getDocument({ data: new Uint8Array(bytes), useSystemFonts: true, isEvalSupported: false, verbosity: 0 }).promise;
+            for (const page of pictures) {
+              if (cards.every((c) => pictureFor.has(c.id))) break;
+              const png = await pdfPageImage(doc, page + 1, pdfjs);
+              const [read] = png ? await readCardsLocally(png) : [];
+              const hit = read && cards.find((c) => !pictureFor.has(c.id) && c.code === read.number);
+              if (hit) pictureFor.set(hit.id, { kind: 'pdf', bytes, page, name: f.name });
+            }
+          } catch { /* no picture: the card still prints with its number and PIN */ }
+        }
         return;
       }
       let tail = f.gc_last4 || null;
       let fullNumber = null;
       if (!tail) {
-        try {
-          // Here first, as on Read the cards; the AI reader only for what this can't read.
-          const face = await readCardFaceLocally(bytes);
-          const read = face ? [face] : aiConfigured() ? await readCardImage(f.r2_key) : [];
-          const nums = [...new Set((read || []).map((c) => String(c?.number || '').replace(/\D/g, '')).filter((n) => n.length >= 8))];
-          if (nums.length === 1) {
-            fullNumber = nums[0];
-            tail = fullNumber.slice(-4);
-            await setBuyCartFileCardTail(cartId, f.id, tail).catch(() => {});
-          }
-        } catch { /* unread → printed as unmatched below */ }
+        const nums = [...new Set((await readCardsLocally(bytes)).map((c) => c.number))];
+        if (nums.length === 1) {
+          fullNumber = nums[0];
+          tail = fullNumber.slice(-4);
+          await setBuyCartFileCardTail(cartId, f.id, tail).catch(() => {});
+        }
       }
-      // An exact number beats the last four; the last four alone must name ONE card.
+      // An exact number beats the last four; the last four alone must name ONE card. A picture
+      // that matches no recorded card isn't printed: this PDF is the recorded cards.
       const exact = fullNumber ? cards.find((c) => c.code === fullNumber) : null;
       const byFour = !exact && tail ? byTail(tail) : [];
       const hit = exact || (byFour.length === 1 ? byFour[0] : null);
       if (hit && !pictureFor.has(hit.id)) pictureFor.set(hit.id, { kind: 'img', bytes, name: f.name });
-      else loose.push({ bytes, name: f.name });
     });
 
     // ---- Page order: the CSV's -------------------------------------------------------
@@ -252,7 +256,7 @@ export default async function handler(req, res) {
       cards.sort((x, y) => at(x) - at(y));
     }
 
-    const bytes = await buildGiftCardPdf({ cards, pictureFor, loose, cartCode: cart.cart_code, printedFor: user.username || user.name });
+    const bytes = await buildGiftCardPdf({ cards, pictureFor, cartCode: cart.cart_code, printedFor: user.username || user.name });
 
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/pdf');

@@ -55,7 +55,8 @@ export default async function handler(req, res) {
     }
 
     const row = await getBuyCartGiftCardSecret(cartId, gcId);
-    if (!row) return send(res, 404, { ok: false, error: 'That card does not exist.' });
+    // A personal card is on file only to account for the money. It isn't ours to read back.
+    if (!row || row.personal) return send(res, 404, { ok: false, error: 'That card does not exist.' });
 
     // The trail first, the secret second.
     await logCartEvent({

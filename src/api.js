@@ -478,6 +478,9 @@ export const api = {
   cartRaisePo: (cartId, boxes) => post('/api/cart/raise-po', { cartId, boxes }),
   // Two sign-offs, not one: the money can be reconciled the day the receipt lands, the
   // goods only once the boxes are in the building. See api/cart/audit.js.
+  cartAuditAddCard: (cartId, card) => post('/api/cart/audit-extras', { cartId, action: 'add_card', card }),
+  cartAuditRemoveCard: (cartId, id, reason) => post('/api/cart/audit-extras', { cartId, action: 'remove_card', id, reason }),
+  cartAuditNote: (cartId, note) => post('/api/cart/audit-extras', { cartId, action: 'note', note }),
   cartAudit: (cartId, cards) => post('/api/cart/audit', { cartId, scope: 'money', cards }),
   cartAuditGoods: (cartId, note) => post('/api/cart/audit', { cartId, scope: 'goods', note }),
   cartClose: (cartId) => post('/api/cart/close', { cartId }),

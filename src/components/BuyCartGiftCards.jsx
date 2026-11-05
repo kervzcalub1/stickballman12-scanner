@@ -102,7 +102,8 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
   // A machine reading of one uploaded file, waiting for a person: { file, cards, source }.
   const [reading, setReading] = useState(null);
 
-  const cards = cart.giftCards || [];
+  // The auditor's personal cards aren't the desk's: they live on the audit.
+  const cards = (cart.giftCards || []).filter((c) => !c.personal);
   const live = cards.filter((c) => !c.voided_at);
   const images = (cart.files || []).filter((f) => f.kind === 'gift_card');
   // What the cards must carry: the shelf price of the approved pairs + the declared tax

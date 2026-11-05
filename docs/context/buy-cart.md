@@ -257,6 +257,21 @@ The PH team uploads card files, and some are bad. The supplier sees none of it.
 - **The PDF is recorded cards only.** A picture matching no card used to print on its own page; now
   it doesn't. The PDF no longer prints the label. A card whose file was deleted prints without a picture.
 
+## Cards and notes the auditor adds (2026-11-06)
+The Andrew case: he bought his own 10 pairs with his own gift cards, and the cashier rang everything up together.
+The receipt then carries money that was never ours. `cart/audit-extras` (audit privilege, not the approver):
+- **Add a card with a remark** (required): number or last 4, what it paid at the till, and **Personal** (the default).
+  `personal` + `remark` on `buy_cart_gift_cards` (**needs db:setup**). Encrypted like any card.
+- **A personal card is not company money:** outside `gc_total`, the funding check, the cards PDF and Show code.
+  It counts toward what the till took. Suppliers don't receive it.
+- **The sum** (`auditTarget`): with a personal card on file, all cards answer to the **printed** total, so taking the
+  buyer's rows off the receipt as well doesn't count them twice. With none, they answer to the receipt total.
+  So either way balances: personal cards on file (printed = ours + theirs), or just the rows taken off.
+- Adding the card doesn't take the buyer's shoes off the receipt or the order; the panel says so.
+- An unticked card is a company card the auditor found: it joins `gc_total`.
+- **Audit notes:** an `audit_note` event, append-only, with who and when. Hidden from suppliers, as are personal
+  card events.
+
 ## Filed is not read (2026-11-05)
 Finding an email by order number FILES it at once (`receipt_at`, status `receipted`), but its rows
 live only on the screen until someone ticks and saves them. A supplier who left at that point left a

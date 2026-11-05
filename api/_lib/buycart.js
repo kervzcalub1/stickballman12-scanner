@@ -8,7 +8,7 @@
 import { send, requireAuth, isPrivileged, blockIfMustChange } from './util.js';
 import { getPoReconciliation, userHasPrivilege, decideBuyCartLines, linesAwaitingQty, linesWithoutPhotos, decideBuyCartTip, getBuyCartLine } from './db.js';
 import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../../src/lib/payout.js';
-import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, fundingWords } from '../../src/lib/buycartRules.js';
+import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, fundingWords, auditTarget } from '../../src/lib/buycartRules.js';
 import { alertLinesDecided } from './alerts.js';
 
 // ---------------------------------------------------------------------------
@@ -495,6 +495,7 @@ export function redactLineForViewer(line, user) {
   return out;
 }
 
+const AUDIT_ONLY_EVENTS = ['gc_personal_added', 'gc_personal_removed', 'audit_note'];
 const isCardFileEvent = (e) => e.kind === 'gc_read'
   || (e.kind === 'file_added' && String(e.body || '').startsWith('gift_card:'))
   || (e.kind === 'file_removed' && String(e.body || '').startsWith('Gift card image'));
@@ -520,8 +521,9 @@ export function redactCartForViewer(cart, user) {
   // The desk's card files, and anything naming them, are the desk's business: the supplier
   // gets the recorded cards, as one PDF. A label is usually one of those file names.
   if (cart.files) out.files = cart.files.filter((f) => f.kind !== 'gift_card');
-  if (cart.giftCards) out.giftCards = cart.giftCards.map((g) => ({ ...g, label: null }));
-  if (cart.events) out.events = cart.events.filter((e) => !isCardFileEvent(e)).map((e) => {
+  // The auditor's cards and notes are the audit's, not part of the supplier's request.
+  if (cart.giftCards) out.giftCards = cart.giftCards.filter((g) => !g.personal).map((g) => ({ ...g, label: null, remark: null }));
+  if (cart.events) out.events = cart.events.filter((e) => !isCardFileEvent(e) && !AUDIT_ONLY_EVENTS.includes(e.kind)).map((e) => {
     if (CALL_EVENT_BODY[e.kind]) return { ...e, body: CALL_EVENT_BODY[e.kind] };
     // `line_added` used to end "— buy". The verdict was never the point of that line
     // (it says what was added, and for how much); it is stripped rather than the whole
@@ -567,6 +569,7 @@ export async function cartCloseChecks(full) {
   const summary = recon?.summary || null;
 
   const spentSum = cards.reduce((n, g) => n + (Number(g.spent_amount) || 0), 0);
+  const auditTotal = money(auditTarget(c).target);
   const everyCardAudited = cards.length > 0 && cards.every((g) => g.spent_amount != null && g.remaining != null);
   const authorized = money(c.card_authorized);
 
@@ -615,13 +618,13 @@ export async function cartCloseChecks(full) {
         // half alone lets a gap hide: matching totals with blank cards says nothing about
         // WHICH card the money left, and per-card figures that don't sum to the receipt
         // mean something was bought that this receipt doesn't cover.
-        ok: everyCardAudited && receiptTotal != null && near(spentSum, receiptTotal),
+        ok: everyCardAudited && auditTotal != null && near(spentSum, auditTotal),
         detail: !everyCardAudited
           ? 'Not every card has its spend and remaining balance recorded.'
-          : receiptTotal == null
+          : auditTotal == null
             ? 'No receipt total to reconcile against.'
-            : !near(spentSum, receiptTotal)
-              ? `Cards account for $${spentSum.toFixed(2)} but the receipt says $${receiptTotal.toFixed(2)} — a $${Math.abs(spentSum - receiptTotal).toFixed(2)} gap.`
+            : !near(spentSum, auditTotal)
+              ? `Cards account for $${spentSum.toFixed(2)} but the receipt says $${auditTotal.toFixed(2)} — a $${Math.abs(spentSum - auditTotal).toFixed(2)} gap.`
               : null,
       }
       : {

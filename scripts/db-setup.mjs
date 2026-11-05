@@ -1443,6 +1443,12 @@ for (const col of [
 await sql(`ALTER TABLE shipment_tracking ADD COLUMN IF NOT EXISTS eta_from DATE`);
 await sql(`ALTER TABLE shipment_tracking ADD COLUMN IF NOT EXISTS eta_to DATE`);
 
+// A card the auditor added to make the money reconcile, with why. `personal` = not company money
+// (the buyer's own, paying for their own shoes rung up on the same receipt): it counts toward
+// what the till took, and never toward what we funded. buy-cart.md.
+await sql(`ALTER TABLE buy_cart_gift_cards ADD COLUMN IF NOT EXISTS personal BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE buy_cart_gift_cards ADD COLUMN IF NOT EXISTS remark TEXT`);
+
 // Which parcels the team has been told have stopped moving (tracking-delay-worker), so a stall
 // is announced once and reminded weekly. `last_move_at` is the stall it was about: a parcel that
 // moves and then stops again is a new delay.

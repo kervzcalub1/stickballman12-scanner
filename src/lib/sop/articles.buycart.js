@@ -147,6 +147,7 @@ export const BUYCART_ARTICLES = [
     steps: [
       { do: 'Open the request. Read the receipt lines against what was approved — the app flags anything bought that nobody approved, or approved and never bought.' },
       { do: 'If the cashier rang up shoes that are not ours (the buyer\'s own pairs), tick those rows, say why, and press Remove from the receipt. The total drops by their price and their share of the tax. Put back undoes it.' },
+      { do: 'If the buyer paid for their own shoes with their own gift cards, press Add a card with a remark in the Financial audit, enter the card, what it paid and whose it is, and leave Personal ticked. It counts toward what the till took, never toward what we funded. Then record what happened under Audit notes.' },
       { do: 'In Financial audit, enter what each card was actually spent and what is left sitting on it.' },
       { do: 'Check the line under it: the cards must account for the receipt total. A gap is a finding — chase it before you record anything.' },
       { do: 'Press Record the audit.' },

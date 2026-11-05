@@ -7616,7 +7616,9 @@ async function recalcCartMoney(sql, cartId) {
         ELSE round(l.approved_amount * (1 + coalesce(nullif(c.cost_stack->>'taxPct', '')::numeric, 0) / 100), 2)
       END,
       gc_total        = g.total,
+      -- What our cards had to cover: with personal cards, the printed total less what they paid.
       balance_remaining = CASE WHEN c.receipt_total IS NULL THEN NULL
+                               WHEN g.has_personal THEN g.total - (coalesce(c.receipt_printed_total, c.receipt_total) - g.personal_spent)
                                ELSE g.total - c.receipt_total END,
       updated_at = now()
     FROM (
@@ -7628,7 +7630,10 @@ async function recalcCartMoney(sql, cartId) {
         FROM buy_cart_lines WHERE cart_id = ${cartId}
     ) l,
     (
-      SELECT coalesce(sum(balance), 0) AS total
+      -- A personal card isn't company money: never part of what was funded.
+      SELECT coalesce(sum(balance) FILTER (WHERE NOT personal), 0) AS total,
+             bool_or(personal) IS TRUE AS has_personal,
+             coalesce(sum(coalesce(spent_amount, 0)) FILTER (WHERE personal), 0) AS personal_spent
         FROM buy_cart_gift_cards WHERE cart_id = ${cartId} AND voided_at IS NULL
     ) g
     WHERE c.id = ${cartId}
@@ -7790,7 +7795,7 @@ export async function getBuyCartFull(id) {
                   (regexp_match(coalesce(l.size, ''), '\\d+(?:\\.\\d+)?'))[1]::numeric NULLS LAST,
                   l.size, l.id`,
     sql`SELECT id, cart_id, code_last4, balance, retailer, label, spent_amount, remaining,
-               issued_by, issued_at, voided_at, voided_reason,
+               issued_by, issued_at, voided_at, voided_reason, personal, remark,
                (pin_enc IS NOT NULL) AS has_pin
           FROM buy_cart_gift_cards WHERE cart_id = ${id} ORDER BY id`,
     sql`SELECT id, cart_id, kind, sku, name, content_type, size_bytes, uploaded_by, uploaded_at
@@ -8768,6 +8773,35 @@ export async function addBuyCartGiftCard({ cartId, codeEnc, codeLast4, pinEnc, b
   return { ...rows[0], balance: Number(rows[0].balance) };
 }
 
+// A card the auditor added, with why. Its whole value is what it spent: it is only here to
+// account for money the till took. Ciphertext arrives encrypted, like the desk's cards.
+export async function addAuditGiftCard({ cartId, codeEnc, codeLast4, spent, personal, remark, actor }) {
+  const sql = db();
+  const rows = await sql`
+    INSERT INTO buy_cart_gift_cards (cart_id, code_enc, code_last4, balance, spent_amount, remaining, personal, remark, issued_by, issued_by_id)
+    VALUES (${cartId}, ${codeEnc}, ${codeLast4}, ${spent}, ${spent}, 0, ${personal}, ${remark},
+            ${actor.name || actor.username || null}, ${actor && Number(actor.uid) ? Number(actor.uid) : null})
+    RETURNING id, code_last4, balance, spent_amount, remaining, personal, remark`;
+  await recalcCartMoney(sql, cartId);
+  await logCartEvent({
+    cartId, kind: personal ? 'gc_personal_added' : 'gc_added', gcId: rows[0].id, actor,
+    body: `${personal ? 'Personal card' : 'Card'} •••• ${codeLast4} · $${Number(spent).toFixed(2)} spent · ${remark}`,
+  });
+  return rows[0];
+}
+
+export async function removeAuditGiftCard({ cartId, gcId, reason, actor }) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_cart_gift_cards SET voided_at = now(), voided_reason = ${reason || null}
+     WHERE id = ${gcId} AND cart_id = ${cartId} AND voided_at IS NULL AND personal
+     RETURNING id, code_last4`;
+  if (!rows[0]) return null;
+  await recalcCartMoney(sql, cartId);
+  await logCartEvent({ cartId, kind: 'gc_personal_removed', gcId, actor, body: `Personal card •••• ${rows[0].code_last4} taken off${reason ? `: ${reason}` : ''}` });
+  return rows[0];
+}
+
 // Void rather than delete: a card that was issued and then withdrawn is a thing that
 // happened to company money, and the trail has to keep it. Voided cards drop out of
 // `gc_total`, so the funding check is unaffected.
@@ -8789,7 +8823,7 @@ export async function voidBuyCartGiftCard({ cartId, gcId, reason, actor }) {
 export async function getBuyCartGiftCardSecret(cartId, gcId) {
   const sql = db();
   return (await sql`
-    SELECT id, cart_id, code_enc, pin_enc, code_last4, balance
+    SELECT id, cart_id, code_enc, pin_enc, code_last4, balance, personal
       FROM buy_cart_gift_cards WHERE id = ${gcId} AND cart_id = ${cartId}`)[0] || null;
 }
 
@@ -8882,7 +8916,7 @@ export async function listBuyCartGiftCardSecrets(cartId) {
   return db()`
     SELECT id, code_enc, pin_enc, code_last4, balance, retailer, label
       FROM buy_cart_gift_cards
-     WHERE cart_id = ${cartId} AND voided_at IS NULL
+     WHERE cart_id = ${cartId} AND voided_at IS NULL AND NOT personal
      ORDER BY issued_at, id`;
 }
 
@@ -8971,6 +9005,7 @@ export async function setBuyCartReceiptLinesRemoved({ cartId, lineIds, restore =
     }
   }
   await sql.transaction(queries);
+  await recalcCartMoney(sql, cartId);
   await logCartEvent({
     cartId, kind: restore ? 'receipt_lines_restored' : 'receipt_lines_removed', actor,
     body: `${pairs} pair${pairs === 1 ? '' : 's'} ${restore ? 'put back on' : 'taken off'} the receipt: ${words}.`
@@ -9007,6 +9042,7 @@ export async function setBuyCartReceiptLines({ cartId, lines, receiptTotal, subt
            status = CASE WHEN status IN ('funded','receipted') THEN 'receipted' ELSE status END,
            updated_at = now()
      WHERE id = ${cartId}`;
+  await recalcCartMoney(sql, cartId);
   await logCartEvent({
     cartId, kind: 'receipt_parsed', actor,
     body: `${lines.length} lines · $${Number(receiptTotal).toFixed(2)}`

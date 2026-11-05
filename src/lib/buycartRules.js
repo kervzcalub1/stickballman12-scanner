@@ -29,6 +29,17 @@ export const DECISIONS_PENDING_ONLY = ['funded', 'receipted', 'audited'];
 // The tax is the DOLLARS actually in `funding_target`, not rate × shelf: once cards are out
 // the target no longer follows a corrected rate, and a request released before this rule has
 // no tax in it at all. `pct` is printed only when it really is what produced those dollars.
+// What the cards have to add up to in the audit. Personal cards pay for shoes the printed total
+// includes, so with one on file the cards answer to the total as printed. Otherwise they answer
+// to the receipt total, which is lower once the buyer's rows have been taken off it.
+export function auditTarget(cart) {
+  const cards = (cart?.giftCards || []).filter((c) => !c.voided_at);
+  const personalSpent = cards.filter((c) => c.personal).reduce((n, c) => n + (Number(c.spent_amount) || 0), 0);
+  const total = cart?.receipt_total == null ? null : Number(cart.receipt_total);
+  const printed = cart?.receipt_printed_total == null ? total : Number(cart.receipt_printed_total);
+  return { target: cards.some((c) => c.personal) ? printed : total, personalSpent, usesPrinted: cards.some((c) => c.personal) };
+}
+
 export function receiptLinePrice(l) {
   if (l.total_price != null) return Number(l.total_price);
   if (l.unit_price != null) return Number(l.unit_price) * (Number(l.qty) || 1);

@@ -37,6 +37,12 @@ export function supplierPoView(data) {
   if (out.lines) out.lines = out.lines.map(({ entered_by, entered_by_name, entered_by_username, ...rest }) => rest);
   if (out.boxes) out.boxes = hideReceivedUnits(out.boxes);
   if (out.stores) out.stores = out.stores.map(supplierStoreRow);
+  // Which of our staff uploaded a receipt is ours, as everywhere else on the order.
+  if (out.dropoffReceipts) {
+    out.dropoffReceipts = out.dropoffReceipts.map((r) => ({
+      ...r, uploaded_by: r.uploaded_role === 'supplier' ? r.uploaded_by : 'Our team',
+    }));
+  }
   delete out.batches;
   delete out.untied_boxes;
   return out;

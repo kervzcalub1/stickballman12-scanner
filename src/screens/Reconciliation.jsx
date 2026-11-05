@@ -15,6 +15,7 @@ import { PoSearchPreview } from '../components/PoSearchPreview.jsx';
 import { isBoxesOrder } from '../lib/postatus.js';
 import { Icon } from '../components/NavIcons.jsx';
 import { PoResolution } from '../components/PoResolution.jsx';
+import { PoDropoffReceipts } from '../components/PoDropoffReceipts.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 
 const FLAG = {
@@ -105,7 +106,7 @@ function buildReport(po, rows, summary, note) {
   return tail(lines);
 }
 
-export function Reconciliation({ canReconcile, onHome, onSignOut }) {
+export function Reconciliation({ canReconcile, showDropoff = false, onHome, onSignOut }) {
   const [pos, setPos] = useState(null);
   const [error, setError] = useState('');
   // Same as PoOverview: ?po= keeps the open order across a refresh. The reconciliation
@@ -756,6 +757,9 @@ export function Reconciliation({ canReconcile, onHome, onSignOut }) {
                 supplierNote={noteSaved}
               />
             )}
+
+            {/* Admins have no PH app, so this is where their Telegram link lands. */}
+            {showDropoff && <PoDropoffReceipts po={po} onSignOut={onSignOut} />}
 
             <div className="rcn-actions">
               <button className="btn ghost" onClick={copyReport}>{copied ? 'Copied ✓' : 'Copy report'}</button>

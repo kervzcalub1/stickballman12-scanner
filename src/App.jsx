@@ -262,7 +262,7 @@ export default function App() {
   if (view === 'rescalereq') return withAdvisor(<RescaleRequestsReport canAudit showPricing={user.role !== 'warehouse'} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'shelve') return withAdvisor(<ShelvePage navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'locations') return withAdvisor(<Locations onHome={() => go('home')} onSignOut={signOut} />);
-  if (view === 'reconcile') return withAdvisor(<Reconciliation canReconcile={user.role === 'warehouse' || isPrivilegedRole(user.role)} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'reconcile') return withAdvisor(<Reconciliation canReconcile={user.role === 'warehouse' || isPrivilegedRole(user.role)} showDropoff={isPrivilegedRole(user.role)} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'sop') return withAdvisor(<Sop user={user} navBack={navBack} onHome={() => go('home')} onSignOut={signOut} />);
   return withAdvisor(<Home user={user} onPick={(v, query) => { setBatchContext(null); if (v === 'ph') return enterPh(); go(v, query); }} onSignOut={signOut} />);
 }

@@ -79,6 +79,10 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
   // one price, and asking about them one at a time is three round trips and three photo
   // checks for one decision.
   const [sizes, setSizes] = useState([]);
+  // A size the shoe's list doesn't have, typed in. A new release can come back with no sizes
+  // at all, and size is required, so this is the buyer's way through.
+  const [typedSize, setTypedSize] = useState('');
+  const [typedSizes, setTypedSizes] = useState([]);
   const [shelf, setShelf] = useState('');
   // ONE PRICE, WITH EXCEPTIONS. A shelf of the same shoe is usually one ticket price, and
   // making the buyer type it once per size would be the kind of retyping that gets a
@@ -221,6 +225,17 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
     setError('');
   }
 
+  function addTypedSize() {
+    const v = typedSize.trim();
+    if (!v) return;
+    const labels = [...(product?.sizes || []), ...(fromPaste?.extra || []), ...typedSizes]
+      .map((s) => String(typeof s === 'string' ? s : (s.size ?? s.label ?? '')));
+    const known = labels.find((l) => sizeKey(l) === sizeKey(v));
+    if (!known) setTypedSizes((cur) => [...cur, v]);
+    if (!sizes.includes(known || v)) tapSize(known || v);
+    setTypedSize('');
+  }
+
   // What one size actually costs: its own price if it has one, the shelf price otherwise.
   function priceFor(sz) {
     const own = Number(String(sizePrice[String(sz)] ?? '').replace(/[$,\s]/g, ''));
@@ -257,7 +272,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
   }
 
   async function add() {
-    if (!product?.sku || !(shelfNum > 0)) return;
+    if (!product?.sku || !(shelfNum > 0) || !sizes.length) return;
     setBusy('add'); setError('');
     try {
       // What the pair IS, and nothing about what it is worth. The server reads the
@@ -282,13 +297,13 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
       // Several sizes go in ONE call: the server prices them one at a time and the desk
       // gets ONE Telegram card for the shoe, answered with "size x qty" — not one per size.
       if (sizes.length > 1) await api.cartAddLines(cart.id, sizes.map(lineFor));
-      else await api.cartAddLine(cart.id, lineFor(sizes[0] ?? null));
+      else await api.cartAddLine(cart.id, lineFor(sizes[0]));
       // Clear the WHOLE form — the code, the shoe, the sizes, the prices, the count, and
       // with the shoe its photos (they hang off `product.sku`). The first version kept
       // the shoe, on the theory that the next size of the same style was the common
       // next action; the buyer said otherwise: every add is a fresh shoe, and a form
       // still showing the last one's code and photo count was being re-sent by mistake.
-      setProduct(null); setSkuInput(''); setSizes([]); setShelf(''); setSizePrice({}); setSizeAvail({});
+      setProduct(null); setSkuInput(''); setSizes([]); setTypedSizes([]); setTypedSize(''); setShelf(''); setSizePrice({}); setSizeAvail({});
       setPremium(false); setTip(''); setFullBox(false);
       setFromPaste(null);
       onAdded();
@@ -365,7 +380,7 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
           )}
 
           <div className="bc-sizes" role="group" aria-label="Size">
-            {[...(product.sizes || []), ...(fromPaste?.extra || [])].map((s) => {
+            {[...(product.sizes || []), ...(fromPaste?.extra || []), ...typedSizes].map((s) => {
               const label = typeof s === 'string' ? s : (s.size ?? s.label ?? '');
               const picked = sizes.includes(String(label));
               return (
@@ -381,7 +396,13 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
                   onClick={() => tapSize(label)}>{label}</button>
               );
             })}
-            {!(product.sizes || []).length && !fromPaste?.extra?.length && <span className="muted sm">No sizes listed — type the price and add it anyway.</span>}
+            {!(product.sizes || []).length && !fromPaste?.extra?.length && !typedSizes.length && <span className="muted sm">No sizes listed for this shoe. Type the size off the box.</span>}
+            <span className="bc-size-typed">
+              <input className="input sm" value={typedSize} maxLength={20} aria-label="Type a size" placeholder="Size not listed?"
+                disabled={!!product.codeCheck} onChange={(e) => setTypedSize(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTypedSize(); } }} />
+              <button type="button" className="btn sm ghost" disabled={!typedSize.trim() || !!product.codeCheck} onClick={addTypedSize}>Add size</button>
+            </span>
             {sizes.length > 1 && (
               <p className="muted xs bc-sizes-note">
                 {sizes.length} sizes selected — each goes on as its own line{shelfNum > 0 ? ` at ${money(shelfNum)}` : ''}, on ONE card to the desk, and they decide how many of each.
@@ -515,14 +536,16 @@ export function BuyCartAdd({ cart, onAdded, onSignOut }) {
                 is still on the shelf. The photo is required BEFORE this, because it is
                 what the approver decides on. */}
             <button type="button" className="btn primary"
-              disabled={busy === 'add' || !(shelfNum > 0) || !shots.length || !!product.codeCheck}
+              disabled={busy === 'add' || !sizes.length || !(shelfNum > 0) || !shots.length || !!product.codeCheck}
               onClick={add}>
               {busy === 'add'
                 ? 'Sending…'
                 : sizes.length > 1 ? `Ask about ${sizes.length} sizes` : 'Ask the desk about this'}
             </button>
             <span className="muted sm">
-              {!shots.length
+              {!sizes.length
+                ? 'Pick a size. The price, payout and profit all depend on it.'
+                : !shots.length
                 ? 'Take a photo of the shoe first — it is what the desk decides on.'
                 : !(shelfNum > 0)
                   ? 'Type the price on the shelf ticket.'

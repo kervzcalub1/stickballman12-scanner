@@ -24,6 +24,10 @@ import { readMarketSales } from '../_lib/marketSales.js';
 import { sizeKey } from '../../src/lib/buyPaste.js';
 
 const MAX_LINES = 200;
+const NEEDS_SIZE = 'Pick a size. The price, payout and profit all depend on it.';
+// A typed "n/a" or "-" is still no size. It has to hold a letter or digit and not be a stand-in.
+const isRealSize = (s) => !!s && /[0-9a-z]/i.test(s) && !/^(n\/?a|none|no ?size|unknown|tbd)$/i.test(s.trim());
+
 // One shoe's sizes in one ask — a full run in halves is ~30; past that it is two shoes.
 const MAX_GROUP = 40;
 // The buyer whose request it is. Their add is a question being asked; anybody else's is
@@ -171,11 +175,14 @@ export default async function handler(req, res) {
         availableQty: Number.isInteger(Number(availSent)) && Number(availSent) > 0 ? Math.min(Number(availSent), 999) : null,
         clearAvailable: availSent === '' || availSent === null,
         shelfPrice: blank(body.patch.shelfPrice) ? null : money(body.patch.shelfPrice),
+        // Blank leaves the size alone, like every other field here, so an edit can't clear it.
         size: body.patch.size == null ? null : String(body.patch.size).trim().slice(0, 20) || null,
         fullBox: bool(body.patch.fullBox),
         // Premium + its tip are the BUYER's proposal; the desk answers a tip on cart/tip.
         premium: buyerFix ? bool(body.patch.premium) : null,
       };
+      if (patch.size != null && !isRealSize(patch.size))
+        return send(res, 400, { ok: false, error: NEEDS_SIZE });
       if (patch.shelfPrice != null && patch.shelfPrice <= 0)
         return send(res, 400, { ok: false, error: 'Enter the price on the shelf — it is what the gift cards have to cover.' });
       const was = await getBuyCartLine(cartId, Number(body.lineId));
@@ -375,7 +382,10 @@ function prepareLine(l, user, cart) {
   if (shelfPrice == null || shelfPrice <= 0)
     return { error: 'Enter the price on the shelf — it is what the gift cards have to cover.' };
 
+  // Required: the market read, the payout and the profit are all per size, so a pair with
+  // no size can be asked about but never priced, and the desk would decide on nothing.
   const size = String(l.size ?? '').trim().slice(0, 20) || null;
+  if (!isRealSize(size)) return { error: NEEDS_SIZE };
   const upc = String(l.upc ?? '').replace(/\D/g, '').slice(0, 20) || null;
   // PREMIUM, and the tip the buyer proposes for THIS shoe only (per pair). Only a premium
   // shoe can carry one; a tip box left blank means no tip asked, never $0.

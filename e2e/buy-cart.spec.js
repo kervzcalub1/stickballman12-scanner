@@ -1493,9 +1493,10 @@ test.describe('what we already hold', () => {
     sizedLineId = Number((await call(request, 'approver', 'cart/line', {
       cartId: heldCartId, line: { sku: HELD_SKU, size: '9', qty: 1, shelfPrice: 60 },
     })).body.line.id);
-    unsizedLineId = Number((await call(request, 'approver', 'cart/line', {
-      cartId: heldCartId, line: { sku: HELD_SKU, qty: 1, shelfPrice: 60 },
-    })).body.line.id);
+    // Written directly: a new line can't have no size, but one saved before that rule can.
+    unsizedLineId = Number((await pool.query(
+      `INSERT INTO buy_cart_lines (cart_id, sku, qty, shelf_price) VALUES ($1, $2, 1, 60) RETURNING id`,
+      [heldCartId, HELD_SKU])).rows[0].id);
     await shoePhotos(heldCartId, [HELD_SKU]);
     await call(request, 'buyer', 'cart/submit', { cartId: heldCartId });
   });
@@ -3807,6 +3808,82 @@ test.describe('the cost stack never reaches a supplier’s browser', () => {
     expect(redactCartForViewer(row, { role: 'admin', uid: 3 })).toBe(row);
     const ev = redactCartForViewer({ ...row, lines: [], events: [{ kind: 'costs_edited', body: 'Tip $ 5.00 → $ 9.00' }] }, supplier);
     expect(ev.events[0].body).not.toContain('9.00');
+  });
+});
+
+// ── A size is required ───────────────────────────────────────────────────────────
+// Pricing, the payout and the profit are all per size.
+test.describe('a size is required', () => {
+  test('the server refuses a line with no size, for the buyer and for staff, whole', async ({ request }) => {
+    const cartId = await newRequest(request, { submit: false, lines: [] });
+    const base = { sku: LINE.sku, shelfPrice: 50 };
+    for (const size of [undefined, null, '', '   ', 'n/a', 'N/A', 'none', '-', '?']) {
+      for (const who of ['buyer', 'approver']) {
+        const r = await call(request, who, 'cart/line', { cartId, line: { ...base, size } });
+        expect(r.status, `${who} size=${JSON.stringify(size)}`).toBe(400);
+        expect(r.body.error).toMatch(/Pick a size/);
+      }
+    }
+    // One blank in a run refuses the run, rather than asking about half of it.
+    const run = await call(request, 'buyer', 'cart/line', { cartId, lines: [{ ...base, size: '9' }, { ...base }] });
+    expect(run.status).toBe(400);
+    expect((await read_(request, 'buyer', `cart/get?id=${cartId}`)).body.cart.lines).toHaveLength(0);
+    for (const size of ['9', '10.5', '10W', '5Y', 'XL', 'OS']) {
+      expect((await call(request, 'approver', 'cart/line', { cartId, line: { ...base, size } })).status, size).toBe(200);
+    }
+  });
+
+  test('on screen: Ask waits for a size, and a shoe with no sizes listed can have one typed', async ({ page, request }) => {
+    const cartId = await newRequest(request, { submit: false, lines: [] });
+    await shoePhotos(cartId, ['HV4091-777']);
+    await page.route('**/api/sku-search', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ ok: true, product: { sku: 'HV4091-777', name: 'New Release', colorway: 'Red', sizes: [] } }),
+    }));
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    await page.getByPlaceholder('SKU or style code').fill('HV4091-777');
+    await page.getByRole('button', { name: 'Look up' }).click();
+    await expect(page.locator('.bc-sizes')).toContainText('Type the size off the box');
+    await page.locator('.bc-add-row .ph-price').fill('48');
+
+    const ask = page.getByRole('button', { name: 'Ask the desk about this' });
+    await expect(ask).toBeDisabled();
+    await expect(page.locator('.bc-add-actions')).toContainText('Pick a size');
+
+    await page.getByLabel('Type a size').fill('10.5');
+    await page.getByLabel('Type a size').press('Enter');
+    await expect(page.locator('.bc-sizes .size-chip.on')).toHaveText('10.5');
+    await expect(ask).toBeEnabled();
+
+    // Tapping it off takes the button back with it.
+    await page.locator('.bc-sizes .size-chip.on').click();
+    await expect(ask).toBeDisabled();
+    await page.locator('.bc-sizes .size-chip').filter({ hasText: /^10\.5$/ }).click();
+    await ask.click();
+    await expect(page.locator('.bc-lines').filter({ hasText: 'HV4091-777' })).toBeVisible();
+    const line = (await read_(request, 'buyer', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    expect(line.size).toBe('10.5');
+  });
+
+  test('an edit cannot wipe a size or swap it for a stand-in', async ({ request }) => {
+    const cartId = await newRequest(request, { submit: false, lines: [LINE] });
+    const lineId = Number((await read_(request, 'buyer', `cart/get?id=${cartId}`)).body.cart.lines[0].id);
+    const bad = await call(request, 'buyer', 'cart/line', { cartId, lineId, patch: { size: 'n/a' } });
+    expect(bad.status).toBe(400);
+    expect((await call(request, 'buyer', 'cart/line', { cartId, lineId, patch: { size: '' } })).status).not.toBe(500);
+    const line = (await read_(request, 'buyer', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    expect(line.size).toBe(LINE.size);
+  });
+
+  test('a line saved before the rule can still be given its size by the buyer, and the edit is accepted', async ({ request }) => {
+    const cartId = await newRequest(request, { submit: false, lines: [] });
+    const lineId = Number((await pool.query(
+      `INSERT INTO buy_cart_lines (cart_id, sku, shelf_price) VALUES ($1, $2, 50) RETURNING id`, [cartId, LINE.sku])).rows[0].id);
+    const fixed = await call(request, 'buyer', 'cart/line', { cartId, lineId, patch: { size: '9' } });
+    expect(fixed.status).toBe(200);
+    const line = (await read_(request, 'buyer', `cart/get?id=${cartId}`)).body.cart.lines.find((l) => Number(l.id) === lineId);
+    expect(line.size).toBe('9');
   });
 });
 

@@ -3765,3 +3765,105 @@ test.describe('a size is required', () => {
     expect(line.size).toBe('9');
   });
 });
+
+// ── Reading a saved receipt again ────────────────────────────────────────────────
+test.describe('re-reading a saved receipt', () => {
+  const rows = [
+    { sku: LINE.sku, size: LINE.size, qty: 1, unitPrice: 100, totalPrice: 100, source: 'paste' },
+    { sku: 'DD1391-100', size: '10', qty: 1, unitPrice: 100, totalPrice: 100, source: 'paste' },
+  ];
+  async function receipted(request) {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000003434', balance: 400 } });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
+    const saved = await call(request, 'buyer', 'cart/receipt', { cartId, receiptTotal: 216.5, subtotal: 200, tax: 16.5, lines: rows });
+    expect(saved.status).toBe(200);
+    return cartId;
+  }
+
+  test('on screen: it opens the saved rows, warns, and Cancel changes nothing', async ({ page, request }) => {
+    const cartId = await receipted(request);
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    await page.getByRole('button', { name: 'Re-read the receipt' }).click();
+
+    const review = page.locator('.bc-review');
+    await expect(review.locator('.bc-review-table tbody tr')).toHaveCount(2);
+    await expect(review.locator('.bc-review-table tbody tr').nth(1).locator('input').first()).toHaveValue('DD1391-100');
+    await expect(review).toContainText('Saving replaces the 2 saved rows and the $216.50 total');
+    await expect(review.locator('.bc-totals input').nth(2)).toHaveValue('216.5');
+    await expect(page.getByRole('button', { name: 'Save these lines' })).toBeEnabled();
+    // The ways to read it are on offer, not only an upload.
+    await expect(page.getByRole('button', { name: 'Find it in the email' })).toBeVisible();
+    await expect(page.locator('.bc-paste-box')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.locator('.bc-paste-box')).toHaveCount(0);
+    await expect(page.locator('#bc-sec-receipt table tbody tr')).toHaveCount(2);
+    const { body } = await read_(request, 'buyer', `cart/get?id=${cartId}`);
+    expect(body.cart.receiptLines).toHaveLength(2);
+    expect(body.cart.receipt_total).toBe(216.5);
+  });
+
+  test('on screen: a corrected list replaces the old one at Save', async ({ page, request }) => {
+    const cartId = await receipted(request);
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    await page.getByRole('button', { name: 'Re-read the receipt' }).click();
+    // One row corrected and saved: the list is replaced, with the other row kept.
+    await page.locator('.bc-review-table tbody tr').nth(1).locator('input').nth(1).fill('11');
+    await page.getByRole('button', { name: 'Save these lines' }).click();
+    await expect(page.locator('.bc-review')).toHaveCount(0);
+    const { body } = await read_(request, 'buyer', `cart/get?id=${cartId}`);
+    expect(body.cart.receiptLines.map((l) => l.size)).toEqual([LINE.size, '11']);
+    expect(body.cart.receipt_total).toBe(216.5);
+    expect(Number(body.cart.receipt_tax)).toBe(16.5);
+  });
+
+  test('on screen: a new pasted reading takes over, unticked, and nothing moves until Save', async ({ page, request }) => {
+    const cartId = await receipted(request);
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    await page.getByRole('button', { name: 'Re-read the receipt' }).click();
+    await page.locator('.bc-paste-box').fill('CT4838-004  8   1   195.00\nSubtotal 195.00\nTax 16.09\nTotal 211.09');
+    await page.getByRole('button', { name: 'Read it' }).click();
+    const rows = page.locator('.bc-review-table tbody tr');
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0)).toHaveClass(/bc-row-pending/);   // a machine's reading is checked by a person
+    await expect(page.getByRole('button', { name: /Check 1 more row to save/ })).toBeDisabled();
+    expect((await read_(request, 'buyer', `cart/get?id=${cartId}`)).body.cart.receiptLines).toHaveLength(2);
+
+    await rows.nth(0).locator('.bc-row-tick').click();
+    await page.getByRole('button', { name: 'Save these lines' }).click();
+    await expect(page.locator('.bc-review')).toHaveCount(0);
+    const { body } = await read_(request, 'buyer', `cart/get?id=${cartId}`);
+    expect(body.cart.receiptLines.map((l) => l.sku)).toEqual(['CT4838-004']);
+    expect(body.cart.receipt_total).toBe(211.09);
+  });
+
+  test('once an order is raised it is refused, on screen and at the server', async ({ page, request }) => {
+    const cartId = await receipted(request);
+    expect((await call(request, 'buyer', 'cart/raise-po', { cartId })).status).toBe(200);
+    const again = await call(request, 'buyer', 'cart/receipt', { cartId, receiptTotal: 108.25, lines: rows.slice(0, 1) });
+    expect(again.status).toBe(409);
+    expect(again.body.error).toMatch(/order was raised/);
+    const { body } = await read_(request, 'buyer', `cart/get?id=${cartId}`);
+    expect(body.cart.receiptLines).toHaveLength(2);
+
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    await expect(page.locator('#bc-sec-receipt')).toContainText('The order was raised from this receipt');
+    await expect(page.getByRole('button', { name: 'Re-read the receipt' })).toHaveCount(0);
+  });
+
+  test('on screen: after the audit the button gives way to the reason', async ({ page, request }) => {
+    const cartId = await receipted(request);
+    const card = (await read_(request, 'auditor', `cart/get?id=${cartId}`)).body.cart.giftCards[0];
+    expect((await call(request, 'auditor', 'cart/audit', { cartId, cards: [{ id: card.id, spent: 216.5, remaining: 183.5 }] })).status).toBe(200);
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    await expect(page.locator('#bc-sec-receipt')).toContainText('has been audited');
+    await expect(page.getByRole('button', { name: 'Re-read the receipt' })).toHaveCount(0);
+  });
+});

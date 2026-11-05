@@ -90,7 +90,7 @@ function GiftCardRow({ cart, card, canReveal, canVoid, onChanged, onSignOut }) {
   );
 }
 
-export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onSignOut }) {
+export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onChanged, onSignOut }) {
   const [code, setCode] = useState('');
   const [pin, setPin] = useState('');
   const [balance, setBalance] = useState('');
@@ -120,7 +120,10 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
     ? cardsRefusedBecause(cart) : null;
   // A card is only readable by the desk that issued it and the buyer who has to spend
   // it — and the buyer only once it has actually been released to them.
-  const canReveal = canIssue || (isBuyer && ['funded', 'receipted', 'audited', 'closed'].includes(cart.status));
+  const released = ['funded', 'receipted', 'audited', 'closed'].includes(cart.status);
+  const canReveal = canIssue || (isBuyer && released);
+  // The auditor checks the spend against the cards, so they may download them once released.
+  const canDownload = canReveal || (canAudit && released);
 
   async function addCard(e) {
     e.preventDefault();
@@ -303,7 +306,7 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
         </ul>
       )}
       {!cards.length && <p className="muted sm">No cards recorded yet.</p>}
-      {canReveal && live.length > 0 && (
+      {canDownload && live.length > 0 && (
         <div className="bc-gc-pdf">
           <button type="button" className="btn sm" disabled={busy === 'pdf'} onClick={downloadAll}
             title="One PDF, a page a card: balance, number, PIN and the card's picture. Recorded against your name.">
@@ -365,9 +368,9 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, onChanged, onS
                 )}
                 {/* A PDF has no viewer here — it downloads, which is what a PDF is for. */}
                 {isImg
-                  ? <button type="button" className="btn sm ghost" disabled={!canReveal} onClick={() => openImage(pictures.findIndex((p) => p.id === f.id))}>View</button>
+                  ? <button type="button" className="btn sm ghost" disabled={!canDownload} onClick={() => openImage(pictures.findIndex((p) => p.id === f.id))}>View</button>
                   : null}
-                <button type="button" className="btn sm ghost" disabled={!canReveal} onClick={() => download(f)}>Download</button>
+                <button type="button" className="btn sm ghost" disabled={!canDownload} onClick={() => download(f)}>Download</button>
               </li>
               );
             })}

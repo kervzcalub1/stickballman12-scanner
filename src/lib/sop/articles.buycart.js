@@ -146,6 +146,7 @@ export const BUYCART_ARTICLES = [
     when: 'A request shows in the "To audit" queue, and again when its shipment has been received.',
     steps: [
       { do: 'Open the request. Read the receipt lines against what was approved — the app flags anything bought that nobody approved, or approved and never bought.' },
+      { do: 'If the cashier rang up shoes that are not ours (the buyer\'s own pairs), tick those rows, say why, and press Remove from the receipt. The total drops by their price and their share of the tax. Put back undoes it.' },
       { do: 'In Financial audit, enter what each card was actually spent and what is left sitting on it.' },
       { do: 'Check the line under it: the cards must account for the receipt total. A gap is a finding — chase it before you record anything.' },
       { do: 'Press Record the audit.' },

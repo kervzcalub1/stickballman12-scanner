@@ -1803,6 +1803,15 @@ await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS goods_audited_by_key T
 // see what the shop actually charged for the goods.
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS receipt_subtotal NUMERIC(12,2)`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS receipt_tax NUMERIC(12,2)`);
+// Shoes that were on the receipt but are not ours (the cashier rang the buyer's own pairs up
+// with the approved ones). The row is kept and marked, never deleted, and the figures as
+// printed are kept beside the adjusted ones. printed_total is set only while a row is removed.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS receipt_printed_total NUMERIC(12,2)`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS receipt_printed_subtotal NUMERIC(12,2)`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS receipt_printed_tax NUMERIC(12,2)`);
+await sql(`ALTER TABLE buy_cart_receipt_lines ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE buy_cart_receipt_lines ADD COLUMN IF NOT EXISTS removed_by TEXT`);
+await sql(`ALTER TABLE buy_cart_receipt_lines ADD COLUMN IF NOT EXISTS removed_reason TEXT`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS written_off_at TIMESTAMPTZ`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS written_off_by TEXT`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS write_off_reason TEXT`);

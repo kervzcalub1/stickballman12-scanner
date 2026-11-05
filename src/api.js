@@ -467,6 +467,8 @@ export const api = {
     downloadBlob(`/api/cart/file?cartId=${cartId}&fileId=${fileId}${kind ? `&kind=${kind}` : ''}`),
   // Every live card on the request as ONE PDF — balance, number, PIN and the card's own
   // picture, a page a card. The bulk form of cartGcReveal: the server logs it first.
+  cartReceiptRemove: (cartId, lineIds, reason) => post('/api/cart/receipt-remove', { cartId, lineIds, reason }),
+  cartReceiptRestore: (cartId, lineIds) => post('/api/cart/receipt-remove', { cartId, lineIds, restore: true }),
   cartGiftCardsPdf: (cartId) => downloadBlob(`/api/cart/gift-cards-pdf?cartId=${cartId}`),
   cartFileDownload: (cartId, fileId, kind) =>
     downloadBlob(`/api/cart/file?cartId=${cartId}&fileId=${fileId}&download=1${kind ? `&kind=${kind}` : ''}`),

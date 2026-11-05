@@ -23,7 +23,6 @@ export default async function handler(req, res) {
   if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
-  if (!r2Configured()) return send(res, 503, { ok: false, error: 'File storage is not configured.' });
 
   const params = new URL(req.url, 'http://x').searchParams;
   const cartId = Number(params.get('cartId'));
@@ -53,6 +52,8 @@ export default async function handler(req, res) {
     // Keyed on the FILE's kind, never the `?kind=` the caller sent: that parameter is the
     // client's description of what it is asking for (found 2026-09-30).
 
+    // After the access checks, so who may see what doesn't depend on the storage being up.
+    if (!r2Configured()) return send(res, 503, { ok: false, error: 'File storage is not configured.' });
     const bytes = await getObject(file.r2_key);
     const ext = String(file.r2_key).split('.').pop().toLowerCase();
     res.statusCode = 200;

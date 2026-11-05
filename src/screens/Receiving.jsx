@@ -2039,7 +2039,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     isStorePo ? (untieOk.current ? null : (activeBox?.storeId ?? null)) : undefined);
   const poLanded = (it, s) => {
     const m = poMoney(it, s);
-    return m ? landedFromShelf(m.shelf, m.tip, costPreset) : null;
+    return m ? landedFromShelf(m.shelf, m.tip, costPreset, { sku: it.sku, size: s.size }) : null;
   };
   // An online order's line: its actual cost (coupon, tax, shipping and gift card already
   // spread over it — orderCosts) IS the landed cost, so no preset is applied on top.

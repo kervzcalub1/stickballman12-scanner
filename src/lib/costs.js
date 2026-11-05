@@ -152,10 +152,19 @@ export function poLineCost(lines, sku, size, poBoxId = null, storeId = undefined
 // is not known, and writing shelf + tip would put a number on the pair that looks
 // landed but is short by the tax and shipping. Blank is the honest answer; link a
 // preset to the supplier and the pair can be costed (Costs → Fill costs from POs).
-export function landedFromShelf(shelf, _lineTip, preset) {
-  const s = costOrNull(shelf);
-  if (s == null || !preset) return null;
-  const tip = preset.tipAmt ?? 0;
+// A pair from a BUYING REQUEST (`presetForShipment` adds `requestLines`) goes by that shoe's
+// own approved line: its shelf price, and any premium tip approved for it on top of the
+// request's. Pass `pair` ({ sku, size }) so it can be found.
+export function landedFromShelf(shelf, _lineTip, preset, pair = null) {
+  if (!preset) return null;
+  const n = pair ? sizeNum(pair.size) : NaN;
+  const own = pair && Array.isArray(preset.requestLines)
+    ? preset.requestLines.find((l) => bareSku(l.sku) === bareSku(pair.sku)
+      && ((Number.isNaN(n) && Number.isNaN(sizeNum(l.size))) || sizeNum(l.size) === n))
+    : null;
+  const s = costOrNull(own?.shelf ?? shelf);
+  if (s == null) return null;
+  const tip = (preset.tipAmt ?? 0) + (own?.tip || 0);
   const b = calcCostBreakdown({
     shelfPrice: s,
     storePct: preset?.storePct, promoPct: preset?.promoPct, giftPct: preset?.giftPct,
@@ -163,6 +172,17 @@ export function landedFromShelf(shelf, _lineTip, preset) {
     tipAmt: tip, shippingAmt: preset?.shippingAmt,
   });
   return Math.round(b.finalCost * 100) / 100;
+}
+
+// A buying request's shipping: what its labels cost, shared across its pairs. Labels are only
+// known when the buyer is about to ship, so before then there is no figure (null).
+export function requestShipping({ perLabel, labels, pairs }) {
+  const rate = Number(perLabel) || 0;
+  const n = Number(labels) || 0;
+  const p = Number(pairs) || 0;
+  if (!n || !p) return null;
+  const total = Math.round(rate * n * 100) / 100;
+  return { total, each: (rate * n) / p };
 }
 
 // The cost a unit is committed with. `shoeCost` is what was typed on the card,

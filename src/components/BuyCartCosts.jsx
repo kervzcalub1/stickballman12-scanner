@@ -10,6 +10,7 @@
 // auditors only: the buyer says what the sticker says, the company says what the sticker
 // costs it. Saving re-prices every line against the new rates using the market prices
 // already captured on them, and writes the before-and-after into the request's history.
+import { requestShipping } from '../lib/costs.js';
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { NumField } from './common.jsx';
@@ -28,7 +29,7 @@ export const COST_FIELDS = [
   { key: 'cashbackPct', label: 'Cashback', unit: '%' },
   { key: 'taxPct', label: 'Sales tax', unit: '%' },
   { key: 'tipAmt', label: 'Tip', unit: '$' },
-  { key: 'shippingAmt', label: 'Shipping', unit: '$' },
+  { key: 'shippingAmt', label: 'Shipping per label', unit: '$' },
 ];
 
 const val = (stack, key) => {
@@ -39,6 +40,9 @@ const isEmpty = (stack) => !stack || COST_FIELDS.every((f) => val(stack, f.key) 
 
 export function BuyCartCosts({ cart, canEdit, onChanged, onSignOut }) {
   const stack = cart.cost_stack || null;
+  const labels = (cart.pack?.boxes || []).filter((b) => b.kind !== 'replacement').length;
+  const pairs = cart.pack?.totalQty || 0;
+  const shipping = requestShipping({ perLabel: val(stack, 'shippingAmt'), labels, pairs });
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
   // One chip being typed into, in place. Correcting a single rate is what actually
@@ -249,6 +253,13 @@ export function BuyCartCosts({ cart, canEdit, onChanged, onSignOut }) {
         )}
       </div>
       {err && <div className="error mt">{err}</div>}
+      {!isEmpty(stack) && val(stack, 'shippingAmt') > 0 && (
+        <p className="muted sm bc-costs-shipping">
+          {shipping
+            ? `Shipping: ${labels} label${labels === 1 ? '' : 's'} × ${money(val(stack, 'shippingAmt'))} = ${money(shipping.total)} ÷ ${pairs} pair${pairs === 1 ? '' : 's'} = ${money(shipping.each)} a pair.`
+            : 'Shipping joins the cost once the labels are known, when the buyer is about to ship.'}
+        </p>
+      )}
     </section>
   );
 }

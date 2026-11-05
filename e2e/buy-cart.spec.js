@@ -1457,6 +1457,80 @@ let heldCartId = null;
 let sizedLineId = null;
 let unsizedLineId = null;
 
+// ── What a pair from a request costs ─────────────────────────────────────────────
+test.describe('what a pair from a request costs', () => {
+  test('the sums: gift card off, tax on, tip on, shipping per label shared across the pairs', async () => {
+    const { landedFromShelf, requestShipping } = await import('../src/lib/costs.js');
+    expect(requestShipping({ perLabel: 8.25, labels: 3, pairs: 30 })).toEqual({ total: 24.75, each: 0.825 });
+    expect(requestShipping({ perLabel: 8.25, labels: 0, pairs: 30 })).toBeNull();
+    const base = { taxPct: 8.25, tipAmt: 5, shippingAmt: 0.825 };
+    expect(landedFromShelf(100, null, { ...base, giftPct: 0 })).toBe(114.08);
+    // 100 − 8% = 92, + 8.25% tax = 99.59, + 5 + 0.825 = 105.42
+    expect(landedFromShelf(100, null, { ...base, giftPct: 8 })).toBe(105.42);
+    // Each shoe its own shelf price and approved tip, whatever the receipt said.
+    const preset = { ...base, giftPct: 0, requestLines: [
+      { sku: 'AB1-100', size: '10', shelf: 120, tip: 7 }, { sku: 'CD2-200', size: '9', shelf: 80, tip: 0 },
+    ] };
+    expect(landedFromShelf(100, null, preset, { sku: 'AB1 100', size: '10W' })).toBe(142.73);
+    expect(landedFromShelf(100, null, preset, { sku: 'CD2-200', size: '9' })).toBe(92.43);
+    // Not on the request: the receipt's price, with the request's costs.
+    expect(landedFromShelf(100, null, preset, { sku: 'ZZ9-999', size: '9' })).toBe(114.08);
+  });
+
+  async function raised(request, { boxes = 3, pairs = 30 } = {}) {
+    const cartId = await newRequest(request, { lines: [{ ...LINE, shelfPrice: 100 }] });
+    await pool.query(`UPDATE buy_carts SET cost_stack = $2 WHERE id = $1`,
+      [cartId, JSON.stringify({ taxPct: 8.25, tipAmt: 5, giftPct: 8, shippingAmt: 8.25 })]);
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: 30 });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000005656', balance: 9000 } });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
+    await call(request, 'buyer', 'cart/receipt', { cartId, receiptTotal: 3000, lines: [
+      { sku: LINE.sku, size: LINE.size, qty: pairs, unitPrice: 90, totalPrice: 90 * pairs, source: 'paste' },
+    ] });
+    const po = await call(request, 'buyer', 'cart/raise-po', { cartId, boxes });
+    expect(po.status).toBe(200);
+    return { cartId, poId: po.body.po.id };
+  }
+  const shipmentCost = (request, who, poId) => request.get(`/api/payout/presets?for=shipment&po=${poId}`, { headers: { Authorization: `Bearer ${tokenFor(people[who])}` } });
+
+  test('receiving gets the request’s costs: its stack, 3 labels shared by 30 pairs, the shoe’s own shelf', async ({ request }) => {
+    const { landedFromShelf } = await import('../src/lib/costs.js');
+    const { poId } = await raised(request);
+    const out = await (await shipmentCost(request, 'approver', poId)).json();
+    expect(out.via).toBe('request');
+    expect(out.preset).toMatchObject({ perLabel: 8.25, labels: 3, pairs: 30, shippingAmt: 0.825, giftPct: 8, taxPct: 8.25 });
+    // The approved $100 shelf, not the $90 on the receipt: 92 + 7.59 + 5 + 0.825 = 105.42
+    expect(landedFromShelf(90, null, out.preset, { sku: LINE.sku, size: LINE.size })).toBe(105.42);
+    // A supplier doesn't get to read it.
+    expect((await shipmentCost(request, 'buyer', poId)).status()).toBe(403);
+  });
+
+  test('a replacement label costs the pairs nothing, and an order from no request keeps the preset', async ({ request }) => {
+    const { poId } = await raised(request);
+    await pool.query(`INSERT INTO po_boxes (po_id, box_number, kind, status) VALUES ($1, 99, 'replacement', 'pending')`, [poId]);
+    expect((await (await shipmentCost(request, 'approver', poId)).json()).preset.labels).toBe(3);
+    await pool.query(`UPDATE buy_carts SET po_id = NULL WHERE po_id = $1`, [poId]);
+    expect((await (await shipmentCost(request, 'approver', poId)).json()).via).not.toBe('request');
+  });
+
+  test('a premium tip counts once approved, and removed shoes stop sharing the shipping', async ({ request }) => {
+    const { cartId, poId } = await raised(request, { boxes: 1, pairs: 10 });
+    await pool.query(`UPDATE buy_cart_lines SET tip_status = 'proposed', tip_proposed = 9 WHERE cart_id = $1`, [cartId]);
+    expect((await (await shipmentCost(request, 'approver', poId)).json()).preset.requestLines[0].tip).toBe(0);
+    await pool.query(`UPDATE buy_cart_lines SET tip_status = 'approved', tip_approved = 9 WHERE cart_id = $1`, [cartId]);
+    expect((await (await shipmentCost(request, 'approver', poId)).json()).preset.requestLines[0].tip).toBe(9);
+    await pool.query(`INSERT INTO buy_cart_receipt_lines (cart_id, sku, size, qty, unit_price, total_price, removed_at)
+       VALUES ($1, 'THEIRS-1', '9', 10, 50, 500, now())`, [cartId]);
+    expect((await (await shipmentCost(request, 'approver', poId)).json()).preset.pairs).toBe(10);
+  });
+
+  test('at approval the cost has no shipping in it yet', async () => {
+    const { repriceLine } = await import('../api/_lib/buycart.js');
+    const out = repriceLine({ shelf_price: 100 }, { taxPct: 8.25, tipAmt: 5, shippingAmt: 8.25 });
+    expect(out.finalCost).toBe(113.25);
+  });
+});
+
 test.describe('what we already hold', () => {
   test.beforeAll(async ({ request }) => {
     const b = (await pool.query(
@@ -2469,9 +2543,9 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     const { cartId, card } = await groupCard(request, PREMIUM_RUN);
     expect(card.text).toContain(`⭐ PREMIUM — ${people.buyer.name} is proposing a $10.00 tip per pair`);
     expect(card.text).toContain('reply "tip ok" to approve it, "tip no" to decline, or "tip 5"');
-    // The tip is part of what the pair costs us: $50 through the fixture's stack is $63.05
-    // (gift 8 %, tax 8.25 %, tip $5, shipping $8.25) — plus this shoe's $10 tip.
-    expect((await costs(cartId))['9']).toBeCloseTo(73.05, 2);
+    // The tip is part of what the pair costs us: $50 through the fixture's stack is $54.80
+    // (gift 8 %, tax 8.25 %, tip $5; shipping joins later) — plus this shoe's $10 tip.
+    expect((await costs(cartId))['9']).toBeCloseTo(64.80, 2);   // shipping joins at the end, when the labels are known
     const line = (await pool.query(`SELECT premium, tip_proposed, tip_status FROM buy_cart_lines WHERE cart_id = $1 AND size = '9'`, [cartId])).rows[0];
     expect(line).toMatchObject({ premium: true, tip_proposed: '10.00', tip_status: 'proposed' });
   });
@@ -2534,7 +2608,7 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     const tips = (await pool.query('SELECT tip_status, tip_approved, tip_proposed FROM buy_cart_lines WHERE cart_id = $1', [cartId])).rows;
     expect(tips.every((t) => t.tip_status === 'approved' && t.tip_approved === '8.00' && t.tip_proposed == null)).toBe(true);
     // $50 through the fixture's stack is $63.05 — plus the $8 the desk set.
-    expect((await costs(cartId))['9']).toBeCloseTo(71.05, 2);
+    expect((await costs(cartId))['9']).toBeCloseTo(62.80, 2);   // no shipping until the labels are known
     expect(await statuses(cartId)).toEqual({ 9: 'pending', '9.5': 'pending', 10: 'pending' });
   });
 

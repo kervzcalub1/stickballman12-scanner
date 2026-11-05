@@ -194,6 +194,14 @@ reason (`cart/receipt-remove`). The buyer can't, because it lowers what they hav
 **Auditors download cards too:** the all-cards PDF and the card files, once released. Show code on a
 single card stays with the desk and buyer. The PDF download is on the trail under their name.
 
+## A size is required (2026-11-06)
+The market read, payout and profit are all per size, so `cart/line` refuses a new line with no size
+for anyone, buyer or staff, and for stand-ins like "n/a" or "-". An edit can't clear a size. The form
+holds Ask until a size is picked, and **Size not listed?** lets the buyer type one, because a new
+release can come back from the catalogue with no sizes at all. Lines saved before this keep their
+blank size (`no_size` in `cart/stock` still answers for them); the buyer can fill it in while the
+line is pending, which prices it.
+
 ## Filed is not read (2026-11-05)
 Finding an email by order number FILES it at once (`receipt_at`, status `receipted`), but its rows
 live only on the screen until someone ticks and saves them. A supplier who left at that point left a

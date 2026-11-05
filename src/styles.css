@@ -5012,6 +5012,8 @@ button.bc-cost-chip { font-family: inherit; line-height: inherit; }
 .bc-review-foot { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 10px; }
 /* A receipt line that matches nothing approved. Not an error — it is the finding. */
 .bc-unmatched td { background: rgba(198,135,26,0.08); }
+.bc-size-typed { display: inline-flex; gap: 6px; align-items: center; }
+.bc-size-typed .input { width: 130px; }
 .bc-receipt-remove { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .bc-receipt-remove p { flex: 1 0 100%; margin: 0; }
 .bc-receipt-remove .input { flex: 1 1 220px; min-width: 0; }

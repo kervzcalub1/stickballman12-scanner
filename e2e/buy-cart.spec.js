@@ -3587,6 +3587,8 @@ test.describe('taking shoes off a receipt', () => {
     // The single-card reveal stays with the desk and the buyer.
     const gcId = (await read_(request, 'auditor', `cart/get?id=${cartId}`)).body.cart.giftCards[0].id;
     expect((await call(request, 'auditor', 'cart/gc-reveal', { cartId, gcId })).status).toBe(403);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // The cost stack must not reach a supplier by ANY route. These assert on the raw JSON a

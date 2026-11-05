@@ -6,9 +6,9 @@
 // tracking isn't configured (TRACKING_API_KEY unset).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { supplierPoView } from '../_lib/po-supplier-view.js';
-import { getPo, getPoBox, listPoTrackingItems, setPoBoxTracking, rollupPoShippedFromTracking, getPoFull, dbConfigured, upsertShipmentTracking,
+import { claimDropoffAlerts, getPo, getPoBox, listPoTrackingItems, setPoBoxTracking, rollupPoShippedFromTracking, getPoFull, dbConfigured, upsertShipmentTracking,
   deliveryStateBefore, openOnlineOrdersByTracking } from '../_lib/db.js';
-import { alertDeliveries } from '../_lib/alerts.js';
+import { alertDeliveries, alertPoDroppedOff } from '../_lib/alerts.js';
 import { trackingConfigured, fetchTrackInfo, forwardTrackingToSheet, registerTracking, stopTracking } from '../_lib/tracking.js';
 
 export default async function handler(req, res) {
@@ -77,6 +77,8 @@ export default async function handler(req, res) {
       }).catch((e) => console.warn('[po/track-refresh] shipment_tracking:', e.message));
       await setPoBoxTracking(u.trackingNumber, u);
     }
+    claimDropoffAlerts({ trackingNumbers: updates.map((u) => u.trackingNumber) }).then(alertPoDroppedOff)
+      .catch((e) => console.warn('[po/track-refresh] drop-off alert:', e.message));
     // Now that box statuses are current, roll the PO off "Filling" if every label has left
     // the supplier (delivered/in-transit/shipped) — the supplier may never have tapped "ship".
     await rollupPoShippedFromTracking(poId);

@@ -26,6 +26,7 @@ import { PoScanModal, PoLineRow, PoLineHeader } from '../components/PoScanModal.
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLinkBatchModal } from '../components/PoLinkBatch.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
+import { PoDropoffReceipts } from '../components/PoDropoffReceipts.jsx';
 import { PoDetailsEdit, PoAddLabels, PoLabelTools } from '../components/PoEdit.jsx';
 import { boxStatusLabel, boxChipCls, isBoxesOrder, shippedProgress, declaresPerBox } from '../lib/postatus.js';
 import { PoStatusChip } from '../components/PoStatusChip.jsx';
@@ -307,6 +308,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
               {/* The courier's own labels, so the supplier can print the one for the box
                   they're packing instead of digging through email. */}
               <PoLabelsFile po={po} canUpload={!FROZEN.includes(po.status)} onChanged={load} onSignOut={onSignOut} />
+              <PoDropoffReceipts po={po} onSignOut={onSignOut} />
 
               {/* What this order is actually counting. Receiving normally sets this itself;
                   it's here because it can also be attached (and undone) by hand for an

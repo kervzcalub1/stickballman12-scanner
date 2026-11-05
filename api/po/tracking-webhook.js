@@ -10,10 +10,10 @@
 // after the response loses nothing. (We run on a persistent Express process, so async work
 // continues after the response is flushed.)
 import { getJsonBody, send, applySecurity } from '../_lib/util.js';
-import { setPoBoxTracking, upsertShipmentTracking, rollupPoShippedFromTracking, deliveryStateBefore,
+import { claimDropoffAlerts, setPoBoxTracking, upsertShipmentTracking, rollupPoShippedFromTracking, deliveryStateBefore,
   openOnlineOrdersByTracking, dbConfigured } from '../_lib/db.js';
 import { trackingWebhookSecret, parseWebhook, forwardTrackingToSheet, stopTracking } from '../_lib/tracking.js';
-import { alertDeliveries } from '../_lib/alerts.js';
+import { alertDeliveries, alertPoDroppedOff } from '../_lib/alerts.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -68,6 +68,10 @@ export default async function handler(req, res) {
       const rows = await setPoBoxTracking(u.trackingNumber, u);
       for (const r of (rows || [])) if (r?.po_id != null) affectedPoIds.add(Number(r.po_id));
     }
+    // A supplier who drops a box at UPS may never tap ship, so the carrier's first scan is
+    // what tells the team to ask for the drop-off receipt.
+    claimDropoffAlerts({ trackingNumbers: updates.map((u) => u.trackingNumber) }).then(alertPoDroppedOff)
+      .catch((e) => console.warn('[po/tracking-webhook] drop-off alert:', e.message));
     // Roll each touched PO off "Filling" once all its labels have left the supplier.
     for (const poId of affectedPoIds) await rollupPoShippedFromTracking(poId);
     // Stop tracking anything that's now delivered — a delivered parcel won't change again, so

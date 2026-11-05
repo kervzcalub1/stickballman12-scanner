@@ -65,6 +65,8 @@ connection brings it back as **Reconnect** with no "Not now". No migration.
 | `buy.comment` | everyone on the request + buyer (a buyer's first question → approvers) | `cart/comment.js` | on |
 | `rescale.audited` | the requester (`rescale_requests.requested_by_id`, new rows only) | `rescale-requests/audit.js` | on |
 | `po.shipped` | warehouse + admins — **batched** per order | `po/ship.js` | on |
+| `po.dropped_off` | PH + admins: a box left the supplier, ask for the receipt — **batched** per order | `po/ship.js`, `po/tracking-webhook.js`, `po/track-refresh.js` (purchase-orders.md) | on |
+| `po.dropoff_receipt` | PH + admins: a supplier uploaded one | `po/dropoff.js` | on |
 | `po.delivered` | warehouse (admins: off) — on the TRANSITION | `po/tracking-webhook.js` + `po/track-refresh.js` | on |
 | `online.delivered` | warehouse (admins: off) — on the transition, `once` | same two | on |
 | `po.discrepancy` | admins (PH: shown, off) — `once` per distinct result | `batches/commit`, `box-commit`, `set-status` | on |

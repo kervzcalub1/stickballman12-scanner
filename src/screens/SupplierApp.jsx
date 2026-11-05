@@ -24,6 +24,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { PoScanModal, PoLineRow, PoLineHeader } from '../components/PoScanModal.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
+import { PoDropoffReceipts, PoDropoffChip } from '../components/PoDropoffReceipts.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
 import { PoBulkDimensions } from '../components/PoBulkDimensions.jsx';
 import { StoreOrderPanel } from '../components/StoreOrderPanel.jsx';
@@ -455,6 +456,7 @@ export function SupplierApp({ user, onSignOut }) {
                       <span className="po-code">{p.po_code}</span>
                       <PoStatusChip po={p} />
                       <PoKindChip po={p} />
+                      <PoDropoffChip po={p} supplier />
                     </div>
                     <div className="po-card-meta">
                       {p.tag_code && <span><Icon name="tag" /> {p.tag_code}</span>}
@@ -601,6 +603,7 @@ export function SupplierApp({ user, onSignOut }) {
             {/* The labels our team bought for this order. Read-only here — they print
                 them, they don't upload them. */}
             <PoLabelsFile po={po} onSignOut={onSignOut} />
+            <PoDropoffReceipts po={po} isSupplier onSignOut={onSignOut} />
 
             {po.by_store && (
               <StoreOrderPanel detail={detail} onChanged={refreshDetail} onPatchLine={patchLine}

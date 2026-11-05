@@ -495,6 +495,10 @@ export function redactLineForViewer(line, user) {
   return out;
 }
 
+const isCardFileEvent = (e) => e.kind === 'gc_read'
+  || (e.kind === 'file_added' && String(e.body || '').startsWith('gift_card:'))
+  || (e.kind === 'file_removed' && String(e.body || '').startsWith('Gift card image'));
+
 /**
  * One request, as a supplier may see it. A no-op for everybody else.
  *
@@ -513,7 +517,11 @@ export function redactCartForViewer(cart, user) {
   // `lines` / `events` only when the row has them: the QUEUE (`cart/list`) hands back
   // bare rows, and inventing empty arrays on them would change their shape.
   if (cart.lines) out.lines = cart.lines.map((l) => redactLineForViewer(l, user));
-  if (cart.events) out.events = cart.events.map((e) => {
+  // The desk's card files, and anything naming them, are the desk's business: the supplier
+  // gets the recorded cards, as one PDF. A label is usually one of those file names.
+  if (cart.files) out.files = cart.files.filter((f) => f.kind !== 'gift_card');
+  if (cart.giftCards) out.giftCards = cart.giftCards.map((g) => ({ ...g, label: null }));
+  if (cart.events) out.events = cart.events.filter((e) => !isCardFileEvent(e)).map((e) => {
     if (CALL_EVENT_BODY[e.kind]) return { ...e, body: CALL_EVENT_BODY[e.kind] };
     // `line_added` used to end "— buy". The verdict was never the point of that line
     // (it says what was added, and for how much); it is stripped rather than the whole

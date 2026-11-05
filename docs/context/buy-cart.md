@@ -247,6 +247,16 @@ A Telegram card still goes out as text with "⚠️ Photo unavailable" if the pi
 - **The screen:** every row fetched the full-size file separately, so a long run could sit on
   "photo…" or fail until a refresh. `shotUrl` now fetches each photo once and retries a failure.
 
+## The desk's card files are the desk's (2026-11-06)
+The PH team uploads card files, and some are bad. The supplier sees none of it.
+- **Server:** `redactCartForViewer` strips `gift_card` files, each card's `label` (usually a file
+  name) and the trail events naming them. `cart/file` answers 403 for a supplier on a card file.
+- **What the supplier has:** the recorded cards, masked, with Show code, and **Download all (PDF)**.
+- **The desk** can **Delete** a file with two taps (`cart/file-delete`, `issue_gift_cards`). Recorded
+  cards stay. The removal is on the trail.
+- **The PDF is recorded cards only.** A picture matching no card used to print on its own page; now
+  it doesn't. The PDF no longer prints the label. A card whose file was deleted prints without a picture.
+
 ## Filed is not read (2026-11-05)
 Finding an email by order number FILES it at once (`receipt_at`, status `receipted`), but its rows
 live only on the screen until someone ticks and saves them. A supplier who left at that point left a
@@ -1261,18 +1271,14 @@ stored `v1:<iv>:<tag>:<ct>` so a key rotation stays possible.
 review table in `BuyCartGiftCards.jsx`. The cards arrive three ways and all three land
 here: a cardwell.fund card face (CARD NUMBER · PIN · barcode), a phone screenshot of one,
 or a table — a spreadsheet screenshot or PDF listing a batch, one card a row
-(balance · number · PIN). An **image** is read on this server first (`readCardFaceLocally`,
-tesseract with the checked-in `eng.traineddata`, ~1 s, free, nothing leaves the building; 2026-11-05):
-twice, plain and with light and dark swapped, and it counts only if the two agree on the number and
-the PIN and there is exactly one number. Anything else (a table, a small or angled photo, two readings
-that differ) goes to the same vision model as the receipt (`gpt-5.4-mini`, ~3 s, ~$0.003). So a card
-face reads with OpenAI out of credit, which is how Read the cards came to fail on images while PDFs
-and CSVs kept working. A 429 from OpenAI now says "out of credit or busy" and not "try again". The
-all-cards PDF matches pictures through the same order. The barcode is not read: ZXing could not decode
-the one on the real card. A **PDF** is text already, read with pdfjs
-(`legacy/build/pdf.mjs`, server-side) and `cardsFromText` (the long digit run is the
-number, a 4–8 digit run beside it the PIN, a `$` amount the balance). Measured on the
-real samples: one card face, one screenshot and a six-row table all read every digit.
+(balance · number · PIN). **No AI, since 2026-11-06, and nothing leaves this server.** An **image**
+is read with tesseract (`readCardsLocally`, the checked-in `eng.traineddata`, ~1 s): twice, plain and
+with light and dark swapped, and it counts only if the two agree on the number and PIN. A picture of
+a table counts row by row on the same terms. A **PDF** is read from its text with pdfjs (`cardsFromPdf`:
+`cardsFromPages`, labels on a card page, `cardsFromText` on a table). A **PDF page with no text** is
+one picture (cardwell's PDF, a card face a page, prints no balance), so the page's picture goes through
+the image reader; `unread` counts pages nothing came off and the screen says so. A file that reads as
+nothing says to type it in, and can be deleted. Receipts and cancellation photos still use the AI.
 - **The reader records nothing.** Rows come back to a review table — full number, PIN,
   balance, each editable, ticked per row like the receipt rows — and *Record N cards*
   posts each ticked row through the ordinary `cart/gift-card` add, so the encryption,

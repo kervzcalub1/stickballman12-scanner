@@ -46,12 +46,12 @@ export default async function handler(req, res) {
     }
     const file = await getBuyCartFile(cartId, fileId);
     if (!file) return send(res, 404, { ok: false, error: 'That file does not exist.' });
+    // A supplier never opens the desk's card files. A bad upload stays out of their hands, and
+    // the recorded cards reach them as the one PDF (`cart/gift-cards-pdf`).
+    if (user.role === 'supplier' && !isPrivileged(user.role) && file.kind === 'gift_card')
+      return send(res, 403, { ok: false, error: 'Download the cards as one PDF.' });
     // Keyed on the FILE's kind, never the `?kind=` the caller sent: that parameter is the
-    // client's description of what it is asking for, and leaving it off used to fetch a
-    // card image before release (found 2026-09-30).
-    if (user.role === 'supplier' && !isPrivileged(user.role) && file.kind === 'gift_card'
-      && !['funded', 'receipted', 'audited', 'closed'].includes(cart.status))
-      return send(res, 409, { ok: false, error: 'These cards have not been released to you yet.' });
+    // client's description of what it is asking for (found 2026-09-30).
 
     const bytes = await getObject(file.r2_key);
     const ext = String(file.r2_key).split('.').pop().toLowerCase();

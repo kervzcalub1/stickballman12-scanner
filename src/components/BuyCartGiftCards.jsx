@@ -124,6 +124,18 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
   const canReveal = canIssue || (isBuyer && released);
   // The auditor checks the spend against the cards, so they may download them once released.
   const canDownload = canReveal || (canAudit && released);
+  // Two taps to delete a file. A recorded card stays recorded.
+  const [confirming, setConfirming] = useState(null);
+  async function removeFile(f) {
+    setBusy(`rm${f.id}`); setErr('');
+    try {
+      await api.cartFileDelete(cart.id, f.id);
+      setConfirming(null);
+      setReading((r) => (r?.file?.id === f.id ? null : r));
+      onChanged();
+    } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(''); }
+  }
 
   async function addCard(e) {
     e.preventDefault();
@@ -199,11 +211,11 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
       if (!r.cards?.length) {
         setErr(r.mangled
           ? `The card numbers in “${f.name || 'that file'}” were turned into numbers like 6.06E+18 by Excel — the digits are gone. Ask for the original CSV, or re-export with the card number column formatted as Text.`
-          : `Nothing on “${f.name || 'that file'}” read as a card number. Try a sharper shot with the card filling the frame, or type it in.`);
+          : `Nothing on “${f.name || 'that file'}” read as a card number. Try a sharper picture with the card filling the frame, or type it in. You can delete this file if it is no use.`);
         return;
       }
       setReading({
-        file: f, source: r.source, mangled: r.mangled || 0,
+        file: f, source: r.source, mangled: r.mangled || 0, unread: r.unread || 0,
         cards: r.cards.map((c) => ({ ...c, balance: c.balance == null ? '' : String(c.balance), ok: !c.already })),
       });
     } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
@@ -339,10 +351,9 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
         </form>
       )}
 
-      {/* Photos / PDFs of the cards. Some suppliers send an image and nothing else, and
-          a picture of a card is as spendable as the digits — so it goes through the same
-          authorised proxy, never a bucket URL. */}
-      <div className="bc-gc-files">
+      {/* Photos / PDFs of the cards, for the desk. The supplier never sees this: the server
+          sends them no files, and they get the recorded cards as the one PDF above. */}
+      {!isBuyer && <div className="bc-gc-files">
         <div className="bc-gc-files-h">
           <span className="muted sm">{images.length ? `${images.length} card file${images.length === 1 ? '' : 's'}` : 'No card files'}</span>
           {canPrep && (
@@ -371,12 +382,23 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
                   ? <button type="button" className="btn sm ghost" disabled={!canDownload} onClick={() => openImage(pictures.findIndex((p) => p.id === f.id))}>View</button>
                   : null}
                 <button type="button" className="btn sm ghost" disabled={!canDownload} onClick={() => download(f)}>Download</button>
+                {canPrep && (confirming === f.id
+                  ? (
+                    <>
+                      <span className="muted sm">Delete it? Recorded cards stay.</span>
+                      <button type="button" className="btn sm danger" disabled={busy === `rm${f.id}`} onClick={() => removeFile(f)}>
+                        {busy === `rm${f.id}` ? 'Deleting…' : 'Delete'}
+                      </button>
+                      <button type="button" className="btn sm ghost" onClick={() => setConfirming(null)}>Keep</button>
+                    </>
+                  )
+                  : <button type="button" className="btn sm ghost" onClick={() => setConfirming(f.id)}>Delete</button>)}
               </li>
               );
             })}
           </ul>
         )}
-      </div>
+      </div>}
 
       {/* The reading, for a person to check. Rows tint amber until ticked, the same rule
           the receipt table follows: a plausible wrong digit is a card that cannot be
@@ -386,7 +408,10 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
         <div className="bc-gc-read">
           <div className="bc-gc-read-h">
             <b>{reading.cards.length} card{reading.cards.length === 1 ? '' : 's'} read from “{reading.file.name || 'file'}”</b>
-            <span className="muted xs">{reading.source === 'pdf' ? 'from the PDF text' : reading.source === 'csv' ? 'from the CSV' : reading.source === 'local' ? 'off the card, read twice' : 'by the AI image reader'} · check every digit, fill any blank balance, tick, then record</span>
+            <span className="muted xs">{reading.source === 'pdf' ? 'from the PDF text' : reading.source === 'csv' ? 'from the CSV' : 'off the card, read twice'} · check every digit, fill any blank balance, tick, then record</span>
+            {reading.unread > 0 && (
+              <span className="bc-short xs">{reading.unread} page{reading.unread === 1 ? '' : 's'} could not be read — type {reading.unread === 1 ? 'that card' : 'those cards'} in.</span>
+            )}
             {reading.mangled > 0 && (
               <span className="bc-short xs">{reading.mangled} row{reading.mangled === 1 ? '' : 's'} skipped — Excel turned the card number into 6.06E+18 and the digits are gone. Get the original CSV for {reading.mangled === 1 ? 'it' : 'them'}.</span>
             )}

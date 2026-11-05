@@ -3259,7 +3259,7 @@ test.describe('gift cards read off a file', () => {
 
   test('a card face image really reads, end to end, off a made-up card', async () => {
     const sharp = (await import('sharp')).default;
-    const { readCardFaceLocally } = await import('../api/cart/gift-card-read.js');
+    const { readCardsLocally } = await import('../api/cart/gift-card-read.js');
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1208" height="767"><rect width="1208" height="767" fill="#2c6652"/>
       <text x="72" y="100" font-family="sans-serif" font-size="28" font-weight="bold" fill="#fff">cardwell</text>
       <text x="72" y="250" font-family="sans-serif" font-size="80" font-weight="bold" fill="#fff">Nike</text>
@@ -3267,7 +3267,7 @@ test.describe('gift cards read off a file', () => {
       <text x="72" y="392" font-family="monospace" font-size="28" font-weight="bold" fill="#fff">6060100000000007777</text><text x="933" y="392" font-family="monospace" font-size="28" font-weight="bold" fill="#fff">777777</text>
       <text x="505" y="472" font-family="serif" font-size="40" font-weight="bold" fill="#fff">BALANCE = $200</text></svg>`;
     const jpeg = await sharp(Buffer.from(svg)).jpeg({ quality: 70 }).toBuffer();
-    expect(await readCardFaceLocally(jpeg)).toEqual({ number: '6060100000000007777', pin: '777777', balance: 200, retailer: '' });
+    expect(await readCardsLocally(jpeg)).toEqual([{ number: '6060100000000007777', pin: '777777', balance: 200, retailer: '' }]);
   });
 
   test('a card face uploaded to a request comes back from Read the cards, read here', async ({ request }) => {
@@ -3298,6 +3298,146 @@ test.describe('gift cards read off a file', () => {
     } finally {
       await call(request, 'issuer', 'cart/file-delete', { cartId, fileId });
     }
+  });
+
+  // cardwell's own PDF: a card face a page, as a picture with transparent corners, and no text
+  // at all. Every page read as nothing until 2026-11-06. Made-up cards, never the real file.
+  test('a PDF of pictures reads card by card, and says which pages it could not', async () => {
+    const sharp = (await import('sharp')).default;
+    const { PDFDocument } = await import('pdf-lib');
+    const { cardsFromPdf } = await import('../api/cart/gift-card-read.js');
+    const face = (number, pin) => sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760"><rect width="1200" height="760" rx="40" fill="#2c6652"/>
+      <text x="66" y="345" font-family="monospace" font-size="16" fill="#cde">CARD NUMBER</text><text x="930" y="345" font-family="monospace" font-size="16" fill="#cde">PIN</text>
+      <text x="66" y="388" font-family="monospace" font-size="30" font-weight="bold" fill="#fff">${number}</text><text x="930" y="388" font-family="monospace" font-size="30" font-weight="bold" fill="#fff">${pin}</text></svg>`)).png().toBuffer();
+    const blank = await sharp({ create: { width: 400, height: 300, channels: 4, background: '#fff' } }).png().toBuffer();
+    const doc = await PDFDocument.create();
+    for (const bytes of [await face('6060100000000006161', '616161'), blank, await face('6060100000000006262', '626262')]) {
+      const img = await doc.embedPng(bytes);
+      doc.addPage([842, 595]).drawImage(img, { x: 0, y: 0, width: 842, height: 595 });
+    }
+    const out = await cardsFromPdf(Buffer.from(await doc.save()));
+    expect(out.cards.map((c) => [c.number, c.pin, c.balance])).toEqual([
+      ['6060100000000006161', '616161', null], ['6060100000000006262', '626262', null],
+    ]);
+    expect(out.unread).toBe(1);
+    expect(out.pictures).toBe(3);
+  });
+
+  test('the reader uses no AI, even with a key set', async () => {
+    const fs = await import('node:fs');
+    for (const f of ['api/cart/gift-card-read.js', 'api/cart/gift-cards-pdf.js'])
+      expect(fs.readFileSync(f, 'utf8'), f).not.toMatch(/openai|OPENAI_API_KEY|chat\/completions/i);
+  });
+
+  test('the supplier gets no card files or their names; the desk keeps them and can delete them', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000007373', balance: 200, label: 'WhatsApp Image bad-upload.jpeg' } });
+    const fileId = Number((await pool.query(
+      `INSERT INTO buy_cart_files (cart_id, kind, r2_key, name, content_type, uploaded_by)
+       VALUES ($1, 'gift_card', $2, 'bad-upload.pdf', 'application/pdf', 'E2E') RETURNING id`, [cartId, `buy-carts/e2e/${cartId}-gc.pdf`])).rows[0].id);
+    await pool.query(`INSERT INTO buy_cart_events (cart_id, kind, body) VALUES ($1, 'file_added', 'gift_card: bad-upload.pdf'), ($1, 'gc_read', '0 cards read from “bad-upload.pdf”')`, [cartId]);
+    await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
+
+    const buyer = await read_(request, 'buyer', `cart/get?id=${cartId}`);
+    const raw = JSON.stringify(buyer.body);
+    expect(raw).not.toContain('bad-upload');
+    expect(raw).not.toContain('WhatsApp');
+    expect(buyer.body.cart.files.filter((f) => f.kind === 'gift_card')).toHaveLength(0);
+    expect(buyer.body.cart.giftCards[0].code_last4).toBe('7373');   // the card itself is still theirs
+    const shoe = buyer.body.cart.files.filter((f) => f.kind === 'shoe');
+    expect(shoe.length).toBeGreaterThan(0);                          // their own photos stay
+    const direct = await request.get(`/api/cart/file?cartId=${cartId}&fileId=${fileId}`, { headers: { Authorization: `Bearer ${tokenFor(people.buyer)}` } });
+    expect(direct.status()).toBe(403);
+
+    const desk = await read_(request, 'issuer', `cart/get?id=${cartId}`);
+    expect(JSON.stringify(desk.body)).toContain('bad-upload');
+
+    // A supplier can't delete one; the desk can, whoever uploaded it, and the card stays.
+    expect((await call(request, 'buyer', 'cart/file-delete', { cartId, fileId })).status).toBe(403);
+    const gone = await call(request, 'issuer', 'cart/file-delete', { cartId, fileId });
+    expect(gone.status).toBe(200);
+    expect(gone.body.cart.files.filter((f) => f.kind === 'gift_card')).toHaveLength(0);
+    expect(gone.body.cart.giftCards).toHaveLength(1);
+  });
+
+  test('on screen: the supplier sees Download all and no files; the desk gets a two-tap Delete', async ({ page, request, browser }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000007474', balance: 200, label: 'hidden-name.jpeg' } });
+    await pool.query(`INSERT INTO buy_cart_files (cart_id, kind, r2_key, name, content_type, uploaded_by)
+       VALUES ($1, 'gift_card', $2, 'hidden-name.pdf', 'application/pdf', 'E2E')`, [cartId, `buy-carts/e2e/${cartId}-gc2.pdf`]);
+    await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
+
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    const cards = page.locator('#bc-sec-cards');
+    await expect(cards.getByRole('button', { name: /Download all 1 card/ })).toBeVisible();
+    await expect(cards).not.toContainText('hidden-name');
+    await expect(cards.locator('.bc-gc-files')).toHaveCount(0);
+
+    const ctx = await browser.newContext({ baseURL: page.url().split('/buying')[0] });
+    const desk = await ctx.newPage();
+    await as(desk, 'issuer');
+    await desk.goto(`/ph/gift-card-buying?request=${cartId}`);
+    const files = desk.locator('.bc-gc-files');
+    await expect(files).toContainText('hidden-name.pdf');
+    await files.getByRole('button', { name: 'Delete' }).click();
+    await expect(files).toContainText('Recorded cards stay');
+    await files.getByRole('button', { name: 'Keep' }).click();
+    await files.getByRole('button', { name: 'Delete' }).click();
+    await files.getByRole('button', { name: 'Delete' }).click();
+    await expect(files).not.toContainText('hidden-name.pdf');
+    await expect(desk.locator('#bc-sec-cards')).toContainText('7474');
+    await ctx.close();
+  });
+
+  test('a PDF of pictures: read, recorded, and printed with its picture; the unrecorded card stays out', async ({ request }) => {
+    test.skip(!process.env.R2_ACCOUNT_ID, 'needs real storage to hold the file');
+    const sharp = (await import('sharp')).default;
+    const { PDFDocument } = await import('pdf-lib');
+    const face = (number, pin) => sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760"><rect width="1200" height="760" rx="40" fill="#2c6652"/>
+      <text x="66" y="345" font-family="monospace" font-size="16" fill="#cde">CARD NUMBER</text><text x="930" y="345" font-family="monospace" font-size="16" fill="#cde">PIN</text>
+      <text x="66" y="388" font-family="monospace" font-size="30" font-weight="bold" fill="#fff">${number}</text><text x="930" y="388" font-family="monospace" font-size="30" font-weight="bold" fill="#fff">${pin}</text></svg>`)).png().toBuffer();
+    const src = await PDFDocument.create();
+    for (const bytes of [await face('6060100000000006363', '636363'), await face('6060100000000006464', '646464')]) {
+      const img = await src.embedPng(bytes);
+      src.addPage([842, 595]).drawImage(img, { x: 0, y: 0, width: 842, height: 595 });
+    }
+    const pdf = Buffer.from(await src.save());
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+    const signed = await call(request, 'issuer', 'cart/file-sign', { cartId, kind: 'gift_card', contentType: 'application/pdf' });
+    expect((await fetch(signed.body.uploadUrl, { method: 'PUT', body: pdf })).ok).toBe(true);
+    const attached = await call(request, 'issuer', 'cart/file-attach', { cartId, kind: 'gift_card', key: signed.body.key, name: 'cards.pdf', contentType: 'application/pdf', sizeBytes: pdf.length });
+    const fileId = Number(attached.body.file.id);
+    try {
+      const read = await call(request, 'issuer', 'cart/gift-card-read', { cartId, fileId });
+      expect(read.status).toBe(200);
+      expect(read.body.source).toBe('local');
+      expect(read.body.cards.map((c) => c.number)).toEqual(['6060100000000006363', '6060100000000006464']);
+      // Only the first is recorded, so the PDF is one page, and it carries that card's picture.
+      expect((await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: read.body.cards[0].number, pin: read.body.cards[0].pin, balance: 200 } })).status).toBe(200);
+      const down = await request.get(`/api/cart/gift-cards-pdf?cartId=${cartId}`, { headers: { Authorization: `Bearer ${tokenFor(people.issuer)}` } });
+      expect(down.status()).toBe(200);
+      const body = await down.body();
+      expect((await PDFDocument.load(body)).getPageCount()).toBe(1);
+      expect(body.toString('latin1')).not.toContain('No picture of this card');
+      expect(body.length).toBeGreaterThan(5000);
+    } finally {
+      await call(request, 'issuer', 'cart/file-delete', { cartId, fileId });
+    }
+  });
+
+  test('the all-cards PDF is the recorded cards only, with no file names on it', async () => {
+    const { PDFDocument } = await import('pdf-lib');
+    const { buildGiftCardPdf } = await import('../api/cart/gift-cards-pdf.js');
+    const bytes = await buildGiftCardPdf({
+      cards: [{ id: 1, code: '6060100000000007575', pin: '757575', balance: 200, retailer: 'Nike', label: 'secret-file-name.jpeg' }],
+      cartCode: 'BC-1', printedFor: 'e2e',
+    });
+    expect((await PDFDocument.load(bytes)).getPageCount()).toBe(1);
+    expect(Buffer.from(bytes).toString('latin1')).not.toContain('secret-file-name');
   });
 
   // Nike's e-gift PDF: one card a page, "Pin:" and "Gift Card Value:" on lines of their

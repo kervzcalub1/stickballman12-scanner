@@ -17,7 +17,7 @@ import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged 
 import {
   getBuyCart, getBuyCartFile, deleteBuyCartFile, getBuyCartFull, logCartEvent, dbConfigured, isLastPhotoOfLiveShoe,
 } from '../_lib/db.js';
-import { hasCostPrivilege, cartVisibleTo, actorKey, redactCartForViewer, requireBuyerAccess } from '../_lib/buycart.js';
+import { hasPrivilege, hasCostPrivilege, cartVisibleTo, actorKey, redactCartForViewer, requireBuyerAccess } from '../_lib/buycart.js';
 import { deleteObject, r2Configured } from '../_lib/r2.js';
 
 export default async function handler(req, res) {
@@ -51,7 +51,9 @@ export default async function handler(req, res) {
     // The uploader can undo their own mistake; a desk can clear up anybody's. A buyer is
     // additionally scoped to their own request by `cartVisibleTo` above.
     const mine = file.uploaded_by_id != null && Number(file.uploaded_by_id) === Number(user.uid);
-    const desk = isPrivileged(user.role) || await hasCostPrivilege(user);
+    // The gift card desk clears up its own files, whoever uploaded them.
+    const desk = isPrivileged(user.role) || await hasCostPrivilege(user)
+      || (file.kind === 'gift_card' && await hasPrivilege(user, 'issue_gift_cards'));
     if (!mine && !desk)
       return send(res, 403, { ok: false, error: 'Only whoever uploaded this, or a buying desk, can remove it.' });
 

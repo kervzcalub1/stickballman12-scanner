@@ -220,8 +220,9 @@ test('the team hears on Telegram, one message an order, and it says the receipt 
   });
   await new Promise((r) => fake.listen(5198, '127.0.0.1', r));
   const keep = {};
-  for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'ALERT_BATCH_MS']) keep[k] = process.env[k];
-  Object.assign(process.env, { TELEGRAM_BOT_TOKEN: 'e2e', TELEGRAM_CHAT_ID: '-1', TELEGRAM_API_BASE: 'http://127.0.0.1:5198', ALERT_BATCH_MS: '50' });
+  for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'ALERT_BATCH_MS', 'APP_BASE_URL']) keep[k] = process.env[k];
+  // The button's address comes from APP_BASE_URL, which CI doesn't have and a machine might.
+  Object.assign(process.env, { TELEGRAM_BOT_TOKEN: 'e2e', TELEGRAM_CHAT_ID: '-1', TELEGRAM_API_BASE: 'http://127.0.0.1:5198', ALERT_BATCH_MS: '50', APP_BASE_URL: 'https://e2e.example.com' });
   const chat = 8800000 + Number(STAMP);
   const wh = chat + 1;
   const ph = Number((await pool.query(

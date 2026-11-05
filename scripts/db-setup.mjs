@@ -1443,12 +1443,6 @@ for (const col of [
 await sql(`ALTER TABLE shipment_tracking ADD COLUMN IF NOT EXISTS eta_from DATE`);
 await sql(`ALTER TABLE shipment_tracking ADD COLUMN IF NOT EXISTS eta_to DATE`);
 
-// A card the auditor added to make the money reconcile, with why. `personal` = not company money
-// (the buyer's own, paying for their own shoes rung up on the same receipt): it counts toward
-// what the till took, and never toward what we funded. buy-cart.md.
-await sql(`ALTER TABLE buy_cart_gift_cards ADD COLUMN IF NOT EXISTS personal BOOLEAN NOT NULL DEFAULT false`);
-await sql(`ALTER TABLE buy_cart_gift_cards ADD COLUMN IF NOT EXISTS remark TEXT`);
-
 // The supplier's drop-off receipt: proof a box was handed to the courier. One order can have
 // several, one drop-off covering a few boxes or a few trips. docs/context/purchase-orders.md.
 await sql(`
@@ -1711,6 +1705,12 @@ await sql(`
     voided_reason  TEXT
   )
 `);
+
+// A card the auditor added to make the money reconcile, with why. `personal` = not company money
+// (the buyer's own, paying for their own shoes rung up on the same receipt): it counts toward
+// what the till took, and never toward what we funded. buy-cart.md.
+await sql(`ALTER TABLE buy_cart_gift_cards ADD COLUMN IF NOT EXISTS personal BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE buy_cart_gift_cards ADD COLUMN IF NOT EXISTS remark TEXT`);
 await sql(`CREATE INDEX IF NOT EXISTS buy_cart_gc_cart_idx ON buy_cart_gift_cards (cart_id, id)`);
 
 // Uploaded evidence: photographs or PDFs of the cards, and the receipt itself. One

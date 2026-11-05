@@ -26,6 +26,7 @@ import { textFromPdf } from '../lib/pdfText.js';
 import { PriceInput } from './common.jsx';
 import { parseReceipt, compareReceiptToApproved } from '../lib/receiptParse.js';
 import { receiptCheckSentence } from '../lib/receiptCheck.js';
+import { receiptAfterRemoval } from '../lib/buycartRules.js';
 import { estDate, estClock } from '../lib/format.js';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
@@ -141,7 +142,10 @@ async function textFromImage(file, onProgress) {
 // `canEdit` is stating WHAT THE RECEIPT SAYS — the total the whole reconciliation then
 // runs against, and the lines the purchase order is raised from. That is a claim about
 // money, so it stays with the buyer, either desk, or the auditor.
-export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut }) {
+export function BuyCartReceipt({ cart, canUpload, canEdit, canRemove, onChanged, onSignOut }) {
+  // Rows ticked to come off the receipt, and why. Nothing moves until the button.
+  const [ticked, setTicked] = useState(() => new Set());
+  const [removeWhy, setRemoveWhy] = useState('');
   const [text, setText] = useState('');
   const [rows, setRows] = useState(null);
   const [statedTotal, setStatedTotal] = useState('');
@@ -173,6 +177,29 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
   const filedEmail = [...files].reverse().find((f) => String(f.content_type || '').startsWith('text/')) || null;
   const approved = (cart.lines || []).filter((l) => l.status === 'approved');
   const diffs = compareReceiptToApproved(committed, approved);
+  const removed = cart.removedReceiptLines || [];
+  const printedTotal = cart.receipt_printed_total ?? cart.receipt_total;
+  // Live preview, from the figures as printed: the same sum the server does.
+  const preview = ticked.size > 0 ? receiptAfterRemoval({
+    total: printedTotal, lines: [...committed, ...removed],
+    removedIds: [...removed.map((r) => r.id), ...ticked],
+  }) : null;
+
+  async function removeTicked() {
+    setBusy('remove'); setErr('');
+    try {
+      await api.cartReceiptRemove(cart.id, [...ticked].map(Number), removeWhy.trim());
+      setTicked(new Set()); setRemoveWhy('');
+      onChanged();
+    } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(''); }
+  }
+  async function putBack(id) {
+    setBusy(`back${id}`); setErr('');
+    try { await api.cartReceiptRestore(cart.id, [Number(id)]); onChanged(); }
+    catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(''); }
+  }
   const rowsTotal = rows ? Math.round(rows.reduce((n, r) => n + (Number(r.totalPrice) || 0), 0) * 100) / 100 : 0;
   // Blank is ABSENT, not zero — the difference between "no tax was charged" and "nobody
   // read the tax", which is the same distinction the stored columns keep.
@@ -445,10 +472,14 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
               that widens the PAGE takes the whole layout with it. */}
           <div className="bc-scroll">
           <table className="table bc-table">
-            <thead><tr><th>SKU</th><th>Size</th><th>Qty</th><th>Unit</th><th>Total</th></tr></thead>
+            <thead><tr>{canRemove && <th aria-label="Take off the receipt" />}<th>SKU</th><th>Size</th><th>Qty</th><th>Unit</th><th>Total</th></tr></thead>
             <tbody>
               {committed.map((r) => (
                 <tr key={r.id} className={r.matched_line_id ? '' : 'bc-unmatched'}>
+                  {canRemove && (
+                    <td><input type="checkbox" aria-label={`Take ${r.sku} ${r.size || ''} off the receipt`} checked={ticked.has(r.id)}
+                      onChange={() => setTicked((t) => { const n = new Set(t); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; })} /></td>
+                  )}
                   <td>{r.sku}</td><td>{r.size || '—'}</td><td>{r.qty}</td>
                   <td>{money(r.unit_price)}</td><td>{money(r.total_price)}</td>
                 </tr>
@@ -461,7 +492,9 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
               <>Goods <b>{money(cart.receipt_subtotal)}</b>
                 {cart.receipt_tax != null && <> + tax <b>{money(cart.receipt_tax)}</b></>} · </>
             )}
-            Receipt total <b>{money(cart.receipt_total)}</b> · cards issued {money(cart.gc_total)} · <b>{money(cart.balance_remaining)}</b> left over.
+            Receipt total <b>{money(cart.receipt_total)}</b>
+            {removed.length > 0 && <> (printed {money(cart.receipt_printed_total)}, {money(cart.receipt_printed_total - cart.receipt_total)} taken off)</>}
+            {' '}· cards issued {money(cart.gc_total)} · <b>{money(cart.balance_remaining)}</b> left over.
           </p>
           {diffs.length > 0 && (
             // The whole reason both lists are kept. Approved and bought are different
@@ -478,7 +511,37 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, onChanged, onSignOut 
               </ul>
             </div>
           )}
-          {canEdit && <button type="button" className="btn sm ghost" onClick={() => setRows([])}>Re-read the receipt</button>}
+          {/* Shoes the cashier rang up that aren't ours. */}
+          {canRemove && ticked.size > 0 && (
+            <div className="bc-receipt-remove">
+              <p className="sm">
+                Taking <b>{ticked.size}</b> row{ticked.size === 1 ? '' : 's'} off removes <b>{money(preview.removedAmount)}</b> with
+                {' '}their share of the tax. The receipt total becomes <b>{money(preview.total)}</b>.
+              </p>
+              <input className="input" value={removeWhy} maxLength={200} aria-label="Why these shoes are not ours"
+                placeholder="Why, e.g. the buyer's own purchase" onChange={(e) => setRemoveWhy(e.target.value)} />
+              <button type="button" className="btn sm" disabled={busy === 'remove' || removeWhy.trim().length < 3} onClick={removeTicked}>
+                {busy === 'remove' ? 'Removing…' : 'Remove from the receipt'}
+              </button>
+            </div>
+          )}
+          {removed.length > 0 && (
+            <div className="bc-receipt-removed">
+              <b className="sm">Taken off this receipt</b>
+              <ul>
+                {removed.map((r) => (
+                  <li key={r.id} className="sm">
+                    {r.sku || r.name}{r.size ? ` size ${r.size}` : ''}{r.qty > 1 ? ` ×${r.qty}` : ''} · {money(r.total_price)}
+                    <span className="muted"> · {r.removed_reason} · {r.removed_by}</span>
+                    {canRemove && (
+                      <button type="button" className="btn sm ghost" disabled={busy === `back${r.id}`} onClick={() => putBack(r.id)}>Put back</button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {canEdit && !removed.length && <button type="button" className="btn sm ghost" onClick={() => setRows([])}>Re-read the receipt</button>}
         </>
       )}
 

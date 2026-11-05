@@ -1371,7 +1371,7 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         && ['approved', 'funded', 'receipted', 'audited', 'closed', 'written_off'].includes(cart.status)
         && (cardsIssuable(cart) || (cart.giftCards || []).length > 0
           || (cart.files || []).some((f) => f.kind === 'gift_card') || !['approved'].includes(cart.status)) && (
-        <div id="bc-sec-cards" className="bc-sec"><BuyCartGiftCards cart={cart} role={role} canIssue={canIssue} isBuyer={isBuyer}
+        <div id="bc-sec-cards" className="bc-sec"><BuyCartGiftCards cart={cart} role={role} canIssue={canIssue} isBuyer={isBuyer} canAudit={canAudit}
           onChanged={load} onSignOut={onSignOut} /></div>
       )}
 
@@ -1388,6 +1388,9 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
           // buyer, either desk, or the auditor.
           canEdit={!['closed', 'cancelled', 'written_off'].includes(cart.status)
             && (isBuyer || canDecide || canIssue || canAudit)}
+          // Shoes on the receipt that aren't ours: the auditor or approver only, never the
+          // buyer, because taking a row off lowers what the buyer has to account for.
+          canRemove={(mayDecide || canAudit) && !['closed', 'cancelled', 'written_off'].includes(cart.status)}
           onChanged={load} onSignOut={onSignOut} /></div>
       )}
 

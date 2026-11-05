@@ -178,6 +178,22 @@ the panel, the Telegram summary, the issuer DM. `fundingBreakdown` / `fundingWor
 
 **History:** 2026-09-16 shelf + tax → 2026-10-02 shelf only → **2026-11-05 shelf + tax, again.**
 
+## Shoes on the receipt that aren't ours (2026-11-05)
+The cashier can ring the buyer's own pairs up with the approved ones, so the receipt and its total
+carry shoes we never paid for. **The auditor or approver** ticks those rows and removes them with a
+reason (`cart/receipt-remove`). The buyer can't, because it lowers what they have to account for.
+- **Kept, not deleted:** `removed_at/by/reason` on the row. `cart.receiptLines` holds live rows only;
+  `removedReceiptLines` holds the rest. **Put back** undoes it.
+- **Total:** `receipt_total` is the adjusted figure, so the audit, balance and close checks follow it
+  by themselves. The printed figures stay in `receipt_printed_*`, set only while a row is removed.
+  Removed rows take their **share** of the printed total, so their tax goes too (`receiptAfterRemoval`).
+- **Order:** with a PO raised, its order-level line drops by the same qty. Refused if the pair is
+  already on a box's packing list. Whole rows only: a row with qty 3 comes off whole.
+- **Re-reading is refused** while a row is removed, because saving replaces every row.
+
+**Auditors download cards too:** the all-cards PDF and the card files, once released. Show code on a
+single card stays with the desk and buyer. The PDF download is on the trail under their name.
+
 ## Filed is not read (2026-11-05)
 Finding an email by order number FILES it at once (`receipt_at`, status `receipted`), but its rows
 live only on the screen until someone ticks and saves them. A supplier who left at that point left a

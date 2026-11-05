@@ -35,6 +35,9 @@ export default async function handler(req, res) {
       return send(res, 403, { ok: false, error: 'You do not have access to this request.' });
     if (!['funded', 'receipted'].includes(cart.status))
       return send(res, 409, { ok: false, error: 'A receipt belongs to a request that has been funded.' });
+    // Saving replaces every row, which would quietly put removed shoes back on the receipt.
+    if (cart.receipt_printed_total != null)
+      return send(res, 409, { ok: false, error: 'Shoes were taken off this receipt by the auditor or approver. Put them back before reading it again.' });
 
     const lines = (Array.isArray(body.lines) ? body.lines : []).slice(0, 300).map((l) => ({
       sku: String(l.sku ?? '').trim().toUpperCase().slice(0, 40) || null,

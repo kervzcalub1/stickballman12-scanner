@@ -9,7 +9,8 @@
 //
 // It prints every code on the request, so it is the bulk form of `cart/gc-reveal` and
 // follows the same rules exactly:
-//   · who: the issuing desk, and the buyer on their own request once it is released;
+//   · who: the issuing desk, the buyer on their own request once it is released, and the
+//     auditor once it is released (auditing the spend means checking the cards);
 //   · the trail row is written BEFORE anything is decrypted — "who could have spent
 //     this" is the question the record exists to answer;
 //   · no-store, never a bucket URL, never logged.
@@ -149,7 +150,9 @@ export default async function handler(req, res) {
   if (!(await requireBuyerAccess(req, res, user))) return;
   if (blockIfMustChange(user, res)) return;
   const isBuyer = user.role === 'supplier' && !isPrivileged(user.role);
-  if (!isBuyer && !(await hasPrivilege(user, 'issue_gift_cards')))
+  const isDesk = !isBuyer && await hasPrivilege(user, 'issue_gift_cards');
+  const isAuditor = !isBuyer && !isDesk && await hasPrivilege(user, 'audit_buying');
+  if (!isBuyer && !isDesk && !isAuditor)
     return send(res, 403, { ok: false, error: 'You do not have access to gift card numbers.' });
   if (!rateLimit(req, { windowMs: 60_000, max: 6 }))
     return send(res, 429, { ok: false, error: 'Too many downloads. Wait a moment.' });
@@ -169,6 +172,8 @@ export default async function handler(req, res) {
       if (!['funded', 'receipted', 'audited', 'closed'].includes(cart.status))
         return send(res, 409, { ok: false, error: 'These cards have not been released to you yet.' });
     }
+    if (isAuditor && !['funded', 'receipted', 'audited', 'closed'].includes(cart.status))
+      return send(res, 409, { ok: false, error: 'These cards have not been released yet, so there is nothing to audit.' });
     const rows = await listBuyCartGiftCardSecrets(cartId);
     if (!rows.length) return send(res, 404, { ok: false, error: 'No gift cards are recorded on this request yet.' });
     const files = r2Configured() ? await listBuyCartCardFiles(cartId) : [];

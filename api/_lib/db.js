@@ -16,7 +16,7 @@ import { ROLL_VIN_RE, VIN_RE } from './vins.js';
 // box. Since 2026-10-23 that is the same alphanumeric rule (store-orders-plan §8b).
 import { trackKey as searchTrackKey, expectsAtOrderLevel, declaresPerBox, hasOrderedList } from '../../src/lib/postatus.js';
 import { presellUnitCost } from '../../src/lib/presellDetails.js';
-import { fundingWords } from '../../src/lib/buycartRules.js';
+import { fundingWords, receiptAfterRemoval } from '../../src/lib/buycartRules.js';
 import { productAnswered } from '../../src/lib/sheinCutover.js';
 import { BLOCKERS as SHEIN_BLOCKERS } from '../../src/lib/sheinListings.js';
 // Registration now sends the canonical form of a number, so anything that MATCHES a
@@ -7433,6 +7433,7 @@ const cartMoney = (r) => ({
   approved_amount: r.approved_amount == null ? 0 : Number(r.approved_amount),
   gc_total: r.gc_total == null ? 0 : Number(r.gc_total),
   receipt_total: r.receipt_total == null ? null : Number(r.receipt_total),
+  receipt_printed_total: r.receipt_printed_total == null ? null : Number(r.receipt_printed_total),
   balance_remaining: r.balance_remaining == null ? null : Number(r.balance_remaining),
   // What the cards must cover: approved shelf total + the declared sales tax. Falls back to
   // the shelf sum for a row written before the column existed (db:setup backfills it).
@@ -7692,12 +7693,10 @@ export async function getBuyCartFull(id) {
       remaining: g.remaining == null ? null : Number(g.remaining),
     })),
     files,
-    receiptLines: receiptLines.map((r) => ({
-      ...r,
-      qty: Number(r.qty) || 0,
-      unit_price: r.unit_price == null ? null : Number(r.unit_price),
-      total_price: r.total_price == null ? null : Number(r.total_price),
-    })),
+    // `receiptLines` is what counts: the order, the pack count and the audit all read it.
+    // A row taken off the receipt stays on the record, apart, with who and why.
+    receiptLines: receiptLines.filter((r) => !r.removed_at).map(receiptLineOut),
+    removedReceiptLines: receiptLines.filter((r) => r.removed_at).map(receiptLineOut),
     events,
     tasks,
     pack,
@@ -8752,6 +8751,84 @@ export async function removeBuyCartFile(cartId, fileId, actor) {
 }
 
 // ---- Receipt --------------------------------------------------------------
+const receiptLineOut = (r) => ({
+  ...r,
+  qty: Number(r.qty) || 0,
+  unit_price: r.unit_price == null ? null : Number(r.unit_price),
+  total_price: r.total_price == null ? null : Number(r.total_price),
+});
+
+/**
+ * Take rows off the receipt, or put them back (`restore`). Everything moves together: the
+ * rows, the adjusted figures, the balance and the order's list of what we are owed. The
+ * figures always come from those PRINTED (`receiptAfterRemoval`). The caller has checked
+ * who may, the status, and that nothing removed is packed.
+ */
+export async function setBuyCartReceiptLinesRemoved({ cartId, lineIds, restore = false, reason = null, actor }) {
+  const sql = db();
+  const cart = (await sql`SELECT * FROM buy_carts WHERE id = ${cartId}`)[0];
+  const all = await sql`SELECT * FROM buy_cart_receipt_lines WHERE cart_id = ${cartId} ORDER BY id`;
+  const ids = new Set(lineIds.map(Number));
+  const moving = all.filter((l) => ids.has(Number(l.id)) && (restore ? l.removed_at : !l.removed_at));
+  if (!moving.length) return null;
+  const removedAfter = all.filter((l) => (l.removed_at && !(restore && ids.has(Number(l.id)))) || (!restore && ids.has(Number(l.id))));
+  const printedTotal = cart.receipt_printed_total ?? cart.receipt_total;
+  const printedSubtotal = cart.receipt_printed_total != null ? cart.receipt_printed_subtotal : cart.receipt_subtotal;
+  const printedTax = cart.receipt_printed_total != null ? cart.receipt_printed_tax : cart.receipt_tax;
+  const after = receiptAfterRemoval({
+    total: printedTotal, subtotal: printedSubtotal, tax: printedTax, lines: all, removedIds: removedAfter.map((l) => l.id),
+  });
+  const before = Number(cart.receipt_total);
+  const anyLeft = removedAfter.length > 0;
+  const by = actor.name || actor.username || null;
+  const movingIds = moving.map((l) => Number(l.id));
+  const pairs = moving.reduce((n, l) => n + (Number(l.qty) || 0), 0);
+  const words = moving.map((l) => `${l.sku || l.name || 'no code'}${l.size ? ` ${l.size}` : ''}${Number(l.qty) > 1 ? ` x${l.qty}` : ''}`).join(', ');
+
+  const queries = [
+    restore
+      ? sql`UPDATE buy_cart_receipt_lines SET removed_at = NULL, removed_by = NULL, removed_reason = NULL
+             WHERE cart_id = ${cartId} AND id = ANY(${movingIds}::bigint[])`
+      : sql`UPDATE buy_cart_receipt_lines SET removed_at = now(), removed_by = ${by}, removed_reason = ${reason}
+             WHERE cart_id = ${cartId} AND id = ANY(${movingIds}::bigint[])`,
+    sql`UPDATE buy_carts SET receipt_total = ${after.total}, receipt_subtotal = ${after.subtotal}, receipt_tax = ${after.tax},
+           receipt_printed_total = ${anyLeft ? printedTotal : null},
+           receipt_printed_subtotal = ${anyLeft ? printedSubtotal : null},
+           receipt_printed_tax = ${anyLeft ? printedTax : null},
+           balance_remaining = gc_total - ${after.total}, updated_at = now()
+         WHERE id = ${cartId}`,
+  ];
+  // The order was raised from the receipt, so what it says we are owed moves with it.
+  if (cart.po_id) {
+    for (const l of moving) {
+      const sku = String(l.sku || '').trim().toUpperCase();
+      const size = String(l.size ?? '').trim() || null;
+      const qty = Math.max(1, Number(l.qty) || 1);
+      if (!sku) continue;
+      queries.push(restore
+        ? sql`INSERT INTO po_lines (po_id, po_box_id, sku, size, name, qty_expected, unit_cost, entered_on_behalf)
+              VALUES (${cart.po_id}, NULL, ${sku}, ${size}, ${l.name || null}, ${qty}, ${l.unit_price ?? null}, true)
+              ON CONFLICT (po_id, sku, size) WHERE po_box_id IS NULL AND dimensions IS NULL AND po_store_id IS NULL
+              DO UPDATE SET qty_expected = po_lines.qty_expected + EXCLUDED.qty_expected, updated_at = now()`
+        : sql`UPDATE po_lines SET qty_expected = qty_expected - ${qty}, updated_at = now()
+               WHERE po_id = ${cart.po_id} AND po_box_id IS NULL AND dimensions IS NULL AND po_store_id IS NULL
+                 AND sku = ${sku} AND size IS NOT DISTINCT FROM ${size}`);
+    }
+    if (!restore) {
+      queries.push(sql`DELETE FROM po_lines
+        WHERE po_id = ${cart.po_id} AND po_box_id IS NULL AND dimensions IS NULL AND po_store_id IS NULL AND qty_expected <= 0`);
+    }
+  }
+  await sql.transaction(queries);
+  await logCartEvent({
+    cartId, kind: restore ? 'receipt_lines_restored' : 'receipt_lines_removed', actor,
+    body: `${pairs} pair${pairs === 1 ? '' : 's'} ${restore ? 'put back on' : 'taken off'} the receipt: ${words}.`
+      + `${reason ? ` Why: ${reason}.` : ''} Receipt total $${before.toFixed(2)} → $${after.total.toFixed(2)}`
+      + ` (printed $${Number(printedTotal).toFixed(2)}).`,
+  });
+  return getBuyCartFull(cartId);
+}
+
 // Replaces the whole parsed set in one transaction: a re-parse is a correction of the
 // same receipt, and leaving the previous attempt's rows behind would double the spend.
 // Each line is matched to an approved request line where SKU and size agree, which is
@@ -8864,7 +8941,7 @@ export async function getCartPackState(cartId) {
 
   const receipt = await sql`
     SELECT max(sku) AS sku, max(size) AS size, max(name) AS name, sum(qty)::int AS qty
-      FROM buy_cart_receipt_lines WHERE cart_id = ${cartId}
+      FROM buy_cart_receipt_lines WHERE cart_id = ${cartId} AND removed_at IS NULL
      GROUP BY upper(btrim(coalesce(sku, ''))), upper(btrim(coalesce(size, '')))
      ORDER BY 1, 2`;
 

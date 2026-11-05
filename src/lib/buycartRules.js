@@ -29,6 +29,32 @@ export const DECISIONS_PENDING_ONLY = ['funded', 'receipted', 'audited'];
 // The tax is the DOLLARS actually in `funding_target`, not rate × shelf: once cards are out
 // the target no longer follows a corrected rate, and a request released before this rule has
 // no tax in it at all. `pct` is printed only when it really is what produced those dollars.
+export function receiptLinePrice(l) {
+  if (l.total_price != null) return Number(l.total_price);
+  if (l.unit_price != null) return Number(l.unit_price) * (Number(l.qty) || 1);
+  return null;
+}
+
+/**
+ * The receipt's figures once some rows are taken off it, always worked out from the figures
+ * as PRINTED, so removing and putting back can never drift. The removed rows take their
+ * share of the total: the till charged tax on them too, and a share also covers a receipt
+ * with no tax line or a discount at the bottom. `unpriced` lists rows with no price, because
+ * a share can't be worked out without them.
+ */
+export function receiptAfterRemoval({ total, subtotal = null, tax = null, lines, removedIds }) {
+  const cents = (n) => Math.round(n * 100) / 100;
+  const gone = new Set([...removedIds].map(Number));
+  const unpriced = lines.filter((l) => receiptLinePrice(l) == null);
+  const sum = lines.reduce((n, l) => n + (receiptLinePrice(l) || 0), 0);
+  const removedGoods = lines.filter((l) => gone.has(Number(l.id))).reduce((n, l) => n + (receiptLinePrice(l) || 0), 0);
+  const keep = sum > 0 ? (sum - removedGoods) / sum : 1;
+  const newTotal = cents(Number(total) * keep);
+  const newSubtotal = subtotal == null ? null : cents(Number(subtotal) * keep);
+  const newTax = tax == null ? null : (newSubtotal != null ? cents(newTotal - newSubtotal) : cents(Number(tax) * keep));
+  return { total: newTotal, subtotal: newSubtotal, tax: newTax, removedAmount: cents(Number(total) - newTotal), unpriced };
+}
+
 export function fundingBreakdown(cart) {
   const cents = (n) => Math.round((Number(n) || 0) * 100) / 100;
   const shelf = cents(cart?.approved_amount);

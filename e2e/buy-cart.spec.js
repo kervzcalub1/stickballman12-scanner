@@ -3445,3 +3445,147 @@ test('plain-words replies and amount-first tips are read; anything else is still
     expect(splitTipReply(t).tip).toEqual({ action: 'approve', amount: 5 });
   expect(splitTipReply('take all, $5 tip')).toMatchObject({ tip: { action: 'approve', amount: 5 }, rest: 'take all' });
 });
+
+// ── Shoes on the receipt that aren't ours ────────────────────────────────────────
+// The cashier rang the buyer's own pairs up with the approved ones.
+test.describe('taking shoes off a receipt', () => {
+  const rows = [
+    { sku: LINE.sku, size: LINE.size, qty: 1, unitPrice: 100, totalPrice: 100, source: 'paste' },
+    { sku: 'DD1391-100', size: '10', qty: 1, unitPrice: 100, totalPrice: 100, source: 'paste' },
+    { sku: 'DD1391-100', size: '11', qty: 1, unitPrice: 100, totalPrice: 100, source: 'paste' },
+  ];
+  async function receipted(request) {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000009999', balance: 400 } });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
+    const saved = await call(request, 'buyer', 'cart/receipt', { cartId, receiptTotal: 324.75, subtotal: 300, tax: 24.75, lines: rows });
+    expect(saved.status).toBe(200);
+    return { cartId, lines: saved.body.cart.receiptLines };
+  }
+
+  test('the auditor or approver removes shoes, the total follows with their tax, and it can be undone', async ({ request }) => {
+    const { cartId, lines } = await receipted(request);
+    const [, his, his2] = lines.map((l) => Number(l.id));
+
+    // Never the buyer: it lowers what they have to account for.
+    expect((await call(request, 'buyer', 'cart/receipt-remove', { cartId, lineIds: [his], reason: 'mine' })).status).toBe(403);
+    expect((await call(request, 'bystander', 'cart/receipt-remove', { cartId, lineIds: [his], reason: 'mine' })).status).toBe(403);
+    expect((await call(request, 'auditor', 'cart/receipt-remove', { cartId, lineIds: [his] })).status).toBe(400);
+
+    const one = await call(request, 'auditor', 'cart/receipt-remove', { cartId, lineIds: [his], reason: 'Buyer own purchase' });
+    expect(one.status).toBe(200);
+    expect(one.body.cart.receipt_total).toBe(216.5);          // 2/3 of 324.75, tax and all
+    expect(Number(one.body.cart.receipt_subtotal)).toBe(200);
+    expect(Number(one.body.cart.receipt_tax)).toBe(16.5);
+    expect(one.body.cart.receipt_printed_total).toBe(324.75);
+    expect(Number(one.body.cart.balance_remaining)).toBe(183.5);
+    expect(one.body.cart.receiptLines).toHaveLength(2);
+    expect(one.body.cart.removedReceiptLines[0]).toMatchObject({ removed_reason: 'Buyer own purchase', sku: 'DD1391-100', size: '10' });
+
+    // A second removal, by the approver, still works from the printed figures.
+    const two = await call(request, 'approver', 'cart/receipt-remove', { cartId, lineIds: [his2], reason: 'Buyer own purchase' });
+    expect(two.body.cart.receipt_total).toBe(108.25);
+    // Not the last row: a receipt with nothing on it isn't a receipt.
+    const last = Number(two.body.cart.receiptLines[0].id);
+    expect((await call(request, 'auditor', 'cart/receipt-remove', { cartId, lineIds: [last], reason: 'Buyer own purchase' })).status).toBe(409);
+
+    // Saving replaces every row, which would quietly bring them back.
+    const again = await call(request, 'buyer', 'cart/receipt', { cartId, receiptTotal: 324.75, lines: rows });
+    expect(again.status).toBe(409);
+    expect(again.body.error).toMatch(/Put them back/);
+
+    // The trail says who, why and what the total did.
+    const ev = (await pool.query(`SELECT body FROM buy_cart_events WHERE cart_id = $1 AND kind = 'receipt_lines_removed' ORDER BY id`, [cartId])).rows;
+    expect(ev[0].body).toMatch(/Buyer own purchase.*\$324\.75 → \$216\.50/);
+
+    const back = await call(request, 'auditor', 'cart/receipt-remove', { cartId, lineIds: [his, his2], restore: true });
+    expect(back.status).toBe(200);
+    expect(back.body.cart.receipt_total).toBe(324.75);
+    expect(Number(back.body.cart.receipt_tax)).toBe(24.75);
+    expect(back.body.cart.receipt_printed_total).toBeNull();
+    expect(back.body.cart.removedReceiptLines).toHaveLength(0);
+    expect((await call(request, 'buyer', 'cart/receipt', { cartId, receiptTotal: 324.75, subtotal: 300, tax: 24.75, lines: rows })).status).toBe(200);
+  });
+
+  test('the audit gap follows the adjusted total', async ({ request }) => {
+    const { cartId, lines } = await receipted(request);
+    await call(request, 'auditor', 'cart/receipt-remove', { cartId, lineIds: [Number(lines[1].id), Number(lines[2].id)], reason: 'Buyer own purchase' });
+    const { body } = await read_(request, 'auditor', `cart/get?id=${cartId}`);
+    const card = body.cart.giftCards[0];
+    const audited = await call(request, 'auditor', 'cart/audit', { cartId, cards: [{ id: card.id, spent: 108.25, remaining: 291.75 }] });
+    expect(audited.status).toBe(200);
+    expect(audited.body.checks.find((k) => k.key === 'spend_reconciled').ok).toBe(true);
+  });
+
+  test('the order stops expecting the pair, and a packed pair is refused', async ({ request }) => {
+    const { cartId, lines } = await receipted(request);
+    const raised = await call(request, 'buyer', 'cart/raise-po', { cartId });
+    expect(raised.status).toBe(200);
+    const poId = raised.body.po.id;
+    const expected = async (size) => (await pool.query(
+      `SELECT qty_expected FROM po_lines WHERE po_id = $1 AND po_box_id IS NULL AND sku = 'DD1391-100' AND size = $2`, [poId, size])).rows[0]?.qty_expected;
+    expect(await expected('10')).toBe(1);
+
+    const gone = await call(request, 'auditor', 'cart/receipt-remove', { cartId, lineIds: [Number(lines[1].id)], reason: 'Buyer own purchase' });
+    expect(gone.status).toBe(200);
+    expect(await expected('10')).toBeUndefined();
+    expect(gone.body.cart.pack.totalQty).toBe(2);
+
+    const back = await call(request, 'auditor', 'cart/receipt-remove', { cartId, lineIds: [Number(lines[1].id)], restore: true });
+    expect(back.status).toBe(200);
+    expect(await expected('10')).toBe(1);
+
+    // On a box's packing list: it's on its way to us, so it can't quietly be the buyer's.
+    const box = (await pool.query(`SELECT id FROM po_boxes WHERE po_id = $1 LIMIT 1`, [poId])).rows[0].id;
+    await pool.query(`INSERT INTO po_lines (po_id, po_box_id, sku, size, qty_expected) VALUES ($1, $2, 'DD1391-100', '11', 1)`, [poId, box]);
+    const packed = await call(request, 'auditor', 'cart/receipt-remove', { cartId, lineIds: [Number(lines[2].id)], reason: 'Buyer own purchase' });
+    expect(packed.status).toBe(409);
+    expect(packed.body.error).toMatch(/packing list/);
+  });
+
+  test('on screen: the auditor ticks a row, sees the new total first, and can put it back', async ({ page, request }) => {
+    const { cartId } = await receipted(request);
+    await as(page, 'auditor');
+    await page.goto(`/buy-carts?request=${cartId}`);
+    const row = page.locator('#bc-sec-receipt tr').filter({ has: page.getByRole('cell', { name: '10', exact: true }) });
+    await row.getByRole('checkbox').check();
+    await expect(page.locator('.bc-receipt-remove')).toContainText('$108.25');
+    await expect(page.locator('.bc-receipt-remove')).toContainText('$216.50');
+    const remove = page.getByRole('button', { name: 'Remove from the receipt' });
+    await expect(remove).toBeDisabled();                       // no reason yet
+    await page.getByLabel('Why these shoes are not ours').fill('Buyer own purchase');
+    await remove.click();
+    await expect(page.locator('.bc-receipt-removed')).toContainText('Buyer own purchase');
+    await expect(page.locator('#bc-sec-receipt')).toContainText('printed $324.75');
+    await page.getByRole('button', { name: 'Put back' }).click();
+    await expect(page.locator('.bc-receipt-removed')).toHaveCount(0);
+  });
+
+  test('on screen: the buyer has no tick boxes', async ({ page, request }) => {
+    const { cartId } = await receipted(request);
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    await expect(page.locator('#bc-sec-receipt table')).toBeVisible();
+    await expect(page.locator('#bc-sec-receipt table input[type=checkbox]')).toHaveCount(0);
+  });
+
+  test('the auditor can download the cards once they are released, and it is on the trail', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000001212', pin: '121212', balance: 108.25 } });
+    const get = (who) => request.get(`/api/cart/gift-cards-pdf?cartId=${cartId}`, { headers: { Authorization: `Bearer ${tokenFor(people[who])}` } });
+    expect((await get('auditor')).status()).toBe(409);        // not released yet
+    await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
+    const pdf = await get('auditor');
+    expect(pdf.status()).toBe(200);
+    expect(pdf.headers()['content-type']).toContain('application/pdf');
+    expect((await get('bystander')).status()).toBe(403);
+    expect((await get('approver')).status()).toBe(403);
+    const { rows: ev } = await pool.query(`SELECT body FROM buy_cart_events WHERE cart_id = $1 AND kind = 'gc_pdf'`, [cartId]);
+    expect(ev.length).toBe(1);
+    // The single-card reveal stays with the desk and the buyer.
+    const gcId = (await read_(request, 'auditor', `cart/get?id=${cartId}`)).body.cart.giftCards[0].id;
+    expect((await call(request, 'auditor', 'cart/gc-reveal', { cartId, gcId })).status).toBe(403);
+  });
+});

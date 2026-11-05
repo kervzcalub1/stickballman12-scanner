@@ -194,6 +194,17 @@ reason (`cart/receipt-remove`). The buyer can't, because it lowers what they hav
 **Auditors download cards too:** the all-cards PDF and the card files, once released. Show code on a
 single card stays with the desk and buyer. The PDF download is on the trail under their name.
 
+## Re-reading a saved receipt (2026-11-06)
+**Re-read the receipt** used to open an empty table, so the list looked erased. It deleted nothing,
+but the only way to a new reading was uploading the file again.
+- It now opens the saved rows, ticked, with the saved figures, and offers **Read this email** and
+  the email and paste boxes. A warning says Save replaces them and Cancel keeps them.
+- **Refused once a PO exists** (`cart/receipt`, 409): the order is raised from these lines and saving
+  doesn't touch it, so a new reading would leave it expecting the old list. Taking shoes off with
+  `cart/receipt-remove` is the way to change a receipt after that, because it moves the order too.
+- The button gives way to the reason after the audit, with shoes removed, or with a PO. An upload in
+  those states still files the evidence, with no review table.
+
 ## Filed is not read (2026-11-05)
 Finding an email by order number FILES it at once (`receipt_at`, status `receipted`), but its rows
 live only on the screen until someone ticks and saves them. A supplier who left at that point left a

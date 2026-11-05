@@ -145,6 +145,9 @@ async function textFromImage(file, onProgress) {
 export function BuyCartReceipt({ cart, canUpload, canEdit, canRemove, onChanged, onSignOut }) {
   // Rows ticked to come off the receipt, and why. Nothing moves until the button.
   const [ticked, setTicked] = useState(() => new Set());
+  // Reading a receipt that already has saved lines: the current lines open for editing and
+  // the ways to read it are offered. Nothing changes on the server until Save.
+  const [rereading, setRereading] = useState(false);
   const [removeWhy, setRemoveWhy] = useState('');
   const [text, setText] = useState('');
   const [rows, setRows] = useState(null);
@@ -178,6 +181,23 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, canRemove, onChanged,
   const approved = (cart.lines || []).filter((l) => l.status === 'approved');
   const diffs = compareReceiptToApproved(committed, approved);
   const removed = cart.removedReceiptLines || [];
+  // The same rules `cart/receipt` enforces, so nobody edits a list only to be refused at Save.
+  const whyNoReread = !['funded', 'receipted'].includes(cart.status)
+    ? 'This receipt has been audited, so it can’t be read again.'
+    : removed.length > 0 ? 'Put the removed shoes back to read this receipt again.'
+      : cart.po_id ? 'The order was raised from this receipt, so it can’t be read again. An auditor or approver can take off shoes that aren’t ours.'
+        : null;
+  // The lines were checked when they were saved, so they open ticked.
+  function startReread() {
+    setRows(committed.map((r) => ({
+      sku: r.sku || '', size: r.size || '', qty: r.qty, name: r.name || '',
+      unitPrice: r.unit_price, totalPrice: r.total_price, source: r.source || 'manual', ok: true,
+    })));
+    setStatedTotal(cart.receipt_total == null ? '' : String(cart.receipt_total));
+    setSubtotal(cart.receipt_subtotal == null ? '' : String(cart.receipt_subtotal));
+    setTax(cart.receipt_tax == null ? '' : String(cart.receipt_tax));
+    setNote(''); setErr(''); setEmailHit(null); setRereading(true);
+  }
   const printedTotal = cart.receipt_printed_total ?? cart.receipt_total;
   // Live preview, from the figures as printed: the same sum the server does.
   const preview = ticked.size > 0 ? receiptAfterRemoval({
@@ -256,7 +276,8 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, canRemove, onChanged,
       // Somebody who may attach evidence but not state what it says gets no review
       // table — reading a receipt they cannot commit would leave a filled-in form with
       // no button, which reads as broken rather than as "not your step".
-      if (!canEdit) return;
+      // The same for a receipt that can no longer be read again: the file is on the record.
+      if (!canEdit || (committed.length > 0 && whyNoReread)) return;
 
       if (file.type === 'application/pdf') {
         // A PDF already carries its text. Reading that beats looking at a picture of it,
@@ -386,7 +407,7 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, canRemove, onChanged,
         String(subtotal).trim() === '' ? null : Number(subtotal),
         String(tax).trim() === '' ? null : Number(tax),
       );
-      setRows(null); setText(''); setSubtotal(''); setTax(''); setEmailHit(null); setTxn('');
+      setRows(null); setRereading(false); setText(''); setSubtotal(''); setTax(''); setEmailHit(null); setTxn('');
       onChanged();
     } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
     finally { setBusy(''); }
@@ -541,18 +562,23 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, canRemove, onChanged,
               </ul>
             </div>
           )}
-          {canEdit && !removed.length && <button type="button" className="btn sm ghost" onClick={() => setRows([])}>Re-read the receipt</button>}
+          {canEdit && !whyNoReread && <button type="button" className="btn sm ghost" onClick={startReread}>Re-read the receipt</button>}
+          {canEdit && whyNoReread && <p className="muted sm">{whyNoReread}</p>}
         </>
       )}
 
       {/* Filed is not read. Finding the email files it straight away, but its lines live on the
           screen until someone ticks and saves them; until then the total is blank and the audit
           waits. So the way back is one tap, and it says why it is there. */}
-      {canEdit && !committed.length && !rows && filedEmail && (
+      {canEdit && ((!committed.length && !rows) || rereading) && filedEmail && (
         <div className="bc-filed-unread">
-          <p className="bc-till-warn">
-            <b>{filedEmail.name || 'The email'}</b> is on file, but its lines have not been saved. The audit needs them.
-          </p>
+          {rereading
+            ? <p className="muted sm"><b>{filedEmail.name || 'The email'}</b> is on file and can be read again.</p>
+            : (
+              <p className="bc-till-warn">
+                <b>{filedEmail.name || 'The email'}</b> is on file, but its lines have not been saved. The audit needs them.
+              </p>
+            )}
           <button type="button" className="btn primary" disabled={busy === 'filed'} onClick={() => readFiled(filedEmail)}>
             {busy === 'filed' ? 'Reading…' : 'Read this email'}
           </button>
@@ -560,7 +586,7 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, canRemove, onChanged,
         </div>
       )}
 
-      {canEdit && !committed.length && !rows && (
+      {canEdit && ((!committed.length && !rows) || rereading) && (
         <div className="bc-paste">
           {/* The number is on the email the shop sent, and so is the receipt — so ask
               for the number. Enter submits; on a phone that is the keyboard's Go. */}
@@ -583,6 +609,11 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, canRemove, onChanged,
       {/* The review step, and it is not optional. */}
       {rows && (
         <div className="bc-review">
+          {committed.length > 0 && (
+            <p className="bc-till-warn">
+              Saving replaces the {committed.length} saved row{committed.length === 1 ? '' : 's'} and the {money(cart.receipt_total)} total. Cancel keeps them.
+            </p>
+          )}
           {emailHit && (
             <p className="muted sm bc-email-hit">
               Read from the email <b>{emailHit.subject || '(no subject)'}</b>
@@ -666,7 +697,7 @@ export function BuyCartReceipt({ cart, canUpload, canEdit, canRemove, onChanged,
               title={uncheckedCount > 0 ? `Tick the ${uncheckedCount} unchecked row${uncheckedCount === 1 ? '' : 's'} first` : undefined}>
               {busy === 'save' ? 'Saving…' : uncheckedCount > 0 ? `Check ${uncheckedCount} more row${uncheckedCount === 1 ? '' : 's'} to save` : 'Save these lines'}
             </button>
-            <button type="button" className="btn ghost" onClick={() => { setRows(null); setEmailHit(null); }}>Cancel</button>
+            <button type="button" className="btn ghost" onClick={() => { setRows(null); setRereading(false); setEmailHit(null); setErr(''); }}>Cancel</button>
           </div>
         </div>
       )}

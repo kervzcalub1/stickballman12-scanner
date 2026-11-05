@@ -1531,6 +1531,163 @@ test.describe('what a pair from a request costs', () => {
   });
 });
 
+// ── The buyer's own cards at the till ────────────────────────────────────────────
+test.describe('cards and notes the auditor adds', () => {
+  const rows = [
+    { sku: LINE.sku, size: LINE.size, qty: 1, unitPrice: 100, totalPrice: 100, source: 'paste' },
+    { sku: 'THEIRS-1', size: '10', qty: 1, unitPrice: 100, totalPrice: 100, source: 'paste' },
+  ];
+  async function receipted(request) {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000008181', balance: 108.25 } });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
+    const saved = await call(request, 'buyer', 'cart/receipt', { cartId, receiptTotal: 216.5, subtotal: 200, tax: 16.5, lines: rows });
+    expect(saved.status).toBe(200);
+    return { cartId, company: saved.body.cart.giftCards[0], lines: saved.body.cart.receiptLines };
+  }
+  const extras = (request, who, cartId, data) => call(request, who, 'cart/audit-extras', { cartId, ...data });
+  const personal = { code: '6060100000000008282', spent: 108.25, remark: "Andrew's personal gift card" };
+  const spendCheck = (r) => r.body.checks.find((k) => k.key === 'spend_reconciled');
+
+  test('a personal card reconciles the receipt without touching what we funded', async ({ request }) => {
+    const { cartId, company } = await receipted(request);
+    const before = (await read_(request, 'auditor', `cart/get?id=${cartId}`)).body.cart;
+    expect(Number(before.balance_remaining)).toBe(-108.25);
+
+    const added = await extras(request, 'auditor', cartId, { action: 'add_card', card: personal });
+    expect(added.status).toBe(200);
+    const c = added.body.cart;
+    expect(Number(c.gc_total)).toBe(108.25);                     // still only ours
+    expect(Number(c.balance_remaining)).toBe(0);
+    const theirs = c.giftCards.find((g) => g.personal);
+    expect(theirs).toMatchObject({ code_last4: '8282', remark: personal.remark });
+    expect(Number(theirs.spent_amount)).toBe(108.25);
+    expect(Number(theirs.remaining)).toBe(0);
+    expect(JSON.stringify(c)).not.toContain('6060100000000008282');
+
+    const audited = await call(request, 'auditor', 'cart/audit', { cartId, cards: [
+      { id: company.id, spent: 108.25, remaining: 0 }, { id: theirs.id, spent: 108.25, remaining: 0 },
+    ] });
+    expect(audited.status).toBe(200);
+    expect(spendCheck(audited).ok).toBe(true);
+    expect((await pool.query(`SELECT body FROM buy_cart_events WHERE cart_id = $1 AND kind = 'gc_personal_added'`, [cartId])).rows[0].body)
+      .toMatch(/Personal card •••• 8282 · \$108\.25 spent · Andrew's personal gift card/);
+  });
+
+  test('taking the buyer’s rows off as well does not count the money twice', async ({ request }) => {
+    const { cartId, company, lines } = await receipted(request);
+    await extras(request, 'auditor', cartId, { action: 'add_card', card: personal });
+    const off = await call(request, 'auditor', 'cart/receipt-remove', { cartId, lineIds: [Number(lines[1].id)], reason: 'Buyer own purchase' });
+    expect(off.body.cart.receipt_total).toBe(108.25);
+    expect(Number(off.body.cart.balance_remaining)).toBe(0);
+    const theirs = off.body.cart.giftCards.find((g) => g.personal);
+    const audited = await call(request, 'auditor', 'cart/audit', { cartId, cards: [
+      { id: company.id, spent: 108.25, remaining: 0 }, { id: theirs.id, spent: 108.25, remaining: 0 },
+    ] });
+    expect(spendCheck(audited).ok).toBe(true);
+  });
+
+  test('just taking the rows off, with no personal card, still balances against the lower total', async ({ request }) => {
+    const { cartId, company, lines } = await receipted(request);
+    await call(request, 'auditor', 'cart/receipt-remove', { cartId, lineIds: [Number(lines[1].id)], reason: 'Buyer own purchase' });
+    const audited = await call(request, 'auditor', 'cart/audit', { cartId, cards: [{ id: company.id, spent: 108.25, remaining: 0 }] });
+    expect(spendCheck(audited).ok).toBe(true);
+  });
+
+  test('a card that doesn’t make up the difference leaves the gap showing', async ({ request }) => {
+    const { cartId, company } = await receipted(request);
+    const added = await extras(request, 'auditor', cartId, { action: 'add_card', card: { ...personal, spent: 50 } });
+    const theirs = added.body.cart.giftCards.find((g) => g.personal);
+    const audited = await call(request, 'auditor', 'cart/audit', { cartId, cards: [
+      { id: company.id, spent: 108.25, remaining: 0 }, { id: theirs.id, spent: 50, remaining: 0 },
+    ] });
+    expect(spendCheck(audited).ok).toBe(false);
+    expect(spendCheck(audited).detail).toMatch(/\$58\.25 gap/);
+  });
+
+  test('who may, and what a remark must say', async ({ request }) => {
+    const { cartId } = await receipted(request);
+    for (const who of ['buyer', 'bystander', 'issuer']) {
+      expect((await extras(request, who, cartId, { action: 'add_card', card: personal })).status, who).toBe(403);
+      expect((await extras(request, who, cartId, { action: 'note', note: 'hello there' })).status, who).toBe(403);
+    }
+    // Whoever approved it can't audit it, here as on the audit itself.
+    expect((await extras(request, 'approver', cartId, { action: 'note', note: 'hello there' })).status).toBe(403);
+    expect((await extras(request, 'auditor', cartId, { action: 'add_card', card: { ...personal, remark: '' } })).status).toBe(400);
+    expect((await extras(request, 'auditor', cartId, { action: 'add_card', card: { ...personal, spent: 0 } })).status).toBe(400);
+    expect((await extras(request, 'auditor', cartId, { action: 'add_card', card: { ...personal, code: '12' } })).status).toBe(400);
+    expect((await extras(request, 'auditor', cartId, { action: 'note', note: ' ' })).status).toBe(400);
+    // Before the receipt there is nothing to reconcile.
+    const early = await newRequest(request, { lines: [LINE] });
+    expect((await extras(request, 'auditor', early, { action: 'add_card', card: personal })).status).toBe(409);
+  });
+
+  test('the supplier sees no personal card or note; it stays out of Show code and the PDF', async ({ request }) => {
+    const { PDFDocument } = await import('pdf-lib');
+    const { cartId } = await receipted(request);
+    const added = await extras(request, 'auditor', cartId, { action: 'add_card', card: personal });
+    const theirs = added.body.cart.giftCards.find((g) => g.personal);
+    await extras(request, 'auditor', cartId, { action: 'note', note: 'Andrew confirmed these 10 pairs are his.' });
+
+    const buyer = await read_(request, 'buyer', `cart/get?id=${cartId}`);
+    const raw = JSON.stringify(buyer.body);
+    expect(buyer.body.cart.giftCards).toHaveLength(1);
+    for (const hidden of ['8282', 'personal gift card', 'Andrew confirmed']) expect(raw).not.toContain(hidden);
+
+    const staff = await read_(request, 'auditor', `cart/get?id=${cartId}`);
+    expect(staff.body.cart.events.find((e) => e.kind === 'audit_note').body).toContain('Andrew confirmed');
+
+    expect((await call(request, 'issuer', 'cart/gc-reveal', { cartId, gcId: theirs.id })).status).toBe(404);
+    const pdf = await request.get(`/api/cart/gift-cards-pdf?cartId=${cartId}`, { headers: { Authorization: `Bearer ${tokenFor(people.issuer)}` } });
+    expect((await PDFDocument.load(await pdf.body())).getPageCount()).toBe(1);
+
+    // Taken off by the auditor; the desk's cards can't be taken off this way.
+    const company = staff.body.cart.giftCards.find((g) => !g.personal);
+    expect((await extras(request, 'auditor', cartId, { action: 'remove_card', id: Number(company.id) })).status).toBe(404);
+    const gone = await extras(request, 'auditor', cartId, { action: 'remove_card', id: Number(theirs.id), reason: 'Wrong card' });
+    expect(gone.status).toBe(200);
+    expect(gone.body.cart.giftCards.find((g) => g.id === theirs.id).voided_at).toBeTruthy();
+    expect(Number(gone.body.cart.balance_remaining)).toBe(-108.25);
+  });
+
+  test('an unticked card is a company card the auditor found', async ({ request }) => {
+    const { cartId } = await receipted(request);
+    const r = await extras(request, 'auditor', cartId, { action: 'add_card', card: { ...personal, personal: false, remark: 'Found in the desk pile' } });
+    expect(Number(r.body.cart.gc_total)).toBe(216.5);
+  });
+
+  test('on screen: the auditor adds the card and a note, and the audit balances', async ({ page, request }) => {
+    const { cartId } = await receipted(request);
+    await as(page, 'auditor');
+    await page.goto(`/buy-carts?request=${cartId}`);
+    const audit = page.locator('.bc-audit');
+    await expect(audit).toContainText('$216.50');
+    await audit.getByRole('button', { name: 'Add a card with a remark' }).click();
+    await audit.getByLabel('Card number').fill('6060100000000008282');
+    await audit.locator('.bc-audit-card-form .ph-price').fill('108.25');
+    await audit.getByLabel('Remark').fill("Andrew's personal gift card");
+    await audit.getByRole('button', { name: 'Add the card' }).click();
+    const row = audit.locator('.bc-audit-list li', { hasText: '8282' });
+    await expect(row).toContainText('Personal');
+    await expect(row).toContainText("Andrew's personal gift card");
+    await audit.locator('.bc-audit-list li', { hasNotText: '8282' }).locator('.ph-price').first().fill('108.25');
+    await audit.locator('.bc-audit-list li', { hasNotText: '8282' }).locator('.ph-price').nth(1).fill('0');
+    await expect(audit.locator('.bc-audit-foot')).toContainText('($108.25 on personal cards)');
+    await expect(audit.locator('.bc-audit-foot')).toContainText('balanced');
+    await expect(audit).toContainText('still on the receipt and the order');
+    await audit.getByRole('button', { name: 'Record the audit' }).click();
+    await expect(audit.locator('.bc-audit-saved')).toBeVisible();
+
+    await audit.getByLabel('Audit note').fill('Andrew confirmed these 10 pairs are his.');
+    await audit.getByRole('button', { name: 'Add note' }).click();
+    await expect(audit.locator('.bc-audit-notes li')).toContainText('Andrew confirmed');
+    await expect(audit.locator('.bc-audit-notes li')).toContainText('E2E Auditor');
+    // Not one of the desk's cards.
+    await expect(page.locator('#bc-sec-cards')).not.toContainText('8282');
+  });
+});
+
 test.describe('what we already hold', () => {
   test.beforeAll(async ({ request }) => {
     const b = (await pool.query(

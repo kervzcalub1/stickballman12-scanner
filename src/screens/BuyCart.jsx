@@ -24,7 +24,7 @@ import { BuyCartTasks } from '../components/BuyCartTasks.jsx';
 import { estDate, estTime, PH_DATE, estClock } from '../lib/format.js';
 import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
-import { fundingBreakdown, LIST_ADDABLE, decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep } from '../lib/buycartRules.js';
+import { auditTarget, fundingBreakdown, LIST_ADDABLE, decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep } from '../lib/buycartRules.js';
 import { NudgeButton } from '../components/NudgeButton.jsx';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
@@ -898,20 +898,58 @@ function Audit({ cart, onChanged, onSignOut }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [saved, setSaved] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [newCard, setNewCard] = useState({ code: '', spent: '', remark: '', personal: true });
+  const [note, setNote] = useState('');
+  const notes = (cart.events || []).filter((e) => e.kind === 'audit_note');
 
-  const spentSum = cards.reduce((n, c) => n + (Number(vals[c.id]?.spent) || 0), 0);
+  // A card added since this panel opened has no typed figures yet, so it shows what's on file.
+  const valOf = (c, k) => {
+    const typed = vals[c.id]?.[k];
+    if (typed !== undefined) return typed;
+    const v = k === 'spent' ? c.spent_amount : c.remaining;
+    return v != null ? String(v) : '';
+  };
+  const spentSum = cards.reduce((n, c) => n + (Number(valOf(c, 'spent')) || 0), 0);
+  const personalSum = cards.filter((c) => c.personal).reduce((n, c) => n + (Number(valOf(c, 'spent')) || 0), 0);
   // No total is not a $0 receipt: blank cards against it used to read "balanced".
   const notRead = cart.receipt_total == null;
-  const receipt = Number(cart.receipt_total) || 0;
+  const { target, usesPrinted } = auditTarget(cart);
+  const receipt = Number(target) || 0;
   const gap = Math.round((spentSum - receipt) * 100) / 100;
 
   const set = (id, k, v) => setVals((s) => ({ ...s, [id]: { ...s[id], [k]: v } }));
+
+  async function addCard(e) {
+    e.preventDefault();
+    setBusy(true); setErr('');
+    try {
+      await api.cartAuditAddCard(cart.id, { ...newCard, spent: Number(newCard.spent) });
+      setNewCard({ code: '', spent: '', remark: '', personal: true });
+      setAdding(false);
+      onChanged();
+    } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(false); }
+  }
+  async function removeCard(c) {
+    setBusy(true); setErr('');
+    try { await api.cartAuditRemoveCard(cart.id, Number(c.id)); onChanged(); }
+    catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(false); }
+  }
+  async function addNote(e) {
+    e.preventDefault();
+    setBusy(true); setErr('');
+    try { await api.cartAuditNote(cart.id, note.trim()); setNote(''); onChanged(); }
+    catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(false); }
+  }
 
   async function save() {
     setBusy(true); setErr('');
     try {
       await api.cartAudit(cart.id, cards.map((c) => ({
-        id: Number(c.id), spent: Number(vals[c.id]?.spent), remaining: Number(vals[c.id]?.remaining),
+        id: Number(c.id), spent: Number(valOf(c, 'spent')), remaining: Number(valOf(c, 'remaining')),
       })));
       setSaved(true);
       onChanged();
@@ -927,7 +965,7 @@ function Audit({ cart, onChanged, onSignOut }) {
     <section className="card bc-audit">
       <h3 className="bc-h">Financial audit</h3>
       <p className="muted sm">
-        Cards issued {money(cart.gc_total)} → receipt {notRead ? 'not read in yet' : money(receipt)}. Say what each card was
+        Cards issued {money(cart.gc_total)} → receipt {notRead ? 'not read in yet' : `${money(receipt)}${usesPrinted && cart.receipt_printed_total != null ? ' as printed' : ''}`}. Say what each card was
         actually spent and what is left sitting on it.
       </p>
       {/* SAYS IT WAS RECORDED. Pressing the button used to save and then re-render the
@@ -952,20 +990,47 @@ function Audit({ cart, onChanged, onSignOut }) {
         {cards.map((c) => (
           <li key={c.id}>
             <span className="bc-gc-num">•••• {c.code_last4}</span>
-            <span className="muted sm">{money(c.balance)} issued</span>
+            {c.personal && <span className="po-chip bc-personal">Personal</span>}
+            <span className="muted sm">{c.remark ? c.remark : `${money(c.balance)} issued`}</span>
+            {c.personal && <button type="button" className="btn sm ghost" disabled={busy} onClick={() => removeCard(c)}>Remove</button>}
             <label className="field"><span className="field-label">Spent</span>
-              <PriceInput value={vals[c.id]?.spent ?? ''} onChange={(e) => set(c.id, 'spent', e.target.value)} /></label>
+              <PriceInput value={valOf(c, 'spent')} onChange={(e) => set(c.id, 'spent', e.target.value)} /></label>
             <label className="field"><span className="field-label">Left on it</span>
-              <PriceInput value={vals[c.id]?.remaining ?? ''} onChange={(e) => set(c.id, 'remaining', e.target.value)} /></label>
+              <PriceInput value={valOf(c, 'remaining')} onChange={(e) => set(c.id, 'remaining', e.target.value)} /></label>
           </li>
         ))}
       </ul>
+      {!adding && !notRead && (
+        <button type="button" className="btn sm ghost bc-audit-add" onClick={() => setAdding(true)}>Add a card with a remark</button>
+      )}
+      {adding && (
+        <form className="bc-audit-card-form" onSubmit={addCard}>
+          <label className="field"><span className="field-label">Card number <span className="muted xs">· or its last 4</span></span>
+            <input className="input" value={newCard.code} autoComplete="off" onChange={(e) => setNewCard((n) => ({ ...n, code: e.target.value }))} /></label>
+          <label className="field"><span className="field-label">Paid at the till</span>
+            <PriceInput value={newCard.spent} onChange={(e) => setNewCard((n) => ({ ...n, spent: e.target.value }))} /></label>
+          <label className="field bc-audit-remark"><span className="field-label">Remark</span>
+            <input className="input" value={newCard.remark} maxLength={300} placeholder={`e.g. ${cart.buyer_name || 'the buyer'}'s personal gift card`}
+              onChange={(e) => setNewCard((n) => ({ ...n, remark: e.target.value }))} /></label>
+          <label className="bc-check">
+            <input type="checkbox" checked={newCard.personal} onChange={(e) => setNewCard((n) => ({ ...n, personal: e.target.checked }))} />
+            <span>Personal card, not company money</span>
+          </label>
+          <span className="bc-audit-card-actions">
+            <button type="submit" className="btn sm primary" disabled={busy || !newCard.code.trim() || !(Number(newCard.spent) > 0) || newCard.remark.trim().length < 3}>Add the card</button>
+            <button type="button" className="btn sm ghost" onClick={() => setAdding(false)}>Cancel</button>
+          </span>
+        </form>
+      )}
+      {personalSum > 0 && !(cart.removedReceiptLines || []).length && (
+        <p className="muted sm">The buyer’s own shoes are still on the receipt and the order. Take them off in the Receipt section so we don’t expect them.</p>
+      )}
       <div className="bc-audit-foot">
         {notRead ? (
           <span className="bc-short">The receipt’s lines have not been saved, so there is no total to audit against. Read it in above first.</span>
         ) : (
           <span className={Math.abs(gap) > 0.01 ? 'bc-short' : 'bc-covered'}>
-            Cards account for {money(spentSum)} against a {money(receipt)} receipt
+            Cards account for {money(spentSum)}{personalSum > 0 ? ` (${money(personalSum)} on personal cards)` : ''} against a {money(receipt)} receipt
             {Math.abs(gap) > 0.01 ? ` — a ${money(Math.abs(gap))} gap` : ' — balanced'}
           </span>
         )}
@@ -975,6 +1040,25 @@ function Audit({ cart, onChanged, onSignOut }) {
       </div>
       {saved && !err && <p className="bc-audit-saved">Saved — the figures above are what is on the record now.</p>}
       {err && <div className="error mt">{err}</div>}
+
+      <div className="bc-audit-notes">
+        <h4 className="bc-h">Audit notes <span className="muted sm">· for the record, not shown to the buyer</span></h4>
+        {notes.length > 0 && (
+          <ul>
+            {notes.map((n) => (
+              <li key={n.id}>
+                <div>{n.body}</div>
+                <div className="muted xs">{n.actor_name || 'Someone'} · {estDate(n.created_at)} {estTime(n.created_at)} EST</div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <form onSubmit={addNote}>
+          <textarea className="input" rows={2} value={note} maxLength={2000} aria-label="Audit note" placeholder="What happened, and what was agreed"
+            onChange={(e) => setNote(e.target.value)} />
+          <button type="submit" className="btn sm" disabled={busy || note.trim().length < 3}>Add note</button>
+        </form>
+      </div>
     </section>
   );
 }

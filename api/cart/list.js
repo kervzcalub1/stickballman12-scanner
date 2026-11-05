@@ -4,7 +4,7 @@
 // own requests off the token — never off a query parameter, which would turn one
 // buyer's spending history into a URL anybody could edit.
 import { send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
-import { requireBuyerAccess } from '../_lib/buycart.js';
+import { requireBuyerAccess, redactCartForViewer } from '../_lib/buycart.js';
 import { listBuyCarts, listBuyCartBuyers, buyCartPendingCounts, dbConfigured } from '../_lib/db.js';
 
 const STATUSES = ['draft', 'submitted', 'approved', 'denied', 'funded', 'receipted', 'audited', 'closed', 'cancelled', 'written_off'];
@@ -37,7 +37,12 @@ export default async function handler(req, res) {
   const buyerId = !isBuyer && Number.isInteger(buyerParam) && buyerParam > 0 ? buyerParam : null;
 
   try {
-    const carts = await listBuyCarts({ buyerUserId, status, buyerId, view });
+    // Every row goes through the same redaction as `cart/get`: `listBuyCarts` selects
+    // `c.*`, which includes the cost stack (discounts, cashback, tip, shipping). A buyer's
+    // row keeps `funding_tax_pct` / `funding_target` for the Needed column; the stack never
+    // leaves the server for them. A no-op for staff.
+    const carts = (await listBuyCarts({ buyerUserId, status, buyerId, view }))
+      .map((c) => redactCartForViewer(c, user));
     // Desk counts are a staff thing — a buyer has no queue to hold up.
     const counts = isBuyer ? null : await buyCartPendingCounts();
     // The dropdown's options come from the whole table, not from the page above: the

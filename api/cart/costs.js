@@ -65,7 +65,7 @@ export default async function handler(req, res) {
       `${note || 'Cost stack set'}${calls.length ? ` — ${calls.length} line${calls.length === 1 ? '' : 's'} re-priced` : ''}`);
     if (!cart) return send(res, 404, { ok: false, error: 'That buying request does not exist.' });
     notifyIssuersIfReady(cartId);   // a corrected tax is a new amount to fund; said once per amount
-    return send(res, 200, { ok: true, cart, repriced: calls.length });
+    return send(res, 200, { ok: true, cart: redactCartForViewer(cart, user), repriced: calls.length });
   } catch (e) {
     console.error('[cart/costs]', e.message);
     return send(res, 500, { ok: false, error: 'Could not save those costs.' });

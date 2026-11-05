@@ -7,7 +7,7 @@
 // every verdict on the request is computed against that frozen copy. A preset edited
 // next week must not restate what an approver was looking at when they said yes.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
-import { requireBuyerAccess } from '../_lib/buycart.js';
+import { requireBuyerAccess, redactCartForViewer } from '../_lib/buycart.js';
 import { createBuyCart, listPayoutPresets, listSupplierUsers, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
@@ -66,7 +66,7 @@ export default async function handler(req, res) {
       costStack,
       actor: user,
     });
-    return send(res, 200, { ok: true, cart });
+    return send(res, 200, { ok: true, cart: redactCartForViewer(cart, user) });
   } catch (e) {
     console.error('[cart/create]', e.message);
     return send(res, 500, { ok: false, error: 'Could not open that buying request.' });

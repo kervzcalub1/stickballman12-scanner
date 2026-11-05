@@ -194,6 +194,30 @@ function LineCall({ line, stack, onPrice, canPrice, busy }) {
 // answer rather than a shortcut. The bytes are PROXIED like every other file here — the
 // bucket never serves one by URL — so this fetches with the session token and turns it
 // into an object URL, revoked when the row unmounts.
+// One fetch per photo, however many rows show it: every size of a shoe shows the same picture,
+// and a run of twenty sizes used to fetch the full-size file twenty times at once, which is how
+// a photo that was there could sit on "photo…" or fail until a refresh. A failure retries.
+const shotUrls = new Map();
+function shotUrl(cartId, fileId) {
+  if (!shotUrls.has(fileId)) {
+    const load = async () => {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          const { blob } = await api.cartFileBlob(cartId, fileId, 'shoe');
+          return URL.createObjectURL(blob);
+        } catch (e) {
+          if (e?.unauthorized || attempt >= 2) throw e;
+          await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+        }
+      }
+    };
+    const p = load();
+    shotUrls.set(fileId, p);
+    p.catch(() => shotUrls.delete(fileId));   // so the next look tries again
+  }
+  return shotUrls.get(fileId);
+}
+
 function ShoeShots({ cart, sku, onSignOut }) {
   const shots = (cart.files || []).filter((f) => f.kind === 'shoe'
     && String(f.sku || '').toUpperCase() === String(sku || '').toUpperCase());
@@ -206,20 +230,16 @@ function ShoeShots({ cart, sku, onSignOut }) {
   const first = shots[0];
 
   useEffect(() => {
-    let dead = false; let made = '';
+    let dead = false;
     setUrl(''); setFailed(false);
     if (!first) return undefined;
-    // `{ blob, filename }`, NOT a bare Blob — `downloadBlob` unwraps the filename out of
-    // Content-Disposition for the save-to-disk callers. Passing the wrapper straight to
-    // createObjectURL throws, which my own catch then reported as "photo failed" on a
-    // photo that had uploaded and fetched perfectly.
-    api.cartFileBlob(cart.id, first.id, 'shoe')
-      .then(({ blob }) => { if (dead) return; made = URL.createObjectURL(blob); setUrl(made); })
+    shotUrl(cart.id, first.id)
+      .then((u) => { if (!dead) setUrl(u); })
       .catch((e) => {
         if (e?.unauthorized) return onSignOut?.();
         if (!dead) setFailed(true);
       });
-    return () => { dead = true; if (made) URL.revokeObjectURL(made); };
+    return () => { dead = true; };
   }, [cart.id, first?.id]);
 
   if (!shots.length) return <span className="bc-shot-none">no photo</span>;

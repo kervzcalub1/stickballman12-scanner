@@ -15,7 +15,7 @@
 // receipt is the evidence half of the money.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import {
-  getBuyCart, getBuyCartFile, deleteBuyCartFile, getBuyCartFull, logCartEvent, dbConfigured,
+  getBuyCart, getBuyCartFile, deleteBuyCartFile, getBuyCartFull, logCartEvent, dbConfigured, isLastPhotoOfLiveShoe,
 } from '../_lib/db.js';
 import { hasCostPrivilege, cartVisibleTo, actorKey, redactCartForViewer, requireBuyerAccess } from '../_lib/buycart.js';
 import { deleteObject, r2Configured } from '../_lib/r2.js';
@@ -54,6 +54,10 @@ export default async function handler(req, res) {
     const desk = isPrivileged(user.role) || await hasCostPrivilege(user);
     if (!mine && !desk)
       return send(res, 403, { ok: false, error: 'Only whoever uploaded this, or a buying desk, can remove it.' });
+
+    // A request can't lose the only picture of a shoe still in play. Add another first.
+    if (file.kind === 'shoe' && await isLastPhotoOfLiveShoe(cartId, file))
+      return send(res, 409, { ok: false, error: `That is the only photo of ${file.sku}. Add another first — the desk decides on it.` });
 
     // Written FIRST, and it names the file. Once the object is gone this row is the only
     // thing that says it was ever here.

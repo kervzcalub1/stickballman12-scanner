@@ -2590,6 +2590,51 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
 
   // A buyer's own PREMIUM group (users.premium_chat_id — "Andrew's Premium Shoes", 2026-11-04):
   // their premium cards go there, the rest stays in the main group, and the group is answered.
+  test('a card too long to be a caption still gets its picture: photo first, then the card with its buttons', async ({ request }) => {
+    test.skip(!process.env.R2_ACCOUNT_ID, 'needs real storage to hold a real photo');
+    const sharp = (await import('sharp')).default;
+    const jpeg = await sharp({ create: { width: 40, height: 40, channels: 3, background: '#336' } }).jpeg().toBuffer();
+    const { sendApprovalCard } = await import('../api/_lib/telegram.js');
+    const cartId = await newRequest(request, { submit: false, lines: [] });
+    const signed = await call(request, 'buyer', 'cart/file-sign', { cartId, kind: 'shoe', contentType: 'image/jpeg', sku: LINE.sku });
+    expect((await fetch(signed.body.uploadUrl, { method: 'PUT', body: jpeg })).ok).toBe(true);
+    const attached = await call(request, 'buyer', 'cart/file-attach', { cartId, kind: 'shoe', key: signed.body.key, sku: LINE.sku, name: 's.jpg', contentType: 'image/jpeg', sizeBytes: jpeg.length });
+    expect(attached.status).toBe(200);
+    const keep = { ...process.env };
+    process.env.TELEGRAM_BOT_TOKEN = 'test'; process.env.TELEGRAM_CHAT_ID = String(CHAT); process.env.TELEGRAM_API_BASE = 'http://127.0.0.1:5198';
+    const t0 = calls.length;
+    try {
+      const msg = await sendApprovalCard({ caption: 'x'.repeat(1500), keyboard: { inline_keyboard: [] }, photoFileId: Number(attached.body.file.id), chatId: CHAT });
+      const sent = since(t0).filter((c) => ['sendPhoto', 'sendMessage'].includes(c.method));
+      expect(sent.map((c) => c.method)).toEqual(['sendPhoto', 'sendMessage']);
+      expect(sent[1].body.text).toBe('x'.repeat(1500));     // no "unavailable" warning
+      expect(sent[1].body.reply_markup).toBeTruthy();
+      expect(msg.message_id).toBeTruthy();                  // what replies attach to
+    } finally {
+      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE']) {
+        if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k];
+      }
+      await call(request, 'approver', 'cart/file-delete', { cartId, fileId: Number(attached.body.file.id) });
+    }
+  });
+
+  test('a long card whose photo cannot be read says so, and still goes', async ({ request }) => {
+    const { sendApprovalCard } = await import('../api/_lib/telegram.js');
+    const keep = { ...process.env };
+    process.env.TELEGRAM_BOT_TOKEN = 'test'; process.env.TELEGRAM_CHAT_ID = String(CHAT); process.env.TELEGRAM_API_BASE = 'http://127.0.0.1:5198';
+    const t0 = calls.length;
+    try {
+      await sendApprovalCard({ caption: 'y'.repeat(1500), keyboard: { inline_keyboard: [] }, photoFileId: 999999999, chatId: CHAT });
+      const sent = since(t0).filter((c) => ['sendPhoto', 'sendMessage'].includes(c.method));
+      expect(sent.map((c) => c.method)).toEqual(['sendMessage']);
+      expect(sent[0].body.text).toMatch(/^⚠️ Photo unavailable/);
+    } finally {
+      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE']) {
+        if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k];
+      }
+    }
+  });
+
   test('a buyer’s premium group gets their PREMIUM cards; replies there count; the rest stays in the main group', async ({ request }) => {
     const PREMIUM_CHAT = -1007770001;
     const H = () => ({ Authorization: `Bearer ${signToken({ uid: 'admin', username: 'admin', name: 'Admin', role: 'admin' })}` });
@@ -3011,6 +3056,82 @@ test.describe('reading a supplier paste and an approver reply', () => {
     expect(out.approve.map((a) => [a.line.id, a.qty])).toEqual([[1, 2]]);
     expect(parseApprovalReply('9 x 2', [{ id: 1, size: '9' }, { id: 2, size: '9W' }]).approve.map((a) => a.line.id)).toEqual([1]);
     expect(parseApprovalReply('9 x 2', [{ id: 1, size: '9' }, { id: 2, size: '9' }]).ok).toBe(false);
+  });
+});
+
+// ── A shoe photo is required ─────────────────────────────────────────────────────
+test.describe('a shoe photo is required', () => {
+  test('the buyer cannot add a shoe with no photo, even with a size and a price', async ({ request }) => {
+    const cartId = await newRequest(request, { submit: false, lines: [] });
+    const r = await call(request, 'buyer', 'cart/line', { cartId, line: LINE });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/Add a photo/);
+    expect((await read_(request, 'buyer', `cart/get?id=${cartId}`)).body.cart.lines).toHaveLength(0);
+  });
+
+  test('a shoe with no photo cannot be approved, one at a time or all at once, and can once it has one', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const lineId = Number((await pool.query(
+      `INSERT INTO buy_cart_lines (cart_id, sku, size, shelf_price) VALUES ($1, 'NO-PHOTO-1', '9', 50) RETURNING id`, [cartId])).rows[0].id);
+    const one = await call(request, 'approver', 'cart/decide', { cartId, lineIds: [lineId], action: 'approve', qtyAll: 1 });
+    expect(one.status).toBe(409);
+    expect(one.body.error).toMatch(/No photo of NO-PHOTO-1/);
+    const all = await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: 1 });
+    expect(all.status).toBe(409);
+    // Turning it down needs no picture.
+    await shoePhotos(cartId, ['NO-PHOTO-1']);
+    expect((await call(request, 'approver', 'cart/decide', { cartId, lineIds: [lineId], action: 'approve', qtyAll: 1 })).status).toBe(200);
+  });
+
+  test('a shoe with no photo can still be turned down', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const lineId = Number((await pool.query(
+      `INSERT INTO buy_cart_lines (cart_id, sku, size, shelf_price) VALUES ($1, 'NO-PHOTO-2', '9', 50) RETURNING id`, [cartId])).rows[0].id);
+    const r = await call(request, 'approver', 'cart/decide', { cartId, lineIds: [lineId], action: 'reject', reason: 'no' });
+    expect(r.status).toBe(200);
+  });
+
+  test('on screen: ten rows of one shoe fetch its photo once, and a failed fetch retries', async ({ page, request }) => {
+    const sizes = ['7', '7.5', '8', '8.5', '9', '9.5', '10', '10.5', '11', '11.5'];
+    const cartId = await newRequest(request, { lines: sizes.map((size) => ({ ...LINE, size, qty: null })) });
+    let hits = 0;
+    await page.route('**/api/cart/file?**', async (route) => {
+      hits += 1;
+      if (hits === 1) return route.fulfill({ status: 500, contentType: 'application/json', body: '{"ok":false,"error":"blip"}' });
+      const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+      return route.fulfill({ status: 200, contentType: 'image/png', body: png });
+    });
+    await as(page, 'approver');
+    await page.goto(`/buy-carts?request=${cartId}`);
+    await expect(page.locator('img.bc-shot-thumb').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.bc-shot-bad')).toHaveCount(0);
+    expect(hits).toBe(2);   // the failure and its one retry, not one per row
+  });
+
+  test('the only photo of a live shoe cannot be removed; a spare can', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    const files = async () => (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.files.filter((f) => f.kind === 'shoe');
+    const [only] = await files();
+    const refused = await call(request, 'approver', 'cart/file-delete', { cartId, fileId: Number(only.id) });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/only photo/);
+    await shoePhotos(cartId, [LINE.sku]);
+    expect((await files()).length).toBe(2);
+    const second = (await files())[1];
+    const removed = await call(request, 'approver', 'cart/file-delete', { cartId, fileId: Number(second.id) });
+    expect(removed.status).not.toBe(409);
+  });
+
+  test('a photo has to be a picture the desk can open, judged by its bytes', async () => {
+    const { shoePhotoProblem } = await import('../api/cart/file-attach.js');
+    const pad = Buffer.alloc(32);
+    expect(shoePhotoProblem(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), pad]))).toBeNull();
+    expect(shoePhotoProblem(Buffer.concat([Buffer.from('\x89PNG\r\n\x1a\n', 'latin1'), pad]))).toBeNull();
+    expect(shoePhotoProblem(Buffer.concat([Buffer.from('RIFF0000WEBP'), pad]))).toBeNull();
+    const heic = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypheic0000heicmif1'), pad]);
+    expect(shoePhotoProblem(heic)).toMatch(/HEIC/);
+    expect(shoePhotoProblem(Buffer.from('this is not a picture of a shoe at all'))).toMatch(/isn’t a photo/);
+    expect(shoePhotoProblem(Buffer.alloc(0))).toMatch(/isn’t a photo/);
   });
 });
 

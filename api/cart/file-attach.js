@@ -3,7 +3,18 @@
 // Records a file this server minted a key for, after the client has PUT the bytes.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getBuyCart, addBuyCartFile, dbConfigured } from '../_lib/db.js';
+import { getObject, deleteObject } from '../_lib/r2.js';
+import { sniffImageFormat } from '../_lib/imgformat.js';
 import { hasPrivilege, requireBuyerAccess } from '../_lib/buycart.js';
+
+// What's wrong with a shoe photo, by its bytes rather than the type the browser claimed, or
+// null. HEIC is refused because browsers can't show it and the Telegram card can't resize it.
+export function shoePhotoProblem(buf) {
+  const format = sniffImageFormat(buf);
+  if (format === 'heic') return 'This photo is in HEIC format, which the desk can’t open. Take it with the camera here, or save it as a JPEG.';
+  if (!['jpeg', 'png', 'webp'].includes(format)) return 'That file isn’t a photo the desk can open. Take it again.';
+  return null;
+}
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -44,6 +55,18 @@ export default async function handler(req, res) {
     // request's file.
     const re = new RegExp(`^buy-carts/${cart.cart_code}/(gift_card|receipt|shoe)-\\d+\\.(jpg|png|webp|heic|pdf|csv)$`);
     if (!re.test(key) || (/\.csv$/.test(key) && kind !== 'gift_card')) return send(res, 400, { ok: false, error: 'Invalid file key.' });
+
+    if (kind === 'shoe') {
+      if (!sku) return send(res, 400, { ok: false, error: 'Which shoe is this a photo of?' });
+      // A row isn't a photo: the desk has to be able to open it. Read what actually landed.
+      let problem;
+      try { problem = shoePhotoProblem(await getObject(key)); }
+      catch { problem = 'The photo did not reach storage. Take it again.'; }
+      if (problem) {
+        await deleteObject(key).catch(() => {});
+        return send(res, 400, { ok: false, error: problem });
+      }
+    }
 
     const file = await addBuyCartFile({
       cartId, kind, key, sku,

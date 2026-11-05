@@ -8500,6 +8500,34 @@ export async function skusWithoutPhotos(cartId) {
   return rows.map((r) => r.sku);
 }
 
+// Lines about to be approved whose shoe has no photo. `lineIds` null = every line still open.
+export async function linesWithoutPhotos(cartId, lineIds = null) {
+  const sql = db();
+  const rows = lineIds
+    ? await sql`SELECT DISTINCT l.sku FROM buy_cart_lines l
+         WHERE l.cart_id = ${cartId} AND l.id = ANY(${lineIds.map(Number)}::bigint[])
+           AND NOT EXISTS (SELECT 1 FROM buy_cart_files f WHERE f.cart_id = l.cart_id AND f.kind = 'shoe'
+                            AND upper(btrim(f.sku)) = upper(btrim(l.sku)))
+         ORDER BY l.sku`
+    : await sql`SELECT DISTINCT l.sku FROM buy_cart_lines l
+         WHERE l.cart_id = ${cartId} AND l.status = 'pending'
+           AND NOT EXISTS (SELECT 1 FROM buy_cart_files f WHERE f.cart_id = l.cart_id AND f.kind = 'shoe'
+                            AND upper(btrim(f.sku)) = upper(btrim(l.sku)))
+         ORDER BY l.sku`;
+  return rows.map((r) => r.sku);
+}
+
+// Removing this photo would leave a shoe still in play with none.
+export async function isLastPhotoOfLiveShoe(cartId, file) {
+  const sql = db();
+  const others = await sql`SELECT 1 FROM buy_cart_files WHERE cart_id = ${cartId} AND kind = 'shoe' AND id <> ${file.id}
+      AND upper(btrim(sku)) = upper(btrim(${String(file.sku || '')})) LIMIT 1`;
+  if (others.length) return false;
+  const live = await sql`SELECT 1 FROM buy_cart_lines WHERE cart_id = ${cartId} AND status NOT IN ('rejected', 'skipped')
+      AND upper(btrim(sku)) = upper(btrim(${String(file.sku || '')})) LIMIT 1`;
+  return live.length > 0;
+}
+
 // Which of the lines about to be approved still have no quantity — theirs, or one the
 // caller supplied. Returned as rows so the refusal can NAME the pairs rather than saying
 // a number is missing somewhere on a twelve-line request.

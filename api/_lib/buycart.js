@@ -6,7 +6,7 @@
 // `cart/close` re-evaluates them server-side, so a person is never told they can close
 // something the server will refuse.
 import { send, requireAuth, isPrivileged, blockIfMustChange } from './util.js';
-import { getPoReconciliation, userHasPrivilege, decideBuyCartLines, linesAwaitingQty, decideBuyCartTip, getBuyCartLine } from './db.js';
+import { getPoReconciliation, userHasPrivilege, decideBuyCartLines, linesAwaitingQty, linesWithoutPhotos, decideBuyCartTip, getBuyCartLine } from './db.js';
 import { calcCostBreakdown, calcPayout, dealVerdict, DEFAULT_FEE_PCT } from '../../src/lib/payout.js';
 import { decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, fundingWords } from '../../src/lib/buycartRules.js';
 import { alertLinesDecided } from './alerts.js';
@@ -383,6 +383,14 @@ export async function decideLines({ cart, action, lineIds, all, qtyById, qtyAll,
   // happened to be in the column, and "we approved one of those" is not a thing anybody
   // said. A rejection needs no quantity — there is nothing to buy.
   if (action === 'approve') {
+    // Nothing is approved unseen, however the line got here. The add and the close already
+    // ask for a photo; this also covers a line a desk added and one from before those rules.
+    const unseen = await linesWithoutPhotos(cart.id, all ? null : lineIds);
+    if (unseen.length)
+      return {
+        code: 409,
+        error: `No photo of ${unseen.slice(0, 4).join(', ')}${unseen.length > 4 ? ` and ${unseen.length - 4} more` : ''} yet, so it can’t be approved. ${cart.buyer_name || 'The buyer'} has to add one on the request first.`,
+      };
     const missing = await linesAwaitingQty(cart.id, all ? null : lineIds, qtyById, qtyAll);
     if (missing.length)
       return {

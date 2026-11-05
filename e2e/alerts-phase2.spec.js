@@ -112,6 +112,9 @@ async function newCart(lines) {
     ids.push(Number((await pool.query(
       `INSERT INTO buy_cart_lines (cart_id, sku, size, shelf_price) VALUES ($1,$2,$3,50) RETURNING id`,
       [cartId, l.sku, l.size])).rows[0].id));
+    await pool.query(
+      `INSERT INTO buy_cart_files (cart_id, kind, sku, r2_key, name, content_type) VALUES ($1, 'shoe', $2, $3, 's.jpg', 'image/jpeg')`,
+      [cartId, l.sku, `buy-carts/e2e/${cartId}-${ids.length}-shoe.jpg`]);
   }
   const code = (await pool.query('SELECT cart_code FROM buy_carts WHERE id = $1', [cartId])).rows[0].cart_code;
   return { cartId, ids, code };

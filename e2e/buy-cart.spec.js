@@ -2660,6 +2660,134 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     expect(miss.error).toMatch(/Couldn't read/);
   });
 
+  test('the card says what is approved, bought or on its way but not in the warehouse yet', async ({ request }) => {
+    const sku = `NH${Date.now() % 1e7}-001`;
+    const shoe = { ...LINE, sku };
+    const first = await newRequest(request, { lines: [{ ...shoe, size: '8' }, { ...shoe, size: '9' }, { ...shoe, size: '11' }] });
+    const firstLines = (await read_(request, 'approver', `cart/get?id=${first}`)).body.cart.lines;
+    const bySize = Object.fromEntries(firstLines.map((l) => [l.size, Number(l.id)]));
+    await call(request, 'approver', 'cart/decide', { cartId: first, lineIds: [bySize[8], bySize[9]], action: 'approve', qty: { [bySize[8]]: 2, [bySize[9]]: 2 } });
+    await call(request, 'approver', 'cart/decide', { cartId: first, lineIds: [bySize[11]], action: 'reject', reason: 'E2E' });
+
+    // An order with one box on its way, one still being packed, and one already received.
+    const po = Number((await pool.query(`INSERT INTO purchase_orders (supplier_name, status) VALUES ('E2E Not Here', 'shipped') RETURNING id`)).rows[0].id);
+    const box = async (n, status) => Number((await pool.query(`INSERT INTO po_boxes (po_id, box_number, tracking_number, status) VALUES ($1,$2,$3,$4) RETURNING id`, [po, n, `NH${po}B${n}`, status])).rows[0].id);
+    const lineIn = (boxId, size, qty) => pool.query(`INSERT INTO po_lines (po_id, po_box_id, sku, size, qty_expected) VALUES ($1,$2,$3,$4,$5)`, [po, boxId, sku, size, qty]);
+    await lineIn(await box(1, 'in_transit'), '8', 1);
+    await lineIn(await box(2, 'pending'), '10', 1);
+    await lineIn(await box(3, 'delivered'), '12', 1);
+    const batch = Number((await pool.query(`INSERT INTO batches (batch_code, supplier_name, status, kind, po_id) VALUES ($1,'E2E Not Here','committed','receiving',$2) RETURNING id`, [`NH-${po}`, po])).rows[0].id);
+    await pool.query(`INSERT INTO items (vin, batch_id, sku, size, name, status) VALUES ($1,$2,$3,'12','E2E','needs_shelf')`, [`SBM-NH-${po}`, batch, sku]);
+    const order = Number((await pool.query(`INSERT INTO online_orders (store, order_number) VALUES ('E2E Shop', $1) RETURNING id`, [`NH-${po}`])).rows[0].id);
+    await pool.query(`INSERT INTO online_order_lines (order_id, sku, size, qty, unit_price) VALUES ($1,$2,'9',1,100), ($1,$2,'13',1,100)`, [order, sku]);
+    await pool.query(`UPDATE online_order_lines SET cancelled_at = now() WHERE order_id = $1 AND size = '13'`, [order]);
+
+    const { card } = await groupCard(request, [{ ...shoe, size: '8' }, { ...shoe, size: '9' }]);
+    expect(card.text).toContain([
+      'Not in warehouse yet: 8 ×3, 9 ×3, 10 ×1',
+      'Approved, not bought yet: 8 ×2, 9 ×2',
+      'Bought, not shipped yet: 10 ×1',
+      'Shipped: 8 ×1',
+      'Online orders: 9 ×1',
+    ].join('\n'));
+    expect(card.text).toContain('No quantity means 1.');
+
+    // Once there is a receipt, the receipt says what was bought, not the approval.
+    await pool.query(`INSERT INTO buy_cart_receipt_lines (cart_id, sku, size, qty, source) VALUES ($1,$2,'8',1,'manual')`, [first, sku]);
+    const { card: next } = await groupCard(request, [{ ...shoe, size: '8' }, { ...shoe, size: '9' }]);
+    expect(next.text).toContain('Not in warehouse yet: 8 ×2, 9 ×1, 10 ×1');
+    expect(next.text).not.toContain('Approved, not bought yet');
+
+    // Older than 30 days is stuck rather than coming.
+    await pool.query(`UPDATE online_orders SET created_at = now() - interval '31 days' WHERE id = $1`, [order]);
+    await pool.query(`UPDATE purchase_orders SET created_at = now() - interval '29 days' WHERE id = $1`, [po]);
+    const { card: month } = await groupCard(request, [{ ...shoe, size: '8' }, { ...shoe, size: '9' }]);
+    expect(month.text).toContain('Not in warehouse yet: 8 ×2, 10 ×1');
+    expect(month.text).not.toContain('Online orders');
+
+    // The website says the same, to staff and not to a supplier.
+    const page_ = await call(request, 'approver', 'cart/not-here', { cartId: first });
+    expect(page_.status).toBe(200);
+    expect(page_.body.shoes.find((x) => x.sku === sku).summary.sizes).toEqual([{ size: '8', qty: 2 }, { size: '10', qty: 1 }]);
+    expect((await call(request, 'buyer', 'cart/not-here', { cartId: first })).status).toBe(403);
+
+    const { card: quiet } = await groupCard(request, [{ ...LINE, sku: `NH${Date.now() % 1e7}-002`, size: '8' }, { ...LINE, sku: `NH${Date.now() % 1e7}-002`, size: '9' }]);
+    expect(quiet.text).toContain('Not in warehouse yet: none.');
+  });
+
+  test('a reply with sizes and no quantity buys one of each and says so', async ({ request }) => {
+    const { cartId, row } = await groupCard(request);
+    const t0 = calls.length;
+    await hook(request, replyUpdate(row, '9, 10', { replyId: 720101 }));
+    expect(await statuses(cartId)).toEqual({ 9: 'approved ×1', '9.5': 'rejected', 10: 'approved ×1' });
+    const reply = since(t0).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT)).pop();
+    expect(reply.body.text).toContain('approved 9 ×1, 10 ×1 (2 pairs)');
+    expect(reply.body.text).toContain('No quantity on 9, 10, so 1 pair each.');
+  });
+
+  test('replying the size itself to a one-size card buys one, not that many', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [{ ...LINE, size: '9' }] });
+    const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    const onCard = (text, replyId) => ({
+      update_id: Date.now(),
+      message: {
+        message_id: replyId, chat: { id: CHAT, type: 'supergroup' }, from: { id: TG, first_name: 'Tapper' }, text,
+        reply_to_message: { message_id: 4344, chat: { id: CHAT },
+          reply_markup: { inline_keyboard: [[{ text: '✓ Buy 1', callback_data: `approve:${cartId}:${line.id}:1:dev` }],
+            [{ text: '✕ Turn it down', callback_data: `reject:${cartId}:${line.id}:dev` }]] } },
+      },
+    });
+    const now = async () => (await pool.query('SELECT status, qty FROM buy_cart_lines WHERE id = $1', [line.id])).rows[0];
+    await hook(request, onCard('9', 740101));
+    expect(await now()).toMatchObject({ status: 'approved', qty: 1 });
+    await hook(request, onCard('2', 740102));                     // any other number is how many
+    expect(await now()).toMatchObject({ status: 'approved', qty: 2 });
+    await hook(request, onCard('9 pairs', 740103));               // and it can always be said outright
+    expect(await now()).toMatchObject({ status: 'approved', qty: 9 });
+  });
+
+  test('the buyer finds more: a pending count goes up, an approved pair stays and a new question goes out', async ({ request }) => {
+    const cartId = await newRequest(request, { lines: [LINE], submit: false });
+    await pool.query(`UPDATE buy_carts SET status = 'submitted' WHERE id = $1`, [cartId]);
+    const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
+    const lineId = Number(line.id);
+    const more = (who, n, id = lineId) => call(request, who, 'cart/line', { cartId, lineId: id, more: n });
+    const cardSaying = (t0, text) => since(t0).find((c) => ['sendMessage', 'sendPhoto'].includes(c.method) && String(c.body.text || c.body.caption || '').includes(text));
+
+    expect((await more('approver', 2)).status).toBe(403);
+    expect((await more('buyer', 0)).status).toBe(400);
+    expect((await more('buyer', 1.5)).status).toBe(400);
+
+    // Still a question: the shop's count goes up, and the group is told what moved.
+    let t0 = calls.length;
+    expect((await more('buyer', 2)).body.line.available_qty).toBe(2);
+    expect((await more('buyer', 3)).body.line.available_qty).toBe(5);
+    await expect.poll(() => !!cardSaying(t0, '➕ FOUND MORE') && !!cardSaying(t0, 'in store 2 → 5')).toBe(true);
+    expect((await pool.query('SELECT qty, status FROM buy_cart_lines WHERE id = $1', [lineId])).rows[0]).toMatchObject({ qty: null, status: 'pending' });
+
+    // Approved: that decision is untouched and the extra pairs are a new, unanswered line.
+    await call(request, 'approver', 'cart/decide', { cartId, lineIds: [lineId], action: 'approve', qty: { [lineId]: 2 } });
+    const before = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.approved_amount;
+    t0 = calls.length;
+    const asked = await more('buyer', 3);
+    expect(asked.status).toBe(200);
+    expect(Number(asked.body.line.id)).not.toBe(lineId);
+    expect(asked.body.line).toMatchObject({ sku: LINE.sku, size: LINE.size, status: 'pending', available_qty: 3, qty: null });
+    const after = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart;
+    expect(after.lines.find((l) => Number(l.id) === lineId)).toMatchObject({ status: 'approved', qty: 2 });
+    expect(after.approved_amount).toBe(before);
+    await expect.poll(() => !!cardSaying(t0, `3 more of size ${LINE.size}. Already approved ×2`), { timeout: 60_000 }).toBe(true);
+    const fresh = Number(asked.body.line.id);
+    await call(request, 'approver', 'cart/decide', { cartId, lineIds: [fresh], action: 'reject', reason: 'Enough' });
+    expect((await more('buyer', 1, fresh)).status).toBe(409);
+
+    // A closed list has to be re-opened first, as with any other add.
+    await pool.query(`UPDATE buy_carts SET list_closed_at = now() WHERE id = $1`, [cartId]);
+    const closed = await more('buyer', 1);
+    expect(closed.status).toBe(409);
+    expect(closed.body.error).toMatch(/re-open/);
+  });
+
   test('a typed reply to a ONE-size card is read too, not dropped', async ({ request }) => {
     const cartId = await newRequest(request, { lines: [LINE] });
     const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
@@ -3100,6 +3228,53 @@ test('a supplier not switched on for buying sees no card, and every cart call is
 // request" is what says the list is complete. The gift-card desk funds nothing against a
 // list still growing; the buyer can re-open it (the group is told) until the receipt is
 // in, and a re-opened, funded request keeps its cards and takes a top-up.
+test('a size with no quantity is one pair, and the answer says so (pure)', async () => {
+  const { parseApprovalReply } = await import('../src/lib/buyPaste.js');
+  const L = ['8', '9', '10', '10.5W'].map((size, i) => ({ id: i + 1, size }));
+  const q = (t) => { const r = parseApprovalReply(t, L); return r.ok ? r.approve.map((a) => `${a.line.size}x${a.qty}`).join(' ') : r.error; };
+  for (const said of ['8, 9', '8 9', '8 and 9', '8\n9', '8-9']) expect(q(said)).toBe('8x1 9x1');
+  expect(q('8-10')).toBe('8x1 9x1 10x1');
+  expect(q('8 to 9')).toBe('8x1 9x1');
+  expect(q('10.5')).toBe('10.5Wx1');
+  expect(q('8\n9 x 2')).toBe('8x1 9x2');            // a mix keeps the number that was said
+  expect(q('9-3')).toBe('9x3');                     // falling numbers are still size, then quantity
+  expect(q('8-9 x 2')).toBe('8x2 9x2');
+  expect(parseApprovalReply('8, 9', L).reject.map((l) => l.size)).toEqual(['10', '10.5W']);
+  expect(parseApprovalReply('8', L).note).toBe('No quantity on 8, so 1 pair.');
+  expect(parseApprovalReply('8, 9', L).note).toBe('No quantity on 8, 9, so 1 pair each.');
+  expect(parseApprovalReply('8 x 2', L).note).toBeNull();
+  // Still strict about everything else: nothing recorded.
+  expect(q('13')).toMatch(/13 isn’t on this card/);
+  expect(q('8 13')).toMatch(/13 isn’t on this card/);
+  expect(q('8, 8')).toMatch(/Size 8 is in the reply twice/);
+  expect(q('8 maybe')).toMatch(/Couldn't read/);
+});
+
+test('each pair not here yet is counted once, at the furthest point it has reached (pure)', async () => {
+  const { notHereSummary, notHereLines } = await import('../src/lib/notHere.js');
+  const line = (po_id, size, qty, po_box_id = null, box_status = null, box_kind = 'original') => ({ po_id, size, qty, po_box_id, box_status, box_kind });
+  const words = (input) => notHereLines(notHereSummary(input));
+  expect(notHereLines(null)).toEqual(['Not in warehouse yet: could not be read.']);
+  expect(words({})).toEqual(['Not in warehouse yet: none.']);
+  expect(words({ approved: [{ size: '9', qty: 2 }, { size: '8', qty: 2 }] })).toEqual([
+    'Not in warehouse yet: 8 ×2, 9 ×2', 'Approved, not bought yet: 8 ×2, 9 ×2',
+  ]);
+  // The order's list is what was paid for, so its boxes aren't added on top of it.
+  expect(words({ poLines: [line(1, '9', 5), line(1, '9', 2, 11, 'in_transit')] })).toEqual([
+    'Not in warehouse yet: 9 ×5', 'Bought, not shipped yet: 9 ×3', 'Shipped: 9 ×2',
+  ]);
+  // Arrival counted two ways is still one arrival.
+  const arrived = { poLines: [line(1, '9', 2, 11, 'delivered'), line(1, '9', 2, 12, 'in_transit')], receivedBoxIds: [11], received: [{ po_id: 1, size: '9', qty: 2 }] };
+  expect(notHereSummary(arrived).total).toBe(2);
+  // Received in full is gone; a replacement label re-sends what is already expected.
+  expect(notHereSummary({ poLines: [line(1, '9', 2, 11, 'delivered')], received: [{ po_id: 1, size: '9', qty: 2 }] }).total).toBe(0);
+  expect(notHereSummary({ poLines: [line(1, '9', 2, 11, 'pending'), line(1, '9', 2, 12, 'shipped', 'replacement')] }).total).toBe(2);
+  // More received than listed on one order doesn't cancel what another order still owes.
+  expect(notHereSummary({ poLines: [line(1, '9', 1, 11, 'delivered'), line(2, '9', 2, 21, 'shipped')], received: [{ po_id: 1, size: '9', qty: 3 }] }).total).toBe(2);
+  // The warehouse's 7.5W is the order's 7.5.
+  expect(notHereSummary({ poLines: [line(1, '7.5', 1, 11, 'delivered')], received: [{ po_id: 1, size: '7.5W', qty: 1 }] }).total).toBe(0);
+});
+
 test.describe('the list stays open until the buyer closes it', () => {
   test('cards wait for the close; the close is the send; re-opening lets the buyer add again', async ({ request }) => {
     const cartId = await newRequest(request, { lines: [LINE], submit: false });
@@ -3907,6 +4082,33 @@ test.describe('floor feedback, November', () => {
     await expect(strip).toContainText('Approved $100.00');
     await expect(strip).toContainText('Tax (8.25%) $8.25');
     await expect(strip).toContainText('Gift cards needed $108.25');
+  });
+
+  test('on screen: an empty Qty box approves one, and the buyer can say they found more', async ({ page, request }) => {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await pool.query(`UPDATE buy_carts SET list_closed_at = NULL WHERE id = $1`, [cartId]);
+    await as(page, 'approver');
+    await page.goto(`/buy-carts?request=${cartId}`);
+    await page.locator('.bc-lines tbody input[type="checkbox"]').first().check();
+    await expect(page.locator('.bc-qty-in').first()).toHaveAttribute('placeholder', '1');
+    await page.getByRole('button', { name: 'Approve selected' }).click();
+    await expect(page.locator('.bc-line-status.approved')).toBeVisible();
+    expect((await pool.query('SELECT qty FROM buy_cart_lines WHERE cart_id = $1', [cartId])).rows[0].qty).toBe(1);
+    // The approved pair is counted on the page without a refresh, and the supplier never sees it.
+    await expect(page.locator('.bc-not-here-total')).toContainText('Not in warehouse yet:');
+    await expect(page.locator('.bc-not-here').getByText(/Approved, not bought yet: .*9 ×/)).toBeVisible();
+
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    await expect(page.locator('.bc-lines')).toBeVisible();
+    await expect(page.locator('.bc-not-here')).toHaveCount(0);
+    await page.getByRole('button', { name: /Found more of CW2288-111 size 9/ }).first().click();
+    await expect(page.getByText('Approved ×1 already, and that stays as it is.')).toBeVisible();
+    await page.getByLabel('How many more did you find?').fill('2');
+    await page.getByRole('button', { name: 'Send to the desk' }).click();
+    await expect(page.getByText('2 in store', { exact: true })).toBeVisible();
+    const rows = (await pool.query('SELECT status, qty, available_qty FROM buy_cart_lines WHERE cart_id = $1 ORDER BY id', [cartId])).rows;
+    expect(rows).toEqual([expect.objectContaining({ status: 'approved', qty: 1 }), expect.objectContaining({ status: 'pending', qty: null, available_qty: 2 })]);
   });
 
   test('on screen: the approver has Change on a decided pair, the buyer ✕ Not buying', async ({ page, request }) => {

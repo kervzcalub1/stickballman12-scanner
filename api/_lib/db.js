@@ -18,6 +18,7 @@ import { trackKey as searchTrackKey, expectsAtOrderLevel, declaresPerBox, hasOrd
 import { presellUnitCost } from '../../src/lib/presellDetails.js';
 import { fundingWords, receiptAfterRemoval } from '../../src/lib/buycartRules.js';
 import { requestShipping } from '../../src/lib/costs.js';
+import { NOT_HERE_DAYS } from '../../src/lib/notHere.js';
 import { productAnswered } from '../../src/lib/sheinCutover.js';
 import { BLOCKERS as SHEIN_BLOCKERS } from '../../src/lib/sheinListings.js';
 // Registration now sends the canonical form of a number, so anything that MATCHES a
@@ -5099,6 +5100,58 @@ export async function listExpectedOnlineOrders() {
      WHERE o.received_at IS NULL
        AND EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL)
      ORDER BY o.created_at DESC`;
+}
+
+// One style's pairs that haven't reached the warehouse, read raw for `src/lib/notHere.js`, which
+// counts each pair once. Spellings of a style code (a dash, a space, "A/B") all match.
+export async function notInWarehouseForSku(sku, days = NOT_HERE_DAYS) {
+  const codes = String(sku || '').toUpperCase().split('/').map((c) => c.replace(/[^A-Z0-9]/g, '')).filter(Boolean);
+  if (!codes.length) return { approved: [], receipts: [], poLines: [], received: [], receivedBoxIds: [], online: [] };
+  const sql = db();
+  const [approved, receipts, poLines, online] = await Promise.all([
+    // Approved, on a request that has neither a purchase order nor a receipt read in yet.
+    sql`SELECT l.size, l.qty
+          FROM buy_cart_lines l JOIN buy_carts c ON c.id = l.cart_id
+         WHERE l.status = 'approved' AND l.qty > 0 AND c.po_id IS NULL
+           AND c.status IN ('submitted', 'approved', 'funded', 'receipted', 'audited')
+           AND coalesce(l.decided_at, l.created_at) > now() - make_interval(days => ${days}::int)
+           AND string_to_array(regexp_replace(upper(l.sku), '[^A-Z0-9/]', '', 'g'), '/') && ${codes}::text[]
+           AND NOT EXISTS (SELECT 1 FROM buy_cart_receipt_lines r WHERE r.cart_id = c.id AND r.removed_at IS NULL)`,
+    // On a receipt, with no purchase order raised for them yet. A receipt line matched to an
+    // approved pair goes by that pair's code, since a receipt prints the store's own.
+    sql`SELECT coalesce(m.size, r.size) AS size, r.qty
+          FROM buy_cart_receipt_lines r
+          JOIN buy_carts c ON c.id = r.cart_id
+          LEFT JOIN buy_cart_lines m ON m.id = r.matched_line_id
+         WHERE r.removed_at IS NULL AND c.po_id IS NULL
+           AND c.status IN ('submitted', 'approved', 'funded', 'receipted', 'audited')
+           AND r.created_at > now() - make_interval(days => ${days}::int)
+           AND string_to_array(regexp_replace(upper(coalesce(m.sku, r.sku, '')), '[^A-Z0-9/]', '', 'g'), '/') && ${codes}::text[]`,
+    sql`SELECT l.po_id, l.po_box_id, l.size, l.qty_expected AS qty, b.status AS box_status, b.kind AS box_kind
+          FROM po_lines l
+          JOIN purchase_orders p ON p.id = l.po_id
+          LEFT JOIN po_boxes b ON b.id = l.po_box_id
+         WHERE p.status NOT IN ('reconciled', 'closed') AND p.order_kind <> 'boxes' AND l.dimensions IS NULL
+           AND p.created_at > now() - make_interval(days => ${days}::int)
+           AND string_to_array(regexp_replace(upper(l.sku), '[^A-Z0-9/]', '', 'g'), '/') && ${codes}::text[]`,
+    sql`SELECT l.size, l.qty
+          FROM online_order_lines l JOIN online_orders o ON o.id = l.order_id
+         WHERE o.received_at IS NULL AND l.cancelled_at IS NULL
+           AND o.created_at > now() - make_interval(days => ${days}::int)
+           AND string_to_array(regexp_replace(upper(l.sku), '[^A-Z0-9/]', '', 'g'), '/') && ${codes}::text[]`,
+  ]);
+  const poIds = [...new Set(poLines.map((l) => Number(l.po_id)))];
+  const [received, receivedBoxIds] = await Promise.all([
+    poIds.length
+      ? sql`SELECT b.po_id, coalesce(i.original_size, i.size) AS size, count(*)::int AS qty
+              FROM items i JOIN batches b ON b.id = i.batch_id
+             WHERE b.po_id = ANY(${poIds}::bigint[])
+               AND string_to_array(regexp_replace(upper(coalesce(i.original_sku, i.sku)), '[^A-Z0-9/]', '', 'g'), '/') && ${codes}::text[]
+             GROUP BY 1, 2`
+      : [],
+    receivedPoBoxIds(poLines.map((l) => l.po_box_id).filter((id) => id != null)),
+  ]);
+  return { approved, receipts, poLines, received, receivedBoxIds, online };
 }
 
 // Of these boxes, the ones already received: tied to a batch box, or sharing its tracking number.

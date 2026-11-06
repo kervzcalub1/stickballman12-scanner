@@ -257,6 +257,24 @@ The PH team uploads card files, and some are bad. The supplier sees none of it.
 - **The PDF is recorded cards only.** A picture matching no card used to print on its own page; now
   it doesn't. The PDF no longer prints the label. A card whose file was deleted prints without a picture.
 
+## Approver and supplier feedback, Nov 6 (2026-11-06)
+- **Not in warehouse yet, on every card** (`src/lib/notHere.js`, `notInWarehouseForSku`): the shoe's pairs in every
+  size that are approved, bought or shipped and not received, so the same sizes aren't approved again tomorrow. Each
+  pair counts once: approved lines until the request has a receipt, receipt lines until it has a PO, PO lines until
+  received (order's own list over its boxes, replacements left out, arrival by items or by received box, whichever is
+  larger). Online orders not counted in are included too. Open requests and orders from the last 30 days only
+  (`NOT_HERE_DAYS`, the owner's number), because older ones are stuck rather than coming. Also on the request page
+  above the lines, in the card's words (`cart/not-here`, `NotHere`), for staff only: it crosses every supplier, so a
+  supplier gets a 403 and sees only their own Qty column.
+- **No quantity means 1.** `8`, `8, 9`, `8 9`, `8 and 9` and `8-10` in a reply are one pair each, and the answer says
+  so. A dash with falling numbers (`9-3`) is still size 9, three pairs. On a one-size card a bare number is still how
+  many, except the card's own size (`9` on a size 9 card is one pair; `9 pairs` is nine). On the screen, an empty Qty
+  box approves 1. The browser states the 1, so `cart/decide` still refuses a call naming no number.
+- **＋ Found more** (`cart/line` `{ more: n }`, own buyer, open list): a pending pair's in-store count goes up and its
+  card is re-posted. An approved pair is left alone, because the money may be out against it. The extra pairs become a
+  new pending line with a new card headed `➕ FOUND MORE`, so one size can have two lines. A turned-down or X'd-out pair
+  refuses. Receipts compare by summing SKU + size, so two lines of a size add up.
+
 ## Cards and notes the auditor adds (2026-11-06)
 The Andrew case: he bought his own 10 pairs with his own gift cards, and the cashier rang everything up together.
 The receipt then carries money that was never ours. `cart/audit-extras` (audit privilege, not the approver):

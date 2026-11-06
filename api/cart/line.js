@@ -4,6 +4,7 @@
 //   { cartId, lineId, patch:{ qty?, availableQty?, shelfPrice?, size?, fullBox?, premium?, tipProposed? } }  -> edit
 //   { cartId, lineId, remove:true }                               -> remove
 //   { cartId, lineId, skip:true|false }                           -> not buying it / back on
+//   { cartId, lineId, more:n }                                    -> the buyer found n more
 //
 // The request's LIST is the buyer's to grow until they close it (`list_closed_at`) —
 // every add is its own question to the desk, and a request with cards already out can
@@ -133,6 +134,55 @@ export default async function handler(req, res) {
             : 'The buyer has closed this request — they can re-open it to add more.')
           : 'This request is past the point of adding to it — open a new request for anything else.',
       });
+    }
+
+    // THE BUYER FOUND MORE of a pair they already sent. An unanswered pair's shelf count goes up.
+    // An approved pair stays exactly as approved (the money may be out against it), so the extra
+    // is a new question beside it. Either way the group gets a card and the approver decides.
+    if (body.more !== undefined) {
+      if (!isOwnBuyer(user, cart))
+        return send(res, 403, { ok: false, error: 'Only the buyer who sent this pair can add more of it.' });
+      const more = Number(body.more);
+      if (!Number.isInteger(more) || more < 1 || more > 999)
+        return send(res, 400, { ok: false, error: 'Say how many more you found, from 1 to 999.' });
+      const lineId = Number(body.lineId);
+      let was = await getBuyCartLine(cartId, lineId);
+      if (!was) return send(res, 404, { ok: false, error: 'That pair is no longer on the request.' });
+      const who = user.name || user.username;
+      const pair = `${was.sku}${was.size ? ` size ${was.size}` : ''}`;
+      const photos = await cartShoePhotos(cartId, was.sku);
+      if (was.status === 'pending') {
+        const count = Math.min((Number(was.available_qty) || 0) + more, 999);
+        const change = `in store ${was.available_qty ?? 'not counted'} → ${count}`;
+        const line = await updateBuyCartLine(cartId, lineId, { availableQty: count }, user, null,
+          `${pair} — found ${more} more, ${change}`, { onlyIfPending: true });
+        if (line) {
+          notifyLineAsked(cartId, lineId, { photoFileId: photos[0] ?? null, photoCount: photos.length,
+            edited: `➕ FOUND MORE, ${who}: ${change}` });
+          return send(res, 200, { ok: true, line: redactLineForViewer(line, user) });
+        }
+        // The desk answered it in the same second, so it is read again and handled as answered.
+        was = await getBuyCartLine(cartId, lineId);
+      }
+      if (was?.status !== 'approved')
+        return send(res, 409, { ok: false, error: `${pair} ${was?.status === 'skipped' ? 'is marked as not buying' : 'was turned down'}, so there is nothing to add to. Add it as a new pair to ask again.` });
+      if (Number(cart.line_count) + 1 > MAX_LINES)
+        return send(res, 409, { ok: false, error: `A request holds at most ${MAX_LINES} lines.` });
+      if (!photos.length)
+        return send(res, 400, { ok: false, error: `Add a photo of ${was.sku} first — the desk decides on it and cannot see the shoe.` });
+      const p = prepareLine({
+        sku: was.sku, size: was.size, availableQty: more, shelfPrice: was.shelf_price, upc: was.upc,
+        premium: !!was.premium, tipProposed: was.tip_proposed, fullBox: !!was.full_box,
+        name: was.name, colorway: was.colorway, gender: was.gender, basis: was.basis,
+      }, user, cart);
+      if (p.error) return send(res, 400, { ok: false, error: p.error });
+      const line = await addBuyCartLine(cartId, p.row, user);
+      priceInBackground(cartId, Number(line.id), { ...p.market }, cart.cost_stack || {}, {
+        notify: true, photos,
+        edited: `➕ FOUND MORE, ${who}: ${more} more of size ${was.size}. Already approved ×${was.qty}${was.decided_by ? ` by ${was.decided_by}` : ''}, and that stands.`,
+      });
+      const asked = await askBuyCart(cartId, user);
+      return send(res, 200, { ok: true, line: redactLineForViewer(line, user), ...(asked ? { cart: redactCartForViewer(asked, user) } : {}) });
     }
 
     if (body.skip !== undefined) {

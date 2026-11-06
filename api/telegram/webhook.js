@@ -30,7 +30,7 @@ import { notifyEnv } from '../_lib/notify.js';
 import { alertCancellationsLogged } from '../_lib/alerts.js';
 import { downloadTelegramFile, fileCancellationPhoto, fileTypedCancellation, replyText, sayTo, HOW_TO, dayFrom, msgPicker, msgFor, msgAll, sendDayReport } from '../_lib/cancellations.js';
 import { platformFromCommand, platformLabel, PLATFORMS } from '../../src/lib/cancellations.js';
-import { parseApprovalReply, splitTipReply } from '../../src/lib/buyPaste.js';
+import { parseApprovalReply, splitTipReply, sizeKey } from '../../src/lib/buyPaste.js';
 const PLATFORM_KEYS = new Set(PLATFORMS.map((p) => p.key));
 
 const env = (k) => String(process.env[k] || '').trim();
@@ -320,7 +320,12 @@ async function handleLineReply(msg, cardMsg, cardEnv, cartId, lineId) {
     let read = null;
     if (rest) {
       const bare = /^(\d{1,3})(?:\s*(?:pairs?|prs?|x))?$/i.exec(rest);
-      read = bare
+      // "9" on a size 9 card names the size, so it is one pair like any size with no quantity.
+      // Reading it as nine pairs would spend nine times what the approver meant.
+      const namesItsSize = bare && rest === bare[1] && Number(rest) === parseFloat(sizeKey(lines[0].size));
+      read = namesItsSize
+        ? parseApprovalReply(rest, lines)
+        : bare
         ? (Number(bare[1]) > 0 ? { ok: true, approve: [{ line: lines[0], qty: Number(bare[1]) }], reject: [] } : { ok: true, approve: [], reject: [lines[0]] })
         : parseApprovalReply(rest, lines);
       if (!read.ok) { missed(read.error); return say(`⚠️ ${read.error}`); }

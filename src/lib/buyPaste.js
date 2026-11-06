@@ -15,7 +15,8 @@
 //      11 x 3
 //      10.5 x 4
 //
-//    → approve 11 ×3 and 10.5 ×4; every other size on the card is turned down. Strict on
+//    → approve 11 ×3 and 10.5 ×4; every other size on the card is turned down. A size with
+//    no quantity ("8", "8, 9", "8-10") is one pair, and the answer says so. Strict on
 //    purpose — this spends money, so a line that can't be read refuses the whole reply
 //    rather than approving the part that could.
 
@@ -210,16 +211,24 @@ export function parseApprovalReply(text, lines) {
   const whole = readWholeCardReply(text, lines);
   if (whole) return whole;
   const qty = new Map();
-  const bad = []; const unknown = []; const twice = [];
+  const bad = []; const unknown = []; const twice = []; const assumed = [];
   let all = null;
+  // No quantity said: one pair (approvers' feedback, 2026-11-06). The answer names these sizes.
+  const takeOne = (line) => {
+    if (qty.has(line.id)) twice.push(line.size);
+    qty.set(line.id, 1);
+    assumed.push(line.size);
+  };
   for (const raw of String(text || '').split(/[\r\n,;]+/)) {
     // "size 14 x two" reads as "14 x 2".
     const t = wordsToDigits(raw.trim()).replace(/^(?:size|sz)\s+/i, '');
     if (!t) continue;
     // A RANGE of sizes, one quantity each: "10.5-11.5 x 2" = 10.5, 11 and 11.5, two of each —
     // the sizes ON THE CARD between the two, inclusive (2026-10-27).
-    const rg = /^(\d{1,2}(?:\.5)?)([a-z]?)\s*(?:-|–|to)\s*(\d{1,2}(?:\.5)?)([a-z]?)\s*[x×*:=]\s*(\d{1,3})\s*(?:pairs?|prs?)?$/i.exec(t);
-    if (rg) {
+    const rg = /^(\d{1,2}(?:\.5)?)([a-z]?)\s*(?:-|–|to)\s*(\d{1,2}(?:\.5)?)([a-z]?)(?:\s*[x×*:=]\s*(\d{1,3})\s*(?:pairs?|prs?)?)?$/i.exec(t);
+    // With no quantity the ends must climb: "8-10" is a range at one pair each, while "9-3"
+    // stays size 9, three pairs, as it always read.
+    if (rg && (rg[5] != null || Number(rg[3]) > Number(rg[1]))) {
       const [a, b] = [Number(rg[1]), Number(rg[3])].sort((x, y) => x - y);
       const suffix = (rg[2] || rg[4] || '').toUpperCase();
       const hit = lines.filter((l) => {
@@ -227,7 +236,17 @@ export function parseApprovalReply(text, lines) {
         return v >= a && v <= b && (!suffix || k.endsWith(suffix));
       });
       if (!hit.length) { unknown.push(`${rg[1]}${rg[2]}-${rg[3]}${rg[4]}`); continue; }
+      if (rg[5] == null) { hit.forEach(takeOne); continue; }
       for (const line of hit) { if (qty.has(line.id)) twice.push(line.size); qty.set(line.id, Number(rg[5])); }
+      continue;
+    }
+    // Sizes alone: "8", "8 9", "8 and 9", "10.5W".
+    const named = t.replace(/\s*(?:&|\band\b)\s*/gi, ' ').trim().split(/\s+/);
+    if (named.every((n) => SIZE_RE.test(n))) {
+      for (const n of named) {
+        const line = bySize.get(sizeKey(n)) || byNumber(n);
+        if (line) takeOne(line); else unknown.push(n);
+      }
       continue;
     }
     const m = /^(\S+?)\s*(?:[x×*:=]|-(?=\s*\d+\s*$))\s*(\d{1,3})\s*(?:pairs?|prs?)?$/i.exec(t);
@@ -251,7 +270,10 @@ export function parseApprovalReply(text, lines) {
     const n = qty.has(l.id) ? qty.get(l.id) : all;
     if (n > 0) approve.push({ line: l, qty: n }); else reject.push(l);
   }
-  return { ok: true, approve, reject };
+  return {
+    ok: true, approve, reject,
+    note: assumed.length ? `No quantity on ${assumed.join(', ')}, so 1 ${assumed.length === 1 ? 'pair' : 'pair each'}.` : null,
+  };
 }
 
 /**

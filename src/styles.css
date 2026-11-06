@@ -1478,6 +1478,9 @@ button.ph-plat-chip { cursor: pointer; }
    goes above it. Amber, not red — over-approving is allowed on purpose (stock moves),
    so this is something to notice, not an error. */
 .bc-avail { margin-top: 2px; }
+.bc-not-here { margin: 0 0 12px; display: grid; gap: 10px; }
+.bc-not-here-sku { font-weight: 700; font-size: 13px; overflow-wrap: anywhere; }
+.bc-not-here-total { font-size: 13px; font-weight: 600; }
 .bc-over-avail { margin-top: 3px; font-size: 11px; font-weight: 600; line-height: 1.2; color: #e0a458; }
 .input.bc-qty-in.over { border-color: rgba(224, 164, 88, .65); }
 .rcmp { border-collapse: collapse; margin: 12px 0; font-size: 15px; }

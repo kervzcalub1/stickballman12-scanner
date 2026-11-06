@@ -203,6 +203,13 @@ const PATHS = {
     <path d="M3 8h18" />
     <path d="M8 12h1.5l1.2 4h4.6l1-3H10.2" />
   </>),
+  // Expected This Week — a calendar page
+  expected: (<>
+    <rect x="3" y="5" width="18" height="16" rx="2" />
+    <path d="M3 10h18" />
+    <path d="M8 3v4M16 3v4" />
+    <path d="M8 15h3" />
+  </>),
   // Undelivered Tracking — a parcel with a question mark (where is it?)
   undelivered: (<>
     <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z" />

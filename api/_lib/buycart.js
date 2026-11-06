@@ -495,6 +495,19 @@ export function redactLineForViewer(line, user) {
   return out;
 }
 
+// Who opens an uploaded card image or PDF: the desk that files them and, once released, the auditor who
+// checks the spend: the same people who can read a full code (`cart/gc-reveal`, `cart/gift-cards-pdf`). A picture
+// of a card IS the card, so a warehouse or PH job title alone isn't enough (2026-11-06).
+const CARDS_RELEASED = ['funded', 'receipted', 'audited', 'closed'];
+export async function canOpenCardFiles(user, cart) {
+  if (await hasPrivilege(user, 'issue_gift_cards')) return true;
+  return CARDS_RELEASED.includes(cart?.status) && hasPrivilege(user, 'audit_buying');
+}
+export async function hideCardFilesWithoutDuty(cart, user) {
+  if (!cart?.files || (await canOpenCardFiles(user, cart))) return cart;
+  return { ...cart, files: cart.files.filter((f) => f.kind !== 'gift_card') };
+}
+
 const AUDIT_ONLY_EVENTS = ['gc_personal_added', 'gc_personal_removed', 'audit_note'];
 const isCardFileEvent = (e) => e.kind === 'gc_read'
   || (e.kind === 'file_added' && String(e.body || '').startsWith('gift_card:'))
@@ -514,6 +527,8 @@ export function redactCartForViewer(cart, user) {
     // pay are how the company buys — a supplier who can read them can price against them.
     // `funding_tax_pct` (the declared rate, on its own) is NOT part of this and stays.
     cost_stack: null,
+    // Which supplier preset the desk priced this against: the stack's name, and no screen of theirs reads it.
+    preset_id: null,
   };
   // `lines` / `events` only when the row has them: the QUEUE (`cart/list`) hands back
   // bare rows, and inventing empty arrays on them would change their shape.

@@ -334,7 +334,7 @@ const ROUTES = {
   newinv:    { main: '/report',        ph: '/ph/new-inventory' },
   cancellations: { main: '/cancellations', ph: '/ph/cancellations' },
   inboundissues: { main: '/inbound-issues', ph: '/ph/inbound-issues' },
-  expected:  { main: '/expected',      ph: '/ph/undelivered' },
+  expected:  { main: '/expected',      ph: '/ph/expected' },
   postatus:  { main: '/reconcile',     ph: '/ph/po-status' },
 };
 export const at = (page, query = '') => (u) => {

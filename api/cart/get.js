@@ -11,7 +11,7 @@
 // from the event trail — see `canSeeBuyCall` in api/_lib/buycart.js.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { getBuyCartFull, dbConfigured } from '../_lib/db.js';
-import { cartVisibleTo, cartCloseChecks, redactCartForViewer, requireBuyerAccess } from '../_lib/buycart.js';
+import { cartVisibleTo, cartCloseChecks, redactCartForViewer, requireBuyerAccess, hideCardFilesWithoutDuty } from '../_lib/buycart.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -35,7 +35,7 @@ export default async function handler(req, res) {
     // carries it — not on the lines and not in the trail, which used to print the
     // verdict in plain words. Stripped here, at the read boundary, rather than left to
     // the screen: a hidden column is not a control (`canSeeBuyCall`).
-    const forViewer = redactCartForViewer(cart, user);
+    const forViewer = await hideCardFilesWithoutDuty(redactCartForViewer(cart, user), user);
     return send(res, 200, { ok: true, cart: { ...forViewer, checks } });
   } catch (e) {
     console.error('[cart/get]', e.message);

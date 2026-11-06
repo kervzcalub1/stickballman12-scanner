@@ -8,11 +8,12 @@
 // box's own status, which is right for receiving and wrong for a daily feed).
 
 // A parcel is judged by when the CARRIER last scanned it, not by when we last looked.
-// Four days of silence is a question; eight is a problem. Chosen against real data:
+// A week of silence is Delayed, the same week the delay alert uses (`DELAY_DAYS`, src/lib/expected.js:
+// the owner's call on 2026-11-06, it was 4). Eight is a problem. Eight was chosen against real data:
 // live orders on 3 Sep had boxes sitting nine days on "Dropped off at The UPS Store"
 // and one fourteen days on "Label Created" — the second is a supplier who never
 // actually handed the parcel over, which is a different conversation to a delay.
-export const STALL_DAYS = 4;
+export const STALL_DAYS = 7;
 export const INVESTIGATE_DAYS = 8;
 
 export const INBOUND_STATES = {

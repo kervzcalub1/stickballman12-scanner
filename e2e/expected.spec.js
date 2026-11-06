@@ -282,6 +282,16 @@ test.describe('the screen and its data', () => {
     await expect(stores.locator('.exp-detail')).toContainText(`COMING-${STAMP}`);
   });
 
+  test('PH has the same screen at its own address', async ({ page }) => {
+    await loginAs(page, 'ph_team');
+    await page.goto('/ph');
+    await page.getByRole('button', { name: /Expected This Week/ }).first().click();
+    await expect(page).toHaveURL(/\/ph\/expected/);
+    await expect(page.locator('[data-side="supplier"]')).toBeVisible();
+    await page.reload();
+    await expect(page.locator('[data-side="supplier"]')).toBeVisible();
+  });
+
   test('a supplier account cannot read it', async ({ page, request }) => {
     const { signToken } = await import('../api/_lib/util.js');
     const r = await request.get('/api/expected', { headers: { Authorization: `Bearer ${signToken({ uid: 999999, username: 'x', name: 'x', role: 'supplier' })}` } });

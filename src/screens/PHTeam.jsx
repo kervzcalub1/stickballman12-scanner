@@ -35,6 +35,7 @@ import { platformChipSummary } from '../lib/payout.js';
 import { PlatformProfit } from './PlatformProfit.jsx';
 import { OnlineOrders } from './OnlineOrders.jsx';
 import { Undelivered } from './Undelivered.jsx';
+import { Expected } from './Expected.jsx';
 import { TrackingDuplicates } from './TrackingDuplicates.jsx';
 import { Cancellations } from './Cancellations.jsx';
 import { InboundIssues } from './InboundIssues.jsx';
@@ -97,6 +98,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     if (page === 'payout') return <PayoutCalculator user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'profit') return <PlatformProfit onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'online') return <OnlineOrders user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'expected') return <Expected onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'undelivered') return <Undelivered onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'duptracking') return <TrackingDuplicates user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'cancellations') return <Cancellations onHome={() => goPage(null)} onSignOut={onSignOut} />;

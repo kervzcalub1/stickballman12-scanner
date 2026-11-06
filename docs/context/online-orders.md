@@ -155,10 +155,10 @@ its orders with a link to the courier. Home's **Expected today** adds online par
 A tracking number with **no movement in 7 days** is **Delayed** on Expected This Week (its own column, ahead of
 any estimate), and the team hears about it on Telegram (`tracking.delayed`, `tracking-delay-worker.js`).
 - **Who:** warehouse, PH and admins with Telegram connected, on by default and switchable in the bell panel.
-  PH's link opens Undelivered Tracking, since Expected is on the warehouse app.
+  PH's link opens PH's own copy of the screen (`/ph/expected`, 2026-11-06).
 - **When:** one message from 10:00 EST. A stall is announced once and reminded every 7 days. A parcel that moves
   and stops again is a new delay (`tracking_delay_alerts`, **needs db:setup**).
 - **What it says:** supplier or store, order, box, pairs, carrier and number, days, last location, and who to chase
   (`delayFollowUp`): never scanned → the sender; carrier exception → call the carrier; stopped → ask for a trace.
 - **Not alerted:** no tracking number, delivered, received, or stopped over 60 days ago. Those last still show
-  as Delayed on the screen. Inbound's own states are separate: it calls 4 days Delayed and 8 days Investigate.
+  as Delayed on the screen. Inbound uses the same 7 for Delayed (`STALL_DAYS`, 2026-11-06, was 4) and 8 days for Investigate.

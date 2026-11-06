@@ -1054,6 +1054,13 @@ first · HTTP 409" on a reply that repeated what was already recorded. Now:
   `none` / `nah` / 👎 → all turned down. Number words read as digits; `size 15 x two` works.
   One-letter `y` / `n` / `k` are NOT read (a typo must not spend money). The answer under the
   card says how it was read ("Read "take all" as every size, … (1 of 10 — not counted).").
+- **All except some sizes** (`readExceptReply`, 2026-11-06): `take all except 8.5`, `take all
+  except 8.5 and 9`, `except 8.5 9`, `except 8.5, 9`; also `all but 8.5`, `take everything
+  except 8.5`, `excluding` / `without` / `minus` / `other than`, and `2 each except 8.5`. The
+  sizes named are turned down; the rest read as the first half would alone, so `take all` is
+  still what's counted in store. Nothing is recorded for a size not on the card, a non-size
+  (ranges like `8-9` included), a first half that doesn't say to buy (`no except 9`), or a reply
+  that leaves no sizes. Works beside a tip (`take all except 8.5, tip ok`) and on one-size cards.
 - **Amount-first tips**: `$5 tip`, `5 tip`, `5$ tip`, `5 dollar tip` (as well as `tip 5`).
 - **A reply that changes nothing** → "✅ Already recorded — nothing changed (…)" — `decideGroup`
   sends only the lines that would move.
@@ -1067,7 +1074,8 @@ first · HTTP 409" on a reply that repeated what was already recorded. Now:
 - **No "· HTTP 4xx"** in the group (`answerOnCard`); the code goes to the server log.
 - **Typed replies to a ONE-size card** (Buy 1/2/3 buttons) were silently dropped. Now read the
   same way (`handleLineReply`): a bare `3` = buy 3, plus every phrase above and the tip forms.
-- The card's instructions add "Or just reply: take all (what's in store) · 2 each · no".
+- The card's instructions add "Or just reply: take all (what's in store) · take all except
+  <a size on this card> · 2 each · no".
 - Unreadable is still refused, nothing recorded, and the error lists what works.
 - **Every unreadable reply is kept** in **`telegram_reply_misses`** (new table → `db:setup`):
   card kind, the sizes it offered, the reply, the error, who sent it. Rules the reader refused

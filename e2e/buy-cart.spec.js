@@ -2576,6 +2576,7 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     const rows = card.text.split('\n').filter((l) => /^\d+(\.5)? · /.test(l)).map((l) => l.split(' · ')[0]);
     expect(rows).toEqual(['10.5', '11', '11.5']);
     expect(card.text).toContain('To approve, REPLY to this card — one size per line, e.g.:\n10.5 x 3\n11 x 2\n');
+    expect(card.text).toContain('take all except 10.5');
     expect(card.text).toContain('A range works too: 10.5-11.5 x 1 · or "all x 1".');
     expect(card.text).not.toContain('9 x 5');
   });
@@ -2645,12 +2646,27 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     expect(reply.body.text).toMatch(/^✅ Already recorded — nothing changed/);
     expect(reply.body.text).not.toContain('HTTP');
 
-    await hook(request, replyUpdate(row, 'no', { replyId: 730004 }));
+    // All except a size: that size is turned down, the rest are what's in store.
+    t0 = calls.length;
+    await hook(request, replyUpdate(row, 'take all except 9.5', { replyId: 730004 }));
+    expect(await statuses(cartId)).toEqual({ 9: 'approved ×2', '9.5': 'rejected', 10: 'approved ×1' });
+    reply = since(t0).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT)).pop();
+    expect(reply.body.text).toContain('Turned down: 9.5');
+    expect(reply.body.text).toContain('Read "take all except 9.5" as every size except 9.5');
+
+    // A size that isn't on the card records nothing.
+    t0 = calls.length;
+    await hook(request, replyUpdate(row, 'take all except 13', { replyId: 730005 }));
+    expect(await statuses(cartId)).toEqual({ 9: 'approved ×2', '9.5': 'rejected', 10: 'approved ×1' });
+    reply = since(t0).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT)).pop();
+    expect(reply.body.text).toMatch(/^⚠️ 13 isn’t on this card/);
+
+    await hook(request, replyUpdate(row, 'no', { replyId: 730006 }));
     expect(await statuses(cartId)).toEqual({ 9: 'rejected', '9.5': 'rejected', 10: 'rejected' });
 
     // Still strict about what it can't read — nothing recorded, and it says what works.
     t0 = calls.length;
-    await hook(request, replyUpdate(row, 'hmm maybe later', { replyId: 730005 }));
+    await hook(request, replyUpdate(row, 'hmm maybe later', { replyId: 730007 }));
     reply = since(t0).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT)).pop();
     expect(reply.body.text).toMatch(/Reply "take all", "2 each", "no"/);
     expect(await statuses(cartId)).toEqual({ 9: 'rejected', '9.5': 'rejected', 10: 'rejected' });
@@ -4149,6 +4165,47 @@ test('plain-words replies and amount-first tips are read; anything else is still
   for (const t of ['$5 tip', '5 tip', '5$ tip', '5 dollar tip', 'tip 5'])
     expect(splitTipReply(t).tip).toEqual({ action: 'approve', amount: 5 });
   expect(splitTipReply('take all, $5 tip')).toMatchObject({ tip: { action: 'approve', amount: 5 }, rest: 'take all' });
+});
+
+test('"take all except" turns down the sizes named and takes the rest (pure)', async () => {
+  const { parseApprovalReply, splitTipReply } = await import('../src/lib/buyPaste.js');
+  const L = [
+    { id: 1, size: '8', available_qty: 3 }, { id: 2, size: '8.5', available_qty: 1 },
+    { id: 3, size: '9', available_qty: null }, { id: 4, size: '10W', available_qty: 2 },
+  ];
+  const q = (t) => { const r = parseApprovalReply(t, L); return r.ok ? `${r.approve.map((a) => `${a.line.size}x${a.qty}`).join(' ')} -${r.reject.map((l) => l.size).join(',')}` : r.error; };
+  const without85 = '8x3 9x1 10Wx2 -8.5';
+  const without859 = '8x3 10Wx2 -8.5,9';
+  expect(q('take all except 8.5')).toBe(without85);
+  expect(q('Take all except 8.5.')).toBe(without85);
+  expect(q('take all, except for size 8.5')).toBe(without85);
+  expect(q('all but 8.5')).toBe(without85);
+  expect(q('take everything except 8.5')).toBe(without85);
+  expect(q('take all except 8.5 and 9')).toBe(without859);
+  expect(q('take all except 8.5 9')).toBe(without859);
+  expect(q('take all except 8.5, 9')).toBe(without859);
+  expect(q('take all except\n8.5\n9')).toBe(without859);
+  expect(q('take all except 8.5 8.5')).toBe(without85);       // said twice is still one size
+  expect(q('take all except 10')).toBe('8x3 8.5x1 9x1 -10W'); // 10 = the only 10 on the card
+  expect(q('2 each except 8.5')).toBe('8x2 9x2 10Wx2 -8.5');  // still capped at the store's count
+  expect(parseApprovalReply('take all except 8.5', L).note)
+    .toBe('Read "take all except 8.5" as every size except 8.5, as many as were counted in store (1 of 9 — not counted).');
+
+  // A misread spends money: anything unclear records nothing.
+  expect(q('take all except 11')).toMatch(/^11 isn’t on this card .*Nothing was recorded\.$/);
+  expect(q('take all except 8.5, 11')).toMatch(/^11 isn’t on this card/);
+  expect(q('take all except')).toMatch(/^Which sizes/);
+  expect(q('take all except 8-9')).toMatch(/^Couldn't read "8-9" as a size/);
+  expect(q('take all except the blue ones')).toMatch(/^Couldn't read/);
+  expect(q('take all except 8 8.5 9 10')).toMatch(/^That leaves no sizes/);
+  expect(q('no except 8.5')).toMatch(/^Couldn't read "no except 8.5"/);
+  expect(q('except 8.5')).toMatch(/^Couldn't read "except 8.5"/);
+  expect(q('8 x 2, 9 x 1 except 10')).toMatch(/^Couldn't read/);
+
+  // Beside a tip, the webhook hands over the rest of the reply split onto lines.
+  const split = splitTipReply('take all except 8.5, 9, tip ok');
+  expect(split.tip).toEqual({ action: 'approve', amount: null });
+  expect(q(split.rest)).toBe(without859);
 });
 
 // ── Shoes on the receipt that aren't ours ────────────────────────────────────────

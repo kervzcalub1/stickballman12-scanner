@@ -335,10 +335,10 @@ export function sheinLinePrice(g) {
 // The orderCreate input for one SHEIN order. `variants`: Map(seller SKU → variant gid); a SKU
 // Shopify no longer has goes in by SKU and title, so the sale is still on record. Throws rather
 // than write a wrong amount. SHEIN collects and pays US sales tax, hence channelLiable.
-export function shopifyOrderInput(o, { variants = new Map(), locationId, now = new Date() }) {
+export function shopifyOrderInput(o, { variants = new Map(), locationId, now = new Date(), shipped = true }) {
   const orderNo = String(o?.orderNo || '').trim();
   if (!orderNo) throw new Error('The SHEIN order has no number.');
-  if (!locationId) throw new Error('No Shopify location to record the shipment against.');
+  if (shipped && !locationId) throw new Error('No Shopify location to record the shipment against.');
   const currency = String(o.orderCurrency || liveGoods(o)[0]?.orderCurrency || 'USD').toUpperCase();
   if (currency !== 'USD') throw new Error(`SHEIN order ${orderNo} is in ${currency}; the store is in USD.`);
   const shopMoney = (n) => ({ shopMoney: { amount: money(n), currencyCode: currency } });
@@ -363,9 +363,10 @@ export function shopifyOrderInput(o, { variants = new Map(), locationId, now = n
   return {
     total: Math.round(total * 100) / 100,
     order: {
-      lineItems, currency, financialStatus: 'PAID', fulfillmentStatus: 'FULFILLED',
-      fulfillment: { locationId, notifyCustomer: false,
-        ...(packages[0] ? { trackingNumber: String(packages[0].waybillNo).trim(), ...(packages[0].carrier ? { trackingCompany: String(packages[0].carrier) } : {}) } : {}) },
+      lineItems, currency, financialStatus: 'PAID',
+      // Not shipped yet (written at the sale): it goes in open and is fulfilled when it ships.
+      ...(shipped ? { fulfillmentStatus: 'FULFILLED', fulfillment: { locationId, notifyCustomer: false,
+        ...(packages[0] ? { trackingNumber: String(packages[0].waybillNo).trim(), ...(packages[0].carrier ? { trackingCompany: String(packages[0].carrier) } : {}) } : {}) } } : {}),
       transactions: [{ kind: 'SALE', status: 'SUCCESS', gateway: 'SHEIN', amountSet: shopMoney(total), ...(soldAt ? { processedAt: soldAt } : {}) }],
       ...(soldAt ? { processedAt: soldAt } : {}),
       // Same marks CedCommerce left, so searches and habits keep working. The order number is
@@ -375,9 +376,15 @@ export function shopifyOrderInput(o, { variants = new Map(), locationId, now = n
       customAttributes: [{ key: 'channel', value: 'SHEIN' }, { key: 'Source order id', value: orderNo }],
       // Shipped and paid: nothing left to do on it, so it goes straight to archived like
       // the CedCommerce orders did.
-      closedAt: new Date(now).toISOString(),
+      ...(shipped ? { closedAt: new Date(now).toISOString() } : {}),
     },
   };
+}
+
+// The tracking to fulfil an order with: the first package's, and the rest for the note.
+export function sheinOrderTracking(o) {
+  const p = (o?.packageWaybillList || []).find((x) => String(x?.waybillNo || '').trim());
+  return p ? { number: String(p.waybillNo).trim(), company: p.carrier ? String(p.carrier) : null } : {};
 }
 
 // What Shopify must do for a recorded unit: 'deduct' | 'restock' | null.

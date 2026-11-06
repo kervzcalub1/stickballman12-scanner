@@ -9,6 +9,7 @@
 //   push_on | push_off                   Shopify stock changes → SHEIN (admin; registers Shopify's webhook)
 //   retry                                retry SHEIN sales that failed to leave Shopify
 //   shopify_orders_on | shopify_orders_off   shipped SHEIN orders → Shopify orders, from now on (admin)
+//   shopify_orders_at_sale | shopify_orders_at_ship  write the order at the sale and let it take the pair off, or at shipping (admin)
 //   shopify_order { orderNo }            retry one order sold since the switch-on (admin); older ones are refused
 //   shoe { spu, mode: dry|full, productId? }  ONE SHEIN product (SHEIN Listings → Details): dry = PH;
 //                                        full writes seller SKUs + stock = admin or Connect integrations
@@ -82,11 +83,11 @@ export default async function handler(req, res) {
         return send(res, 200, { ok: true });
       }
       case 'retry': return send(res, 200, { ok: true, ...(await actOnUnits(undefined, { manual: true })) });
-      case 'shopify_order': case 'shopify_orders_on': case 'shopify_orders_off': {
+      case 'shopify_order': case 'shopify_orders_on': case 'shopify_orders_off': case 'shopify_orders_at_sale': case 'shopify_orders_at_ship': {
         if (!isAdmin(user) && !(await hasPrivilege(user, 'connect_integrations')))
           return send(res, 403, { ok: false, error: 'Writing SHEIN orders to Shopify needs an admin, or the “Connect integrations” privilege.' });
         // Dev and prod share one Shopify store: only production may write real orders.
-        if (b.action !== 'shopify_orders_off' && !sheinWorkerEnabled())
+        if (!['shopify_orders_off', 'shopify_orders_at_ship'].includes(b.action) && !sheinWorkerEnabled())
           return send(res, 409, { ok: false, error: 'Only production writes orders to Shopify (dev and prod share the store).' });
         if (b.action === 'shopify_order') {
           // Future orders only (the owner's call): the switch-on date is the line, here as well as on the page.
@@ -96,6 +97,13 @@ export default async function handler(req, res) {
             return send(res, 409, { ok: false, error: 'Only SHEIN orders sold after the switch was turned on go into Shopify.' });
           const r = await addOrderToShopify(String(b.orderNo || ''), { by });
           return send(res, 200, { ok: true, result: r });
+        }
+        if (b.action === 'shopify_orders_at_ship') return send(res, 200, { ok: true, sync: await writeSync({ shopifyOrdersAtSale: 'off', shopifyOrdersAtSaleOffBy: by }, by) });
+        if (b.action === 'shopify_orders_at_sale') {
+          if (!sheinOrdersConfigured()) return send(res, 409, { ok: false, error: 'The SHEIN orders app isn’t set up on this server (SHEIN_ORDERS_CLIENT_ID / SECRET).' });
+          const cur = await readSync();
+          if (cur.shopifyOrders !== 'on') return send(res, 409, { ok: false, error: 'Turn on SHEIN orders in Shopify first.' });
+          return send(res, 200, { ok: true, sync: await writeSync({ shopifyOrdersAtSale: 'on', shopifyOrdersAtSaleSince: cur.shopifyOrdersAtSaleSince || new Date().toISOString(), shopifyOrdersAtSaleBy: by }, by) });
         }
         if (b.action === 'shopify_orders_off') return send(res, 200, { ok: true, sync: await writeSync({ shopifyOrders: 'off', shopifyOrdersOffBy: by, shopifyOrdersOffAt: new Date().toISOString() }, by) });
         if (!sheinOrdersConfigured()) return send(res, 409, { ok: false, error: 'The SHEIN orders app isn’t set up on this server (SHEIN_ORDERS_CLIENT_ID / SECRET).' });

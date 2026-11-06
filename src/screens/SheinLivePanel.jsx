@@ -23,14 +23,15 @@ const tone = (it) => (it.result === 'failed' || it.result === 'mismatch' ? 'bad'
 
 // One SHEIN sale's Shopify order: the link once it exists, why not otherwise, and the
 // button for an admin to write an order that has shipped but isn't there.
-function ShopifyOrderCell({ unit, row, store, isAdmin, ready, busy, onAdd }) {
+function ShopifyOrderCell({ unit, row, store, since, isAdmin, ready, busy, onAdd }) {
   if (row?.state === 'created') {
     const id = String(row.shopify_order_id || '').split('/').pop();
     return store && id ? <a href={`https://admin.shopify.com/store/${store}/orders/${id}`} target="_blank" rel="noreferrer">{row.shopify_name}</a> : row.shopify_name;
   }
   if (row?.state === 'skipped') return <span className="muted">{row.note || 'Not needed'}</span>;
   if (row?.state === 'creating') return <span className="muted">Writing…{row.error ? <div className="shc-bad">{row.error}</div> : null}</span>;
-  const shipped = !!unit.shipped_seen && Number(unit.unit_status) !== 6;
+  // Future orders only (the owner's call): a sale from before the switch-on never gets a button.
+  const shipped = !!unit.shipped_seen && Number(unit.unit_status) !== 6 && !!since && new Date(unit.order_time) >= new Date(since);
   return (
     <>
       {row?.state === 'waiting' && <span className="muted">{row.note}</span>}
@@ -178,7 +179,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
                       <td className="xs">{u.deducted_at ? <span className="ebo-chip ok">off Shopify</span> : !u.due ? <span className="ebo-chip">before switch-on</span> : u.error ? <span className="ebo-chip bad">not yet</span> : <span className="ebo-chip">—</span>}
                         {u.restocked_at && <span className="ebo-chip info">put back</span>}
                         {(u.note || u.error) && <div className={u.error ? 'shc-bad' : 'muted'}>{u.error || u.note}</div>}</td>
-                      <td className="xs"><ShopifyOrderCell unit={u} row={orderRows.get(u.order_no)} store={d.shopifyStore} isAdmin={isAdmin} ready={d.shopifyOrdersReady} busy={busy} onAdd={(orderNo) => act('shopify_order', { orderNo })} /></td>
+                      <td className="xs"><ShopifyOrderCell unit={u} row={orderRows.get(u.order_no)} store={d.shopifyStore} since={sync.shopifyOrdersSince} isAdmin={isAdmin} ready={d.shopifyOrdersReady} busy={busy} onAdd={(orderNo) => act('shopify_order', { orderNo })} /></td>
                     </tr>
                   ))}
                 </tbody>

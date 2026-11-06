@@ -508,11 +508,11 @@ test.describe('SHEIN live — the page', () => {
   test('Shopify orders: a shipped sale has Add to Shopify, a written one links to its order, a cancelled one has no button', async ({ page }) => {
     const { loginAs } = await import('./helpers/auth.js');
     const posted = [];
-    const unit = (id, order, status, extra = {}) => ({ goods_id: id, order_no: order, unit_status: status, shipped_seen: status === 4, due: true, deducted_at: '2026-11-03T23:00:00Z', order_time: '2026-11-03T23:00:00Z', seller_sku: 'A7', title: 'Air Max', ...extra });
+    const unit = (id, order, status, extra = {}) => ({ goods_id: id, order_no: order, unit_status: status, shipped_seen: status === 4, due: true, deducted_at: '2026-11-08T23:00:00Z', order_time: '2026-11-08T23:00:00Z', seller_sku: 'A7', title: 'Air Max', ...extra });
     let live = {
       ok: true, connected: true, configured: true, worker: true, active: null, modes: ['dry', 'stock', 'full'], run: null, items: [], pushes: [],
-      sync: { orders: 'on', since: '2026-10-16T14:00:00Z' }, unitCounts: { last24: 0, failing: 0 }, shopifyOrdersReady: true, shopifyStore: 'teststore',
-      units: [unit('1', 'GSUSHIP', 4), unit('2', 'GSUDONE', 4), unit('3', 'GSUGONE', 6), unit('4', 'GSUOPEN', 2), unit('5', 'GSUBAD', 4)],
+      sync: { orders: 'on', since: '2026-10-16T14:00:00Z', shopifyOrders: 'off', shopifyOrdersSince: '2026-11-07T00:00:00Z' }, unitCounts: { last24: 0, failing: 0 }, shopifyOrdersReady: true, shopifyStore: 'teststore',
+      units: [unit('1', 'GSUSHIP', 4), unit('2', 'GSUDONE', 4), unit('3', 'GSUGONE', 6), unit('4', 'GSUOPEN', 2), unit('5', 'GSUBAD', 4), unit('6', 'GSUPAST', 4, { order_time: '2026-11-03T23:00:00Z' })],
       shopifyOrders: [{ order_no: 'GSUDONE', state: 'created', shopify_order_id: 'gid://shopify/Order/55', shopify_name: '#40000' }, { order_no: 'GSUBAD', state: 'failed', error: 'Location not found' }],
     };
     await page.route('**/api/shein/status', (r) => r.fulfill({ json: { ok: true, configured: true, connected: true } }));
@@ -523,7 +523,7 @@ test.describe('SHEIN live — the page', () => {
         live = { ...live, shopifyOrders: [...live.shopifyOrders, { order_no: b.orderNo, state: 'created', shopify_order_id: 'gid://shopify/Order/56', shopify_name: '#40001' }] };
         return r.fulfill({ json: { ok: true, result: { state: 'created', name: '#40001' } } });
       }
-      live = { ...live, sync: { ...live.sync, shopifyOrders: 'on', shopifyOrdersSince: '2026-11-07T00:00:00Z' } };
+      live = { ...live, sync: { ...live.sync, shopifyOrders: 'on' } };
       return r.fulfill({ json: { ok: true } });
     });
     await loginAs(page, 'admin');
@@ -533,6 +533,8 @@ test.describe('SHEIN live — the page', () => {
     await expect(row('GSUDONE').getByRole('link', { name: '#40000' })).toHaveAttribute('href', 'https://admin.shopify.com/store/teststore/orders/55');
     await expect(row('GSUGONE').getByRole('button')).toHaveCount(0);
     await expect(row('GSUOPEN').getByRole('button')).toHaveCount(0);
+    // Future orders only: shipped, but sold before the switch-on, so no button.
+    await expect(row('GSUPAST').getByRole('button')).toHaveCount(0);
     await expect(row('GSUBAD').getByText('Location not found')).toBeVisible();
     await expect(row('GSUBAD').getByRole('button', { name: 'Try again' })).toBeVisible();
     await row('GSUSHIP').getByRole('button', { name: 'Add to Shopify' }).click();
@@ -840,8 +842,13 @@ test.describe('SHEIN orders in Shopify', () => {
     expect(order).not.toHaveProperty('sourceName');   // the Channel label comes from the app; a name here is ignored
   });
 
-  test('prices: the discounted price wins; else price minus coupon and promotion; never a blank or $0 order', () => {
-    expect(sheinLinePrice(GOOD({ sellerCurrencyDiscountPrice: 49.5 }))).toBe(49.5);
+  test('prices: sale price minus coupon and promotion, never SHEIN’s “discount” field (that total already has the tax in it); never a blank or $0 order', () => {
+    // Real orders, read from SHEIN 2026-11-06. The field = net price + tax, every time.
+    for (const [price, promo, tax, paid, net] of [[76, 0, 5.32, 81.32, 76], [55, 0, 3.99, 58.99, 55], [68, 0, 3.89, 71.89, 68], [59.36, 2.97, 3.38, 59.77, 56.39]]) {
+      const g = GOOD({ sellerCurrencyPrice: price, orderCurrencyPromotionPrice: promo, saleTax: tax, sellerCurrencyDiscountPrice: paid });
+      expect(sheinLinePrice(g)).toBe(net);
+      expect(shopifyOrderInput(ORDER({ orderGoodsInfoList: [g] }), { locationId: LOC }).total).toBe(paid);
+    }
     expect(sheinLinePrice(GOOD({ orderCurrencyStoreCouponPrice: 5, orderCurrencyPromotionPrice: 2 }))).toBe(48);
     expect(() => shopifyOrderInput(ORDER({ orderGoodsInfoList: [GOOD({ sellerCurrencyPrice: null })] }), { locationId: LOC })).toThrow(/no usable price/);
     expect(() => shopifyOrderInput(ORDER({ orderGoodsInfoList: [GOOD({ sellerCurrencyPrice: 0 })] }), { locationId: LOC })).toThrow(/no usable price/);

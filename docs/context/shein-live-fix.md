@@ -71,11 +71,15 @@ Built 2026-11-06. The owner removed the CedCommerce app on purpose; this replace
   write. Every attempt looks for the tag in Shopify first. A lost answer (network, 5xx) leaves the row
   `creating`, unclaimable for 5 minutes, then the search finds the order instead of writing again. A
   definite refusal = `failed`; the worker tries 8 times, then it waits for **Try again**.
+- **Price = `sellerCurrencyPrice` − coupon − promotion**, the start of SHEIN's income formula. Not
+  `sellerCurrencyDiscountPrice`: that's the buyer's total WITH tax (checked on 4 real orders).
 - A SKU Shopify no longer has goes in by SKU + title (the sale stays on record); a SKU two variants
   share stops the order; no price, $0 or a non-USD order is refused rather than written wrong.
 - **Switch:** "Turn on SHEIN orders in Shopify" on the panel (`shopify_orders_on`, admin or Connect
-  integrations) covers orders sold since then, on the minute tick. **Add to Shopify** on a row of
-  Latest SHEIN sales writes one order, for older ones. Only production writes (dev shares the store).
+  integrations) covers orders sold since then, on the minute tick. **Future orders only (owner's
+  call, 2026-11-06):** a past order would confuse people, so the first switch-on date is the line, on
+  the page and in the endpoint. **Add to Shopify / Try again** on a row is for orders after that line.
+  Only production writes (dev shares the store).
 
 ## 2. Shopify → SHEIN (`api/shopify/webhook.js`, `pushSkus` in `shein-live.js`)
 Admin turns it on → we register Shopify's `INVENTORY_LEVELS_UPDATE` webhook to

@@ -9,13 +9,13 @@
 //   push_on | push_off                   Shopify stock changes → SHEIN (admin; registers Shopify's webhook)
 //   retry                                retry SHEIN sales that failed to leave Shopify
 //   shopify_orders_on | shopify_orders_off   shipped SHEIN orders → Shopify orders, from now on (admin)
-//   shopify_order { orderNo }            write one SHEIN order to Shopify now, e.g. an older one (admin)
+//   shopify_order { orderNo }            retry one order sold since the switch-on (admin); older ones are refused
 //   shoe { spu, mode: dry|full, productId? }  ONE SHEIN product (SHEIN Listings → Details): dry = PH;
 //                                        full writes seller SKUs + stock = admin or Connect integrations
 // docs/context/shein-live-fix.md. PH + admin; the two switches that change how SHOPIFY's
 // stock moves are admin-only.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, latestSheinLiveRun, listSheinLiveItems, countSheinLiveItems, recentSheinUnits, sheinUnitCounts, recentSheinPushes, requestSheinLiveStop, listSheinLinks, sheinShopifyOrdersFor } from '../_lib/db.js';
+import { dbConfigured, latestSheinLiveRun, listSheinLiveItems, countSheinLiveItems, recentSheinUnits, sheinUnitCounts, recentSheinPushes, requestSheinLiveStop, listSheinLinks, sheinShopifyOrdersFor, sheinOrderSoldAt } from '../_lib/db.js';
 import { sheinStatus } from '../_lib/shein.js';
 import { startWalk, walkActive, heartbeat, MODES, startShoe, shoeActive, latestShoeRun } from '../_lib/shein-live.js';
 import { readSync, writeSync, switchOn, switchOff, actOnUnits, addOrderToShopify } from '../_lib/shein-orders.js';
@@ -89,6 +89,11 @@ export default async function handler(req, res) {
         if (b.action !== 'shopify_orders_off' && !sheinWorkerEnabled())
           return send(res, 409, { ok: false, error: 'Only production writes orders to Shopify (dev and prod share the store).' });
         if (b.action === 'shopify_order') {
+          // Future orders only (the owner's call): the switch-on date is the line, here as well as on the page.
+          const since = (await readSync()).shopifyOrdersSince;
+          const sold = await sheinOrderSoldAt(String(b.orderNo || ''));
+          if (!since || !sold || new Date(sold) < new Date(since))
+            return send(res, 409, { ok: false, error: 'Only SHEIN orders sold after the switch was turned on go into Shopify.' });
           const r = await addOrderToShopify(String(b.orderNo || ''), { by });
           return send(res, 200, { ok: true, result: r });
         }

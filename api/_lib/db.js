@@ -11381,6 +11381,10 @@ export async function markSheinShopifyOrder(orderNo, { state, id = null, name = 
       attempts = CASE WHEN ${state}::text = 'waiting' THEN 0 ELSE attempts END, updated_at = now()
      WHERE order_no = ${orderNo}`;
 }
+export async function sheinOrderSoldAt(orderNo) {
+  const [r] = await db()`SELECT min(order_time) AS sold FROM shein_order_units WHERE order_no = ${orderNo}`;
+  return r?.sold || null;
+}
 export async function getSheinShopifyOrder(orderNo) {
   const [r] = await db()`SELECT * FROM shein_shopify_orders WHERE order_no = ${orderNo}`;
   return r || null;

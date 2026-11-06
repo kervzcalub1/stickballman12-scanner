@@ -136,10 +136,12 @@ export function SheinListings({ user, onHome, onSignOut }) {
             <span className="shl-grow" />
             <button type="button" className="btn ghost sm" disabled={!!busy || !connected || !!active} title={snapTitle} onClick={snapshot}>
               {busy === 'snapshot' ? 'Starting…' : '↻ Re-read Shopify + SHEIN'}</button>
-            {!s?.hooks?.on && (
-              <button type="button" className="btn ghost sm" disabled={!canWrite || !!busy} title={canWrite ? 'Shopify tells us when a product’s price, size or SKU changes' : NEEDS_PRIV}
-                onClick={() => act('webhooks', {}, 'Shopify product webhooks registered.')}>{busy === 'webhooks' ? 'Registering…' : 'Register Shopify webhooks'}</button>
-            )}
+            {/* Stays on the page once registered: Shopify deletes a subscription after repeated failures, and
+                this creates only what's missing. */}
+            <button type="button" className="btn ghost sm" disabled={!canWrite || !!busy}
+              title={canWrite ? (s?.hooks?.on ? 'Puts back any product webhook Shopify has removed. Safe to press again.' : 'Shopify tells us when a product’s price, size or SKU changes') : NEEDS_PRIV}
+              onClick={() => act('webhooks', {}, s?.hooks?.on ? 'Shopify product webhooks checked.' : 'Shopify product webhooks registered.')}>
+              {busy === 'webhooks' ? 'Registering…' : (s?.hooks?.on ? 'Re-register Shopify webhooks' : 'Register Shopify webhooks')}</button>
           </div>
         )}
         {d && <p className="muted xs shl-strip-note">Stock is kept in step by the live sync (<button type="button" className="shl-linkbtn" onClick={() => goPath(checkPath())}>SHEIN ↔ Shopify check</button>). This page is about <b>what is listed</b>: sizes, seller SKUs, prices. It writes to SHEIN in two ways — <b>add missing sizes</b>, and <b>update prices &amp; sizes</b> (SHEIN price, a size turned off, a wrong SKU) — always after a dry run you check.</p>}

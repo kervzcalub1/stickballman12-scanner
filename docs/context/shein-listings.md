@@ -140,7 +140,7 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
 ## The page (`/ph/shein-listings` PH card above "SHEIN ↔ Shopify check"; `/shein-listings` admin, Marketplaces)
 - **Who:** PH + admin/superadmin (the endpoints refuse anyone else, so the admin card has NO
   `privKey` — a warehouse holder of Connect integrations would land on 403s). **Ask SHEIN** and
-  **Register Shopify webhooks** need admin or `connect_integrations`; others see them disabled with
+  **Register Shopify webhooks** (**Re-register** once done; it only creates what's missing) need admin or `connect_integrations`; others see them disabled with
   the reason in the title. SheinCheck carries a one-line link to the page.
 - **Layout** (matches `docs/shein-listings-mockup.html`): connection strip (SHEIN connected · last
   read EST — amber after 30 min · counts · webhooks state · Re-read · Register webhooks) → running-job

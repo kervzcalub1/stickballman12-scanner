@@ -706,6 +706,24 @@ test.describe('SHEIN Listings — the page before anything was read', () => {
     await expect(page.getByText('Not asked yet.')).toBeVisible();
   });
 
+  test('the webhook button stays once registered, because Shopify can delete a subscription', async ({ page }) => {
+    test.skip(!pool || foreign, 'needs the database (and no real SHEIN Listings data)');
+    let hooks = null;
+    await page.route('**/api/shein/listings**', async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.summary) json.summary.hooks = hooks;
+      await route.fulfill({ response, json });
+    });
+    await loginAs(page, 'admin');
+    await page.goto('/shein-listings?tab=jobs');
+    await expect(page.getByRole('button', { name: 'Register Shopify webhooks', exact: true })).toBeVisible();
+    hooks = { on: true, at: '2026-10-27T06:11:55Z' };
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Re-register Shopify webhooks' })).toBeVisible();
+    await expect(page.getByText(/Shopify product updates: on/)).toBeVisible();
+  });
+
   test('admin reaches it from /shein-listings', async ({ page }) => {
     test.skip(!pool || foreign, 'needs the database (and no real SHEIN Listings data)');
     await loginAs(page, 'admin');

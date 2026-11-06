@@ -186,7 +186,45 @@ export function planProduct({ rows, variants, decisions = {}, aiLinks = {}, owne
       }
     }
   }
-  return { rows: out, writes, edits, skipped, sizesToAdd: fix.sizesToAdd };
+  const steps = links ? twoStepMoves(edits, out, holders) : { edits, waiting: [] };
+  return { rows: out, writes, edits: steps.edits, skipped: [...skipped, ...steps.waiting], sizesToAdd: fix.sizesToAdd };
+}
+
+// SHEIN refuses a new seller SKU while another size of this product still SHOWS it, even when the same
+// edit moves it away ("Duplicate seller SKU", 29 sizes on 9 shoes, live run 2026-11-06). So such a move
+// takes two edits: now, every size showing a wanted SKU moves off it; once SHEIN has approved that, the
+// next "Fix stock + seller SKUs" sends the moves (their SKUs are free by then). A size that both shows a
+// wanted SKU and waits for one is parked now, with its real SKU saved (finalSku), so a swap or a chain
+// of any length is two edits, not one per link. Edits that clash with nothing go out as before.
+function twoStepMoves(edits, rows, holders) {
+  const showing = new Map();
+  for (const r of rows) if (r.sellerSku) showing.set(r.sellerSku, [...(showing.get(r.sellerSku) || []), r]);
+  const others = (e) => (showing.get(e.supplierSku) || []).filter((r) => r.sheinSku !== e.skuCode);
+  const clash = edits.filter((e) => !e.frees && others(e).length);
+  if (!clash.length) return { edits, waiting: [] };
+  const held = new Set(clash.map((e) => e.skuCode));
+  const send = edits.filter((e) => !held.has(e.skuCode));
+  const moving = new Set(send.map((e) => e.skuCode));
+  const taken = new Set([...holders.keys(), ...edits.map((e) => e.supplierSku)]);
+  const waiting = [];
+  for (const e of clash) {
+    const seller = others(e).find((r) => r.reason === 'ok');   // the last read says it sells this SKU right: leave both alone
+    if (seller) { held.delete(e.skuCode); waiting.push({ sheinSku: e.skuCode, why: `SHEIN size ${seller.size} already sells ${e.supplierSku} correctly — this size is a duplicate listing; delist it` }); continue; }
+    for (const r of others(e)) {
+      if (moving.has(r.sheinSku)) continue;
+      let park = `${e.supplierSku}-off`; let i = 2;
+      while (taken.has(park)) park = `${e.supplierSku}-off${i++}`;
+      taken.add(park); moving.add(r.sheinSku);
+      const own = clash.find((x) => x.skuCode === r.sheinSku);
+      send.push({ skc: r.skc, skuCode: r.sheinSku, supplierSku: park, from: r.sellerSku, by: 'rule', why: 'frees', frees: e.supplierSku, ...(own ? { finalSku: own.supplierSku } : {}) });
+    }
+  }
+  for (const e of clash) {
+    if (!held.has(e.skuCode) || moving.has(e.skuCode)) continue;
+    const r = others(e)[0];
+    waiting.push({ sheinSku: e.skuCode, why: `step 2 of 2: ${e.supplierSku} is still on SHEIN size ${r.size}. That size moves off it first; once SHEIN approves, the next Fix stock + seller SKUs changes this one` });
+  }
+  return { edits: send, waiting };
 }
 
 /* ------------------------- delist / re-list / delete ------------------------- */
@@ -255,7 +293,7 @@ export function shelfPlan({ rows, shelf, records = new Map(), styleOnShopify = n
 export function outcome(row, { wrote = [], edit = null, skip = null, after = null, dry = false } = {}) {
   const parts = [];
   if (wrote.length) parts.push(`${dry ? 'would set' : 'stock'} ${row.qty} → ${row.newQty}${after != null && after !== row.newQty ? ` (SHEIN shows ${after}!)` : ''}`);
-  if (edit) parts.push(`${dry ? 'would change' : 'seller SKU'} ${edit.from || '—'} → ${edit.supplierSku}${edit.frees ? ` (frees ${edit.frees})` : ''}${edit.withAttrs?.length ? ` + SHEIN details it now requires (${edit.withAttrs.join(', ')})` : ''}`);
+  if (edit) parts.push(`${dry ? 'would change' : 'seller SKU'} ${edit.from || '—'} → ${edit.supplierSku}${edit.frees ? ` (frees ${edit.frees}${edit.finalSku ? `; becomes ${edit.finalSku} once SHEIN approves` : ''})` : ''}${edit.withAttrs?.length ? ` + SHEIN details it now requires (${edit.withAttrs.join(', ')})` : ''}`);
   if (skip) parts.push(`not changed: ${skip.why}`);
   return parts.join(' · ');
 }

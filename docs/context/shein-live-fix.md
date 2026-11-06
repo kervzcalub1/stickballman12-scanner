@@ -152,6 +152,13 @@ a person confirmed it (Match sizes), or a verified AI match ≥ **0.8** (`AI_WRI
 at 0.6). Never onto a SKU another SHEIN product uses, or one a size already sells correctly.
 A size losing its SKU to a swap gets `<sku>-off` (parked, 0, saved as `delist`). Every edit
 is saved to `shein_links`, so the size stays 0 until SHEIN shows the new SKU, then sells.
+**A move inside one product takes two edits (`twoStepMoves`, 2026-11-06).** SHEIN refuses a seller SKU
+while another size of the product still shows it, even when the same edit moves it away ("Duplicate
+seller SKU": 29 sizes on 9 shoes, live run). Step 1 moves every size off a wanted SKU; a size that also
+waits for one is parked with its real SKU saved as its link (`finalSku`), so a swap or a chain of any
+length is still two edits. The sizes waiting read "step 2 of 2" and stay at 0. Step 2 needs SHEIN's
+approval first, then another **Fix stock + seller SKUs**: the 3-hourly walk is stock only, nothing sends
+it by itself. Two-step is proven by tests against a fake only until a real shoe has gone through both.
 A SHEIN size itself can't be changed by API (sale attributes are fixed) — wrong sizes are
 relinked or zeroed; **sizes to add** stay a person's job (new SKU via partialEdit, untested).
 

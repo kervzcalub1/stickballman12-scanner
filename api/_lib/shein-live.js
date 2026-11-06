@@ -172,7 +172,7 @@ export async function stepProduct(spuName, ctx) {
           await io.saveSheinLinks(edits.map((e) => {
             const row = byRow.get(e.skuCode);
             return { shein_sku: e.skuCode, spu: spuName, skc: e.skc, shein_size: row?.size || null, seller_sku_was: e.from || null,
-              link_sku: e.frees ? null : e.supplierSku, decision: e.frees ? 'delist' : 'link', source: e.by === 'ai' ? 'ai' : e.why === 'swap' ? 'swap' : e.by === 'person' ? 'person' : 'rule' };
+              link_sku: e.frees ? e.finalSku || null : e.supplierSku, decision: e.frees && !e.finalSku ? 'delist' : 'link', source: e.by === 'ai' ? 'ai' : e.why === 'swap' || e.finalSku ? 'swap' : e.by === 'person' ? 'person' : 'rule' };
           }), 'SHEIN live fix');
         }
       }

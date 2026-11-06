@@ -149,4 +149,5 @@ one, and either one still mints tokens, so the sales feed kept working while eve
 - A refused call logs `[shopify/webhook] refused bad signature: topic= shop= api= sub= id= signed= bytes=` (capped at
   200 lines an hour). Read `railway logs --filter "refused bad signature"`.
 - Shopify deletes an Admin API subscription after 8 consecutive failures, and `PRODUCTS_UPDATE` was found missing.
-  Once calls pass, press **Register webhooks** on SHEIN Listings to put it back.
+  **Re-register Shopify webhooks** on SHEIN Listings puts back what's missing. It stays on the page once registered and
+  needs an admin or `connect_integrations`.

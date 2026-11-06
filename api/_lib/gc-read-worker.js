@@ -7,10 +7,11 @@
 import {
   claimCardRead, finishCardRead, requeueStuckCardReads, takeCardReadSummary, queueCardRead,
   getBuyCart, getBuyCartFile, addBuyCartFile, deleteBuyCartFile, listBuyCartCardFiles,
-  setBuyCartFileCardTail, logCartEvent, dbConfigured,
+  setBuyCartFileCardTail, listDoneCardReads, logCartEvent, dbConfigured,
 } from './db.js';
 import { getObject, putObject, deleteObject, r2Configured } from './r2.js';
-import { encryptSecret, secretsConfigured } from './secrets.js';
+import { encryptSecret, decryptSecret, secretsConfigured } from './secrets.js';
+import { cardTailFromFileName } from '../../src/lib/buycartRules.js';
 import { cardFilesFromZip, MAX_ZIP_FILES } from './gcCards.js';
 
 const EVERY_MS = 15_000;
@@ -66,10 +67,28 @@ async function unpackZip(job, file) {
   await deleteObject(file.r2_key).catch((e) => console.warn('[gc-read] ZIP left in storage:', e.message));
 }
 
+// The last four of every card on a CSV this request has read.
+async function csvCardTails(cartId) {
+  const tails = new Set();
+  for (const r of await listDoneCardReads(cartId)) {
+    if (r.source !== 'csv' || !r.enc) continue;
+    for (const c of JSON.parse(decryptSecret(r.enc))) tails.add(String(c.number).slice(-4));
+  }
+  return tails;
+}
+
 async function readOne(job) {
   const file = await getBuyCartFile(job.cart_id, job.file_id);
   if (!file) return;   // deleted while it waited; its reading row went with it
   if (/\.zip$/i.test(file.r2_key || '')) return unpackZip(job, file);
+  // THE CSV HAS THE CARD; THE PICTURE IS FOR THE TILL. A picture named for a card on the CSV
+  // needs no OCR: it only has to be tied to that card for the supplier's PDF. A picture of a
+  // card the CSV doesn't list is still read, so that card comes up for review, not vanishes.
+  const tail = String(file.content_type || '').startsWith('image/') ? cardTailFromFileName(file.name) : null;
+  if (tail && (await csvCardTails(job.cart_id)).has(tail)) {
+    await setBuyCartFileCardTail(job.cart_id, job.file_id, tail);
+    return finishCardRead(job.file_id, { status: 'picture' });
+  }
   // Imported here, not above: the reader lives with the endpoint and pulls in the OCR libraries.
   const { readCardFile } = await import('../cart/gift-card-read.js');
   const { cards, source, unread, mangled, single } = await readCardFile(file, await getObject(file.r2_key));

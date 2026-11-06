@@ -21,8 +21,8 @@
 //
 // Pairing a picture with its card:
 //   · a PDF page is matched by the FULL number in its text layer;
-//   · an image by the last four remembered when it was read (`buy_cart_files.gc_last4`),
-//     and an image never read is read now, once, on this server, and remembered;
+//   · an image by its last four: remembered (`buy_cart_files.gc_last4`) or in its file name; one
+//     with neither is read now, once, on this server, and remembered;
 //   · a PDF page with no text is a picture, and is read the same way.
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { send, applySecurity, rateLimit, requireAuth, isPrivileged, blockIfMustChange } from '../_lib/util.js';
@@ -33,6 +33,7 @@ import { decryptSecret, secretsConfigured } from '../_lib/secrets.js';
 import { hasPrivilege, requireBuyerAccess } from '../_lib/buycart.js';
 import { getObject, r2Configured } from '../_lib/r2.js';
 import { pdfPages, pdfPageImage, readCardsLocally, cardsFromCsv } from './gift-card-read.js';
+import { cardTailFromFileName } from '../../src/lib/buycartRules.js';
 
 const PAGE_W = 612; // US Letter
 const PAGE_H = 792;
@@ -219,21 +220,21 @@ export default async function handler(req, res) {
         }
         return;
       }
-      let tail = f.gc_last4 || null;
-      let fullNumber = null;
-      if (!tail) {
+      // By the last four remembered, then the file name (cardwell's 001-nike-4832.png), which needs
+      // no OCR. Either must name ONE card. Read only if neither settles it: never read before, or
+      // two cards on this request end the same way. A picture that matches no recorded card isn't
+      // printed: this PDF is the recorded cards.
+      const one = (t) => { const b = t ? byTail(t) : []; return b.length === 1 ? b[0] : null; };
+      const nameTail = cardTailFromFileName(f.name);
+      let hit = one(f.gc_last4) || one(nameTail);
+      if (!hit && (!f.gc_last4 || [f.gc_last4, nameTail].some((t) => t && byTail(t).length > 1))) {
         const nums = [...new Set((await readCardsLocally(bytes)).map((c) => c.number))];
         if (nums.length === 1) {
-          fullNumber = nums[0];
-          tail = fullNumber.slice(-4);
+          const tail = nums[0].slice(-4);
           await setBuyCartFileCardTail(cartId, f.id, tail).catch(() => {});
+          hit = cards.find((c) => c.code === nums[0]) || one(tail);
         }
       }
-      // An exact number beats the last four; the last four alone must name ONE card. A picture
-      // that matches no recorded card isn't printed: this PDF is the recorded cards.
-      const exact = fullNumber ? cards.find((c) => c.code === fullNumber) : null;
-      const byFour = !exact && tail ? byTail(tail) : [];
-      const hit = exact || (byFour.length === 1 ? byFour[0] : null);
       if (hit && !pictureFor.has(hit.id)) pictureFor.set(hit.id, { kind: 'img', bytes, name: f.name });
     });
 

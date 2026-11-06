@@ -262,3 +262,10 @@ export function nextStep(cart, who) {
       return null;
   }
 }
+
+// The last four of a gift card in its picture's file name: cardwell names them 001-nike-4832.png.
+// 13 of 13 named pictures on production matched the card when checked (2026-11-06). Null for
+// any other name, so "IMG_2024 (1).png" names no card.
+export function cardTailFromFileName(name) {
+  return (/(?:^|[-_ ])(\d{4})\.(?:png|jpe?g|webp)$/i.exec(String(name || '')) || [])[1] || null;
+}

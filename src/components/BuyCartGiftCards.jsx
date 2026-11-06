@@ -13,7 +13,7 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { PriceInput, CopyText, ImageZoomModal, FormModal } from './common.jsx';
-import { cardsIssuable, cardsRefusedBecause, cardsAfterPurchase, fundingBreakdown } from '../lib/buycartRules.js';
+import { cardsIssuable, cardsRefusedBecause, cardsAfterPurchase, fundingBreakdown, cardTailFromFileName } from '../lib/buycartRules.js';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -243,9 +243,16 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
   const isZip = (f) => /zip/.test(String(f.content_type || '')) || /\.zip$/i.test(f.name || '');
   const readWaiting = images.filter((f) => ['queued', 'reading'].includes(f.read_status));
   const readDone = images.filter((f) => f.read_status === 'done');
+  const readFinished = images.filter((f) => ['done', 'picture'].includes(f.read_status));
   const readyCards = readDone.reduce((n, f) => n + Number(f.read_count || 0), 0);
   const missed = images.filter((f) => f.read_status === 'failed' || (f.read_status === 'done' && !Number(f.read_count)));
   const notRead = images.filter((f) => !f.read_status || f.read_status === 'failed');
+  // The supplier scans the picture at the till, so a card without one is the desk's to fix before
+  // releasing. A PDF's pages can't be checked from here, so a request with a card PDF isn't judged.
+  const pictureTails = new Set(pictures.flatMap((f) => [f.gc_last4, cardTailFromFileName(f.name)]).filter(Boolean));
+  const noPicture = canIssue && ['approved', 'funded'].includes(cart.status) && !readWaiting.length
+    && !images.some((f) => String(f.content_type || '').includes('pdf'))
+    ? live.filter((c) => !pictureTails.has(c.code_last4)) : [];
 
   async function readAll() {
     setBusy('readall'); setErr('');
@@ -353,6 +360,11 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
         {/* Why no card can be recorded yet, in the endpoint's own words — "the buyer is
             still adding" is the one the desk most needs, because the total is not final. */}
         {whyNot && <p className="bc-till-warn">{whyNot}</p>}
+        {noPicture.length > 0 && (
+          <p className="bc-till-warn">
+            No barcode picture for {noPicture.length} card{noPicture.length === 1 ? '' : 's'}: {noPicture.slice(0, 6).map((c) => `•••• ${c.code_last4 || '????'}`).join(', ')}{noPicture.length > 6 ? ` and ${noPicture.length - 6} more` : ''}. The cashier scans the picture, so upload the ZIP before releasing.
+          </p>
+        )}
         {canIssue && cart.status === 'approved' && canAdd && (
           <button type="button" className="btn primary" disabled={busy === 'fund' || short > 0} onClick={fund}>
             {busy === 'fund' ? 'Releasing…' : 'Release to the buyer'}
@@ -421,8 +433,8 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
           )}
         </div>
 
-        {canPrep && !images.length && (
-          <p className="muted xs">From Cardwell: upload the CSV with the ZIP. The CSV has each card’s balance, the ZIP has its barcode picture.</p>
+        {canPrep && !pictures.length && (
+          <p className="muted xs">From Cardwell: upload the CSV, then the ZIP. The CSV has each card’s number, PIN and balance. The ZIP has the pictures the cashier scans at checkout.</p>
         )}
 
         {/* The server reads files as they land. The page only shows how far it has got, and the
@@ -432,7 +444,7 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
             {readWaiting.length > 0 && (
               <div className="bc-gc-bulk-row">
                 <span className="sm">
-                  <b>Reading {readDone.length + 1} of {readDone.length + readWaiting.length} files…</b>
+                  <b>Reading {readFinished.length + 1} of {readFinished.length + readWaiting.length} files…</b>
                   <span className="muted"> You can leave this page; it carries on.</span>
                 </span>
                 <button type="button" className="btn sm ghost" disabled={busy === 'stop'} onClick={stopReading}>Stop</button>
@@ -474,10 +486,11 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
                 {f.read_status === 'done' && (Number(f.read_count) > 0
                   ? <span className="bc-covered xs">{f.read_count} card{Number(f.read_count) === 1 ? '' : 's'} read{Number(f.read_unread) > 0 ? `, ${f.read_unread} page${Number(f.read_unread) === 1 ? '' : 's'} not` : ''}</span>
                   : <span className="bc-short xs">Nothing read</span>)}
+                {f.read_status === 'picture' && <span className="bc-covered xs">Barcode picture for •••• {f.gc_last4}</span>}
                 {f.read_status === 'failed' && <span className="bc-short xs">{f.read_error || 'Could not be read'}</span>}
                 {/* Read the numbers off it — a card face, a screenshot, or a table of
                     cards — into a review table below. Nothing is recorded until ticked. */}
-                {canPrep && !isZip(f) && (
+                {canPrep && !isZip(f) && f.read_status !== 'picture' && (
                   <button type="button" className="btn sm" disabled={busy === `read${f.id}` || busy === 'record'}
                     title="Read the card numbers, PINs and balances off this file for review"
                     onClick={() => readFile(f)}>{busy === `read${f.id}` ? 'Reading…' : 'Read the cards'}</button>

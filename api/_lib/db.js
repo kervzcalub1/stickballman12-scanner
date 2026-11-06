@@ -7894,7 +7894,7 @@ export async function getBuyCartFull(id) {
                (pin_enc IS NOT NULL) AS has_pin
           FROM buy_cart_gift_cards WHERE cart_id = ${id} ORDER BY id`,
     // The read's state only. Its ciphertext (`enc`) has its own endpoint and never comes here.
-    sql`SELECT f.id, f.cart_id, f.kind, f.sku, f.name, f.content_type, f.size_bytes, f.uploaded_by, f.uploaded_at,
+    sql`SELECT f.id, f.cart_id, f.kind, f.sku, f.name, f.content_type, f.size_bytes, f.uploaded_by, f.uploaded_at, f.gc_last4,
                r.status AS read_status, r.card_count AS read_count, r.unread AS read_unread, r.error AS read_error
           FROM buy_cart_files f LEFT JOIN buy_cart_card_reads r ON r.file_id = f.id
          WHERE f.cart_id = ${id} ORDER BY f.kind, f.id`,
@@ -9034,7 +9034,7 @@ export async function finishCardRead(fileId, { status, cardCount = 0, unread = 0
 // Everything read and not yet recorded, with its ciphertext: the desk's endpoint only.
 export async function listDoneCardReads(cartId) {
   return db()`
-    SELECT r.file_id, r.card_count, r.unread, r.mangled, r.enc, f.name
+    SELECT r.file_id, r.card_count, r.unread, r.mangled, r.enc, r.source, f.name
       FROM buy_cart_card_reads r JOIN buy_cart_files f ON f.id = r.file_id
      WHERE r.cart_id = ${cartId} AND r.status = 'done'
      ORDER BY r.file_id`;

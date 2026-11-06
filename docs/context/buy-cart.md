@@ -1372,9 +1372,16 @@ prod's trail), and every balance was typed. **The server now does the reading, w
   pressing again can't record a card twice. The stored readings are cleared after a full record.
 - **The balance can't be read off a cardwell card: the face and the PDF print only the number and PIN**
   (checked on the real file). **Cardwell's CSV has it** (`Retailer,Card number,PIN,Added,Balance`, read
-  by `cardsFromCsv` as is, checked on a real export; one card was $20.86 among $200s). Upload the CSV with
-  the ZIP: the CSV gives the balance, the ZIP the barcode picture for the all-cards PDF. A CSV alone is
-  enough to record cards, but the PDF then prints no barcode. With no CSV, **Set every blank balance**,
+  by `cardsFromCsv` as is, checked on a real export; one card was $20.86 among $200s).
+- **The desk's flow: the CSV, then the ZIP** (owner, 2026-11-06). The CSV is the card's details; the ZIP's
+  pictures are only for the supplier, whose all-cards PDF carries the barcode the cashier scans. So a picture
+  named for a card on a read CSV (`cardTailFromFileName`: `001-nike-4832.png`) is **not OCR'd**: it gets
+  `gc_last4` and read status `picture`. Names matched the card 13 of 13 on prod when checked. A picture of a card
+  the CSV doesn't list, or with no such name, is still read, so that card comes up for review. ZIP first
+  works too, just with OCR. **The PDF pairs** by `gc_last4`, then the name, and reads only if neither settles it
+  (never read, or two cards ending alike). **No barcode picture for N cards** warns the desk on the funding
+  panel before release (not on a request with a card PDF, whose pages can't be judged from the page).
+- With no CSV, **Set every blank balance**,
   which until now stopped at the first keystroke (typing 200 set every row to $2). A hand-edited row keeps its own value.
 - A PDF of up to 200 pages is read (was 60, silently); pages past that count as unread and the screen says so.
 - The per-file **Read the cards** button still works (`cart/gift-card-read`, one file, straight away).

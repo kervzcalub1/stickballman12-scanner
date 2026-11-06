@@ -11358,6 +11358,55 @@ export async function sheinUnitCounts() {
   return r || {};
 }
 
+/* SHEIN orders written to Shopify (docs/context/shein-live-fix.md → "Orders in Shopify"). */
+// Take this order for writing. Returns the row, or null when someone already has it or it's
+// done. Atomic, so the worker and a person's click can't both create the order. A 'creating'
+// row only comes back after 5 minutes: that's a request whose answer got lost, and the caller
+// looks in Shopify before it writes again.
+export async function claimSheinShopifyOrder(orderNo, by = null) {
+  const [r] = await db()`
+    INSERT INTO shein_shopify_orders (order_no, state, attempts, requested_by, claimed_at)
+    VALUES (${orderNo}, 'creating', 1, ${by}, now())
+    ON CONFLICT (order_no) DO UPDATE SET state = 'creating', attempts = shein_shopify_orders.attempts + 1,
+      requested_by = COALESCE(EXCLUDED.requested_by, shein_shopify_orders.requested_by), claimed_at = now(), updated_at = now()
+     WHERE shein_shopify_orders.state IN ('waiting', 'failed')
+        OR (shein_shopify_orders.state = 'creating' AND shein_shopify_orders.claimed_at < now() - interval '5 minutes')
+    RETURNING *`;
+  return r || null;
+}
+export async function markSheinShopifyOrder(orderNo, { state, id = null, name = null, source = null, total = null, error = null, note = null }) {
+  await db()`
+    UPDATE shein_shopify_orders SET state = ${state}, shopify_order_id = COALESCE(${id}, shopify_order_id), shopify_name = COALESCE(${name}, shopify_name),
+      shopify_source = COALESCE(${source}, shopify_source), total = COALESCE(${total}::numeric, total), error = ${error}, note = COALESCE(${note}, note),
+      attempts = CASE WHEN ${state}::text = 'waiting' THEN 0 ELSE attempts END, updated_at = now()
+     WHERE order_no = ${orderNo}`;
+}
+export async function getSheinShopifyOrder(orderNo) {
+  const [r] = await db()`SELECT * FROM shein_shopify_orders WHERE order_no = ${orderNo}`;
+  return r || null;
+}
+export async function sheinShopifyOrdersFor(orderNos) {
+  if (!orderNos.length) return [];
+  return await db()`SELECT * FROM shein_shopify_orders WHERE order_no = ANY(${orderNos}::text[])`;
+}
+// Orders sold since `since` whose every live pair has left the warehouse and that aren't in
+// Shopify yet. A cancel before shipping never gets here, so it never needs undoing in Shopify.
+export async function sheinOrdersDueForShopify(since, limit = 20) {
+  const rows = await db()`
+    SELECT u.order_no, min(u.order_time) AS sold
+      FROM shein_order_units u
+      LEFT JOIN shein_shopify_orders s ON s.order_no = u.order_no
+     WHERE u.stock_mode = 3 AND u.order_time >= ${since}::timestamptz
+       AND (s.order_no IS NULL
+         OR (s.attempts < 8 AND s.state IN ('waiting', 'failed'))
+         OR (s.attempts < 8 AND s.state = 'creating' AND s.claimed_at < now() - interval '5 minutes'))
+     GROUP BY u.order_no
+    HAVING bool_or(u.exchange_tag IN (1, 3) AND u.unit_status <> 6)
+       AND NOT bool_or(u.exchange_tag IN (1, 3) AND u.unit_status IN (1, 2, 7))
+     ORDER BY sold LIMIT ${limit}`;
+  return rows.map((r) => r.order_no);
+}
+
 export async function createSheinLiveRun({ mode, by }) {
   const [r] = await db()`INSERT INTO shein_live_runs (mode, status, phase, started_by) VALUES (${mode}, 'running', 'starting', ${by || null}) RETURNING *`;
   return r;

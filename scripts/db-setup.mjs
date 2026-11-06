@@ -2836,6 +2836,25 @@ await sql(`
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_sku ON shein_order_units (seller_sku)`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_order ON shein_order_units (order_no)`);
+// SHEIN orders written to Shopify by our own "SHEIN via Stickballman12.com" app (replaced the
+// CedCommerce import, 2026-11-06). One row = one SHEIN order. The row is the guard against a
+// second Shopify order: only a 'waiting' / 'failed' / long-stuck 'creating' row can be claimed.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_shopify_orders (
+    order_no         TEXT PRIMARY KEY,
+    state            TEXT NOT NULL DEFAULT 'creating',   -- creating | waiting | created | skipped | failed
+    shopify_order_id TEXT,
+    shopify_name     TEXT,
+    shopify_source   TEXT,
+    total            NUMERIC(12,2),
+    error            TEXT,
+    note             TEXT,
+    attempts         INT NOT NULL DEFAULT 0,
+    requested_by     TEXT,
+    claimed_at       TIMESTAMPTZ,
+    first_seen       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
 // The live fix walk: one run = every SHEIN product, one at a time; one item = one SHEIN size
 // as the walk found and left it. `source` = walk | push (a single Shopify change pushed) | shoe
 // (SHEIN Listings → Details → Fix this shoe).
@@ -3378,7 +3397,7 @@ const LIVE_TABLES = [
   'email_receipts', 'user_purchase_emails',
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log',
   'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_price_locks', 'stockx_listings', 'stockx_price_locks', 'stockx_price_edits', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
-  'shein_order_units', 'shein_live_runs', 'shein_live_items',
+  'shein_order_units', 'shein_shopify_orders', 'shein_live_runs', 'shein_live_items',
   'shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_jobs', 'shein_listing_job_items',
   'cancellations', 'cancellation_photos', 'cancellation_events',
   'inbound_issues', 'inbound_issue_events',

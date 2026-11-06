@@ -50,6 +50,33 @@ its top). The rules are the export fix's (`docs/context/shein-fix.md`), run per 
   refused, never guessed. The store has ONE location (2026-10-16). Location NAMES need
   `read_locations`, which the app lacks — we use ids only.
 
+## 1b. SHEIN orders in Shopify (`addOrderToShopify` in `shein-orders.js`, table `shein_shopify_orders`)
+Built 2026-11-06. The owner removed the CedCommerce app on purpose; this replaces its order import.
+- **The Channel name comes from the app that creates the order.** So orders are written by a
+  second Dev Dashboard app, **SHEIN via Stickballman12.com** (`SHEIN_ORDERS_CLIENT_ID/SECRET`,
+  `write_orders` only). `sourceName` isn't set: a name there doesn't change the label. Stock and
+  variant reads still use the main app. Older orders keep "SHEIN CedCommerce".
+- **Stock isn't part of this.** The −1 happens at the sale (section 1); the order is written with
+  `inventoryBehaviour: BYPASS`.
+- **An order is written when every live pair has SHIPPED** (`sheinOrderState`), not at the sale.
+  That means a cancel before shipping never reaches Shopify, and the order goes in with its
+  tracking number. `processedAt` is the real sale date, so reports land on the right day. It goes in
+  paid, fulfilled and archived, with tag `SHEIN`, a tag equal to the SHEIN order number, and note +
+  attributes "Source order id", as CedCommerce's did. Tax is `channelLiable` (SHEIN pays it). No
+  customer or address: SHEIN only gives us the region. No emails to anyone.
+- **Why fulfilled at creation:** `write_orders` can't fulfil an existing order; that needs
+  `write_merchant_managed_fulfillment_orders`. A refund AFTER shipping is a return and leaves the
+  Shopify order as it is (CedCommerce did the same).
+- **Never two orders.** `claimSheinShopifyOrder` is atomic, so a click and the worker can't both
+  write. Every attempt looks for the tag in Shopify first. A lost answer (network, 5xx) leaves the row
+  `creating`, unclaimable for 5 minutes, then the search finds the order instead of writing again. A
+  definite refusal = `failed`; the worker tries 8 times, then it waits for **Try again**.
+- A SKU Shopify no longer has goes in by SKU + title (the sale stays on record); a SKU two variants
+  share stops the order; no price, $0 or a non-USD order is refused rather than written wrong.
+- **Switch:** "Turn on SHEIN orders in Shopify" on the panel (`shopify_orders_on`, admin or Connect
+  integrations) covers orders sold since then, on the minute tick. **Add to Shopify** on a row of
+  Latest SHEIN sales writes one order, for older ones. Only production writes (dev shares the store).
+
 ## 2. Shopify → SHEIN (`api/shopify/webhook.js`, `pushSkus` in `shein-live.js`)
 Admin turns it on → we register Shopify's `INVENTORY_LEVELS_UPDATE` webhook to
 `<APP_URL or host>/api/shopify/webhook` (HMAC over the RAW body; any of `SHOPIFY_WEBHOOK_SECRET`, `SHOPIFY_SECRET_KEY`, `SHOPIFY_CLIENT_SECRET` passes;

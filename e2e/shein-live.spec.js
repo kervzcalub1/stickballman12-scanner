@@ -12,7 +12,8 @@
 //   · webhooks: SHEIN's signature + AES, Shopify's HMAC — a forged one is refused.
 import { test, expect } from '@playwright/test';
 import crypto from 'node:crypto';
-import { rowsFromSpu, planProduct, ownersFrom, indexRows, unitsFromOrders, unitAction, pickLocation, toSheinTime, fromSheinTime, AI_WRITE_MIN, shelfFrom, shelfPlan } from '../src/lib/sheinLive.js';
+import { rowsFromSpu, planProduct, ownersFrom, indexRows, unitsFromOrders, unitAction, pickLocation, toSheinTime, fromSheinTime, AI_WRITE_MIN, shelfFrom, shelfPlan, sheinOrderState, sheinLinePrice, shopifyOrderInput } from '../src/lib/sheinLive.js';
+import { addOrderToShopify } from '../api/_lib/shein-orders.js';
 
 /* ------------------------------ fixtures ------------------------------ */
 
@@ -504,6 +505,46 @@ test.describe('SHEIN live — the page', () => {
     if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
   });
 
+  test('Shopify orders: a shipped sale has Add to Shopify, a written one links to its order, a cancelled one has no button', async ({ page }) => {
+    const { loginAs } = await import('./helpers/auth.js');
+    const posted = [];
+    const unit = (id, order, status, extra = {}) => ({ goods_id: id, order_no: order, unit_status: status, shipped_seen: status === 4, due: true, deducted_at: '2026-11-03T23:00:00Z', order_time: '2026-11-03T23:00:00Z', seller_sku: 'A7', title: 'Air Max', ...extra });
+    let live = {
+      ok: true, connected: true, configured: true, worker: true, active: null, modes: ['dry', 'stock', 'full'], run: null, items: [], pushes: [],
+      sync: { orders: 'on', since: '2026-10-16T14:00:00Z' }, unitCounts: { last24: 0, failing: 0 }, shopifyOrdersReady: true, shopifyStore: 'teststore',
+      units: [unit('1', 'GSUSHIP', 4), unit('2', 'GSUDONE', 4), unit('3', 'GSUGONE', 6), unit('4', 'GSUOPEN', 2), unit('5', 'GSUBAD', 4)],
+      shopifyOrders: [{ order_no: 'GSUDONE', state: 'created', shopify_order_id: 'gid://shopify/Order/55', shopify_name: '#40000' }, { order_no: 'GSUBAD', state: 'failed', error: 'Location not found' }],
+    };
+    await page.route('**/api/shein/status', (r) => r.fulfill({ json: { ok: true, configured: true, connected: true } }));
+    await page.route('**/api/shein/live', (r) => {
+      if (r.request().method() !== 'POST') return r.fulfill({ json: live });
+      const b = r.request().postDataJSON(); posted.push(b);
+      if (b.action === 'shopify_order') {
+        live = { ...live, shopifyOrders: [...live.shopifyOrders, { order_no: b.orderNo, state: 'created', shopify_order_id: 'gid://shopify/Order/56', shopify_name: '#40001' }] };
+        return r.fulfill({ json: { ok: true, result: { state: 'created', name: '#40001' } } });
+      }
+      live = { ...live, sync: { ...live.sync, shopifyOrders: 'on', shopifyOrdersSince: '2026-11-07T00:00:00Z' } };
+      return r.fulfill({ json: { ok: true } });
+    });
+    await loginAs(page, 'admin');
+    await page.goto('/shein-check');
+    await page.getByText('Latest SHEIN sales', { exact: false }).click();
+    const row = (no) => page.locator('tr', { hasText: no });
+    await expect(row('GSUDONE').getByRole('link', { name: '#40000' })).toHaveAttribute('href', 'https://admin.shopify.com/store/teststore/orders/55');
+    await expect(row('GSUGONE').getByRole('button')).toHaveCount(0);
+    await expect(row('GSUOPEN').getByRole('button')).toHaveCount(0);
+    await expect(row('GSUBAD').getByText('Location not found')).toBeVisible();
+    await expect(row('GSUBAD').getByRole('button', { name: 'Try again' })).toBeVisible();
+    await row('GSUSHIP').getByRole('button', { name: 'Add to Shopify' }).click();
+    await expect.poll(() => posted.at(-1)).toEqual({ action: 'shopify_order', orderNo: 'GSUSHIP' });
+    await expect(page.getByText('GSUSHIP is in Shopify as #40001.')).toBeVisible();
+    await expect(row('GSUSHIP').getByRole('link', { name: '#40001' })).toBeVisible();
+    // The going-forward switch is separate from adding one order.
+    await page.getByRole('button', { name: 'Turn on SHEIN orders in Shopify' }).click();
+    await expect.poll(() => posted.at(-1)).toEqual({ action: 'shopify_orders_on' });
+    await expect(page.getByRole('button', { name: 'Stop SHEIN orders in Shopify' })).toBeVisible();
+  });
+
   test('a run bigger than the live list: the page says so, and the CSV fetches every row', async ({ page }) => {
     const { loginAs } = await import('./helpers/auth.js');
     const row = (i) => ({ id: i, spu: `spu${i}`, shein_sku: `s${i}`, product_name: `Shoe ${i}`, shein_size: 'US9', seller_sku: `K${i}`, shopify_size: '9', shopify_qty: 1, held: 0, before_qty: 2, target_qty: 1, reason: 'ok', result: 'changed', wrote: 'dry', action: 'would set 2 → 1' });
@@ -764,5 +805,129 @@ test.describe('SHEIN live — one shoe', () => {
     expect(r.status()).toBe(400);
     r = await request.post('/api/shein/live', { headers: admin, data: { action: 'shoe', spu: 'spu1', mode: 'stock' } });
     expect(r.status()).toBe(400);   // one shoe: dry or full only
+  });
+});
+
+/* ---------------- SHEIN orders written to Shopify (our own app) ---------------- */
+test.describe('SHEIN orders in Shopify', () => {
+  const GOOD = (extra = {}) => ({ goodsId: 1001, sellerSku: 'A7', skuCode: 's7', goodsTitle: 'Nike Air Max 95', newGoodsStatus: 4, goodsExchangeTag: 1, sellerCurrencyPrice: 55, saleTax: 3.99, ...extra });
+  const ORDER = (extra = {}) => ({ orderNo: 'GSU1', stockMode: 3, orderStatus: 4, orderCurrency: 'USD', orderAllocateTime: '2026-11-04 07:13:00.000+0800', packageWaybillList: [{ waybillNo: '1Z999', carrier: 'UPS' }], orderGoodsInfoList: [GOOD()], ...extra });
+  const LOC = 'gid://shopify/Location/1';
+
+  test('ready only once every live pair has shipped; a cancel before shipping never reaches Shopify', () => {
+    expect(sheinOrderState(ORDER()).state).toBe('ready');
+    expect(sheinOrderState(ORDER({ orderGoodsInfoList: [GOOD({ newGoodsStatus: 2 })] })).state).toBe('wait');
+    expect(sheinOrderState(ORDER({ orderGoodsInfoList: [GOOD(), GOOD({ goodsId: 1002, newGoodsStatus: 1 })] })).state).toBe('wait');
+    expect(sheinOrderState(ORDER({ orderGoodsInfoList: [GOOD({ newGoodsStatus: 6 })] })).state).toBe('skip');
+    expect(sheinOrderState(ORDER({ orderGoodsInfoList: [GOOD({ goodsExchangeTag: 2 })] })).state).toBe('skip');
+    expect(sheinOrderState(ORDER({ stockMode: 2 })).state).toBe('skip');
+    // A refunded pair beside a shipped one: the order is ready, with the shipped pair only.
+    const mixed = ORDER({ orderGoodsInfoList: [GOOD(), GOOD({ goodsId: 1002, newGoodsStatus: 6 })] });
+    expect(sheinOrderState(mixed).state).toBe('ready');
+    expect(shopifyOrderInput(mixed, { locationId: LOC }).order.lineItems).toHaveLength(1);
+  });
+
+  test('the input: real sale date, paid, fulfilled with tracking, same marks as CedCommerce, tax is SHEIN’s to pay', () => {
+    const { order, total } = shopifyOrderInput(ORDER(), { variants: new Map([['A7', 'gid://shopify/ProductVariant/7']]), locationId: LOC, now: new Date('2026-11-07T00:00:00Z') });
+    expect(total).toBe(58.99);
+    expect(order.processedAt).toBe(fromSheinTime('2026-11-04 07:13:00.000+0800'));
+    expect(order).toMatchObject({ financialStatus: 'PAID', fulfillmentStatus: 'FULFILLED', sourceIdentifier: 'GSU1', tags: ['SHEIN', 'GSU1'], note: 'Source order id: GSU1' });
+    expect(order.fulfillment).toEqual({ locationId: LOC, notifyCustomer: false, trackingNumber: '1Z999', trackingCompany: 'UPS' });
+    expect(order.transactions[0]).toMatchObject({ gateway: 'SHEIN', amountSet: { shopMoney: { amount: '58.99', currencyCode: 'USD' } } });
+    const line = order.lineItems[0];
+    expect(line).toMatchObject({ variantId: 'gid://shopify/ProductVariant/7', quantity: 1, priceSet: { shopMoney: { amount: '55.00' } } });
+    expect(line.taxLines[0]).toMatchObject({ title: 'Sale tax', rate: 0.0725, channelLiable: true, priceSet: { shopMoney: { amount: '3.99' } } });
+    expect(order).not.toHaveProperty('sourceName');   // the Channel label comes from the app; a name here is ignored
+  });
+
+  test('prices: the discounted price wins; else price minus coupon and promotion; never a blank or $0 order', () => {
+    expect(sheinLinePrice(GOOD({ sellerCurrencyDiscountPrice: 49.5 }))).toBe(49.5);
+    expect(sheinLinePrice(GOOD({ orderCurrencyStoreCouponPrice: 5, orderCurrencyPromotionPrice: 2 }))).toBe(48);
+    expect(() => shopifyOrderInput(ORDER({ orderGoodsInfoList: [GOOD({ sellerCurrencyPrice: null })] }), { locationId: LOC })).toThrow(/no usable price/);
+    expect(() => shopifyOrderInput(ORDER({ orderGoodsInfoList: [GOOD({ sellerCurrencyPrice: 0 })] }), { locationId: LOC })).toThrow(/no usable price/);
+    expect(() => shopifyOrderInput(ORDER({ orderCurrency: 'EUR' }), { locationId: LOC })).toThrow(/EUR/);
+    expect(() => shopifyOrderInput(ORDER(), {})).toThrow(/location/);
+  });
+
+  test('a SKU Shopify no longer has goes in by SKU and title; no tracking yet still fulfils', () => {
+    const { order } = shopifyOrderInput(ORDER({ packageWaybillList: [] }), { locationId: LOC });
+    expect(order.lineItems[0]).toMatchObject({ sku: 'A7', title: 'Nike Air Max 95' });
+    expect(order.lineItems[0]).not.toHaveProperty('variantId');
+    expect(order.fulfillment).toEqual({ locationId: LOC, notifyCustomer: false });
+  });
+
+  // A fake store: the DB row, SHEIN and both Shopify apps. The row behaves as the real claim does.
+  function fakeIo({ detail = ORDER(), create = () => ({ ok: true, id: 'gid://shopify/Order/9', name: '#40000', source: '123' }), find = () => ({ order: null }), row = null } = {}) {
+    const st = { row, creates: [], finds: 0, stockReads: 0 };
+    const io = {
+      sheinOrdersConfigured: () => true,
+      orderDetails: async () => (detail ? [detail] : []),
+      shopifyStockForSku: async (sku) => { st.stockReads += 1; return { variantId: `gid://shopify/ProductVariant/${sku}`, levels: [{ locationId: LOC, location: '1', available: 2 }] }; },
+      sheinLinkedSku: async () => null,
+      shopifyFindSheinOrder: async () => { st.finds += 1; return find(); },
+      shopifyCreateSheinOrder: async (o) => { st.creates.push(o); return create(); },
+      claim: async (no, by) => {
+        if (st.row && !['waiting', 'failed'].includes(st.row.state) && !st.row.stale) return null;
+        st.row = { order_no: no, state: 'creating', attempts: (st.row?.attempts || 0) + 1, requested_by: by };
+        return st.row;
+      },
+      mark: async (no, patch) => { st.row = { ...st.row, ...patch, shopify_name: patch.name ?? st.row.shopify_name, stale: false }; },
+      get: async () => st.row,
+    };
+    return { io, st };
+  }
+
+  test('writes once; a second call finds the row and writes nothing', async () => {
+    const { io, st } = fakeIo();
+    const r = await addOrderToShopify('GSU1', { by: 'Kev', io });
+    expect(r).toMatchObject({ state: 'created', name: '#40000', total: 58.99 });
+    expect(st.creates).toHaveLength(1);
+    expect(st.creates[0].fulfillment.locationId).toBe(LOC);
+    const again = await addOrderToShopify('GSU1', { by: 'Kev', io });
+    expect(again).toMatchObject({ state: 'created', name: '#40000' });
+    expect(st.creates).toHaveLength(1);
+  });
+
+  test('a lost answer stays "creating"; the next try finds the order in Shopify and does not write a second one', async () => {
+    let live = null;
+    const { io, st } = fakeIo({ create: () => { live = { id: 'gid://shopify/Order/9', name: '#40000', sourceName: '123' }; return { error: 'Shopify answered HTTP 502 with no result.', definite: false }; }, find: () => ({ order: live }) });
+    const first = await addOrderToShopify('GSU1', { io });
+    expect(first.state).toBe('creating');
+    expect(st.row.state).toBe('creating');
+    // Within the 5 minutes the row can't be claimed at all.
+    expect((await addOrderToShopify('GSU1', { io })).busy).toBe(true);
+    expect(st.creates).toHaveLength(1);
+    st.row.stale = true;   // 5 minutes later
+    const later = await addOrderToShopify('GSU1', { io });
+    expect(later).toMatchObject({ state: 'created', name: '#40000', already: true });
+    expect(st.creates).toHaveLength(1);
+  });
+
+  test('a definite refusal can be tried again; not shipped waits; refunded is skipped; no credentials writes nothing', async () => {
+    let calls = 0;
+    const a = fakeIo({ create: () => { calls += 1; return calls === 1 ? { error: 'Location not found', definite: true } : { ok: true, id: 'x', name: '#40001' }; } });
+    expect((await addOrderToShopify('GSU1', { io: a.io })).state).toBe('failed');
+    expect(a.st.row.error).toBe('Location not found');
+    expect((await addOrderToShopify('GSU1', { io: a.io })).name).toBe('#40001');
+
+    const b = fakeIo({ detail: ORDER({ orderGoodsInfoList: [GOOD({ newGoodsStatus: 2 })] }) });
+    expect((await addOrderToShopify('GSU1', { io: b.io })).state).toBe('waiting');
+    expect(b.st.creates).toHaveLength(0);
+
+    const c = fakeIo({ detail: ORDER({ orderGoodsInfoList: [GOOD({ newGoodsStatus: 6 })] }) });
+    expect((await addOrderToShopify('GSU1', { io: c.io })).state).toBe('skipped');
+    expect(c.st.creates).toHaveLength(0);
+
+    const d = fakeIo();
+    d.io.sheinOrdersConfigured = () => false;
+    expect((await addOrderToShopify('GSU1', { io: d.io })).state).toBe('failed');
+    expect(d.st.row).toBeNull();
+  });
+
+  test('a SKU two variants share stops the order; no guessing', async () => {
+    const { io, st } = fakeIo();
+    io.shopifyStockForSku = async () => ({ error: '2 Shopify variants share SKU A7', code: 'ambiguous' });
+    expect((await addOrderToShopify('GSU1', { io })).state).toBe('failed');
+    expect(st.creates).toHaveLength(0);
   });
 });

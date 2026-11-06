@@ -308,6 +308,77 @@ export function unitsFromOrders(details, { since = null, known = new Set(), open
   return out;
 }
 
+// Is this SHEIN order ready to be written to Shopify as an order? Only once every live pair has
+// left the warehouse: a cancel before shipping then never reaches Shopify, and the order goes in
+// with its tracking number. 'ready' | 'wait' | 'skip'.
+const liveGoods = (o) => (o?.orderGoodsInfoList || []).filter((g) => [1, 3].includes(Number(g.goodsExchangeTag ?? 1)) && Number(g.newGoodsStatus ?? g.goodsStatus ?? o.orderStatus) !== 6);
+export function sheinOrderState(o) {
+  if (Number(o?.stockMode ?? 3) !== 3) return { state: 'skip', reason: 'SHEIN ships this one from its own warehouse.' };
+  const live = liveGoods(o);
+  if (!live.length) return { state: 'skip', reason: 'SHEIN refunded or swapped every pair on this order.' };
+  if (live.some((g) => OPEN.has(Number(g.newGoodsStatus ?? g.goodsStatus ?? o.orderStatus)))) return { state: 'wait', reason: 'Not shipped yet. It goes into Shopify when it ships.' };
+  return { state: 'ready' };
+}
+
+const money = (n) => Number(n).toFixed(2);
+// What the buyer paid for the pair, before tax. The discounted price when SHEIN gives one.
+export function sheinLinePrice(g) {
+  const discounted = Number(g.sellerCurrencyDiscountPrice);
+  if (Number.isFinite(discounted) && discounted > 0) return Math.round(discounted * 100) / 100;
+  const base = Number(g.sellerCurrencyPrice);
+  if (!Number.isFinite(base)) return null;
+  const net = base - (Number(g.orderCurrencyStoreCouponPrice) || 0) - (Number(g.orderCurrencyPromotionPrice) || 0);
+  return Math.round(net * 100) / 100;
+}
+
+// The orderCreate input for one SHEIN order. `variants`: Map(seller SKU → variant gid); a SKU
+// Shopify no longer has goes in by SKU and title, so the sale is still on record. Throws rather
+// than write a wrong amount. SHEIN collects and pays US sales tax, hence channelLiable.
+export function shopifyOrderInput(o, { variants = new Map(), locationId, now = new Date() }) {
+  const orderNo = String(o?.orderNo || '').trim();
+  if (!orderNo) throw new Error('The SHEIN order has no number.');
+  if (!locationId) throw new Error('No Shopify location to record the shipment against.');
+  const currency = String(o.orderCurrency || liveGoods(o)[0]?.orderCurrency || 'USD').toUpperCase();
+  if (currency !== 'USD') throw new Error(`SHEIN order ${orderNo} is in ${currency}; the store is in USD.`);
+  const shopMoney = (n) => ({ shopMoney: { amount: money(n), currencyCode: currency } });
+  let total = 0;
+  const lineItems = liveGoods(o).map((g) => {
+    const price = sheinLinePrice(g);
+    if (price == null || price <= 0) throw new Error(`SHEIN gave no usable price for ${g.sellerSku || g.goodsId} on ${orderNo}.`);
+    const tax = Math.round((Number(g.saleTax) || 0) * 100) / 100;
+    total += price + tax;
+    const sku = String(g.sellerSku ?? '').trim();
+    const variantId = variants.get(sku);
+    return {
+      quantity: 1, priceSet: shopMoney(price), requiresShipping: true,
+      ...(variantId ? { variantId } : { title: String(g.goodsTitle || sku || 'SHEIN item').slice(0, 250), ...(sku ? { sku } : {}) }),
+      ...(tax > 0 ? { taxLines: [{ title: 'Sale tax', rate: Number((tax / price).toFixed(4)), priceSet: shopMoney(tax), channelLiable: true }] } : {}),
+    };
+  });
+  if (!lineItems.length) throw new Error(`SHEIN order ${orderNo} has no live pairs.`);
+  const soldAt = fromSheinTime(o.orderAllocateTime) || fromSheinTime(o.orderTime) || fromSheinTime(o.paymentTime);
+  const packages = (o.packageWaybillList || []).filter((p) => String(p?.waybillNo || '').trim());
+  const extra = packages.slice(1).map((p) => p.waybillNo);
+  return {
+    total: Math.round(total * 100) / 100,
+    order: {
+      lineItems, currency, financialStatus: 'PAID', fulfillmentStatus: 'FULFILLED',
+      fulfillment: { locationId, notifyCustomer: false,
+        ...(packages[0] ? { trackingNumber: String(packages[0].waybillNo).trim(), ...(packages[0].carrier ? { trackingCompany: String(packages[0].carrier) } : {}) } : {}) },
+      transactions: [{ kind: 'SALE', status: 'SUCCESS', gateway: 'SHEIN', amountSet: shopMoney(total), ...(soldAt ? { processedAt: soldAt } : {}) }],
+      ...(soldAt ? { processedAt: soldAt } : {}),
+      // Same marks CedCommerce left, so searches and habits keep working. The order number is
+      // also a tag: that's how we find this order again after a lost answer.
+      tags: ['SHEIN', orderNo], sourceIdentifier: orderNo,
+      note: `Source order id: ${orderNo}${extra.length ? ` · more tracking: ${extra.join(', ')}` : ''}`,
+      customAttributes: [{ key: 'channel', value: 'SHEIN' }, { key: 'Source order id', value: orderNo }],
+      // Shipped and paid: nothing left to do on it, so it goes straight to archived like
+      // the CedCommerce orders did.
+      closedAt: new Date(now).toISOString(),
+    },
+  };
+}
+
 // What Shopify must do for a recorded unit: 'deduct' | 'restock' | null.
 export function unitAction(u) {
   if (u.deducted_at == null) {

@@ -21,6 +21,25 @@ const VIEWS = [['changed', 'Changed'], ['person', 'Needs a person'], ['skipped',
 const UNIT = { 1: 'pending', 2: 'to ship', 4: 'shipped', 5: 'delivered', 6: 'refunded', 7: 'to pick up', 8: 'lost', 9: 'rejected' };
 const tone = (it) => (it.result === 'failed' || it.result === 'mismatch' ? 'bad' : it.reason !== 'ok' ? 'warn' : it.result === 'changed' ? 'info' : 'ok');
 
+// One SHEIN sale's Shopify order: the link once it exists, why not otherwise, and the
+// button for an admin to write an order that has shipped but isn't there.
+function ShopifyOrderCell({ unit, row, store, isAdmin, ready, busy, onAdd }) {
+  if (row?.state === 'created') {
+    const id = String(row.shopify_order_id || '').split('/').pop();
+    return store && id ? <a href={`https://admin.shopify.com/store/${store}/orders/${id}`} target="_blank" rel="noreferrer">{row.shopify_name}</a> : row.shopify_name;
+  }
+  if (row?.state === 'skipped') return <span className="muted">{row.note || 'Not needed'}</span>;
+  if (row?.state === 'creating') return <span className="muted">Writing…{row.error ? <div className="shc-bad">{row.error}</div> : null}</span>;
+  const shipped = !!unit.shipped_seen && Number(unit.unit_status) !== 6;
+  return (
+    <>
+      {row?.state === 'waiting' && <span className="muted">{row.note}</span>}
+      {row?.state === 'failed' && <div className="shc-bad">{row.error}</div>}
+      {isAdmin && ready && shipped && <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => onAdd(unit.order_no)}>{row?.state === 'failed' ? 'Try again' : 'Add to Shopify'}</button>}
+    </>
+  );
+}
+
 export function SheinLivePanel({ isAdmin, onSignOut }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
@@ -53,12 +72,19 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
         setMsg(r?.failed ? `Retried: ${fmt(n)} done, ${fmt(r.failed)} still failing — the reason is under each red row in “Latest SHEIN sales”.`
           : n ? `Retried: ${fmt(n)} done.` : 'Nothing left to retry.');
       }
+      if (action === 'shopify_order') {
+        const o = r?.result || {};
+        setMsg(o.state === 'created' ? `${extra.orderNo} is in Shopify as ${o.name}${o.already ? ' (it was already there)' : ''}.`
+          : o.state === 'failed' ? `${extra.orderNo} didn’t go in: ${o.error}`
+            : o.note || `${extra.orderNo}: ${o.state}.`);
+      }
       await load();
     }
     catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
     finally { setBusy(''); }
   }
 
+  const orderRows = useMemo(() => new Map((d?.shopifyOrders || []).map((o) => [o.order_no, o])), [d]);
   const run = d?.run;
   const running = run?.status === 'running';
   const c = run?.counts || {};
@@ -104,6 +130,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
           <div className="shc-tile info"><b>{fmt(uc.last24)}</b><span>pairs taken off Shopify, last 24 h</span></div>
           {Number(uc.failing) > 0 && <div className="shc-tile bad"><b>{fmt(uc.failing)}</b><span>SHEIN sales NOT off Shopify yet — see below</span></div>}
           <div className={`shc-tile ${sync.push === 'on' ? 'ok' : 'warn'}`}><b>{sync.push === 'on' ? 'ON' : 'OFF'}</b><span>Shopify stock → SHEIN</span></div>
+          <div className={`shc-tile ${sync.shopifyOrders === 'on' ? 'ok' : 'warn'}`}><b>{sync.shopifyOrders === 'on' ? 'ON' : 'OFF'}</b><span>SHEIN orders in Shopify{sync.shopifyOrders === 'on' ? ` · since ${when(sync.shopifyOrdersSince)}` : ''}</span></div>
         </div>
         <p className="muted xs">{sync.orders === 'on'
           ? <>SHEIN tells us the moment an order comes in; every minute we also check SHEIN for anything missed (last check {when(sync.polledAt)}). Each pair is taken off Shopify once — never twice — and put back only if SHEIN cancels it before it ships.</>
@@ -117,6 +144,9 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
               ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => act('push_off')}>Turn off Shopify → SHEIN</button>
               : <button type="button" className="btn sm" disabled={!!busy || sync.orders !== 'on' || !paused4seller} title={sync.orders !== 'on' ? 'Turn on SHEIN sales → Shopify first' : !paused4seller ? 'Tick “4seller is paused” below first' : ''} onClick={() => act('push_on')}>{busy === 'push_on' ? 'Registering with Shopify…' : 'Turn on Shopify → SHEIN'}</button>}
             {Number(uc.failing) > 0 && <button type="button" className="btn sm" disabled={!!busy} onClick={() => act('retry')}>{busy === 'retry' ? 'Retrying…' : 'Retry the failed ones'}</button>}
+            {sync.shopifyOrders === 'on'
+              ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => act('shopify_orders_off')}>Stop SHEIN orders in Shopify</button>
+              : <button type="button" className="btn sm" disabled={!!busy || !d.shopifyOrdersReady} title={d.shopifyOrdersReady ? 'From now on, each SHEIN order goes into Shopify when it ships' : 'The SHEIN orders app isn’t set up on this server'} onClick={() => act('shopify_orders_on')}>Turn on SHEIN orders in Shopify</button>}
           </div>
         )}
         {msg && <p className="sm mt">{msg}</p>}
@@ -136,7 +166,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
             <summary className="sm">Latest SHEIN sales ({fmt(d.units.length)})</summary>
             <div className="ap-tablewrap">
               <table className="table shc-table">
-                <thead><tr><th>Sold</th><th>Order</th><th>Seller SKU</th><th>Shoe</th><th>SHEIN</th><th>Shopify</th></tr></thead>
+                <thead><tr><th>Sold</th><th>Order</th><th>Seller SKU</th><th>Shoe</th><th>SHEIN</th><th>Shopify</th><th>Shopify order</th></tr></thead>
                 <tbody>
                   {d.units.map((u) => (
                     <tr key={u.goods_id} className={u.error && !u.deducted_at && u.due ? 'bad' : ''}>
@@ -148,6 +178,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
                       <td className="xs">{u.deducted_at ? <span className="ebo-chip ok">off Shopify</span> : !u.due ? <span className="ebo-chip">before switch-on</span> : u.error ? <span className="ebo-chip bad">not yet</span> : <span className="ebo-chip">—</span>}
                         {u.restocked_at && <span className="ebo-chip info">put back</span>}
                         {(u.note || u.error) && <div className={u.error ? 'shc-bad' : 'muted'}>{u.error || u.note}</div>}</td>
+                      <td className="xs"><ShopifyOrderCell unit={u} row={orderRows.get(u.order_no)} store={d.shopifyStore} isAdmin={isAdmin} ready={d.shopifyOrdersReady} busy={busy} onAdd={(orderNo) => act('shopify_order', { orderNo })} /></td>
                     </tr>
                   ))}
                 </tbody>

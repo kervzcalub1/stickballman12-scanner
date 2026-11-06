@@ -14,9 +14,9 @@
 // Idempotency: the key carries the goodsId + how many DEFINITE refusals came before, so a
 // request whose answer got lost is resent with the same key and can't take a pair twice.
 import { sheinCall, listOf } from './shein.js';
-import { shopifyStockForSku, shopifyAdjustAvailable, shopifyConfigured } from './shopify.js';
-import { getSetting, setSetting, upsertSheinUnits, sheinUnitsKnown, sheinUnitsToAct, markSheinUnit, sheinLinkedSku } from './db.js';
-import { unitsFromOrders, unitAction, pickLocation, toSheinTime } from '../../src/lib/sheinLive.js';
+import { shopifyStockForSku, shopifyAdjustAvailable, shopifyConfigured, sheinOrdersConfigured, shopifyFindSheinOrder, shopifyCreateSheinOrder } from './shopify.js';
+import { getSetting, setSetting, upsertSheinUnits, sheinUnitsKnown, sheinUnitsToAct, markSheinUnit, sheinLinkedSku, claimSheinShopifyOrder, markSheinShopifyOrder, getSheinShopifyOrder, sheinOrdersDueForShopify } from './db.js';
+import { unitsFromOrders, unitAction, pickLocation, toSheinTime, sheinOrderState, shopifyOrderInput } from '../../src/lib/sheinLive.js';
 
 export const SYNC_KEY = 'shein_sync';
 // What the Shopify step touches — swappable in tests.
@@ -150,3 +150,85 @@ export async function switchOn({ by, openAtStart }) {
   return processOrders(nos, { openAtStart: !!openAtStart });
 }
 export const switchOff = (by) => writeSync({ orders: 'off', offBy: by, offAt: new Date().toISOString() }, by);
+
+/* ---------------------- the order itself, in Shopify ---------------------- */
+// CedCommerce wrote SHEIN orders into Shopify until the owner removed it (2026-11-06). Our own
+// app does it now, so the Channel column reads "SHEIN via Stickballman12.com". Stock is NOT
+// part of this: the −1 above already happened at the sale, and the order is written with
+// inventory bypassed. One SHEIN order = one Shopify order, written when it has shipped.
+export const ORDER_IO = {
+  orderDetails, shopifyStockForSku, sheinLinkedSku, sheinOrdersConfigured, shopifyFindSheinOrder, shopifyCreateSheinOrder,
+  claim: claimSheinShopifyOrder, mark: markSheinShopifyOrder, get: getSheinShopifyOrder,
+};
+
+export async function addOrderToShopify(orderNo, { by = null, io = ORDER_IO } = {}) {
+  const no = String(orderNo || '').trim();
+  if (!no) return { state: 'failed', error: 'Which SHEIN order?' };
+  if (!io.sheinOrdersConfigured()) return { state: 'failed', error: 'The SHEIN orders app isn’t set up on this server (SHEIN_ORDERS_CLIENT_ID / SECRET).' };
+  const row = await io.claim(no, by);
+  if (!row) {
+    const cur = await io.get(no);
+    return { state: cur?.state || 'creating', name: cur?.shopify_name || null, error: cur?.error || null, busy: cur?.state === 'creating' };
+  }
+  const fail = async (error, definite = true) => {
+    // Not definite = the order may exist. It stays 'creating', so nothing writes again for 5
+    // minutes, and the next try looks in Shopify first.
+    await io.mark(no, { state: definite ? 'failed' : 'creating', error });
+    return { state: definite ? 'failed' : 'creating', error };
+  };
+  try {
+    // Already there? (An earlier answer got lost, or a retry after a crash.) Never a second order.
+    const found = await io.shopifyFindSheinOrder(no);
+    if (found.error) return fail(`Couldn’t check Shopify first: ${found.error}`);
+    if (found.order) {
+      await io.mark(no, { state: 'created', id: found.order.id, name: found.order.name, source: found.order.sourceName, note: 'Found already in Shopify.' });
+      return { state: 'created', name: found.order.name, id: found.order.id, already: true };
+    }
+    const [detail] = await io.orderDetails([no]);
+    if (!detail) return fail('SHEIN didn’t return this order.');
+    const ready = sheinOrderState(detail);
+    if (ready.state === 'skip') { await io.mark(no, { state: 'skipped', note: ready.reason }); return { state: 'skipped', note: ready.reason }; }
+    if (ready.state === 'wait') { await io.mark(no, { state: 'waiting', note: ready.reason }); return { state: 'waiting', note: ready.reason }; }
+
+    const variants = new Map();
+    let location = null;
+    for (const g of detail.orderGoodsInfoList || []) {
+      const sku = String(g.sellerSku ?? '').trim();
+      if (!sku || variants.has(sku)) continue;
+      let st = await io.shopifyStockForSku(sku);
+      if (st.code === 'missing' && g.skuCode && io.sheinLinkedSku) {
+        const linked = await io.sheinLinkedSku(String(g.skuCode));
+        if (linked && linked !== sku) st = await io.shopifyStockForSku(linked);
+      }
+      if (st.code === 'missing') continue;   // goes in by SKU and title; the sale stays on record
+      if (st.error) return fail(st.error);
+      variants.set(sku, st.variantId);
+      location = location || pickLocation(st.levels, process.env.SHOPIFY_SHEIN_LOCATION)?.locationId || null;
+    }
+    const { order, total } = shopifyOrderInput(detail, { variants, locationId: location || sheinLocationGid() });
+    const made = await io.shopifyCreateSheinOrder(order);
+    if (!made.ok) return fail(made.error, made.definite !== false);
+    await io.mark(no, { state: 'created', id: made.id, name: made.name, source: made.source, total });
+    return { state: 'created', name: made.name, id: made.id, source: made.source, total };
+  } catch (e) {
+    // Thrown before the write (a bad price, no location) or by the write's network call.
+    return fail(e.message, !/fetch|network|timeout|aborted/i.test(e.message));
+  }
+}
+const sheinLocationGid = () => {
+  const v = String(process.env.SHOPIFY_SHEIN_LOCATION || '').trim();
+  return /^\d+$/.test(v) ? `gid://shopify/Location/${v}` : (v.startsWith('gid://') ? v : null);
+};
+
+// The worker's step: every order that has shipped since the switch was turned on.
+export async function syncShopifyOrders(io = ORDER_IO, due = sheinOrdersDueForShopify) {
+  const sync = await readSync();
+  if (sync.shopifyOrders !== 'on' || !sync.shopifyOrdersSince || !io.sheinOrdersConfigured()) return null;
+  let created = 0; let failed = 0;
+  for (const no of await due(sync.shopifyOrdersSince)) {
+    const r = await addOrderToShopify(no, { by: 'auto', io });
+    if (r.state === 'created') created += 1;
+    else if (r.state === 'failed') failed += 1;
+  }
+  return { created, failed };
+}

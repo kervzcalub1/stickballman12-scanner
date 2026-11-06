@@ -8,18 +8,20 @@
 //   orders_on { openAtStart } | orders_off   SHEIN sales → Shopify (admin)
 //   push_on | push_off                   Shopify stock changes → SHEIN (admin; registers Shopify's webhook)
 //   retry                                retry SHEIN sales that failed to leave Shopify
+//   shopify_orders_on | shopify_orders_off   shipped SHEIN orders → Shopify orders, from now on (admin)
+//   shopify_order { orderNo }            write one SHEIN order to Shopify now, e.g. an older one (admin)
 //   shoe { spu, mode: dry|full, productId? }  ONE SHEIN product (SHEIN Listings → Details): dry = PH;
 //                                        full writes seller SKUs + stock = admin or Connect integrations
 // docs/context/shein-live-fix.md. PH + admin; the two switches that change how SHOPIFY's
 // stock moves are admin-only.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, latestSheinLiveRun, listSheinLiveItems, countSheinLiveItems, recentSheinUnits, sheinUnitCounts, recentSheinPushes, requestSheinLiveStop, listSheinLinks } from '../_lib/db.js';
+import { dbConfigured, latestSheinLiveRun, listSheinLiveItems, countSheinLiveItems, recentSheinUnits, sheinUnitCounts, recentSheinPushes, requestSheinLiveStop, listSheinLinks, sheinShopifyOrdersFor } from '../_lib/db.js';
 import { sheinStatus } from '../_lib/shein.js';
 import { startWalk, walkActive, heartbeat, MODES, startShoe, shoeActive, latestShoeRun } from '../_lib/shein-live.js';
-import { readSync, writeSync, switchOn, switchOff, actOnUnits } from '../_lib/shein-orders.js';
+import { readSync, writeSync, switchOn, switchOff, actOnUnits, addOrderToShopify } from '../_lib/shein-orders.js';
 import { sheinWorkerEnabled } from '../_lib/shein-worker.js';
 import { hasPrivilege } from '../_lib/buycart.js';
-import { shopifyEnsureInventoryWebhook } from '../_lib/shopify.js';
+import { shopifyEnsureInventoryWebhook, sheinOrdersConfigured, shopifyAdminStore } from '../_lib/shopify.js';
 
 const isAdmin = (u) => u?.role === 'admin' || u?.role === 'superadmin';
 const baseUrl = (req) => String(process.env.APP_URL || process.env.PUBLIC_URL || `https://${req.headers['x-forwarded-host'] || req.headers.host}`).replace(/\/+$/, '');
@@ -53,8 +55,10 @@ export default async function handler(req, res) {
       sheinStatus().catch(() => null), latestSheinLiveRun(), readSync(), recentSheinUnits(60), sheinUnitCounts(), recentSheinPushes(40),
     ]);
     const [items, itemsTotal] = run ? await Promise.all([listSheinLiveItems(run.id), countSheinLiveItems(run.id)]) : [[], 0];
-    return send(res, 200, { ok: true, connected: !!st?.connected, configured: !!st?.configured, run, active: walkActive(), items, itemsTotal, sync, units, unitCounts, pushes,
-      worker: sheinWorkerEnabled(), modes: MODES });
+    // Its own catch: a missing table (deployed before db:setup) mustn't take the stock panel down.
+    const shopifyOrders = await sheinShopifyOrdersFor([...new Set(units.map((u) => u.order_no))]).catch(() => []);
+    return send(res, 200, { ok: true, connected: !!st?.connected, configured: !!st?.configured, run, active: walkActive(), items, itemsTotal, sync, units, unitCounts, pushes, shopifyOrders,
+      shopifyOrdersReady: sheinOrdersConfigured(), shopifyStore: shopifyAdminStore(), worker: sheinWorkerEnabled(), modes: MODES });
   }
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
   const b = await getJsonBody(req);
@@ -78,6 +82,23 @@ export default async function handler(req, res) {
         return send(res, 200, { ok: true });
       }
       case 'retry': return send(res, 200, { ok: true, ...(await actOnUnits(undefined, { manual: true })) });
+      case 'shopify_order': case 'shopify_orders_on': case 'shopify_orders_off': {
+        if (!isAdmin(user) && !(await hasPrivilege(user, 'connect_integrations')))
+          return send(res, 403, { ok: false, error: 'Writing SHEIN orders to Shopify needs an admin, or the “Connect integrations” privilege.' });
+        // Dev and prod share one Shopify store: only production may write real orders.
+        if (b.action !== 'shopify_orders_off' && !sheinWorkerEnabled())
+          return send(res, 409, { ok: false, error: 'Only production writes orders to Shopify (dev and prod share the store).' });
+        if (b.action === 'shopify_order') {
+          const r = await addOrderToShopify(String(b.orderNo || ''), { by });
+          return send(res, 200, { ok: true, result: r });
+        }
+        if (b.action === 'shopify_orders_off') return send(res, 200, { ok: true, sync: await writeSync({ shopifyOrders: 'off', shopifyOrdersOffBy: by, shopifyOrdersOffAt: new Date().toISOString() }, by) });
+        if (!sheinOrdersConfigured()) return send(res, 409, { ok: false, error: 'The SHEIN orders app isn’t set up on this server (SHEIN_ORDERS_CLIENT_ID / SECRET).' });
+        const cur = await readSync();
+        // Keeps the first switch-on date, so turning it off and on again still catches what shipped between.
+        const since = cur.shopifyOrdersSince || new Date().toISOString();
+        return send(res, 200, { ok: true, sync: await writeSync({ shopifyOrders: 'on', shopifyOrdersSince: since, shopifyOrdersBy: by }, by) });
+      }
       case 'orders_on': case 'orders_off': case 'push_on': case 'push_off': {
         if (!isAdmin(user) && !(await hasPrivilege(user, 'connect_integrations')))
           return send(res, 403, { ok: false, error: 'Switching the live sync needs an admin, or the “Connect integrations” privilege.' });

@@ -651,6 +651,75 @@ export async function shopifyAdjustAvailable({ inventoryItemId, locationId, delt
   return { ok: true, after: ch?.quantityAfterChange ?? (from + delta) };
 }
 
+/* ------------------------- SHEIN orders (their own app) ------------------------- */
+// Shopify's Channel column shows the name of the app that created the order, so SHEIN orders
+// are written by a second Dev Dashboard app named "SHEIN via Stickballman12.com". It holds
+// write_orders only; every read of stock and variants still goes through the main app.
+// Its token lives 24 h, in memory: minted on first use, again on a 401.
+const ordersClientId = () => process.env.SHEIN_ORDERS_CLIENT_ID;
+const ordersClientSecret = () => process.env.SHEIN_ORDERS_CLIENT_SECRET;
+export const sheinOrdersConfigured = () => !!(domain() && ordersClientId() && ordersClientSecret());
+let ordersToken = null;
+async function mintOrdersToken() {
+  ordersToken = null;
+  const r = await fetch(`https://${domain()}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ client_id: ordersClientId(), client_secret: ordersClientSecret(), grant_type: 'client_credentials' }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok || !data?.access_token) {
+    // Never log the response body whole: on success it IS the credential.
+    console.error(`[shopify] SHEIN orders app token exchange failed (${r.status}) ${data?.error || ''}`.trim());
+    return null;
+  }
+  ordersToken = data.access_token;
+  return ordersToken;
+}
+// `definite` = Shopify answered, so a refusal really means nothing was created. A network
+// failure or a 5xx isn't definite: the order may exist, and the caller must look before retrying.
+async function ordersGql(query, variables) {
+  const token = ordersToken || await mintOrdersToken();
+  if (!token) return { ok: false, definite: true, error: 'The SHEIN orders app could not get a token. Check SHEIN_ORDERS_CLIENT_ID / SECRET and that the app is installed.' };
+  let r = await post(token, query, variables);
+  if (r.status === 401) {
+    const fresh = await mintOrdersToken();
+    if (!fresh) return { ok: false, definite: true, error: 'Shopify refused the SHEIN orders app and no new token could be minted.' };
+    r = await post(fresh, query, variables);
+  }
+  const data = await r.json().catch(() => null);
+  if (r.status >= 500 || !data) return { ok: false, definite: false, error: `Shopify answered HTTP ${r.status} with no result.` };
+  const errs = Array.isArray(data.errors) ? data.errors : (data.errors ? [{ message: String(data.errors) }] : []);
+  if (!r.ok || errs.length) return { ok: false, definite: true, error: errs.map((e) => e?.message || '').join(' | ') || `HTTP ${r.status}` };
+  return { ok: true, data: data.data };
+}
+
+// The Shopify order already written for this SHEIN order, by the tag we put on it.
+export async function shopifyFindSheinOrder(orderNo) {
+  const r = await ordersGql(`query($q:String!){ orders(first:2, query:$q){ edges{ node{ id name sourceName tags } } } }`, { q: `tag:${JSON.stringify(orderNo)}` });
+  if (!r.ok) return { error: r.error };
+  const hit = (r.data?.orders?.edges || []).map((e) => e.node).find((o) => (o.tags || []).includes(orderNo));
+  return { order: hit || null };
+}
+
+// inventoryBehaviour BYPASS: the pair already came off stock at the sale (shein-orders.js), and
+// a second deduction here would be wrong. No customer emails: SHEIN owns the buyer.
+export async function shopifyCreateSheinOrder(order) {
+  const r = await ordersGql(`mutation($order: OrderCreateOrderInput!, $options: OrderCreateOptionsInput) {
+    orderCreate(order: $order, options: $options) {
+      order { id name sourceName }
+      userErrors { field message }
+    }
+  }`, { order, options: { inventoryBehaviour: 'BYPASS', sendReceipt: false, sendFulfillmentReceipt: false } });
+  if (!r.ok) return { error: r.error, definite: r.definite };
+  const res = r.data?.orderCreate;
+  const errs = res?.userErrors || [];
+  if (errs.length) return { error: errs.map((e) => e.message).join(' | '), definite: true };
+  if (!res?.order?.id) return { error: 'Shopify answered without an order.', definite: false };
+  return { ok: true, id: res.order.id, name: res.order.name, source: res.order.sourceName };
+}
+
 /* ------------------------- inventory webhook (→ SHEIN) ------------------------- */
 // docs/context/shein-live-fix.md → "Shopify → SHEIN". Shopify tells us the moment a stock
 // level changes; we push that SKU's new number to SHEIN.

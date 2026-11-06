@@ -13,7 +13,7 @@
 import { test, expect } from '@playwright/test';
 import crypto from 'node:crypto';
 import { rowsFromSpu, planProduct, ownersFrom, indexRows, unitsFromOrders, unitAction, pickLocation, toSheinTime, fromSheinTime, AI_WRITE_MIN, shelfFrom, shelfPlan, sheinOrderState, sheinLinePrice, shopifyOrderInput } from '../src/lib/sheinLive.js';
-import { addOrderToShopify } from '../api/_lib/shein-orders.js';
+import { addOrderToShopify, actOnUnits, releaseClaimedOrder, fulfilShippedOrders } from '../api/_lib/shein-orders.js';
 
 /* ------------------------------ fixtures ------------------------------ */
 
@@ -545,6 +545,8 @@ test.describe('SHEIN live — the page', () => {
     await page.getByRole('button', { name: 'Turn on SHEIN orders in Shopify' }).click();
     await expect.poll(() => posted.at(-1)).toEqual({ action: 'shopify_orders_on' });
     await expect(page.getByRole('button', { name: 'Stop SHEIN orders in Shopify' })).toBeVisible();
+    await page.getByRole('button', { name: 'Write orders at the sale' }).click();
+    await expect.poll(() => posted.at(-1)).toEqual({ action: 'shopify_orders_at_sale' });
   });
 
   test('a run bigger than the live list: the page says so, and the CSV fetches every row', async ({ page }) => {
@@ -875,7 +877,7 @@ test.describe('SHEIN orders in Shopify', () => {
       shopifyCreateSheinOrder: async (o) => { st.creates.push(o); return create(); },
       claim: async (no, by) => {
         if (st.row && !['waiting', 'failed'].includes(st.row.state) && !st.row.stale) return null;
-        st.row = { order_no: no, state: 'creating', attempts: (st.row?.attempts || 0) + 1, requested_by: by };
+        st.row = { ...st.row, order_no: no, state: 'creating', attempts: (st.row?.attempts || 0) + 1, requested_by: by, stale: false };
         return st.row;
       },
       mark: async (no, patch) => { st.row = { ...st.row, ...patch, shopify_name: patch.name ?? st.row.shopify_name, stale: false }; },
@@ -929,6 +931,113 @@ test.describe('SHEIN orders in Shopify', () => {
     d.io.sheinOrdersConfigured = () => false;
     expect((await addOrderToShopify('GSU1', { io: d.io })).state).toBe('failed');
     expect(d.st.row).toBeNull();
+  });
+
+  // At the sale, the DPL way: the order takes the pair off, and the sync's −1 is only the backstop.
+  const OPENED = (extra = {}) => ORDER({ packageWaybillList: [], orderGoodsInfoList: [GOOD({ newGoodsStatus: 2 })], ...extra });
+  const UNIT = (extra = {}) => ({ goods_id: '1001', order_no: 'GSU1', seller_sku: 'A7', exchange_tag: 1, unit_status: 2, deducted_at: null, restocked_at: null, ...extra });
+  const saleIo = (units, opts = {}) => {
+    const f = fakeIo({ detail: OPENED(), ...opts });
+    f.st.claims = []; f.st.marked = [];
+    const create = f.io.shopifyCreateSheinOrder;
+    f.io.shopifyCreateSheinOrder = async (o, { claim } = {}) => { f.st.claims.push(claim); return create(o); };
+    f.io.units = async () => units;
+    f.io.markUnit = async (id, p) => { f.st.marked.push({ id, ...p }); };
+    const mark = f.io.mark;
+    f.io.mark = async (no, p) => { await mark(no, p); if (p.claimed) f.st.row.stock_claimed = true; };
+    return f;
+  };
+
+  test('at the sale: written open and claiming the pair; its units are marked off so the sync takes nothing', async () => {
+    const { io, st } = saleIo([UNIT()]);
+    const r = await addOrderToShopify('GSU1', { io, atSale: true });
+    expect(r).toMatchObject({ state: 'created', claimed: true });
+    expect(st.claims).toEqual([true]);
+    expect(st.creates[0]).not.toHaveProperty('fulfillmentStatus');
+    expect(st.creates[0]).not.toHaveProperty('closedAt');
+    expect(st.marked).toHaveLength(1);
+    expect(st.marked[0]).toMatchObject({ id: '1001', deducted: true, before: 2 });
+    expect(st.marked[0].note).toContain('Shopify 2 → 1');
+    expect(st.marked[0].note).toContain('#40000');
+  });
+
+  test('at the sale: never claims a pair already off, or a SKU with no variant; those stay with the sync', async () => {
+    const off = saleIo([UNIT({ deducted_at: '2026-11-06T00:00:00Z' })]);
+    expect((await addOrderToShopify('GSU1', { io: off.io, atSale: true })).claimed).toBe(false);
+    expect(off.st.claims).toEqual([false]);
+    expect(off.st.marked).toHaveLength(0);
+
+    const gone = saleIo([UNIT()]);
+    gone.io.shopifyStockForSku = async () => ({ error: 'No Shopify variant', code: 'missing' });
+    gone.io.sheinLinkedSku = async () => null;
+    await addOrderToShopify('GSU1', { io: gone.io, atSale: true });
+    expect(gone.st.claims).toEqual([false]);
+    expect(gone.st.marked).toHaveLength(0);
+  });
+
+  test('at the sale, a refused order: nothing marked off, so the sync still takes the pair', async () => {
+    const { io, st } = saleIo([UNIT()], { create: () => ({ error: 'Nope', definite: true }) });
+    expect((await addOrderToShopify('GSU1', { io, atSale: true })).state).toBe('failed');
+    expect(st.marked).toHaveLength(0);
+  });
+
+  test('at the sale, a lost answer: the retry finds the order and marks its pairs off; never a second order or a second −1', async () => {
+    let live = null;
+    const { io, st } = saleIo([UNIT()], { create: () => { live = { id: 'gid://shopify/Order/9', name: '#40000', sourceName: '1' }; return { error: 'HTTP 502', definite: false }; }, find: () => ({ order: live }) });
+    expect((await addOrderToShopify('GSU1', { io, atSale: true })).state).toBe('creating');
+    expect(st.marked).toHaveLength(0);
+    st.row.stale = true;
+    const later = await addOrderToShopify('GSU1', { io, atSale: true });
+    expect(later).toMatchObject({ state: 'created', already: true });
+    expect(st.creates).toHaveLength(1);
+    expect(st.marked).toHaveLength(1);
+    expect(st.marked[0]).toMatchObject({ id: '1001', deducted: true });
+  });
+
+  test('the sync: waits while an order is being written; a pair the order took goes back through the order, not a +1', async () => {
+    const adjusted = []; const released = [];
+    const base = { shopifyConfigured: () => true, shopifyStockForSku: async () => ({ variantId: 'v', inventoryItemId: 'i', levels: [{ locationId: LOC, location: '1', available: 3 }] }),
+      shopifyAdjustAvailable: async (a) => { adjusted.push(a); return { ok: true, after: a.from + a.delta }; }, markSheinUnit: async () => {}, sheinLinkedSku: async () => null, ordersAtSale: async () => {},
+      releaseClaimed: async (u) => { released.push(u.goods_id); return { ok: true }; } };
+    const due = UNIT({ due: true, stock_mode: 3 });
+    await actOnUnits({ ...base, sheinUnitsToAct: async () => [due], orderRowsFor: async () => [{ order_no: 'GSU1', state: 'creating' }] });
+    expect(adjusted).toHaveLength(0);
+    await actOnUnits({ ...base, sheinUnitsToAct: async () => [due], orderRowsFor: async () => [{ order_no: 'GSU1', state: 'failed' }] });
+    expect(adjusted).toHaveLength(1);
+    expect(adjusted[0].delta).toBe(-1);
+    const cancelled = UNIT({ deducted_at: 'x', unit_status: 6, stock_mode: 3 });
+    await actOnUnits({ ...base, sheinUnitsToAct: async () => [cancelled], orderRowsFor: async () => [{ order_no: 'GSU1', state: 'created', stock_claimed: true }] });
+    expect(released).toEqual(['1001']);
+    expect(adjusted).toHaveLength(1);
+  });
+
+  test('cancel before shipping: every pair gone cancels the order; one of two goes red for a person', async () => {
+    const row = { shopify_order_id: 'gid://o/9', shopify_name: '#40000' };
+    const run = async (units) => {
+      const log = { cancels: [], marks: [] };
+      const r = await releaseClaimedOrder(units[0], row, { units: async () => units, cancel: async (id) => { log.cancels.push(id); return { ok: true }; }, markUnit: async (id, p) => { log.marks.push({ id, ...p }); } });
+      return { r, ...log };
+    };
+    const all = await run([UNIT({ unit_status: 6, deducted_at: 'x' })]);
+    expect(all.r.ok).toBe(true);
+    expect(all.cancels).toEqual(['gid://o/9']);
+    expect(all.marks[0]).toMatchObject({ id: '1001', restocked: true });
+    const one = await run([UNIT({ unit_status: 6, deducted_at: 'x' }), UNIT({ goods_id: '1002', unit_status: 2, deducted_at: 'x' })]);
+    expect(one.cancels).toHaveLength(0);
+    expect(one.r.error).toContain('by hand');
+    expect(one.marks[0]).toMatchObject({ id: '1001', failed: true });
+  });
+
+  test('shipped: fulfilled with SHEIN’s tracking; a refusal is recorded on the order', async () => {
+    const calls = []; const marks = [];
+    const io = { sheinOrdersConfigured: () => true, toFulfil: async () => [{ order_no: 'GSU1', shopify_order_id: 'gid://o/9', shopify_name: '#40000' }], orderDetails: async () => [ORDER()],
+      fulfil: async (id, t) => { calls.push([id, t]); return { ok: true }; }, markFulfilled: async (no, p) => { marks.push([no, p]); } };
+    expect(await fulfilShippedOrders(io)).toEqual({ fulfilled: 1, failed: 0 });
+    expect(calls[0]).toEqual(['gid://o/9', { number: '1Z999', company: 'UPS' }]);
+    expect(marks[0]).toEqual(['GSU1', { error: null }]);
+    io.fulfil = async () => ({ error: 'Access denied' });
+    expect(await fulfilShippedOrders(io)).toEqual({ fulfilled: 0, failed: 1 });
+    expect(marks[1][1].error).toContain('Access denied');
   });
 
   test('a SKU two variants share stops the order; no guessing', async () => {

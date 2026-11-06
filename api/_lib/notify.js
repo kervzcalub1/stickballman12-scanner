@@ -510,7 +510,7 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       ...lines.slice(0, 2).map((l) => `${l.size} x ${l.available_qty > 0 ? l.available_qty : 1}`),
       ...(lines.length > 2 ? [`A range works too: ${lines[0].size}-${lines[lines.length - 1].size} x 1 · or "all x 1".`] : []),
       // The plain-words answers people actually type (floor feedback, 2026-11-02).
-      'Or just reply: take all (what’s in store) · 2 each · no',
+      `Or just reply: take all (what’s in store) · take all except ${lines[0].size} · 2 each · no`,
       'No quantity means 1. Sizes you leave out are turned down. A new reply replaces the last one (edits aren’t read).',
     ].join('\n');
 

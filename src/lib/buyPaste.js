@@ -155,9 +155,10 @@ const wordsToDigits = (t) => t.replace(/\b(one|two|three|four|five|six|seven|eig
  *                                               (1 where nobody counted — said in the note)
  *   2 each · two each size max · max 2 each   → that many per size, never more than counted
  *   no · pass · none · nah · 👎               → every size turned down
+ * ("take all except 8.5" is read by `readExceptReply`, which calls this for the first half.)
  * Returns null when the text isn't one of these (the size-by-size grammar takes over).
  */
-export function readWholeCardReply(text, lines) {
+export function readWholeCardReply(text, lines, { said = String(text ?? '').trim(), but = '' } = {}) {
   const t = wordsToDigits(String(text || '').trim().toLowerCase())
     .replace(/[.!?]+$/g, '').replace(/\s+/g, ' ').trim();
   if (!t) return null;
@@ -170,7 +171,7 @@ export function readWholeCardReply(text, lines) {
       ok: true,
       approve: lines.map((l) => ({ line: l, qty: counted(l) ?? 1 })),
       reject: [],
-      note: `Read "${String(text).trim()}" as every size, as many as were counted in store`
+      note: `Read "${said}" as every size${but}, as many as were counted in store`
         + `${uncounted.length ? ` (1 of ${uncounted.join(', ')} — not counted)` : ''}.`,
     };
   }
@@ -188,10 +189,41 @@ export function readWholeCardReply(text, lines) {
     });
     return {
       ok: true, approve, reject: [],
-      note: `Read "${String(text).trim()}" as ${n} of every size${capped.length ? `, fewer where the store has fewer: ${capped.join(', ')}` : ''}.`,
+      note: `Read "${said}" as ${n} of every size${but}${capped.length ? `, fewer where the store has fewer: ${capped.join(', ')}` : ''}.`,
     };
   }
   return null;
+}
+
+/**
+ * "Take all except 8.5" (also: "take all except 8.5 and 9", "8.5 9", "8.5, 9"; "all but 8.5",
+ * "2 each except 8.5"). The sizes named are turned down; the rest are read exactly as the
+ * words before "except" would read on their own, so "take all" still means what's in store.
+ * Strict, because a misread spends money: a size that isn't on the card, a word that isn't a
+ * size, or a first half that doesn't say to buy ("no except 9") records nothing.
+ * Returns null when the reply has no "except" in it.
+ */
+const EXCEPT_RE = /^(.*?)[\s,:;–—-]*\b(?:except(?:\s+for)?|excluding|without|minus|other\s+than|but(?:\s+not)?)\b[\s:]*(.*)$/;
+function readExceptReply(text, lines, findLine) {
+  const said = String(text || '').replace(/\s+/g, ' ').trim();
+  const m = EXCEPT_RE.exec(wordsToDigits(said.toLowerCase()).replace(/[.!?]+$/g, ''));
+  if (!m) return null;
+  const example = `Reply like "take all except ${lines[0]?.size || 9}".`;
+  const named = m[2].replace(/\b(?:sizes?|sz)\b/g, ' ').split(/[\s,;/&+]+|\band\b/).filter(Boolean);
+  if (!named.length) return { ok: false, error: `Which sizes should be left out? ${example} Nothing was recorded.` };
+  const unread = named.filter((n) => !SIZE_RE.test(n));
+  if (unread.length) return { ok: false, error: `Couldn't read ${unread.map((n) => `"${n}"`).join(', ')} as a size. ${example} Nothing was recorded.` };
+  const unknown = named.filter((n) => !findLine(n));
+  if (unknown.length)
+    return { ok: false, error: `${unknown.join(', ')} ${unknown.length === 1 ? 'isn’t' : 'aren’t'} on this card (sizes: ${lines.map((l) => l.size).join(', ')}). Nothing was recorded.` };
+  const left = new Set(named.map((n) => findLine(n).id));
+  const reject = lines.filter((l) => left.has(l.id));
+  const take = lines.filter((l) => !left.has(l.id));
+  if (!take.length) return { ok: false, error: 'That leaves no sizes to take. Reply "no" to turn them all down. Nothing was recorded.' };
+  const first = m[1].replace(/\beverything\b/, 'all');
+  const read = readWholeCardReply(first, take, { said, but: ` except ${reject.map((l) => l.size).join(', ')}` });
+  if (!read?.approve.length) return { ok: false, error: `Couldn't read "${said}". ${example} Nothing was recorded.` };
+  return { ok: true, approve: read.approve, reject, note: read.note };
 }
 
 export function parseApprovalReply(text, lines) {
@@ -207,6 +239,8 @@ export function parseApprovalReply(text, lines) {
     const hits = lines.filter((l) => parseFloat(sizeKey(l.size)) === n);
     return hits.length === 1 ? hits[0] : null;
   };
+  const except = readExceptReply(text, lines, (n) => bySize.get(sizeKey(n)) || byNumber(n));
+  if (except) return except;
   // A plain-words answer for the whole card first ("take all", "2 each", "no").
   const whole = readWholeCardReply(text, lines);
   if (whole) return whole;

@@ -321,12 +321,13 @@ export function sheinOrderState(o) {
 }
 
 const money = (n) => Number(n).toFixed(2);
-// What the buyer paid for the pair, before tax. The discounted price when SHEIN gives one.
+// What the buyer paid for the pair, before tax: SHEIN's own income formula starts from
+// sellerCurrencyPrice and takes off the coupon and promotion. NOT sellerCurrencyDiscountPrice:
+// that's the buyer's total WITH tax (checked on 4 real orders, 2026-11-06), so using it counted
+// the tax twice on #31114 ($59.77 + $3.38 instead of $56.39 + $3.38).
 export function sheinLinePrice(g) {
-  const discounted = Number(g.sellerCurrencyDiscountPrice);
-  if (Number.isFinite(discounted) && discounted > 0) return Math.round(discounted * 100) / 100;
   const base = Number(g.sellerCurrencyPrice);
-  if (!Number.isFinite(base)) return null;
+  if (g.sellerCurrencyPrice == null || !Number.isFinite(base)) return null;
   const net = base - (Number(g.orderCurrencyStoreCouponPrice) || 0) - (Number(g.orderCurrencyPromotionPrice) || 0);
   return Math.round(net * 100) / 100;
 }

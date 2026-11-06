@@ -840,8 +840,13 @@ test.describe('SHEIN orders in Shopify', () => {
     expect(order).not.toHaveProperty('sourceName');   // the Channel label comes from the app; a name here is ignored
   });
 
-  test('prices: the discounted price wins; else price minus coupon and promotion; never a blank or $0 order', () => {
-    expect(sheinLinePrice(GOOD({ sellerCurrencyDiscountPrice: 49.5 }))).toBe(49.5);
+  test('prices: sale price minus coupon and promotion, never SHEIN’s “discount” field (that total already has the tax in it); never a blank or $0 order', () => {
+    // Real orders, read from SHEIN 2026-11-06. The field = net price + tax, every time.
+    for (const [price, promo, tax, paid, net] of [[76, 0, 5.32, 81.32, 76], [55, 0, 3.99, 58.99, 55], [68, 0, 3.89, 71.89, 68], [59.36, 2.97, 3.38, 59.77, 56.39]]) {
+      const g = GOOD({ sellerCurrencyPrice: price, orderCurrencyPromotionPrice: promo, saleTax: tax, sellerCurrencyDiscountPrice: paid });
+      expect(sheinLinePrice(g)).toBe(net);
+      expect(shopifyOrderInput(ORDER({ orderGoodsInfoList: [g] }), { locationId: LOC }).total).toBe(paid);
+    }
     expect(sheinLinePrice(GOOD({ orderCurrencyStoreCouponPrice: 5, orderCurrencyPromotionPrice: 2 }))).toBe(48);
     expect(() => shopifyOrderInput(ORDER({ orderGoodsInfoList: [GOOD({ sellerCurrencyPrice: null })] }), { locationId: LOC })).toThrow(/no usable price/);
     expect(() => shopifyOrderInput(ORDER({ orderGoodsInfoList: [GOOD({ sellerCurrencyPrice: 0 })] }), { locationId: LOC })).toThrow(/no usable price/);

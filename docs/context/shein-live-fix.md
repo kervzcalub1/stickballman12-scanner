@@ -71,6 +71,8 @@ Built 2026-11-06. The owner removed the CedCommerce app on purpose; this replace
   write. Every attempt looks for the tag in Shopify first. A lost answer (network, 5xx) leaves the row
   `creating`, unclaimable for 5 minutes, then the search finds the order instead of writing again. A
   definite refusal = `failed`; the worker tries 8 times, then it waits for **Try again**.
+- **Price = `sellerCurrencyPrice` − coupon − promotion**, the start of SHEIN's income formula. Not
+  `sellerCurrencyDiscountPrice`: that's the buyer's total WITH tax (checked on 4 real orders).
 - A SKU Shopify no longer has goes in by SKU + title (the sale stays on record); a SKU two variants
   share stops the order; no price, $0 or a non-USD order is refused rather than written wrong.
 - **Switch:** "Turn on SHEIN orders in Shopify" on the panel (`shopify_orders_on`, admin or Connect

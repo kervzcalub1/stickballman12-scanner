@@ -139,3 +139,14 @@ worked on 2026-10-08 for `write_products` was opening
 `https://<store>.myshopify.com/admin/oauth/install?client_id=<SHOPIFY_CLIENT_ID>` as the
 owner and approving. Check the app page's **Edit** column (Products ✓), or
 `GET /admin/oauth/access_scopes.json` with the token.
+
+## Webhooks refused with a 401 (2026-11-06)
+The app has two client secrets (Old Aug 22, New Aug 25). Shopify signs webhooks with the **oldest unrevoked**
+one, and either one still mints tokens, so the sales feed kept working while every webhook was refused.
+- `shopifyWebhookValid` accepts any of `SHOPIFY_WEBHOOK_SECRET`, `SHOPIFY_SECRET_KEY`, `SHOPIFY_CLIENT_SECRET`.
+- **Fix without revoking:** put the Old secret in `SHOPIFY_WEBHOOK_SECRET` on Railway. Revoking Old also works, but
+  it can't be undone, and Shopify can take up to an hour to switch to the new secret.
+- A refused call logs `[shopify/webhook] refused bad signature: topic= shop= api= sub= id= signed= bytes=` (capped at
+  200 lines an hour). Read `railway logs --filter "refused bad signature"`.
+- Shopify deletes an Admin API subscription after 8 consecutive failures, and `PRODUCTS_UPDATE` was found missing.
+  Once calls pass, press **Register webhooks** on SHEIN Listings to put it back.

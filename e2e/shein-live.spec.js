@@ -427,6 +427,17 @@ test.describe('SHEIN live — webhooks', () => {
     const good = crypto.createHmac('sha256', 'shpss_test').update(raw).digest('base64');
     expect(shopifyWebhookValid(raw, good)).toBe(true);
     expect(shopifyWebhookValid(Buffer.from('{"inventory_item_id":123,"available":9}'), good)).toBe(false);
+
+    // After a rotation Shopify signs with the OLD secret while SHOPIFY_SECRET_KEY holds the new one.
+    const old = process.env.SHOPIFY_WEBHOOK_SECRET;
+    const signedByOld = crypto.createHmac('sha256', 'shpss_old_secret').update(raw).digest('base64');
+    delete process.env.SHOPIFY_WEBHOOK_SECRET;
+    expect(shopifyWebhookValid(raw, signedByOld)).toBe(false);
+    process.env.SHOPIFY_WEBHOOK_SECRET = 'shpss_old_secret';
+    expect(shopifyWebhookValid(raw, signedByOld)).toBe(true);
+    expect(shopifyWebhookValid(raw, good)).toBe(true);
+    expect(shopifyWebhookValid(raw, crypto.createHmac('sha256', 'someone_else').update(raw).digest('base64'))).toBe(false);
+    if (old === undefined) delete process.env.SHOPIFY_WEBHOOK_SECRET; else process.env.SHOPIFY_WEBHOOK_SECRET = old;
   });
 
   test('webhooks: SHEIN’s URL check is answered, an unverified push ignored (on /callback and /callback. too); Shopify unsigned refused', async ({ request }) => {

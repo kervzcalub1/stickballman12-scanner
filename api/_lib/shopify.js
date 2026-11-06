@@ -655,13 +655,19 @@ export async function shopifyAdjustAvailable({ inventoryItemId, locationId, delt
 // docs/context/shein-live-fix.md → "Shopify → SHEIN". Shopify tells us the moment a stock
 // level changes; we push that SKU's new number to SHEIN.
 
-// Shopify signs every webhook: base64(HMAC-SHA256(raw body, app secret)).
+// Shopify signs every webhook: base64(HMAC-SHA256(raw body, app secret)). The app can hold TWO secrets
+// after a rotation, and Shopify signs with the OLDEST one not yet revoked, while either one still mints
+// tokens. So a rotated secret breaks only the webhooks (found 2026-11-06: every call refused). Any
+// configured secret is accepted: SHOPIFY_WEBHOOK_SECRET holds the old one until it is revoked.
 export function shopifyWebhookValid(rawBody, hmacHeader) {
-  const secret = String(process.env.SHOPIFY_SECRET_KEY || process.env.SHOPIFY_WEBHOOK_SECRET || '');
-  if (!secret || !rawBody || !hmacHeader) return false;
-  const want = Buffer.from(crypto.createHmac('sha256', secret).update(rawBody).digest('base64'));
+  if (!rawBody || !hmacHeader) return false;
   const got = Buffer.from(String(hmacHeader));
-  return want.length === got.length && crypto.timingSafeEqual(want, got);
+  const secrets = [process.env.SHOPIFY_WEBHOOK_SECRET, process.env.SHOPIFY_SECRET_KEY, process.env.SHOPIFY_CLIENT_SECRET]
+    .map((s) => String(s || '').trim()).filter(Boolean);
+  return secrets.some((secret) => {
+    const want = Buffer.from(crypto.createHmac('sha256', secret).update(rawBody).digest('base64'));
+    return want.length === got.length && crypto.timingSafeEqual(want, got);
+  });
 }
 export async function shopifySkuForInventoryItem(inventoryItemId) {
   const id = String(inventoryItemId).startsWith('gid://') ? String(inventoryItemId) : `gid://shopify/InventoryItem/${inventoryItemId}`;

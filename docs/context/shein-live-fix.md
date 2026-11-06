@@ -52,7 +52,7 @@ its top). The rules are the export fix's (`docs/context/shein-fix.md`), run per 
 
 ## 2. Shopify → SHEIN (`api/shopify/webhook.js`, `pushSkus` in `shein-live.js`)
 Admin turns it on → we register Shopify's `INVENTORY_LEVELS_UPDATE` webhook to
-`<APP_URL or host>/api/shopify/webhook` (HMAC over the RAW body with `SHOPIFY_SECRET_KEY`;
+`<APP_URL or host>/api/shopify/webhook` (HMAC over the RAW body; any of `SHOPIFY_WEBHOOK_SECRET`, `SHOPIFY_SECRET_KEY`, `SHOPIFY_CLIENT_SECRET` passes;
 `server.mjs` keeps `req.rawBody` for that path). The SKU is queued (1.5 s coalesce) and every
 SHEIN product carrying it (from the LAST WALK's log, so one walk must have run) gets the
 per-product step, **stock only**. While a walk is running, changes are HELD and pushed

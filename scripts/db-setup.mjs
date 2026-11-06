@@ -2855,6 +2855,12 @@ await sql(`
     first_seen       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
+// Orders written AT THE SALE, the way DPL writes eBay's: stock_claimed = the order itself took the
+// pair off Shopify; open_at_create = it went in unfulfilled and is fulfilled when SHEIN ships it.
+await sql(`ALTER TABLE shein_shopify_orders ADD COLUMN IF NOT EXISTS stock_claimed BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE shein_shopify_orders ADD COLUMN IF NOT EXISTS open_at_create BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE shein_shopify_orders ADD COLUMN IF NOT EXISTS fulfilled_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE shein_shopify_orders ADD COLUMN IF NOT EXISTS fulfil_tries INT NOT NULL DEFAULT 0`);
 // The live fix walk: one run = every SHEIN product, one at a time; one item = one SHEIN size
 // as the walk found and left it. `source` = walk | push (a single Shopify change pushed) | shoe
 // (SHEIN Listings → Details → Fix this shoe).

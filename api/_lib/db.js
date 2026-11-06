@@ -11374,11 +11374,30 @@ export async function claimSheinShopifyOrder(orderNo, by = null) {
     RETURNING *`;
   return r || null;
 }
-export async function markSheinShopifyOrder(orderNo, { state, id = null, name = null, source = null, total = null, error = null, note = null }) {
+export async function markSheinShopifyOrder(orderNo, { state, id = null, name = null, source = null, total = null, error = null, note = null, claimed = false, open = false }) {
   await db()`
-    UPDATE shein_shopify_orders SET state = ${state}, shopify_order_id = COALESCE(${id}, shopify_order_id), shopify_name = COALESCE(${name}, shopify_name),
+    UPDATE shein_shopify_orders SET stock_claimed = CASE WHEN ${state}::text = 'failed' THEN false ELSE stock_claimed OR ${claimed} END, open_at_create = CASE WHEN ${state}::text = 'failed' THEN false ELSE open_at_create OR ${open} END,
+      state = ${state}, shopify_order_id = COALESCE(${id}, shopify_order_id), shopify_name = COALESCE(${name}, shopify_name),
       shopify_source = COALESCE(${source}, shopify_source), total = COALESCE(${total}::numeric, total), error = ${error}, note = COALESCE(${note}, note),
       attempts = CASE WHEN ${state}::text = 'waiting' THEN 0 ELSE attempts END, updated_at = now()
+     WHERE order_no = ${orderNo}`;
+}
+export async function sheinUnitsOfOrder(orderNo) {
+  return await db()`SELECT * FROM shein_order_units WHERE order_no = ${orderNo} ORDER BY goods_id`;
+}
+// Written open at the sale, and now every live pair has left the warehouse.
+export async function sheinOrdersToFulfil(limit = 20) {
+  return await db()`
+    SELECT s.order_no, s.shopify_order_id, s.shopify_name FROM shein_shopify_orders s
+     WHERE s.state = 'created' AND s.open_at_create AND s.fulfilled_at IS NULL AND s.fulfil_tries < 20
+       AND EXISTS (SELECT 1 FROM shein_order_units u WHERE u.order_no = s.order_no AND u.exchange_tag IN (1, 3) AND u.unit_status <> 6)
+       AND NOT EXISTS (SELECT 1 FROM shein_order_units u WHERE u.order_no = s.order_no AND u.exchange_tag IN (1, 3) AND u.unit_status IN (1, 2, 7))
+     ORDER BY s.first_seen LIMIT ${limit}`;
+}
+export async function markSheinOrderFulfilled(orderNo, { error = null } = {}) {
+  await db()`
+    UPDATE shein_shopify_orders SET fulfilled_at = CASE WHEN ${error}::text IS NULL THEN now() ELSE fulfilled_at END,
+      fulfil_tries = fulfil_tries + 1, error = ${error}, updated_at = now()
      WHERE order_no = ${orderNo}`;
 }
 export async function sheinOrderSoldAt(orderNo) {

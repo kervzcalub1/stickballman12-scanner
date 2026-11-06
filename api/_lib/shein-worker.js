@@ -8,7 +8,7 @@
 // of them may take a sale off Shopify. SHEIN_SYNC_WATCH=on|off overrides.
 import { dbConfigured, latestSheinLiveRun } from './db.js';
 import { sheinStatus, sheinConfigured } from './shein.js';
-import { pollOrders, actOnUnits, readSync, syncShopifyOrders } from './shein-orders.js';
+import { pollOrders, actOnUnits, readSync, syncShopifyOrders, fulfilShippedOrders } from './shein-orders.js';
 import { heartbeat, startWalk, walkActive, resumePushes } from './shein-live.js';
 import { listingTick } from './shein-listing.js';
 
@@ -46,6 +46,7 @@ export async function sheinTick() {
     else await actOnUnits();   // put-backs of earlier sales still apply
     // Shipped SHEIN orders → Shopify orders. Its own catch: it must never stop the stock sync.
     await syncShopifyOrders().catch((e) => console.error('[shein-sync] shopify orders', e.message));
+    await fulfilShippedOrders().catch((e) => console.error('[shein-sync] fulfil orders', e.message));
     if (sync.push === 'on' && !walkActive()) {
       const last = await latestSheinLiveRun();
       if (walkDue(last)) {

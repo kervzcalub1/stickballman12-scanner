@@ -131,7 +131,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
           <div className="shc-tile info"><b>{fmt(uc.last24)}</b><span>pairs taken off Shopify, last 24 h</span></div>
           {Number(uc.failing) > 0 && <div className="shc-tile bad"><b>{fmt(uc.failing)}</b><span>SHEIN sales NOT off Shopify yet — see below</span></div>}
           <div className={`shc-tile ${sync.push === 'on' ? 'ok' : 'warn'}`}><b>{sync.push === 'on' ? 'ON' : 'OFF'}</b><span>Shopify stock → SHEIN</span></div>
-          <div className={`shc-tile ${sync.shopifyOrders === 'on' ? 'ok' : 'warn'}`}><b>{sync.shopifyOrders === 'on' ? 'ON' : 'OFF'}</b><span>SHEIN orders in Shopify{sync.shopifyOrders === 'on' ? ` · since ${when(sync.shopifyOrdersSince)}` : ''}</span></div>
+          <div className={`shc-tile ${sync.shopifyOrders === 'on' ? 'ok' : 'warn'}`}><b>{sync.shopifyOrders === 'on' ? 'ON' : 'OFF'}</b><span>SHEIN orders in Shopify{sync.shopifyOrders === 'on' ? `, ${sync.shopifyOrdersAtSale === 'on' ? 'at the sale' : 'when shipped'} · since ${when(sync.shopifyOrdersAtSale === 'on' ? sync.shopifyOrdersAtSaleSince : sync.shopifyOrdersSince)}` : ''}</span></div>
         </div>
         <p className="muted xs">{sync.orders === 'on'
           ? <>SHEIN tells us the moment an order comes in; every minute we also check SHEIN for anything missed (last check {when(sync.polledAt)}). Each pair is taken off Shopify once — never twice — and put back only if SHEIN cancels it before it ships.</>
@@ -148,6 +148,9 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
             {sync.shopifyOrders === 'on'
               ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => act('shopify_orders_off')}>Stop SHEIN orders in Shopify</button>
               : <button type="button" className="btn sm" disabled={!!busy || !d.shopifyOrdersReady} title={d.shopifyOrdersReady ? 'From now on, each SHEIN order goes into Shopify when it ships' : 'The SHEIN orders app isn’t set up on this server'} onClick={() => act('shopify_orders_on')}>Turn on SHEIN orders in Shopify</button>}
+            {sync.shopifyOrders === 'on' && (sync.shopifyOrdersAtSale === 'on'
+              ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => act('shopify_orders_at_ship')}>Write orders when shipped instead</button>
+              : <button type="button" className="btn sm" disabled={!!busy} title="The order goes in at the sale and takes the pair off Shopify itself, as DPL’s eBay orders do" onClick={() => act('shopify_orders_at_sale')}>Write orders at the sale</button>)}
           </div>
         )}
         {msg && <p className="sm mt">{msg}</p>}

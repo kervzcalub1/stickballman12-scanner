@@ -694,6 +694,13 @@ async function ordersGql(query, variables) {
   if (!r.ok || errs.length) return { ok: false, definite: true, error: errs.map((e) => e?.message || '').join(' | ') || `HTTP ${r.status}` };
   return { ok: true, data: data.data };
 }
+// A token minted before the app got a new permission doesn't have it: mint once more on a refusal.
+async function ordersGqlFresh(query, variables) {
+  const r = await ordersGql(query, variables);
+  if (r.ok || !/access denied|scope/i.test(r.error || '')) return r;
+  ordersToken = null;
+  return ordersGql(query, variables);
+}
 
 // The Shopify order already written for this SHEIN order, by the tag we put on it.
 export async function shopifyFindSheinOrder(orderNo) {
@@ -703,21 +710,52 @@ export async function shopifyFindSheinOrder(orderNo) {
   return { order: hit || null };
 }
 
-// inventoryBehaviour BYPASS: the pair already came off stock at the sale (shein-orders.js), and
-// a second deduction here would be wrong. No customer emails: SHEIN owns the buyer.
-export async function shopifyCreateSheinOrder(order) {
+// `claim`: the order itself takes the pair off Shopify, as DPL's eBay orders do. Without it the
+// order leaves stock alone, because our sync has already taken the pair off. A decrement ignoring
+// policy: a sale that happened must be recorded even at 0. No customer emails: SHEIN owns the buyer.
+export async function shopifyCreateSheinOrder(order, { claim = false } = {}) {
   const r = await ordersGql(`mutation($order: OrderCreateOrderInput!, $options: OrderCreateOptionsInput) {
     orderCreate(order: $order, options: $options) {
       order { id name sourceName }
       userErrors { field message }
     }
-  }`, { order, options: { inventoryBehaviour: 'BYPASS', sendReceipt: false, sendFulfillmentReceipt: false } });
+  }`, { order, options: { inventoryBehaviour: claim ? 'DECREMENT_IGNORING_POLICY' : 'BYPASS', sendReceipt: false, sendFulfillmentReceipt: false } });
   if (!r.ok) return { error: r.error, definite: r.definite };
   const res = r.data?.orderCreate;
   const errs = res?.userErrors || [];
   if (errs.length) return { error: errs.map((e) => e.message).join(' | '), definite: true };
   if (!res?.order?.id) return { error: 'Shopify answered without an order.', definite: false };
   return { ok: true, id: res.order.id, name: res.order.name, source: res.order.sourceName };
+}
+
+// SHEIN shipped it: fulfil everything still open on the order, with the tracking, then archive it
+// as CedCommerce's were. Needs write_merchant_managed_fulfillment_orders. No customer notice.
+export async function shopifyFulfilSheinOrder(orderId, { number = null, company = null } = {}) {
+  const read = await ordersGqlFresh(`query($id: ID!){ order(id: $id){ fulfillmentOrders(first: 5){ edges{ node{ id status } } } } }`, { id: orderId });
+  if (!read.ok) return { error: read.error };
+  const open = (read.data?.order?.fulfillmentOrders?.edges || []).map((e) => e.node).filter((f) => ['OPEN', 'IN_PROGRESS'].includes(f.status));
+  if (open.length) {
+    const r = await ordersGqlFresh(`mutation($f: FulfillmentInput!){ fulfillmentCreate(fulfillment: $f){ fulfillment { id } userErrors { field message } } }`, { f: {
+      lineItemsByFulfillmentOrder: open.map((f) => ({ fulfillmentOrderId: f.id })), notifyCustomer: false,
+      ...(number ? { trackingInfo: { number, ...(company ? { company } : {}) } } : {}),
+    } });
+    if (!r.ok) return { error: r.error };
+    const errs = r.data?.fulfillmentCreate?.userErrors || [];
+    if (errs.length) return { error: errs.map((e) => e.message).join(' | ') };
+  }
+  const closed = await ordersGqlFresh(`mutation($input: OrderCloseInput!){ orderClose(input: $input){ userErrors { field message } } }`, { input: { id: orderId } });
+  if (!closed.ok) console.error('[shein-orders] orderClose', closed.error);   // fulfilled is what matters
+  return { ok: true };
+}
+
+// SHEIN cancelled every pair before it shipped: cancel the order, which puts the pairs back.
+export async function shopifyCancelSheinOrder(orderId, note) {
+  const r = await ordersGqlFresh(`mutation($id: ID!, $note: String){ orderCancel(orderId: $id, reason: OTHER, restock: true, notifyCustomer: false, staffNote: $note, refundMethod: { originalPaymentMethodsRefund: true }) {
+    job { id } orderCancelUserErrors { message } userErrors { message } } }`, { id: orderId, note: String(note || '').slice(0, 250) });
+  if (!r.ok) return { error: r.error };
+  const errs = [...(r.data?.orderCancel?.orderCancelUserErrors || []), ...(r.data?.orderCancel?.userErrors || [])];
+  if (errs.length) return { error: errs.map((e) => e.message).join(' | ') };
+  return { ok: true };
 }
 
 /* ------------------------- inventory webhook (→ SHEIN) ------------------------- */

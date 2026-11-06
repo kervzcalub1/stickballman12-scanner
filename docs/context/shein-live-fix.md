@@ -81,6 +81,24 @@ Built 2026-11-06. The owner removed the CedCommerce app on purpose; this replace
   the page and in the endpoint. **Add to Shopify / Try again** on a row is for orders after that line.
   Only production writes (dev shares the store).
 
+### Orders at the sale (the DPL way), switch "Write orders at the sale", off by default
+How DPL's eBay orders work (checked on 5 orders + II's API log, 2026-11-06): the order claims the pair
+at the sale (Shopify's own row: available −1, committed +1); Shopify's `orders/updated` webhook reaches
+II, which updates its own count and overwrites Shopify (`inventorySetQuantities`, no compare) only if
+the two differ. II can't see our `inventoryAdjustQuantities` −1, so with an order only at shipping, any
+other order on that size in between makes II erase our −1. Hence, with this switch on:
+- `actOnUnits` first writes the order of each due unit (`ordersAtSaleStep`), open, with
+  `DECREMENT_IGNORING_POLICY`, and marks its units off Shopify. **Anything that didn't work still gets
+  the old −1 below it**, so a failed order never leaves a pair on sale; that order goes in at shipping
+  without claiming. A row left `creating` (lost answer) holds its pairs back up to 5 minutes.
+- It claims only if no pair of the order is off yet and every SKU has a variant.
+- `fulfilShippedOrders` fulfils it with the tracking when every live pair has shipped, then archives
+  it. Needs `write_merchant_managed_fulfillment_orders` on the app.
+- Cancel before shipping: every pair → `orderCancel` with restock. One pair of several, or a swap → red
+  for a person (the order still holds it; a +1 from us would count it twice).
+- **4Seller must stop touching SHEIN stock.** It reserves −1 at the sale and corrects at shipping, on
+  top of ours. II's overwrite after an order hides this; with no order, one sale took 2 pairs off.
+
 ## 2. Shopify → SHEIN (`api/shopify/webhook.js`, `pushSkus` in `shein-live.js`)
 Admin turns it on → we register Shopify's `INVENTORY_LEVELS_UPDATE` webhook to
 `<APP_URL or host>/api/shopify/webhook` (HMAC over the RAW body; any of `SHOPIFY_WEBHOOK_SECRET`, `SHOPIFY_SECRET_KEY`, `SHOPIFY_CLIENT_SECRET` passes;

@@ -78,13 +78,39 @@ test.describe('SHEIN live — the plan for one product', () => {
     const by = Object.fromEntries(p.rows.map((x) => [x.sheinSku, x]));
     expect(by.s8).toMatchObject({ newQty: 0, reason: 'swap', linkTo: { sku: 'A8' } });
     expect(by.s75).toMatchObject({ newQty: 0, reason: 'wrong_size' });
-    expect(p.edits).toEqual([
-      { skc: 'spu1-c', skuCode: 's8', supplierSku: 'A8', from: 'A9', by: 'rule', why: 'swap' },
-      { skc: 'spu1-c', skuCode: 's75', supplierSku: 'A8-off', from: 'A8', by: 'rule', why: 'frees', frees: 'A8' },
-    ]);
+    // Two edits: SHEIN refuses A8 on s8 while s75 still shows it, even in one edit that moves it away.
+    expect(p.edits).toEqual([{ skc: 'spu1-c', skuCode: 's75', supplierSku: 'A8-off', from: 'A8', by: 'rule', why: 'frees', frees: 'A8' }]);
+    expect(p.skipped).toEqual([{ sheinSku: 's8', why: expect.stringContaining('step 2 of 2: A8 is still on SHEIN size US7.5') }]);
     expect(p.writes.map((w) => [w.sheinSku, w.total])).toEqual([['s8', 0], ['s75', 0]]);
     // Without links (stock mode) nothing is edited — and the sizes still sell nothing.
     expect(planProduct({ rows: r, variants: VARS, owners: ownersFrom(r, VARS), holders: indexRows(r).holders, target: 'W1', links: false }).edits).toEqual([]);
+  });
+
+  test('a swap, step 2: once SHEIN shows the parked SKU, the move goes out on the next full fix', () => {
+    const r = rows([['s8', 'A9', 'US8', 0, 0], ['s75', 'A8-off', 'US7.5', 0, 0]]);
+    const p = planProduct({ rows: r, variants: VARS, decisions: { s75: { shein_sku: 's75', decision: 'delist', link_sku: null } }, owners: ownersFrom(r, VARS), holders: indexRows(r).holders, target: 'W1' });
+    expect(p.edits).toEqual([{ skc: 'spu1-c', skuCode: 's8', supplierSku: 'A8', from: 'A9', by: 'rule', why: 'swap' }]);
+    expect(p.skipped).toEqual([]);
+  });
+
+  test('two sizes that trade SKUs, or a chain: all parked or waiting now, every move in ONE second edit', () => {
+    const chainVars = ['7', '8', '9', '10'].map((n) => V(`C${n}`, n, 2));
+    const plan = (list, decisions = {}) => { const r = rows(list); return planProduct({ rows: r, variants: chainVars, decisions, owners: ownersFrom(r, chainVars), holders: indexRows(r).holders, target: 'W1' }); };
+    // Each size shows the SKU of the next size up: 7 → C8, 8 → C9, 9 → C10, and 10 shows a dead SKU.
+    const first = plan([['s7', 'C8', 'US7', 0, 0], ['s8', 'C9', 'US8', 0, 0], ['s9', 'C10', 'US9', 0, 0], ['s10', 'GONE', 'US10', 0, 0]]);
+    const sent = Object.fromEntries(first.edits.map((e) => [e.skuCode, e]));
+    // No SKU goes onto a size while another size still shows it.
+    const shown = new Set(['C8', 'C9', 'C10', 'GONE']);
+    for (const e of first.edits) expect(shown.has(e.supplierSku)).toBe(false);
+    expect(new Set(first.edits.map((e) => e.supplierSku)).size).toBe(first.edits.length);
+    expect(sent.s8).toMatchObject({ supplierSku: 'C9-off', frees: 'C9', finalSku: 'C8' });
+    expect(sent.s9).toMatchObject({ supplierSku: 'C10-off', frees: 'C10', finalSku: 'C9' });
+    // Step 2 = what SHEIN shows after approval + the saved links: every remaining move, nothing clashing.
+    const second = plan([['s7', first.edits.find((e) => e.skuCode === 's7')?.supplierSku || 'C8', 'US7', 0, 0], ['s8', 'C9-off', 'US8', 0, 0], ['s9', 'C10-off', 'US9', 0, 0], ['s10', first.edits.find((e) => e.skuCode === 's10')?.supplierSku || 'GONE', 'US10', 0, 0]],
+      { s8: { shein_sku: 's8', decision: 'link', link_sku: 'C8' }, s9: { shein_sku: 's9', decision: 'link', link_sku: 'C9' } });
+    expect(second.skipped).toEqual([]);
+    expect(Object.fromEntries(second.edits.map((e) => [e.skuCode, e.supplierSku]))).toMatchObject({ s8: 'C8', s9: 'C9' });
+    expect(second.edits.every((e) => !e.finalSku)).toBe(true);
   });
 
   test('a link onto a SKU another SHEIN product uses is not written; nor onto one a size already sells right', () => {
@@ -171,8 +197,9 @@ test.describe('SHEIN live — one product, end to end (fakes)', () => {
     expect(s7).toMatchObject({ before_qty: 9, target_qty: 4, shopify_qty: 5, held: 1, wrote: 'dry', reason: 'ok' });
     expect(s7.action).toContain('would set 9 → 4');
     // …and it shows the seller-SKU fix full mode would send (checked, not sent).
-    expect(f.calls.items.find((i) => i.shein_sku === 's8').action).toContain('would change A9 → A8');
-    expect(r.counts).toMatchObject({ sizes: 3, links_changed: 1 });
+    expect(f.calls.items.find((i) => i.shein_sku === 's75').action).toContain('would change A8 → A8-off');
+    expect(f.calls.items.find((i) => i.shein_sku === 's8').action).toContain('step 2 of 2');
+    expect(r.counts).toMatchObject({ sizes: 3, links_changed: 0, links_skipped: 1 });   // step 1 only parks; s8's move is step 2
   });
 
   test('stock mode: SHEIN gets Shopify’s live number (total incl. held), read back; seller SKUs untouched', async () => {
@@ -218,12 +245,41 @@ test.describe('SHEIN live — one product, end to end (fakes)', () => {
     const { stepProduct } = await import('../api/_lib/shein-live.js');
     const f = fakeIO({ spu, stock, shopify });
     await stepProduct('spu1', ctxFor(f.io, 'full', scan()));
-    expect(f.calls.edits.map((e) => [e.skuCode, e.supplierSku])).toEqual([['s8', 'A8'], ['s75', 'A8-off']]);
-    expect(f.calls.links).toEqual([
-      expect.objectContaining({ shein_sku: 's8', link_sku: 'A8', decision: 'link', source: 'swap', seller_sku_was: 'A9' }),
-      expect.objectContaining({ shein_sku: 's75', link_sku: null, decision: 'delist' }),
-    ]);
-    expect(f.calls.items.find((i) => i.shein_sku === 's8')).toMatchObject({ wrote: 'stock+link', target_qty: 0 });
+    // Step 1 only: SHEIN refuses A8 on s8 while s75 shows it, so s75 moves off first.
+    expect(f.calls.edits.map((e) => [e.skuCode, e.supplierSku])).toEqual([['s75', 'A8-off']]);
+    expect(f.calls.links).toEqual([expect.objectContaining({ shein_sku: 's75', link_sku: null, decision: 'delist' })]);
+    const s8 = f.calls.items.find((i) => i.shein_sku === 's8');
+    expect(s8).toMatchObject({ wrote: 'stock', target_qty: 0, link_to: 'A8', result: 'changed' });
+    expect(s8.action).toContain('step 2 of 2');
+  });
+
+  test('full mode, SHEIN’s real refusal: a SKU another size still shows is refused; the two edits both pass and the parked size’s real SKU is saved', async () => {
+    const { stepProduct } = await import('../api/_lib/shein-live.js');
+    // Two sizes that hold each other's SKU, and a SHEIN that refuses what the live store refused on 2026-11-06.
+    const state = { x8: 'A9', x9: 'A8' };
+    const live = () => SPU('spu1', [SKU('x8', state.x8, 'US8'), SKU('x9', state.x9, 'US9')]);
+    const f = fakeIO({ spu: live(), stock: [['x8', 0], ['x9', 0]], shopify: [V('A8', '8', 2), V('A9', '9', 2)] });
+    f.io.sheinSpuInfo = async () => live();
+    f.io.sheinSetSellerSkus = async (n, edits) => {
+      for (const e of edits) if (Object.entries(state).some(([code, sku]) => code !== e.skuCode && sku === e.supplierSku)) return { ok: false, version: null, messages: [`Duplicate seller SKU. Seller SKU: ${e.supplierSku}`] };
+      for (const e of edits) state[e.skuCode] = e.supplierSku;
+      f.calls.edits.push(...edits);
+      return { ok: true, version: 'v1', messages: [] };
+    };
+    const decisions = {};
+    const run = async () => {
+      const rows = rowsFromSpu(live(), STOCK([['x8', 0], ['x9', 0]]), {});
+      const before = f.calls.links.length;
+      const out = await stepProduct('spu1', { ...ctxFor(f.io, 'full', rows), decisions });
+      for (const l of f.calls.links.slice(before)) decisions[l.shein_sku] = l;
+      return out;
+    };
+    expect((await run()).counts.errors).toBe(0);
+    expect(state).toEqual({ x8: 'A9-off', x9: 'A8-off' });
+    expect(decisions.x8).toMatchObject({ link_sku: 'A8', decision: 'link', source: 'swap' });
+    expect(decisions.x9).toMatchObject({ link_sku: 'A9', decision: 'link', source: 'swap' });
+    expect((await run()).counts.errors).toBe(0);
+    expect(state).toEqual({ x8: 'A8', x9: 'A9' });
   });
 
   test('full mode: the seller-SKU edit carries the details SHEIN now requires; with no default set it waits (SHEIN would refuse it)', async () => {
@@ -235,12 +291,12 @@ test.describe('SHEIN live — one product, end to end (fakes)', () => {
     f.io.sheinEditAttrs = async () => ({ list, added: [{ attributeId: 1002260, attribute: 'Reflection' }], dropped: [], problems: [] });
     await stepProduct('spu1', ctxFor(f.io, 'full', scan()));
     expect(sent).toEqual({ attributes: list });
-    expect(f.calls.items.find((i) => i.shein_sku === 's8').action).toContain('SHEIN details it now requires (Reflection)');
+    expect(f.calls.items.find((i) => i.shein_sku === 's75').action).toContain('SHEIN details it now requires (Reflection)');
     const g = fakeIO({ spu, stock, shopify });
     g.io.sheinEditAttrs = async () => ({ list: null, added: [], dropped: [], problems: [{ code: 'missing_attr', params: { attributeId: 1002260, attribute: 'Reflection' } }] });
     await stepProduct('spu1', ctxFor(g.io, 'full', scan()));
     expect(g.calls.edits).toEqual([]);
-    expect(g.calls.items.find((i) => i.shein_sku === 's8').action).toContain('SHEIN now requires Reflection on this shoe');
+    expect(g.calls.items.find((i) => i.shein_sku === 's75').action).toContain('SHEIN now requires Reflection on this shoe');
     expect(g.calls.stock.length).toBeGreaterThan(0);   // stock is still fixed
     // nothing missing → no list (an attribute list sends every colour to review)
     const h = fakeIO({ spu, stock, shopify }); let opts = 'unset';
@@ -256,7 +312,7 @@ test.describe('SHEIN live — one product, end to end (fakes)', () => {
     await stepProduct('spu1', ctxFor(f.io, 'full', scan()));
     expect(f.calls.edits).toEqual([]);
     expect(f.calls.stock.length).toBe(3);
-    expect(f.calls.items.find((i) => i.shein_sku === 's8').action).toContain('still reviewing');
+    expect(f.calls.items.find((i) => i.shein_sku === 's75').action).toContain('still reviewing');
   });
 
   test('a Shopify sale a second ago is counted: the step reads Shopify live, not the scan', async () => {

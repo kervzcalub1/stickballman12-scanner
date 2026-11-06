@@ -459,6 +459,8 @@ export const api = {
   cartReceiptRead: (cartId, fileId) => post('/api/cart/receipt-read', { cartId, fileId }),
   // Read card numbers / PINs / balances off an uploaded card image or PDF (review first).
   cartGiftCardRead: (cartId, fileId) => post('/api/cart/gift-card-read', { cartId, fileId }),
+  cartCardReads: (cartId, action) => post('/api/cart/gift-card-reads', { cartId, action }),
+  cartAddGiftCards: (cartId, cards) => post('/api/cart/gift-card', { cartId, cards }),
   cartReceiptEmail: (cartId, transactionId) => post('/api/cart/receipt-email', { cartId, transactionId }),
   cartReceiptEmailFile: (cartId, fileId) => post('/api/cart/receipt-email', { cartId, fileId }),
   // The bytes are PROXIED — the bucket never serves a card photo or a receipt by URL,

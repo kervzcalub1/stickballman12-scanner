@@ -3673,8 +3673,335 @@ test.describe('gift cards read off a file', () => {
 
   test('the reader uses no AI, even with a key set', async () => {
     const fs = await import('node:fs');
-    for (const f of ['api/cart/gift-card-read.js', 'api/cart/gift-cards-pdf.js'])
+    for (const f of ['api/cart/gift-card-read.js', 'api/cart/gift-cards-pdf.js', 'api/cart/gift-card-reads.js', 'api/_lib/gc-read-worker.js', 'api/_lib/gcCards.js'])
       expect(fs.readFileSync(f, 'utf8'), f).not.toMatch(/openai|OPENAI_API_KEY|chat\/completions/i);
+  });
+
+  // Cardwell's download: a ZIP of pictures, named 001-nike-4832.png. Made-up cards only.
+  test('a ZIP opens into its card files: in order, junk ignored, others counted, full numbers masked', async () => {
+    const sharp = (await import('sharp')).default;
+    const { zipSync } = await import('fflate');
+    const { cardFilesFromZip, MAX_ZIP_FILES } = await import('../api/_lib/gcCards.js');
+    const png = new Uint8Array(await sharp({ create: { width: 20, height: 20, channels: 3, background: '#fff' } }).png().toBuffer());
+    const jpg = new Uint8Array(await sharp({ create: { width: 20, height: 20, channels: 3, background: '#fff' } }).jpeg().toBuffer());
+    const text = (t) => new TextEncoder().encode(t);
+    const { files, skipped } = cardFilesFromZip(Buffer.from(zipSync({
+      'cards/010-nike-4832.png': png,
+      'cards/002-nike-4815.jpeg': jpg,
+      'cards/6060100000000001111.png': png,
+      'cards/list.csv': text('number,pin\n6060100000000002222,123456\n'),
+      'cards/notes.txt': text('not a card'),
+      'cards/fake.png': text('not really a picture, whatever the name says'),
+      '__MACOSX/cards/._010-nike-4832.png': png,
+      'cards/.DS_Store': text('x'),
+    })));
+    expect(files.map((f) => [f.name, f.ext, f.contentType])).toEqual([
+      ['002-nike-4815.jpeg', 'jpg', 'image/jpeg'],
+      ['010-nike-4832.png', 'png', 'image/png'],
+      ['••••1111.png', 'png', 'image/png'],
+      ['list.csv', 'csv', 'text/csv'],
+    ]);
+    expect(skipped).toBe(2);
+    expect(() => cardFilesFromZip(Buffer.from('this is not a zip file at all, not even close'))).toThrow();
+    const many = Object.fromEntries(Array.from({ length: MAX_ZIP_FILES + 1 }, (_, i) => [`${i}.png`, png]));
+    expect(() => cardFilesFromZip(Buffer.from(zipSync(many)))).toThrow(/more than/);
+  });
+
+  test('many files make one table: one row a card, a CSV fills a picture\'s balance, a disagreement is held', async () => {
+    const { mergeCardReads } = await import('../api/_lib/gcCards.js');
+    const card = (number, pin, balance = null) => ({ number, pin, balance, retailer: null, already: false });
+    const rows = mergeCardReads([
+      { fileId: 1, fileName: '001.png', cards: [card('6060100000000001111', '111111')] },
+      { fileId: 2, fileName: '002.png', cards: [card('6060100000000002222', '222222')] },
+      { fileId: 3, fileName: 'list.csv', cards: [card('6060100000000001111', '111111', 200), card('6060100000000002222', '999999', 50), card('6060100000000003333', null, 100)] },
+    ], ['3333']);
+    expect(rows.map((r) => [r.number.slice(-4), r.pin, r.balance, r.conflict, r.already, r.fileName])).toEqual([
+      ['1111', '111111', 200, false, false, '001.png'],
+      ['2222', '222222', 50, true, false, '002.png'],
+      ['3333', null, 100, false, true, 'list.csv'],
+    ]);
+  });
+
+  // Cardwell's export, column for column (made-up cards). The balance is only here: their card
+  // pictures and PDF don't print one, and a used card is worth less than the rest.
+  test('Cardwell\'s CSV gives each card its own balance, and a ZIP\'s picture of the same card picks it up', async () => {
+    const { cardsFromCsv } = await import('../api/cart/gift-card-read.js');
+    const { cleanCards, mergeCardReads } = await import('../api/_lib/gcCards.js');
+    const csv = `Retailer,Card number,PIN,Added,Balance
+"Nike","6060100000000005511","551155","2026-11-06T17:21:04.123Z","200.00"
+"Nike","6060100000000005522","552255","2026-11-06T17:21:05.456Z","20.86"
+"Nike","6060100000000005533","553355","2026-11-06T17:21:06.789Z","200.00"`;
+    const { cards, mangled } = cardsFromCsv(csv);
+    expect(mangled).toBe(0);
+    expect(cleanCards(cards).map((c) => [c.number, c.pin, c.balance, c.retailer])).toEqual([
+      ['6060100000000005511', '551155', 200, 'Nike'],
+      ['6060100000000005522', '552255', 20.86, 'Nike'],
+      ['6060100000000005533', '553355', 200, 'Nike'],
+    ]);
+    const picture = (number, pin) => ({ number, pin, balance: null, retailer: null, already: false });
+    const rows = mergeCardReads([
+      { fileId: 1, fileName: '001-nike-5511.png', cards: [picture('6060100000000005511', '551155')] },
+      { fileId: 2, fileName: '002-nike-5522.png', cards: [picture('6060100000000005522', '552255')] },
+      { fileId: 3, fileName: 'cardwell-selected-gift-cards.csv', cards: cleanCards(cards) },
+    ]);
+    expect(rows.map((r) => [r.number.slice(-4), r.balance, r.retailer, r.conflict, r.fileName])).toEqual([
+      ['5511', 200, 'Nike', false, '001-nike-5511.png'],
+      ['5522', 20.86, 'Nike', false, '002-nike-5522.png'],
+      ['5533', 200, 'Nike', false, 'cardwell-selected-gift-cards.csv'],
+    ]);
+  });
+
+  test('a picture\'s file name names its card only when it clearly does', async () => {
+    const { cardTailFromFileName: t } = await import('../src/lib/buycartRules.js');
+    expect(t('001-nike-4832.png')).toBe('4832');
+    expect(t('002-nike-0007.JPG')).toBe('0007');
+    for (const none of ['IMG_20241.png', 'photo.png', 'WhatsApp Image 2026-11-05 at 04.42.06.jpeg', '4832.pdf', '', null]) expect(t(none), String(none)).toBeNull();
+  });
+
+  // The stored readings, seeded straight in: CI has no file storage for the worker to read from.
+  async function seedReads(cartId, readings) {
+    const { encryptSecret } = await import('../api/_lib/secrets.js');
+    for (const [i, { name, cards, status = 'done' }] of readings.entries()) {
+      const file = (await pool.query(
+        `INSERT INTO buy_cart_files (cart_id, kind, r2_key, name, content_type) VALUES ($1, 'gift_card', $2, $3, 'image/png') RETURNING id`,
+        [cartId, `buy-carts/e2e/gift_card-${cartId}${i}.png`, name],
+      )).rows[0];
+      await pool.query(
+        `INSERT INTO buy_cart_card_reads (file_id, cart_id, status, card_count, enc) VALUES ($1, $2, $3, $4, $5)`,
+        [file.id, cartId, status, (cards || []).length, cards?.length ? encryptSecret(JSON.stringify(cards)) : null],
+      );
+    }
+  }
+  const readCard = (number, pin, balance = null) => ({ number, pin, balance, retailer: null, already: false });
+  async function fundable(request) {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+    return cartId;
+  }
+
+  test('the readings go to the desk alone: digits only on request, on the trail, and never in the cart', async ({ request }) => {
+    const cartId = await fundable(request);
+    await seedReads(cartId, [
+      { name: '001-nike-1111.png', cards: [readCard('6060100000000001111', '111111')] },
+      { name: '002-nike-2222.png', cards: [readCard('6060100000000002222', '222222')] },
+      { name: '003-nike-blur.png', cards: [] },
+    ]);
+    for (const who of ['approver', 'buyer'])
+      expect((await call(request, who, 'cart/gift-card-reads', { cartId, action: 'results' })).status).toBe(403);
+
+    // The cart says how far reading has got, without a digit or the ciphertext.
+    const got = await read_(request, 'issuer', `cart/get?id=${cartId}`);
+    const raw = JSON.stringify(got.body);
+    expect(raw).not.toContain('6060100000000001111');
+    expect(raw).not.toContain('"enc"');
+    const files = got.body.cart.files.filter((f) => f.kind === 'gift_card');
+    expect(files.map((f) => [f.read_status, f.read_count])).toEqual([['done', 1], ['done', 1], ['done', 0]]);
+    // A supplier sees neither the files nor their reading.
+    const theirs = await read_(request, 'buyer', `cart/get?id=${cartId}`);
+    expect(JSON.stringify(theirs.body)).not.toContain('001-nike-1111');
+
+    const out = await call(request, 'issuer', 'cart/gift-card-reads', { cartId, action: 'results' });
+    expect(out.status).toBe(200);
+    expect(out.body.cards.map((c) => [c.number, c.pin, c.fileName])).toEqual([
+      ['6060100000000001111', '111111', '001-nike-1111.png'],
+      ['6060100000000002222', '222222', '002-nike-2222.png'],
+    ]);
+    const ev = (await pool.query(`SELECT body FROM buy_cart_events WHERE cart_id = $1 AND kind = 'gc_read_all'`, [cartId])).rows;
+    expect(ev.length).toBe(1);
+    expect(ev[0].body).toContain('2 cards opened for review');
+    expect(ev[0].body).not.toMatch(/\d{4,}/);
+
+    // Once recorded, the stored digits are gone.
+    expect((await call(request, 'issuer', 'cart/gift-card-reads', { cartId, action: 'clear' })).status).toBe(200);
+    const left = (await pool.query(`SELECT count(*)::int AS n FROM buy_cart_card_reads WHERE cart_id = $1 AND enc IS NOT NULL`, [cartId])).rows[0];
+    expect(left.n).toBe(0);
+    expect((await call(request, 'issuer', 'cart/gift-card-reads', { cartId, action: 'results' })).body.cards).toEqual([]);
+  });
+
+  test('a file that failed or never got read can be queued; a recorded one is not read again', async ({ request }) => {
+    const cartId = await fundable(request);
+    await seedReads(cartId, [
+      { name: 'recorded.png', cards: [readCard('6060100000000005151', '515151')], status: 'cleared' },
+      { name: 'failed.png', status: 'failed' },
+    ]);
+    await pool.query(`INSERT INTO buy_cart_files (cart_id, kind, r2_key, name, content_type) VALUES ($1, 'gift_card', $2, 'never.png', 'image/png')`, [cartId, `buy-carts/e2e/gift_card-${cartId}9.png`]);
+    expect((await call(request, 'approver', 'cart/gift-card-reads', { cartId, action: 'queue' })).status).toBe(403);
+    const out = await call(request, 'issuer', 'cart/gift-card-reads', { cartId, action: 'queue' });
+    expect(out.status).toBe(200);
+    expect(out.body.queued).toBe(2);
+    const cleared = (await pool.query(`SELECT r.status FROM buy_cart_card_reads r JOIN buy_cart_files f ON f.id = r.file_id WHERE f.name = 'recorded.png' AND r.cart_id = $1`, [cartId])).rows[0];
+    expect(cleared.status).toBe('cleared');
+  });
+
+  test('after a restart a file mid-read goes back in the queue, and one that keeps failing stops', async ({ request }) => {
+    const { requeueStuckCardReads } = await import('../api/_lib/db.js');
+    const cartId = await fundable(request);
+    await seedReads(cartId, [{ name: 'cut-short.png', status: 'reading' }, { name: 'keeps-dying.png', status: 'reading' }, { name: 'still-going.png', status: 'reading' }]);
+    await pool.query(`UPDATE buy_cart_card_reads r SET attempts = CASE f.name WHEN 'keeps-dying.png' THEN 3 ELSE 1 END, started_at = CASE f.name WHEN 'still-going.png' THEN now() ELSE now() - interval '1 hour' END FROM buy_cart_files f WHERE f.id = r.file_id AND r.cart_id = $1`, [cartId]);
+    await requeueStuckCardReads(30);
+    const rows = (await pool.query(`SELECT f.name, r.status FROM buy_cart_card_reads r JOIN buy_cart_files f ON f.id = r.file_id WHERE r.cart_id = $1 ORDER BY f.id`, [cartId])).rows;
+    expect(rows.map((r) => r.status)).toEqual(['queued', 'failed', 'reading']);
+    // Off the shared queue again, so this test's made-up files aren't left for the worker.
+    await pool.query(`DELETE FROM buy_cart_card_reads WHERE cart_id = $1`, [cartId]);
+  });
+
+  test('on screen: the desk is warned about a card with no barcode picture, until there is one', async ({ page, request }) => {
+    const cartId = await fundable(request);
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000008181', pin: '818181', balance: 500 } });
+    await as(page, 'issuer');
+    await page.goto(`/ph/gift-card-buying?request=${cartId}`);
+    const section = page.locator('.bc-cards');
+    await expect(section).toContainText('No barcode picture for 1 card: •••• 8181');
+    await expect(section).toContainText('upload the CSV, then the ZIP');
+    await pool.query(`INSERT INTO buy_cart_files (cart_id, kind, r2_key, name, content_type) VALUES ($1, 'gift_card', $2, '001-nike-8181.png', 'image/png')`, [cartId, `buy-carts/e2e/gift_card-${cartId}1.png`]);
+    await page.reload();
+    await expect(section.locator('.bc-gc-list')).toContainText('8181');
+    await expect(section).not.toContainText('No barcode picture');
+  });
+
+  test('recording many at once is one call: all or nothing on a bad row, and says how many landed', async ({ request }) => {
+    const cartId = await fundable(request);
+    const code = (i) => `60601000000000${String(70000 + i)}`;
+    const bad = await call(request, 'issuer', 'cart/gift-card', { cartId, cards: [{ code: code(1), balance: 200 }, { code: code(2), balance: '' }] });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toMatch(/Nothing was recorded/);
+    const none = (await pool.query(`SELECT count(*)::int AS n FROM buy_cart_gift_cards WHERE cart_id = $1`, [cartId])).rows[0];
+    expect(none.n).toBe(0);
+    expect((await call(request, 'approver', 'cart/gift-card', { cartId, cards: [{ code: code(1), balance: 200 }] })).status).toBe(403);
+
+    // More than the one-a-call rate limit allows in a minute, in a single press.
+    const out = await call(request, 'issuer', 'cart/gift-card', { cartId, cards: Array.from({ length: 70 }, (_, i) => ({ code: code(i), pin: '123456', balance: 5, label: `${i}.png` })) });
+    expect(out.status).toBe(200);
+    expect(out.body.recorded).toBe(70);
+    const row = (await pool.query(`SELECT count(*)::int AS n, sum(balance)::numeric AS total, min(code_enc) AS enc FROM buy_cart_gift_cards WHERE cart_id = $1`, [cartId])).rows[0];
+    expect(row.n).toBe(70);
+    expect(Number(row.total)).toBe(350);
+    expect(row.enc).not.toContain('6060100');
+  });
+
+  test('on screen: Review opens every card, typing 200 fills the blanks with 200, Record files them', async ({ page, request }) => {
+    const cartId = await fundable(request);
+    await seedReads(cartId, [
+      { name: '001-nike-3131.png', cards: [readCard('6060100000000003131', '313131')] },
+      { name: '002-nike-3232.png', cards: [readCard('6060100000000003232', '323232')] },
+      { name: '003-nike-3333.png', cards: [readCard('6060100000000003333', '333333')] },
+      { name: '004-nike-blur.png', cards: [] },
+    ]);
+    await as(page, 'issuer');
+    await page.goto(`/ph/gift-card-buying?request=${cartId}`);
+    const section = page.locator('.bc-cards');
+    // No digit on the page until someone asks.
+    await expect(section.getByRole('button', { name: 'Review the 3 cards read' })).toBeVisible();
+    await expect(section.locator('.bc-gc-bulk')).toContainText('Nothing read from 1 file: 004-nike-blur.png');
+    await expect(page.locator('body')).not.toContainText('6060100000000003131');
+    await section.getByRole('button', { name: 'Review the 3 cards read' }).click();
+
+    const rows = section.locator('.bc-gc-read-list li');
+    await expect(rows).toHaveCount(3);
+    await expect(section.locator('.bc-gc-read-h')).toContainText('3 cards read from 3 files');
+
+    // Typed key by key, as a person does: this used to leave every row at $2.
+    await section.getByLabel('Set every blank balance').pressSequentially('200');
+    const balances = () => rows.locator('.ph-price').evaluateAll((els) => els.map((e) => e.value));
+    await expect.poll(balances).toEqual(['200', '200', '200']);
+    // A row changed by hand keeps its own number when the fill changes.
+    await rows.nth(1).locator('.ph-price').fill('50');
+    await section.getByLabel('Set every blank balance').fill('100');
+    await expect.poll(balances).toEqual(['100', '50', '100']);
+
+    await section.getByRole('button', { name: 'Record 3 cards' }).click();
+    await expect(section.locator('.bc-gc-read')).toHaveCount(0);
+    await expect(section.locator('.bc-gc-list li')).toHaveCount(3);
+    const saved = (await pool.query(`SELECT code_last4, balance::numeric AS balance, label FROM buy_cart_gift_cards WHERE cart_id = $1 ORDER BY id`, [cartId])).rows;
+    expect(saved.map((r) => [r.code_last4, Number(r.balance), r.label])).toEqual([
+      ['3131', 100, '001-nike-3131.png'], ['3232', 50, '002-nike-3232.png'], ['3333', 100, '003-nike-3333.png'],
+    ]);
+    // Spent: no button to open them again, and nothing left stored.
+    await expect(section.getByRole('button', { name: /Review the/ })).toHaveCount(0);
+    expect((await pool.query(`SELECT count(*)::int AS n FROM buy_cart_card_reads WHERE cart_id = $1 AND enc IS NOT NULL`, [cartId])).rows[0].n).toBe(0);
+  });
+
+  // The desk's real flow. The pictures here hold no readable text at all, so if anything still
+  // depended on OCR, they would come back unmatched and the PDF would print no pictures.
+  test('the CSV, then the ZIP: details from the CSV, no OCR, and the supplier\'s PDF carries each picture', async ({ request }) => {
+    test.skip(!process.env.R2_ACCOUNT_ID, 'R2 is not configured in this env — file-sign answers 503');
+    const sharp = (await import('sharp')).default;
+    const { zipSync } = await import('fflate');
+    const { PDFDocument } = await import('pdf-lib');
+    const blank = async (c) => new Uint8Array(await sharp({ create: { width: 600, height: 380, channels: 3, background: c } }).png().toBuffer());
+    const face = new Uint8Array(await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760"><rect width="1200" height="760" fill="#2c6652"/>
+      <text x="66" y="345" font-family="monospace" font-size="16" fill="#cde">CARD NUMBER</text><text x="930" y="345" font-family="monospace" font-size="16" fill="#cde">PIN</text>
+      <text x="66" y="388" font-family="monospace" font-size="30" font-weight="bold" fill="#fff">6060100000000009393</text><text x="930" y="388" font-family="monospace" font-size="30" font-weight="bold" fill="#fff">939393</text></svg>`)).png().toBuffer());
+    const cartId = await fundable(request);
+    const put = async (bytes, name, contentType) => {
+      const signed = await call(request, 'issuer', 'cart/file-sign', { cartId, kind: 'gift_card', contentType });
+      expect((await fetch(signed.body.uploadUrl, { method: 'PUT', body: bytes })).ok).toBe(true);
+      expect((await call(request, 'issuer', 'cart/file-attach', { cartId, kind: 'gift_card', key: signed.body.key, name, contentType, sizeBytes: bytes.length })).status).toBe(200);
+    };
+    const files = async () => (await read_(request, 'issuer', `cart/get?id=${cartId}`)).body.cart.files.filter((f) => f.kind === 'gift_card');
+    try {
+      await put(Buffer.from(`Retailer,Card number,PIN,Added,Balance
+"Nike","6060100000000009191","919191","2026-11-06T17:21:04.123Z","300.00"
+"Nike","6060100000000009292","929292","2026-11-06T17:21:05.456Z","20.86"`), 'cardwell-selected-gift-cards.csv', 'text/csv');
+      await expect.poll(async () => (await files()).map((f) => f.read_status), { timeout: 30_000, intervals: [300] }).toEqual(['done']);
+      await put(Buffer.from(zipSync({
+        '001-nike-9191.png': await blank('#112233'),
+        '002-nike-9292.png': await blank('#445566'),
+        '003-nike-9393.png': face,    // on no CSV: read, so it can't vanish
+      })), 'nike_gift_cards.zip', 'application/zip');
+      await expect.poll(async () => (await files()).map((f) => `${f.name}:${f.read_status}:${f.gc_last4}`), { timeout: 60_000, intervals: [500] }).toEqual([
+        'cardwell-selected-gift-cards.csv:done:null',
+        '001-nike-9191.png:picture:9191',
+        '002-nike-9292.png:picture:9292',
+        '003-nike-9393.png:done:9393',
+      ]);
+      const out = await call(request, 'issuer', 'cart/gift-card-reads', { cartId, action: 'results' });
+      expect(out.body.cards.map((c) => [c.number.slice(-4), c.pin, c.balance])).toEqual([
+        ['9191', '919191', 300], ['9292', '929292', 20.86], ['9393', '939393', null],
+      ]);
+      const rec = await call(request, 'issuer', 'cart/gift-card', { cartId, cards: out.body.cards.slice(0, 2).map((c) => ({ code: c.number, pin: c.pin, balance: c.balance, label: c.fileName })) });
+      expect(rec.body.recorded).toBe(2);
+      expect((await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true })).status).toBe(200);
+      // What the supplier takes to the till: a page a card, each with its own picture.
+      const down = await request.get(`/api/cart/gift-cards-pdf?cartId=${cartId}`, { headers: { Authorization: `Bearer ${tokenFor(people.buyer)}` } });
+      expect(down.status()).toBe(200);
+      const body = await down.body();
+      expect((await PDFDocument.load(body)).getPageCount()).toBe(2);
+      expect((body.toString('latin1').match(/\/Subtype\s*\/Image/g) || []).length).toBe(2);
+    } finally {
+      for (const f of await files()) await call(request, 'issuer', 'cart/file-delete', { cartId, fileId: Number(f.id) }).catch(() => {});
+    }
+  });
+
+  test('a ZIP uploaded to a request is unpacked and read by the server with nobody pressing anything', async ({ request }) => {
+    test.skip(!process.env.R2_ACCOUNT_ID, 'R2 is not configured in this env — file-sign answers 503');
+    const sharp = (await import('sharp')).default;
+    const { zipSync } = await import('fflate');
+    const face = async (number, pin) => new Uint8Array(await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760"><rect width="1200" height="760" fill="#2c6652"/>
+      <text x="66" y="345" font-family="monospace" font-size="16" fill="#cde">CARD NUMBER</text><text x="930" y="345" font-family="monospace" font-size="16" fill="#cde">PIN</text>
+      <text x="66" y="388" font-family="monospace" font-size="30" font-weight="bold" fill="#fff">${number}</text><text x="930" y="388" font-family="monospace" font-size="30" font-weight="bold" fill="#fff">${pin}</text></svg>`)).png().toBuffer());
+    const zip = Buffer.from(zipSync({
+      '001-nike-4141.png': await face('6060100000000004141', '414141'),
+      '002-nike-4242.png': await face('6060100000000004242', '424242'),
+    }));
+    const cartId = await fundable(request);
+    const signed = await call(request, 'issuer', 'cart/file-sign', { cartId, kind: 'gift_card', contentType: 'application/zip' });
+    expect(signed.status).toBe(200);
+    expect((await fetch(signed.body.uploadUrl, { method: 'PUT', body: zip })).ok).toBe(true);
+    expect((await call(request, 'issuer', 'cart/file-attach', { cartId, kind: 'gift_card', key: signed.body.key, name: 'nike_gift_cards.zip', contentType: 'application/zip', sizeBytes: zip.length })).status).toBe(200);
+    const files = async () => (await read_(request, 'issuer', `cart/get?id=${cartId}`)).body.cart.files.filter((f) => f.kind === 'gift_card');
+    try {
+      await expect.poll(async () => (await files()).map((f) => `${f.name}:${f.read_status}:${f.read_count}`), { timeout: 60_000, intervals: [500] })
+        .toEqual(['001-nike-4141.png:done:1', '002-nike-4242.png:done:1']);   // the ZIP itself is gone
+      const out = await call(request, 'issuer', 'cart/gift-card-reads', { cartId, action: 'results' });
+      expect(out.body.cards.map((c) => [c.number, c.pin])).toEqual([['6060100000000004141', '414141'], ['6060100000000004242', '424242']]);
+      const trail = (await pool.query(`SELECT body FROM buy_cart_events WHERE cart_id = $1 AND kind IN ('gc_read_all', 'file_added')`, [cartId])).rows.map((r) => r.body).join(' | ');
+      expect(trail).toContain('unpacked into 2 files');
+      expect(trail).toContain('2 cards read from 2 files on this server');
+      expect(trail).not.toMatch(/\d{8,}/);
+    } finally {
+      for (const f of await files()) await call(request, 'issuer', 'cart/file-delete', { cartId, fileId: Number(f.id) });
+    }
   });
 
   test('the supplier gets no card files or their names; the desk keeps them and can delete them', async ({ request }) => {

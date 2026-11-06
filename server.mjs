@@ -232,6 +232,11 @@ import('./api/_lib/stockx-reprice-worker.js')
   .then((m) => m.startStockxRepriceWorker())
   .catch((e) => console.error('[stockx-reprice] failed to start:', e.message));
 
+// Gift card files — read on the server, so closing the page never stops it (docs/context/buy-cart.md).
+import('./api/_lib/gc-read-worker.js')
+  .then((m) => m.startCardReadWorker())
+  .catch((e) => console.error('[gc-read] failed to start:', e.message));
+
 // eBay orders — incremental sync every 30 min so late shipments show by themselves
 // (docs/context/ebay-orders.md). Production only by default; EBAY_ORDERS_WATCH overrides.
 import('./api/_lib/ebay-orders-worker.js')

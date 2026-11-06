@@ -1343,6 +1343,49 @@ nothing says to type it in, and can be deleted. Receipts and cancellation photos
   in the background as the viewer opens), and a download button in the bar. The panel
   is drawn whenever card files exist, even before cards can be recorded.
 
+### Card files read on the server (2026-11-06)
+The desk's complaint: cardwell gives a ZIP, each picture took a press (about a minute a card, on
+prod's trail), and every balance was typed. **The server now does the reading, with no AI:**
+- **Upload anything, as many as you like** (`multiple`): pictures, PDFs, CSVs, or **a ZIP**.
+  `file-attach` queues each `gift_card` file; `api/_lib/gc-read-worker.js` reads them one at a time
+  (`readCardFile`, the same reader as the per-file button). Closing the page doesn't stop it, a
+  restart requeues what was mid-read, **Stop** empties the queue. A failing file is `failed` with
+  plain words after 3 tries; it never blocks the others.
+- **A ZIP** (`cardFilesFromZip`, `api/_lib/gcCards.js`, fflate) is unpacked into one `gift_card` file
+  per picture, because the all-cards PDF pairs each card with its own picture, then the ZIP is
+  deleted. Types are sniffed from the bytes; junk (`__MACOSX`, dotfiles) is ignored; other files are
+  counted as `skipped` on the trail. Up to 200 files, 20 MB each, 300 MB in all. Full card numbers in
+  file names are masked. R2 keys are fixed per ZIP + entry, so a restart resumes without duplicates.
+- **`buy_cart_card_reads`** (new table → `db:setup`, in `LIVE_TABLES`): one row per file — status, counts,
+  and the cards as **`enc`, encrypted like a recorded card** (no `BUY_GC_KEY` → `failed`, never in the
+  clear). Its own table so `enc` can't reach a screen through a query on `buy_cart_files`; `getBuyCartFull`
+  joins only the status columns.
+- **`POST cart/gift-card-reads`**, `issue_gift_cards` only: `queue` (files with no reading) · `cancel` ·
+  `results` · `clear`. **Digits leave the database only on `results`**, from the **Review the N cards read**
+  button, never on page load, with a `gc_read_all` trail row of who and how many. The worker adds one
+  `gc_read_all` summary row when a request's queue empties, so 50 files don't push out the trail.
+  Suppliers don't see these rows (`isCardFileEvent`).
+- **One review table** across every file (`mergeCardReads`): one row per full number, and a CSV's balance
+  fills in a picture's blank. Two files disagreeing on a PIN or balance → row starts unticked, "files disagree".
+- **Record is one call** (`cart/gift-card` `{ cards: [...] }`, up to 200, in order, checked first). The
+  old one-call-per-row loop hit the 60/min limit on a big batch. It answers how many landed, so
+  pressing again can't record a card twice. The stored readings are cleared after a full record.
+- **The balance can't be read off a cardwell card: the face and the PDF print only the number and PIN**
+  (checked on the real file). **Cardwell's CSV has it** (`Retailer,Card number,PIN,Added,Balance`, read
+  by `cardsFromCsv` as is, checked on a real export; one card was $20.86 among $200s).
+- **The desk's flow: the CSV, then the ZIP** (owner, 2026-11-06). The CSV is the card's details; the ZIP's
+  pictures are only for the supplier, whose all-cards PDF carries the barcode the cashier scans. So a picture
+  named for a card on a read CSV (`cardTailFromFileName`: `001-nike-4832.png`) is **not OCR'd**: it gets
+  `gc_last4` and read status `picture`. Names matched the card 13 of 13 on prod when checked. A picture of a card
+  the CSV doesn't list, or with no such name, is still read, so that card comes up for review. ZIP first
+  works too, just with OCR. **The PDF pairs** by `gc_last4`, then the name, and reads only if neither settles it
+  (never read, or two cards ending alike). **No barcode picture for N cards** warns the desk on the funding
+  panel before release (not on a request with a card PDF, whose pages can't be judged from the page).
+- With no CSV, **Set every blank balance**,
+  which until now stopped at the first keystroke (typing 200 set every row to $2). A hand-edited row keeps its own value.
+- A PDF of up to 200 pages is read (was 60, silently); pages past that count as unread and the screen says so.
+- The per-file **Read the cards** button still works (`cart/gift-card-read`, one file, straight away).
+
 ### E-gift PDFs, CSVs, and all the cards as one PDF (2026-09-30)
 - **An e-gift PDF, one card a PAGE** (Nike's layout) prints "Gift Card Value:", "Card
   Number:" and "Pin:" on lines of their own, so the row reader found every number and

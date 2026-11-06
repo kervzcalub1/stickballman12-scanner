@@ -18,6 +18,8 @@ const EXT = {
   'image/heic': 'heic', 'application/pdf': 'pdf',
   // The card seller's export (number · PIN · balance). Gift-card files only.
   'text/csv': 'csv',
+  // Cardwell's download: one picture per card. Gift-card files only; unpacked on the server.
+  'application/zip': 'zip',
 };
 
 export default async function handler(req, res) {
@@ -39,8 +41,8 @@ export default async function handler(req, res) {
   const sku = kind === 'shoe' ? String(body.sku ?? '').trim().toUpperCase().slice(0, 40) : null;
   const contentType = EXT[body.contentType] ? body.contentType : null;
   if (!Number.isInteger(cartId)) return send(res, 400, { ok: false, error: 'A valid cartId is required.' });
-  if (!contentType || (contentType === 'text/csv' && kind !== 'gift_card'))
-    return send(res, 400, { ok: false, error: kind === 'gift_card' ? 'Upload a photo, a PDF or a CSV.' : 'Upload a photo or a PDF.' });
+  if (!contentType || (['text/csv', 'application/zip'].includes(contentType) && kind !== 'gift_card'))
+    return send(res, 400, { ok: false, error: kind === 'gift_card' ? 'Upload a photo, a PDF, a CSV or a ZIP.' : 'Upload a photo or a PDF.' });
 
   try {
     const cart = await getBuyCart(cartId);

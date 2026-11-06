@@ -29,11 +29,31 @@ export async function routeShopifyWebhook(topic, body, hook = HOOK) {
   return { ignored: true };
 }
 
+// A refused call leaves one line saying WHO sent it, because a status code can't: a 401 from our own
+// subscription means our secret is wrong, a 401 from another store or app means nothing of ours failed.
+// Headers are attacker-controlled before the signature passes, so they are cut to safe characters,
+// and the lines are capped per hour. The signature itself is never logged.
+const safeHeader = (v) => String(v ?? '').replace(/[^\w./:@-]/g, '').slice(0, 80) || '-';
+const REJECT_LOGS_PER_HOUR = 200;
+let rejectHour = 0;
+let rejectLogged = 0;
+export function logRejectedWebhook(req, now = Date.now()) {
+  const hour = Math.floor(now / 3_600_000);
+  if (hour !== rejectHour) { rejectHour = hour; rejectLogged = 0; }
+  if (++rejectLogged > REJECT_LOGS_PER_HOUR) return false;
+  const h = req.headers || {};
+  console.warn(`[shopify/webhook] refused bad signature: topic=${safeHeader(h['x-shopify-topic'])} shop=${safeHeader(h['x-shopify-shop-domain'])} api=${safeHeader(h['x-shopify-api-version'])} sub=${safeHeader(h['x-shopify-name'])} id=${safeHeader(h['x-shopify-webhook-id'])} signed=${h['x-shopify-hmac-sha256'] ? 'yes' : 'no'} bytes=${req.rawBody?.length ?? 0}`);
+  return true;
+}
+
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false });
   if (!rateLimit(req, { windowMs: 60_000, max: 2000 })) return send(res, 429, { ok: false });
-  if (!shopifyWebhookValid(req.rawBody, req.headers['x-shopify-hmac-sha256'])) return send(res, 401, { ok: false });
+  if (!shopifyWebhookValid(req.rawBody, req.headers['x-shopify-hmac-sha256'])) {
+    logRejectedWebhook(req);
+    return send(res, 401, { ok: false });
+  }
   send(res, 200, { ok: true });
   const topic = String(req.headers['x-shopify-topic'] || '');
   try {

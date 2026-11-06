@@ -427,6 +427,7 @@ export const api = {
   cartRemoveLine: (cartId, lineId) => post('/api/cart/line', { cartId, lineId, remove: true }),
   // Not buying an approved pair (skip=true) / buying it after all (false).
   cartSkipLine: (cartId, lineId, skip) => post('/api/cart/line', { cartId, lineId, skip: !!skip }),
+  cartMoreOfLine: (cartId, lineId, more) => post('/api/cart/line', { cartId, lineId, more }),
   // The cost stack an approver or an auditor states when the buyer's preset never had
   // one. Saving re-prices every line server-side and writes the diff into the trail.
   cartSetCosts: (cartId, stack) => post('/api/cart/costs', { cartId, stack }),
@@ -436,6 +437,7 @@ export const api = {
   // What we ALREADY hold of every shoe on the request — Shopify's live figure for the
   // pairs we have listed, plus our own units it cannot see. One press, every line.
   cartStock: (cartId) => post('/api/cart/stock', { cartId }),
+  cartNotHere: (cartId) => post('/api/cart/not-here', { cartId }),
   // "Close the request": the buyer's list is complete. Same route as the old send.
   cartCloseList: (cartId) => post('/api/cart/submit', { cartId }),
   cartReopenList: (cartId) => post('/api/cart/submit', { cartId, reopen: true }),

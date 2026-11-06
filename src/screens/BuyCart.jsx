@@ -24,6 +24,7 @@ import { BuyCartTasks } from '../components/BuyCartTasks.jsx';
 import { estDate, estTime, PH_DATE, estClock } from '../lib/format.js';
 import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
+import { notHereLines } from '../lib/notHere.js';
 import { auditTarget, fundingBreakdown, LIST_ADDABLE, decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep } from '../lib/buycartRules.js';
 import { NudgeButton } from '../components/NudgeButton.jsx';
 
@@ -372,6 +373,37 @@ function TipChip({ line: l }) {
   return <span className="po-chip warn">Tip {$(l.tip_proposed)}/pair proposed</span>;
 }
 
+// The Telegram card's "Not in warehouse yet", in the card's own words. Staff only, because the
+// count crosses every supplier. Read again whenever a decision on this request changes it.
+function NotHere({ cart, onSignOut }) {
+  const [shoes, setShoes] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const decisions = (cart.lines || []).map((l) => `${l.id}:${l.status}:${l.qty}`).join(',');
+  useEffect(() => {
+    let live = true;
+    api.cartNotHere(cart.id)
+      .then((r) => { if (live) { setShoes(r.shoes || []); setFailed(false); } })
+      .catch((e) => { if (e.unauthorized) return onSignOut(); if (live) setFailed(true); });
+    return () => { live = false; };
+  }, [cart.id, decisions]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (failed) return <p className="muted sm bc-not-here">Not in warehouse yet: could not be read.</p>;
+  if (!shoes) return null;
+  const coming = shoes.filter((s) => !s.summary || s.summary.total > 0);
+  if (!coming.length) return <p className="muted sm bc-not-here">Not in warehouse yet: none.</p>;
+  return (
+    <div className="bc-not-here">
+      {coming.map((s) => (
+        <div key={s.sku} className="bc-not-here-shoe">
+          <div className="bc-not-here-sku">{s.name ? `${s.name} · ` : ''}{s.sku}</div>
+          {notHereLines(s.summary).map((line, i) => (
+            <div key={line} className={i === 0 ? 'bc-not-here-total' : 'muted xs'}>{line}</div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, canPrice, isBuyer, autoStock, onChanged, onSignOut }) {
   const [sel, setSel] = useState([]);
   const [busy, setBusy] = useState('');
@@ -398,6 +430,7 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
   // reported what they found — so this starts empty and approving without it is refused
   // by name rather than defaulted to a number nobody chose.
   const [qty, setQty] = useState({});
+  const [addingMore, setAddingMore] = useState(null);
   // Is this quantity above what the buyer counted on the shelf? Only ever true when they
   // ACTUALLY counted — a blank `available_qty` means "didn't count", and treating that as
   // zero would flag every uncounted line as an over-approval.
@@ -428,8 +461,10 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
   // CHANGE A DECISION already made — until the cards go out (`decisionsPendingOnly` from
   // `funded`). A skipped pair is the buyer's call, not ours, so it has no Change.
   const canChange = (l) => canDecide && !decisionsPendingOnly(cart.status) && ['approved', 'rejected'].includes(l.status);
+  // FOUND MORE after sending it: an open list, and a pair that is unanswered or approved.
+  const canAddMore = (l) => isBuyer && buyerCanAdd(cart) && ['pending', 'approved'].includes(l.status);
   const canFix = editable || canEditLines || lines.some(canRemove) || lines.some(buyerEdit)
-    || lines.some(canSkip) || lines.some(canUnskip);
+    || lines.some(canSkip) || lines.some(canUnskip) || lines.some(canAddMore);
   // Kept in one place: the detail row has to span exactly the header, and a colSpan that
   // drifts from the columns leaves a ragged edge nobody notices in review.
   // A buyer has no "Buy call" column — the call is the approver's (`canSeeBuyCall` on
@@ -451,9 +486,15 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
 
   async function commit(action, all, reason) {
     setBusy(action); setErr('');
-    // Only what was actually typed. An empty box is not a zero and not a one — it is a
-    // question the approver has not answered yet, and the server says so by name.
+    // What was typed, and 1 where an approved line's box was left empty (approvers' feedback,
+    // 2026-11-06; the box shows the 1). Stated here, so the server still refuses a call that
+    // names no number at all.
     const qtyMap = {};
+    if (action === 'approve') {
+      for (const l of all ? pending : lines.filter((x) => sel.includes(Number(x.id)))) {
+        if (!(Number(l.qty) > 0)) qtyMap[Number(l.id)] = 1;
+      }
+    }
     for (const [id, v] of Object.entries(qty)) {
       const n = Number(v);
       if (Number.isInteger(n) && n > 0) qtyMap[id] = n;
@@ -566,10 +607,9 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
   // One line, re-decided. Turning down still asks why — the buyer reads it in the shop.
   async function change({ decision, qty: n, reason }) {
     const id = Number(changing.id);
-    if (decision === 'approve' && !(Number(n) > 0)) throw new Error('Say how many to buy.');
     if (decision === 'reject' && !String(reason ?? '').trim()) throw new Error('Say why it’s turned down — the buyer reads it.');
     await api.cartDecide(cart.id, decision === 'approve'
-      ? { action: 'approve', lineIds: [id], qty: { [id]: Number(n) }, reason: String(reason ?? '').trim() || null }
+      ? { action: 'approve', lineIds: [id], qty: { [id]: Number(n) > 0 ? Number(n) : 1 }, reason: String(reason ?? '').trim() || null }
       : { action: 'reject', lineIds: [id], reason: String(reason).trim() });
     setChanging(null); onChanged();
   }
@@ -585,6 +625,17 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
           onSubmit={({ reason }) => commit('reject', rejecting.all, reason.trim())}
           fields={[{ name: 'reason', label: 'Why?', type: 'textarea', required: true,
             placeholder: 'e.g. Too close to retail — only worth it under $95' }]} />
+      )}
+      {addingMore && (
+        <FormModal
+          title={`More of ${addingMore.sku}${addingMore.size ? ` size ${addingMore.size}` : ''}`}
+          message={addingMore.status === 'approved'
+            ? `Approved ×${addingMore.qty} already, and that stays as it is. The desk gets a new card for the extra pairs.`
+            : 'The desk gets a new card with the higher count.'}
+          submitLabel="Send to the desk"
+          onClose={() => setAddingMore(null)}
+          onSubmit={({ more }) => api.cartMoreOfLine(cart.id, addingMore.id, Number(more)).then(() => { setAddingMore(null); onChanged(); })}
+          fields={[{ name: 'more', label: 'How many more did you find?', type: 'number', min: 1, max: 999, required: true }]} />
       )}
       {tipping && (
         <FormModal
@@ -608,7 +659,7 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
             { name: 'decision', label: 'Decision', type: 'select',
               value: changing.status === 'approved' ? 'reject' : 'approve',
               options: [{ value: 'approve', label: 'Approve' }, { value: 'reject', label: 'Turn it down' }] },
-            { name: 'qty', label: 'How many to buy (if approving)', type: 'number', min: 1, max: 999,
+            { name: 'qty', label: 'How many to buy (if approving)', type: 'number', min: 1, max: 999, hint: 'Blank = 1.',
               value: changing.qty != null ? String(changing.qty) : (changing.overrode_qty != null ? String(changing.overrode_qty) : '') },
             { name: 'reason', label: 'Why? (needed to turn it down)', type: 'textarea',
               placeholder: 'e.g. Market dropped — only worth it under $95' },
@@ -661,6 +712,7 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
         )}
       </div>
       {!lines.length && <p className="muted sm">Nothing on the request yet.</p>}
+      {!isBuyer && lines.length > 0 && <NotHere cart={cart} onSignOut={onSignOut} />}
       {lines.length > 0 && (
         <div className="bc-scroll">
           <table className="table bc-table">
@@ -754,7 +806,7 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                       <>
                         <input className={`input bc-qty-in${overAvail(l, qty[id]) ? ' over' : ''}`}
                           type="number" min="1" max="999"
-                          inputMode="numeric" placeholder="?"
+                          inputMode="numeric" placeholder="1"
                           aria-label={`How many ${l.sku}${l.size ? ` size ${l.size}` : ''} to buy`}
                           value={qty[id] ?? ''}
                           onChange={(e) => setQtyFor(id, e.target.value)} />
@@ -827,6 +879,11 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                       {(editable || canEditLines || buyerEdit(l)) && (
                         <button type="button" className="btn sm ghost" onClick={() => setFixing(l)}
                           aria-label={`Correct ${l.sku}`} title={isBuyer ? 'Fix the size, price, count, full box or premium' : 'Correct the size, quantity or shelf price'}>✎</button>
+                      )}
+                      {canAddMore(l) && (
+                        <button type="button" className="btn sm ghost" onClick={() => setAddingMore(l)}
+                          aria-label={`Found more of ${l.sku}${l.size ? ` size ${l.size}` : ''}`}
+                          title="Found more of this in the shop — asks the desk about the extra pairs">＋ Found more</button>
                       )}
                       {canSkip(l) && (
                         <button type="button" className="btn sm ghost bc-skip" disabled={busy === `sk${l.id}`}

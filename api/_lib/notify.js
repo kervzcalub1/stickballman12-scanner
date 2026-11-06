@@ -17,7 +17,7 @@
 // seconds later by `priceInBackground`, and a card that goes out first says "not priced"
 // on every pair — which is the one thing the approver most needs and the reason to have
 // a card at all.
-import { getBuyCart, getBuyCartLine, lastCartEvent, logCartEvent, createTelegramGroupCard, setTelegramGroupCardMessage, premiumPingPeople, premiumChatForBuyer } from './db.js';
+import { getBuyCart, getBuyCartLine, notInWarehouseForSku, lastCartEvent, logCartEvent, createTelegramGroupCard, setTelegramGroupCardMessage, premiumPingPeople, premiumChatForBuyer } from './db.js';
 import { alertUsers, at } from './alerts.js';
 import { fundingTarget } from './buycart.js';
 import { stockForPair, stockForSizes, stockSentence } from './buyingStock.js';
@@ -27,6 +27,7 @@ import { cardsIssuable, fundingWords } from '../../src/lib/buycartRules.js';
 import { compareSizes } from '../../src/lib/codes.js';
 import { stockxConfigured, stockxProductBySku } from './stockx.js';
 import { salesSentence } from './marketSales.js';
+import { notHereSummary, notHereLines } from '../../src/lib/notHere.js';
 
 // Where the card's SKU line links: the shoe's own StockX page when StockX's catalogue has that
 // exact style code (`urlKey`, cached 12 h — the pricing read already warmed it), else a StockX
@@ -133,6 +134,17 @@ export function premiumLines(line, cart, { replies = false, buttons = false } = 
   ];
 }
 
+// The shoe's pairs already approved or on their way. Never fatal: the card still goes, and says
+// the count couldn't be read rather than printing none.
+async function notHereCardLines(sku) {
+  try {
+    return notHereLines(notHereSummary(await notInWarehouseForSku(sku)));
+  } catch (e) {
+    console.warn(`[notify] ${sku} — could not read what is on its way:`, e.message);
+    return notHereLines(null);
+  }
+}
+
 export async function notifyLineAsked(cartId, lineId, extra = {}) {
   // THIS RETURN USED TO BE SILENT, and it was the only path in here that reached no
   // further and logged nothing — so a server configured not to send looked exactly like a
@@ -234,6 +246,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
     // hold — and only then the paperwork.
     const priced = call && call.verdict;
     const ping = await premiumPing(!!line.premium);
+    const notHere = await notHereCardLines(line.sku);
     const caption = [
       // A BUYER'S CHANGE to a pair already asked about heads the re-posted card, so the
       // group knows this replaces the one above and what moved (cart/line patch).
@@ -288,6 +301,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
       '',
       'Inventory:',
       stock ? stockSentence(stock) : 'Stock could not be read.',
+      ...notHere,
       '',
       cart.cart_code,
       `Supplier: ${cart.buyer_name}`,
@@ -469,6 +483,7 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
     }
 
     const ping = await premiumPing(lines.some((l) => l.premium));
+    const notHere = await notHereCardLines(first.sku);
     const caption = [
       ...(String(first.name || '').trim() ? [String(first.name).trim()] : []),
       first.sku,
@@ -483,6 +498,7 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       '',
       'Inventory:',
       inventory,
+      ...notHere,
       '',
       cart.cart_code,
       `Supplier: ${cart.buyer_name}`,
@@ -495,7 +511,7 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       ...(lines.length > 2 ? [`A range works too: ${lines[0].size}-${lines[lines.length - 1].size} x 1 · or "all x 1".`] : []),
       // The plain-words answers people actually type (floor feedback, 2026-11-02).
       'Or just reply: take all (what’s in store) · 2 each · no',
-      'Sizes you leave out are turned down. A new reply replaces the last one (edits aren’t read).',
+      'No quantity means 1. Sizes you leave out are turned down. A new reply replaces the last one (edits aren’t read).',
     ].join('\n');
 
     const chatId = await chatFor(cart, lines.some((l) => l.premium));

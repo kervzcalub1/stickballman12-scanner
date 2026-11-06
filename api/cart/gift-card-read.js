@@ -24,13 +24,13 @@
 // reading the card, and the file endpoint already gates the image on the same duty.
 import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
 import { getBuyCart, getBuyCartFile, listBuyCartCardTails, logCartEvent, dbConfigured, setBuyCartFileCardTail } from '../_lib/db.js';
+import { cleanCards, MAX_CARDS } from '../_lib/gcCards.js';
 import { requirePrivilege } from '../_lib/buycart.js';
 import { getObject, r2Configured } from '../_lib/r2.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const MAX_CARDS = 60;
 const LOCAL_TIMEOUT_MS = 30_000;
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..'); // eng.traineddata is checked in
 
@@ -39,6 +39,7 @@ export async function pdfPages(buf) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const doc = await pdfjs.getDocument({ data: new Uint8Array(buf), useSystemFonts: true, isEvalSupported: false }).promise;
   const pages = [];
+  pages.overCap = Math.max(0, doc.numPages - MAX_CARDS);
   for (let p = 1; p <= Math.min(doc.numPages, MAX_CARDS); p++) {
     const page = await doc.getPage(p);
     const tc = await page.getTextContent();
@@ -294,7 +295,7 @@ export async function pdfPageImage(doc, pageNumber, pdfjs) {
 export async function cardsFromPdf(buf) {
   const pages = await pdfPages(buf);
   const cards = [];
-  let unread = 0;
+  let unread = pages.overCap;   // pages past the cap are pages nobody read, and the screen says so
   let pictures = 0;
   let open = null;
   for (let i = 0; i < pages.length; i++) {
@@ -311,28 +312,24 @@ export async function cardsFromPdf(buf) {
   return { cards, unread, pictures };
 }
 
-/** Tidy and de-duplicate whatever the reader produced; never trust a shape. */
-function cleanCards(list, tails) {
-  const seen = new Set();
-  const out = [];
-  for (const c of Array.isArray(list) ? list : []) {
-    const number = String(c?.number ?? '').replace(/\D/g, '');
-    if (number.length < 8 || number.length > 24 || seen.has(number)) continue;
-    seen.add(number);
-    const pin = String(c?.pin ?? '').replace(/\D/g, '').slice(0, 12) || null;
-    const b = Number(c?.balance);
-    out.push({
-      number,
-      pin,
-      balance: Number.isFinite(b) && b > 0 ? Math.round(b * 100) / 100 : null,
-      retailer: String(c?.retailer ?? '').trim().slice(0, 60) || null,
-      // Same last four as a card already on this request — a likely re-read of the same
-      // card. A hint for the reviewer, not a refusal: two cards can end the same way.
-      already: tails.includes(number.slice(-4)),
-    });
-    if (out.length >= MAX_CARDS) break;
+/**
+ * Every card in one file, by its kind. Reads and returns; records nothing, logs no digit.
+ * `single` is an image holding exactly one card: its last four pair the picture with its card
+ * on the all-cards PDF.
+ */
+export async function readCardFile(file, bytes, tails = []) {
+  const isPdf = String(file.content_type || '').includes('pdf') || /\.pdf$/i.test(file.name || '');
+  const isCsv = /csv|comma-separated/.test(String(file.content_type || '')) || /\.csv$/i.test(file.name || '');
+  if (isPdf) {
+    const parsed = await cardsFromPdf(bytes);
+    return { cards: cleanCards(parsed.cards, tails), source: parsed.pictures ? 'local' : 'pdf', unread: parsed.unread, mangled: 0, single: false };
   }
-  return out;
+  if (isCsv) {
+    const parsed = cardsFromCsv(bytes.toString('utf8'));
+    return { cards: cleanCards(parsed.cards, tails), source: 'csv', unread: 0, mangled: parsed.mangled, single: false };
+  }
+  const cards = cleanCards(await readCardsLocally(bytes), tails);
+  return { cards, source: 'local', unread: 0, mangled: 0, single: cards.length === 1 };
 }
 
 export default async function handler(req, res) {
@@ -360,29 +357,12 @@ export default async function handler(req, res) {
     // After the access and file checks, so a stranger learns nothing about the server.
     if (!r2Configured()) return send(res, 503, { ok: false, error: 'File storage is not configured.' });
     const tails = await listBuyCartCardTails(cartId);
-    const isPdf = String(file.content_type || '').includes('pdf') || /\.pdf$/i.test(file.name || '');
-    const isCsv = /csv|comma-separated/.test(String(file.content_type || '')) || /\.csv$/i.test(file.name || '');
-    let cards;
-    let source;
-    let mangled = 0;
-    let unread = 0;
-    if (isPdf) {
-      const parsed = await cardsFromPdf(await getObject(file.r2_key));
-      source = parsed.pictures ? 'local' : 'pdf';
-      unread = parsed.unread;
-      cards = cleanCards(parsed.cards, tails);
-    } else if (isCsv) {
-      source = 'csv';
-      const parsed = cardsFromCsv((await getObject(file.r2_key)).toString('utf8'));
-      mangled = parsed.mangled;
-      cards = cleanCards(parsed.cards, tails);
-    } else {
-      source = 'local';
-      cards = cleanCards(await readCardsLocally(await getObject(file.r2_key)), tails);
-      // A card face is ONE card: remember which (its last four — shown on screen anyway,
-      // never the number) so the gift-card PDF can put this picture on that card's page.
-      if (cards.length === 1) await setBuyCartFileCardTail(cartId, fileId, cards[0].number.slice(-4)).catch(() => {});
-    }
+    if (/\.zip$/i.test(file.r2_key || ''))
+      return send(res, 409, { ok: false, error: 'This ZIP is being unpacked on the server. Its cards will come up for review by themselves.' });
+    const { cards, source, mangled, unread, single } = await readCardFile(file, await getObject(file.r2_key), tails);
+    // A card face is ONE card: remember which (its last four — shown on screen anyway,
+    // never the number) so the gift-card PDF can put this picture on that card's page.
+    if (single) await setBuyCartFileCardTail(cartId, fileId, cards[0].number.slice(-4)).catch(() => {});
 
     // On the trail: HOW MANY, by what, from which file. Never a digit of any of them.
     await logCartEvent({

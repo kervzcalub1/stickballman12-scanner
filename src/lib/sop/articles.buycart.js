@@ -123,7 +123,7 @@ export const BUYCART_ARTICLES = [
     steps: [
       { do: 'Open the request and read the approval: who approved it, and for how much.' },
       { do: 'For each card, type the number, the PIN if there is one, and what is on it. Press Record card.', note: 'The number is encrypted the moment it is saved. Afterwards only the last four show, and reading the full code is a separate, recorded action.' },
-      { do: 'If the cards came as photos or a PDF, use Add image / PDF instead — those count too, and page through them with the arrows in the viewer.' },
+      { do: 'If the cards came as a ZIP, photos, a PDF or a CSV, press Add images / PDF / CSV / ZIP instead. You can pick many files at once. The server reads them by itself, so you can leave the page; come back and press Review the cards.', note: 'From Cardwell, upload the CSV with the ZIP: the CSV has each card’s balance (a used card holds less) and the ZIP has its barcode picture. Their pictures and PDF print no balance. With no CSV, use Set every blank balance and change any that differ. Check the rows and press Record.' },
       { do: 'Watch the funding line. It says what the cards total against the amount needed (shelf price of the approved pairs + the declared sales tax) and how much is still short.', note: 'No card can be recorded while the buyer is still adding. The request says "Buyer still adding" until they close it; once closed and every line decided, the form appears.' },
       { do: 'Press Release to the buyer once it reads "covered".' },
     ],

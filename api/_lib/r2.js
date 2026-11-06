@@ -116,6 +116,13 @@ export async function getObject(key) {
   return Buffer.from(await res.arrayBuffer());
 }
 
+// Write an object server-side. Throws on a non-2xx.
+export async function putObject(key, bytes) {
+  const res = await fetch(presignPutUrl({ key }), { method: 'PUT', body: bytes });
+  if (!res.ok) throw new Error(`R2 PUT ${key} failed (${res.status})`);
+  return true;
+}
+
 // Best-effort delete. A 404 counts as done — the point is that it's gone.
 export async function deleteObject(key) {
   const res = await fetch(presignUrl({ key, method: 'DELETE' }), { method: 'DELETE' });

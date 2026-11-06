@@ -7893,8 +7893,11 @@ export async function getBuyCartFull(id) {
                issued_by, issued_at, voided_at, voided_reason, personal, remark,
                (pin_enc IS NOT NULL) AS has_pin
           FROM buy_cart_gift_cards WHERE cart_id = ${id} ORDER BY id`,
-    sql`SELECT id, cart_id, kind, sku, name, content_type, size_bytes, uploaded_by, uploaded_at
-          FROM buy_cart_files WHERE cart_id = ${id} ORDER BY kind, id`,
+    // The read's state only. Its ciphertext (`enc`) has its own endpoint and never comes here.
+    sql`SELECT f.id, f.cart_id, f.kind, f.sku, f.name, f.content_type, f.size_bytes, f.uploaded_by, f.uploaded_at,
+               r.status AS read_status, r.card_count AS read_count, r.unread AS read_unread, r.error AS read_error
+          FROM buy_cart_files f LEFT JOIN buy_cart_card_reads r ON r.file_id = f.id
+         WHERE f.cart_id = ${id} ORDER BY f.kind, f.id`,
     sql`SELECT * FROM buy_cart_receipt_lines WHERE cart_id = ${id} ORDER BY id`,
     sql`SELECT * FROM buy_cart_events WHERE cart_id = ${id} ORDER BY id DESC LIMIT 200`,
     cart.po_id
@@ -8947,7 +8950,7 @@ export async function fundBuyCart(cartId, actor, note = null) {
 }
 
 // ---- Files ----------------------------------------------------------------
-export async function addBuyCartFile({ cartId, kind, key, name, contentType, sizeBytes, sku = null, actor }) {
+export async function addBuyCartFile({ cartId, kind, key, name, contentType, sizeBytes, sku = null, actor, quiet = false }) {
   const sql = db();
   const rows = await sql`
     INSERT INTO buy_cart_files (cart_id, kind, r2_key, name, content_type, size_bytes, sku, uploaded_by, uploaded_by_id)
@@ -8964,8 +8967,103 @@ export async function addBuyCartFile({ cartId, kind, key, name, contentType, siz
                      updated_at = now()
                WHERE id = ${cartId}`;
   }
-  await logCartEvent({ cartId, kind: 'file_added', actor, body: `${kind}: ${name || key}` });
+  // `quiet`: a ZIP's contents get one line on the trail, or 50 cards push out the rest of it.
+  if (!quiet) await logCartEvent({ cartId, kind: 'file_added', actor, body: `${kind}: ${name || key}` });
   return rows[0];
+}
+
+// ---- The server's reading of card files (api/_lib/gc-read-worker.js) --------
+// Queue one file. A file being read right now is left to finish.
+export async function queueCardRead(cartId, fileId, actor) {
+  const actorId = actor && Number(actor.uid) ? Number(actor.uid) : null;
+  const actorName = actor?.name || actor?.username || null;
+  const actorRole = actor?.role || null;
+  const rows = await db()`
+    INSERT INTO buy_cart_card_reads (file_id, cart_id, actor_id, actor_name, actor_role)
+    SELECT id, cart_id, ${actorId}, ${actorName}, ${actorRole}
+      FROM buy_cart_files WHERE id = ${fileId} AND cart_id = ${cartId} AND kind = 'gift_card'
+    ON CONFLICT (file_id) DO UPDATE SET
+      status = 'queued', card_count = 0, unread = 0, mangled = 0, source = NULL, error = NULL, enc = NULL,
+      attempts = 0, logged = false, queued_at = now(), started_at = NULL, finished_at = NULL,
+      actor_id = EXCLUDED.actor_id, actor_name = EXCLUDED.actor_name, actor_role = EXCLUDED.actor_role
+    WHERE buy_cart_card_reads.status <> 'reading'
+    RETURNING file_id`;
+  return rows.length > 0;
+}
+
+// Card files with no reading yet, or a failed one. Recorded ones (`cleared`) stay as they are.
+export async function listCardFilesToRead(cartId) {
+  const rows = await db()`
+    SELECT f.id FROM buy_cart_files f LEFT JOIN buy_cart_card_reads r ON r.file_id = f.id
+     WHERE f.cart_id = ${cartId} AND f.kind = 'gift_card'
+       AND (r.file_id IS NULL OR r.status = 'failed')
+     ORDER BY f.id`;
+  return rows.map((r) => Number(r.id));
+}
+
+// The next file, oldest first. A crash partway leaves it `reading` until the worker requeues it.
+export async function claimCardRead() {
+  const rows = await db()`
+    UPDATE buy_cart_card_reads
+       SET status = 'reading', started_at = now(), attempts = attempts + 1
+     WHERE file_id = (SELECT file_id FROM buy_cart_card_reads WHERE status = 'queued'
+                       ORDER BY queued_at, file_id LIMIT 1 FOR UPDATE SKIP LOCKED)
+     RETURNING file_id, cart_id, attempts, actor_id, actor_name, actor_role`;
+  return rows[0] || null;
+}
+
+// Back in the queue after a restart. A file that took the server down three times is failed.
+export async function requeueStuckCardReads(olderThanMinutes) {
+  const sql = db();
+  const cutoff = new Date(Date.now() - olderThanMinutes * 60_000).toISOString();
+  await sql`
+    UPDATE buy_cart_card_reads
+       SET status = 'failed', error = 'Reading this file kept failing. Type its cards in.', finished_at = now()
+     WHERE status = 'reading' AND attempts >= 3 AND started_at <= ${cutoff}`;
+  await sql`UPDATE buy_cart_card_reads SET status = 'queued' WHERE status = 'reading' AND started_at <= ${cutoff}`;
+}
+
+export async function finishCardRead(fileId, { status, cardCount = 0, unread = 0, mangled = 0, source = null, error = null, enc = null }) {
+  await db()`
+    UPDATE buy_cart_card_reads
+       SET status = ${status}, card_count = ${cardCount}, unread = ${unread}, mangled = ${mangled},
+           source = ${source}, error = ${error}, enc = ${enc}, finished_at = now()
+     WHERE file_id = ${fileId} AND status = 'reading'`;
+}
+
+// Everything read and not yet recorded, with its ciphertext: the desk's endpoint only.
+export async function listDoneCardReads(cartId) {
+  return db()`
+    SELECT r.file_id, r.card_count, r.unread, r.mangled, r.enc, f.name
+      FROM buy_cart_card_reads r JOIN buy_cart_files f ON f.id = r.file_id
+     WHERE r.cart_id = ${cartId} AND r.status = 'done'
+     ORDER BY r.file_id`;
+}
+
+// The readings are spent once recorded: the digits now live on the cards themselves.
+export async function clearCardReads(cartId) {
+  await db()`UPDATE buy_cart_card_reads SET status = 'cleared', enc = NULL WHERE cart_id = ${cartId} AND status = 'done'`;
+}
+
+export async function cancelCardReads(cartId) {
+  await db()`DELETE FROM buy_cart_card_reads WHERE cart_id = ${cartId} AND status = 'queued'`;
+}
+
+// The cart's queue just emptied: what to say on the trail, once. Null while files are still waiting.
+export async function takeCardReadSummary(cartId) {
+  const sql = db();
+  const waiting = await sql`SELECT 1 FROM buy_cart_card_reads WHERE cart_id = ${cartId} AND status IN ('queued', 'reading') LIMIT 1`;
+  if (waiting.length) return null;
+  const rows = await sql`
+    UPDATE buy_cart_card_reads SET logged = true
+     WHERE cart_id = ${cartId} AND NOT logged AND status IN ('done', 'failed')
+     RETURNING status, card_count`;
+  if (!rows.length) return null;
+  return {
+    files: rows.length,
+    cards: rows.reduce((n, r) => n + Number(r.card_count || 0), 0),
+    missed: rows.filter((r) => r.status === 'failed' || !Number(r.card_count)).length,
+  };
 }
 
 /**

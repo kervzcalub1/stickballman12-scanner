@@ -99,8 +99,10 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
   const [err, setErr] = useState('');
   const [viewing, setViewing] = useState(null); // { index, url }
   const [blobs, setBlobs] = useState({});
-  // A machine reading of one uploaded file, waiting for a person: { file, cards, source }.
+  // A machine reading waiting for a person: one file's ({ file, cards, source }), or every
+  // file's ({ file: null, files: n, cards }) with each row naming where it came from.
   const [reading, setReading] = useState(null);
+  const [uploading, setUploading] = useState(null); // { done, total }
 
   // The auditor's personal cards aren't the desk's: they live on the audit.
   const cards = (cart.giftCards || []).filter((c) => !c.personal);
@@ -157,25 +159,38 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
     finally { setBusy(''); }
   }
 
+  // One file or many: pictures, PDFs, CSVs or Cardwell's ZIP. The server starts reading each as
+  // it lands (file-attach), so there is nothing to press per file.
   async function upload(e) {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
-    if (!file) return;
+    if (!files.length) return;
     setBusy('upload'); setErr('');
-    // A CSV arrives as text/csv, application/vnd.ms-excel (Windows) or no type at all,
-    // depending on the machine — the name is the one thing they agree on.
-    const type = /\.csv$/i.test(file.name || '') ? 'text/csv' : file.type;
+    let done = 0;
+    setUploading({ done, total: files.length });
     try {
-      const { uploadUrl, key } = await api.cartFileSign(cart.id, 'gift_card', type);
-      const put = await fetch(uploadUrl, { method: 'PUT', body: file });
-      if (!put.ok) throw new Error('The upload did not go through. Try again.');
-      await api.cartFileAttach({
-        cartId: cart.id, kind: 'gift_card', key, name: file.name,
-        contentType: type, sizeBytes: file.size,
-      });
+      for (const file of files) {
+        // A CSV arrives as text/csv, application/vnd.ms-excel (Windows) or no type at all,
+        // depending on the machine, and a ZIP as application/zip or x-zip-compressed — the
+        // name is the one thing they agree on.
+        const type = /\.csv$/i.test(file.name || '') ? 'text/csv'
+          : /\.zip$/i.test(file.name || '') ? 'application/zip' : file.type;
+        const { uploadUrl, key } = await api.cartFileSign(cart.id, 'gift_card', type);
+        const put = await fetch(uploadUrl, { method: 'PUT', body: file });
+        if (!put.ok) throw new Error('The upload did not go through. Try again.');
+        await api.cartFileAttach({
+          cartId: cart.id, kind: 'gift_card', key, name: file.name,
+          contentType: type, sizeBytes: file.size,
+        });
+        done++;
+        setUploading({ done, total: files.length });
+      }
       onChanged();
-    } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
-    finally { setBusy(''); }
+    } catch (ex) {
+      if (ex.unauthorized) return onSignOut();
+      setErr(files.length > 1 ? `${done} of ${files.length} uploaded. ${ex.message}` : ex.message);
+      if (done) onChanged();
+    } finally { setBusy(''); setUploading(null); }
   }
 
   // The bytes are proxied and authorised, so there is no `src` to hand an <img>: fetch
@@ -224,27 +239,67 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
     finally { setBusy(''); }
   }
 
+  // What the server has done with the files so far.
+  const isZip = (f) => /zip/.test(String(f.content_type || '')) || /\.zip$/i.test(f.name || '');
+  const readWaiting = images.filter((f) => ['queued', 'reading'].includes(f.read_status));
+  const readDone = images.filter((f) => f.read_status === 'done');
+  const readyCards = readDone.reduce((n, f) => n + Number(f.read_count || 0), 0);
+  const missed = images.filter((f) => f.read_status === 'failed' || (f.read_status === 'done' && !Number(f.read_count)));
+  const notRead = images.filter((f) => !f.read_status || f.read_status === 'failed');
+
+  async function readAll() {
+    setBusy('readall'); setErr('');
+    try { await api.cartCardReads(cart.id, 'queue'); onChanged(); }
+    catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(''); }
+  }
+
+  async function stopReading() {
+    setBusy('stop'); setErr('');
+    try { await api.cartCardReads(cart.id, 'cancel'); onChanged(); }
+    catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(''); }
+  }
+
+  // Opening the digits is a deliberate press, and the server writes who pressed it. They are
+  // never fetched on load: a cart page gets opened over someone's shoulder.
+  async function reviewAll() {
+    setBusy('review'); setErr(''); setReading(null);
+    try {
+      const r = await api.cartCardReads(cart.id, 'results');
+      setReading({
+        file: null, files: r.files, source: 'all', mangled: r.mangled || 0, unread: r.unread || 0,
+        cards: r.cards.map((c) => ({ ...c, balance: c.balance == null ? '' : String(c.balance), ok: !c.already && !c.conflict })),
+      });
+      onChanged();
+    } catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(''); }
+  }
+
   const setRead = (i, patch) => setReading((r) => ({ ...r, cards: r.cards.map((c, j) => (j === i ? { ...c, ...patch } : c)) }));
 
-  // One `cart/gift-card` call per ticked row — the same path a pasted card takes, so the
-  // encryption, the last-four masking and the trail are the same code. Stops at the
-  // first refusal and keeps the rest on screen, so nothing is half-recorded silently.
+  // Every ticked row in ONE call, recorded in order on the server by the same code a pasted
+  // card goes through. `recorded` says how many landed, so a failure partway keeps the rest on
+  // screen and pressing again can't record the first ones twice.
   async function recordRead() {
     const rows = reading.cards.filter((c) => c.ok);
     setBusy('record'); setErr('');
-    let done = 0;
     try {
-      for (const c of rows) {
-        await api.cartAddGiftCard(cart.id, { code: c.number, pin: c.pin || '', balance: c.balance, retailer: c.retailer || '', label: reading.file.name || '' });
-        done++;
-        setReading((r) => ({ ...r, cards: r.cards.map((x) => (x.number === c.number ? { ...x, saved: true, ok: false } : x)) }));
-      }
+      const out = await api.cartAddGiftCards(cart.id, rows.map((c) => ({
+        code: c.number, pin: c.pin || '', balance: c.balance, retailer: c.retailer || '',
+        label: c.fileName || reading.file?.name || '',
+      })));
+      const landed = new Set(rows.slice(0, out.recorded).map((c) => c.number));
+      setReading((r) => ({ ...r, cards: r.cards.map((x) => (landed.has(x.number) ? { ...x, saved: true, ok: false } : x)) }));
+      if (out.error) { setErr(out.error); onChanged(); return; }
+      // The digits now live on the cards, so the stored readings go. A row left unticked can be
+      // read again from its file.
+      if (!reading.file) await api.cartCardReads(cart.id, 'clear');
       setReading(null);
       onChanged();
     } catch (ex) {
       if (ex.unauthorized) return onSignOut();
-      setErr(`${done} of ${rows.length} recorded. ${ex.message}`);
-      if (done) onChanged();
+      setErr(ex.message);
     } finally { setBusy(''); }
   }
 
@@ -360,21 +415,69 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
           <span className="muted sm">{images.length ? `${images.length} card file${images.length === 1 ? '' : 's'}` : 'No card files'}</span>
           {canPrep && (
             <label className="btn sm ghost bc-upload">
-              {busy === 'upload' ? 'Uploading…' : 'Add image / PDF / CSV'}
-              <input type="file" accept="image/*,application/pdf,.csv,text/csv" hidden onChange={upload} />
+              {uploading ? `Uploading ${Math.min(uploading.done + 1, uploading.total)} of ${uploading.total}…` : 'Add images / PDF / CSV / ZIP'}
+              <input type="file" multiple accept="image/*,application/pdf,.csv,text/csv,.zip,application/zip" hidden onChange={upload} />
             </label>
           )}
         </div>
+
+        {canPrep && !images.length && (
+          <p className="muted xs">From Cardwell: upload the CSV with the ZIP. The CSV has each card’s balance, the ZIP has its barcode picture.</p>
+        )}
+
+        {/* The server reads files as they land. The page only shows how far it has got, and the
+            digits don't come to the screen until someone presses Review. */}
+        {canIssue && images.length > 0 && (readWaiting.length > 0 || readyCards > 0 || missed.length > 0 || notRead.length > 0) && (
+          <div className="bc-gc-bulk">
+            {readWaiting.length > 0 && (
+              <div className="bc-gc-bulk-row">
+                <span className="sm">
+                  <b>Reading {readDone.length + 1} of {readDone.length + readWaiting.length} files…</b>
+                  <span className="muted"> You can leave this page; it carries on.</span>
+                </span>
+                <button type="button" className="btn sm ghost" disabled={busy === 'stop'} onClick={stopReading}>Stop</button>
+              </div>
+            )}
+            {readyCards > 0 && (
+              <div className="bc-gc-bulk-row">
+                <button type="button" className="btn primary sm" disabled={busy === 'review' || !!reading} onClick={reviewAll}>
+                  {busy === 'review' ? 'Opening…' : `Review the ${readyCards} card${readyCards === 1 ? '' : 's'} read`}
+                </button>
+                <span className="muted xs">Opening them is recorded against your name. Nothing is on the request until you record it.</span>
+              </div>
+            )}
+            {!readWaiting.length && notRead.length > 0 && canPrep && (
+              <div className="bc-gc-bulk-row">
+                <button type="button" className="btn sm" disabled={busy === 'readall'} onClick={readAll}>
+                  {busy === 'readall' ? 'Starting…' : `Read ${notRead.length} file${notRead.length === 1 ? '' : 's'} not read yet`}
+                </button>
+              </div>
+            )}
+            {!readWaiting.length && missed.length > 0 && (
+              <p className="bc-short xs">
+                Nothing read from {missed.length} file{missed.length === 1 ? '' : 's'}: {missed.slice(0, 5).map((f) => f.name || 'unnamed').join(', ')}{missed.length > 5 ? ` and ${missed.length - 5} more` : ''}. Open {missed.length === 1 ? 'it' : 'them'} and type the card in.
+              </p>
+            )}
+          </div>
+        )}
+
         {images.length > 0 && (
+          <details className="bc-gc-files-list" open={images.length <= 8}>
+          <summary className="muted xs">Show the files</summary>
           <ul className="bc-file-list">
             {images.map((f, i) => {
               const isImg = String(f.content_type).startsWith('image/');
               return (
               <li key={f.id}>
                 <span className="bc-file-name">{f.name || `Card ${i + 1}`}</span>
+                {['queued', 'reading'].includes(f.read_status) && <span className="muted xs">{isZip(f) ? 'Unpacking…' : f.read_status === 'reading' ? 'Reading…' : 'Waiting…'}</span>}
+                {f.read_status === 'done' && (Number(f.read_count) > 0
+                  ? <span className="bc-covered xs">{f.read_count} card{Number(f.read_count) === 1 ? '' : 's'} read{Number(f.read_unread) > 0 ? `, ${f.read_unread} page${Number(f.read_unread) === 1 ? '' : 's'} not` : ''}</span>
+                  : <span className="bc-short xs">Nothing read</span>)}
+                {f.read_status === 'failed' && <span className="bc-short xs">{f.read_error || 'Could not be read'}</span>}
                 {/* Read the numbers off it — a card face, a screenshot, or a table of
                     cards — into a review table below. Nothing is recorded until ticked. */}
-                {canPrep && (
+                {canPrep && !isZip(f) && (
                   <button type="button" className="btn sm" disabled={busy === `read${f.id}` || busy === 'record'}
                     title="Read the card numbers, PINs and balances off this file for review"
                     onClick={() => readFile(f)}>{busy === `read${f.id}` ? 'Reading…' : 'Read the cards'}</button>
@@ -399,6 +502,7 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
               );
             })}
           </ul>
+          </details>
         )}
       </div>}
 
@@ -409,8 +513,8 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
       {reading && (
         <div className="bc-gc-read">
           <div className="bc-gc-read-h">
-            <b>{reading.cards.length} card{reading.cards.length === 1 ? '' : 's'} read from “{reading.file.name || 'file'}”</b>
-            <span className="muted xs">{reading.source === 'pdf' ? 'from the PDF text' : reading.source === 'csv' ? 'from the CSV' : 'off the card, read twice'} · check every digit, fill any blank balance, tick, then record</span>
+            <b>{reading.cards.length} card{reading.cards.length === 1 ? '' : 's'} read from {reading.file ? `“${reading.file.name || 'file'}”` : `${reading.files} file${reading.files === 1 ? '' : 's'}`}</b>
+            <span className="muted xs">{reading.source === 'all' ? 'on this server' : reading.source === 'pdf' ? 'from the PDF text' : reading.source === 'csv' ? 'from the CSV' : 'off the card, read twice'} · check every digit, fill any blank balance, tick, then record</span>
             {reading.unread > 0 && (
               <span className="bc-short xs">{reading.unread} page{reading.unread === 1 ? '' : 's'} could not be read — type {reading.unread === 1 ? 'that card' : 'those cards'} in.</span>
             )}
@@ -419,7 +523,10 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
             )}
             <span className="bc-gc-read-fill">
               <PriceInput placeholder="Set every blank balance"
-                onChange={(e) => { const v = e.target.value; setReading((r) => ({ ...r, cards: r.cards.map((c) => (c.balance === '' ? { ...c, balance: v } : c)) })); }} />
+                aria-label="Set every blank balance"
+                // `filled` rows follow what's typed. Filling only blank rows stopped at the first
+                // keystroke: typing 200 left every row at $2.
+                onChange={(e) => { const v = e.target.value; setReading((r) => ({ ...r, cards: r.cards.map((c) => ((c.balance === '' || c.filled) && !c.saved ? { ...c, balance: v, filled: v !== '' } : c)) })); }} />
             </span>
           </div>
           <ul className="bc-gc-read-list">
@@ -433,15 +540,16 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
                 <input className="input bc-gc-read-pin" value={c.pin || ''} placeholder="PIN" inputMode="numeric" disabled={c.saved}
                   onChange={(e) => setRead(i, { pin: e.target.value.replace(/\D/g, '') })} aria-label="PIN" />
                 <PriceInput value={c.balance} placeholder="Balance" disabled={c.saved}
-                  onChange={(e) => setRead(i, { balance: e.target.value })} />
+                  onChange={(e) => setRead(i, { balance: e.target.value, filled: false })} />
                 {c.saved ? <span className="bc-covered xs">recorded</span>
+                  : c.conflict ? <span className="bc-short xs" title="This card is in two files with a different PIN or balance. Check it against the picture.">files disagree — check it</span>
                   : c.already ? <span className="bc-short xs" title="A card ending in these four digits is already on this request">already on this request?</span>
                     : c.retailer ? <span className="muted xs">{c.retailer}</span> : null}
               </li>
             ))}
           </ul>
           <div className="bc-gc-read-foot">
-            <button type="button" className="btn ghost sm" disabled={busy === 'record'} onClick={() => setReading(null)}>Discard</button>
+            <button type="button" className="btn ghost sm" disabled={busy === 'record'} onClick={() => setReading(null)}>{reading.file ? 'Discard' : 'Close'}</button>
             {(() => {
               const ticked = reading.cards.filter((c) => c.ok);
               const blank = ticked.filter((c) => !(Number(c.balance) > 0) || c.number.length < 8).length;

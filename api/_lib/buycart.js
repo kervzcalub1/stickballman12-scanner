@@ -509,7 +509,7 @@ export async function hideCardFilesWithoutDuty(cart, user) {
 }
 
 const AUDIT_ONLY_EVENTS = ['gc_personal_added', 'gc_personal_removed', 'audit_note'];
-const isCardFileEvent = (e) => e.kind === 'gc_read'
+const isCardFileEvent = (e) => e.kind === 'gc_read' || e.kind === 'gc_read_all'
   || (e.kind === 'file_added' && String(e.body || '').startsWith('gift_card:'))
   || (e.kind === 'file_removed' && String(e.body || '').startsWith('Gift card image'));
 

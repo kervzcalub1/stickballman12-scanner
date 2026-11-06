@@ -2,10 +2,11 @@
 //   -> { ok, file }
 // Records a file this server minted a key for, after the client has PUT the bytes.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
-import { getBuyCart, addBuyCartFile, dbConfigured } from '../_lib/db.js';
+import { getBuyCart, addBuyCartFile, queueCardRead, dbConfigured } from '../_lib/db.js';
 import { getObject, deleteObject } from '../_lib/r2.js';
 import { sniffImageFormat } from '../_lib/imgformat.js';
 import { hasPrivilege, requireBuyerAccess } from '../_lib/buycart.js';
+import { kickCardReads } from '../_lib/gc-read-worker.js';
 
 // What's wrong with a shoe photo, by its bytes rather than the type the browser claimed, or
 // null. HEIC is refused because browsers can't show it and the Telegram card can't resize it.
@@ -53,8 +54,8 @@ export default async function handler(req, res) {
     // Only a key THIS server minted, and only under this cart's own prefix. Without the
     // cart_code in the pattern, an attach could point one request's record at another
     // request's file.
-    const re = new RegExp(`^buy-carts/${cart.cart_code}/(gift_card|receipt|shoe)-\\d+\\.(jpg|png|webp|heic|pdf|csv)$`);
-    if (!re.test(key) || (/\.csv$/.test(key) && kind !== 'gift_card')) return send(res, 400, { ok: false, error: 'Invalid file key.' });
+    const re = new RegExp(`^buy-carts/${cart.cart_code}/(gift_card|receipt|shoe)-\\d+\\.(jpg|png|webp|heic|pdf|csv|zip)$`);
+    if (!re.test(key) || (/\.(csv|zip)$/.test(key) && kind !== 'gift_card')) return send(res, 400, { ok: false, error: 'Invalid file key.' });
 
     if (kind === 'shoe') {
       if (!sku) return send(res, 400, { ok: false, error: 'Which shoe is this a photo of?' });
@@ -75,6 +76,12 @@ export default async function handler(req, res) {
       sizeBytes: Number.isInteger(Number(body.sizeBytes)) ? Number(body.sizeBytes) : null,
       actor: user,
     });
+    // Nobody presses anything per file: reading starts on the server the moment it lands.
+    // Best-effort: the file is saved either way, and the screen offers to read what wasn't.
+    if (kind === 'gift_card') {
+      try { await queueCardRead(cartId, Number(file.id), user); kickCardReads(); }
+      catch (e) { console.warn('[cart/file-attach] could not queue the read:', e.message); }
+    }
     return send(res, 200, { ok: true, file });
   } catch (e) {
     console.error('[cart/file-attach]', e.message);

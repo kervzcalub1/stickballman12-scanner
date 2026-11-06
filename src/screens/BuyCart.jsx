@@ -1239,7 +1239,7 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
   // input on this page keeps its own draft state, exactly as it already had to for the
   // reload `act()` does after each write. A request that can no longer move is left alone.
   const settled = ['closed', 'cancelled', 'written_off'].includes(cart?.status);
-  useLive(['buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_gift_cards', 'buy_cart_receipt_lines', 'buy_cart_tasks', 'purchase_orders', 'po_boxes', 'po_lines', 'items'], async () => {
+  useLive(['buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_card_reads', 'buy_cart_gift_cards', 'buy_cart_receipt_lines', 'buy_cart_tasks', 'purchase_orders', 'po_boxes', 'po_lines', 'items'], async () => {
     try {
       const { cart: c } = await api.cartGet(cartId);
       setCart((cur) => (JSON.stringify(cur) === JSON.stringify(c) ? cur : c));

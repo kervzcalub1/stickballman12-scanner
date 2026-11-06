@@ -1744,6 +1744,31 @@ await sql(`ALTER TABLE buy_cart_files ADD CONSTRAINT buy_cart_files_kind_check
            CHECK (kind IN ('gift_card','receipt','shoe'))`);
 await sql(`CREATE INDEX IF NOT EXISTS buy_cart_files_cart_idx ON buy_cart_files (cart_id, kind, id)`);
 await sql(`CREATE INDEX IF NOT EXISTS buy_cart_files_sku_idx ON buy_cart_files (cart_id, sku) WHERE sku IS NOT NULL`);
+// The server's reading of each card file (buy-cart.md "Card files read on the server"). Its own
+// table so the ciphertext can't reach a screen through a query on buy_cart_files.
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_cart_card_reads (
+    file_id     BIGINT PRIMARY KEY REFERENCES buy_cart_files(id) ON DELETE CASCADE,
+    cart_id     BIGINT NOT NULL REFERENCES buy_carts(id) ON DELETE CASCADE,
+    status      TEXT NOT NULL DEFAULT 'queued',
+    card_count  INT NOT NULL DEFAULT 0,
+    unread      INT NOT NULL DEFAULT 0,
+    mangled     INT NOT NULL DEFAULT 0,
+    source      TEXT,
+    error       TEXT,
+    enc         TEXT,
+    attempts    INT NOT NULL DEFAULT 0,
+    logged      BOOLEAN NOT NULL DEFAULT false,
+    actor_id    BIGINT,
+    actor_name  TEXT,
+    actor_role  TEXT,
+    queued_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at  TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_card_reads_queue_idx ON buy_cart_card_reads (status, queued_at)`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_cart_card_reads_cart_idx ON buy_cart_card_reads (cart_id)`);
 
 // What the receipt SAYS was bought — which is not the same list as what was approved,
 // and the gap between them is the point of keeping both. `matched_line_id` is the
@@ -3390,7 +3415,7 @@ const LIVE_TABLES = [
   'purchase_orders', 'po_boxes', 'po_lines', 'po_comments', 'po_resolutions', 'deleted_pos',
   'po_stores', 'po_store_charges', 'po_store_receipts', 'po_dropoff_receipts', 'presell_stock_po', 'presell_box_lines',
   'rescale_requests', 'rescale_request_items',
-  'buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_gift_cards',
+  'buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_card_reads', 'buy_cart_gift_cards',
   'buy_cart_receipt_lines', 'buy_cart_tasks', 'deleted_buy_carts',
   'online_orders', 'online_order_lines', 'online_order_events',
   'tracking_duplicates',

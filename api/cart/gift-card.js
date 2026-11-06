@@ -90,6 +90,36 @@ export default async function handler(req, res) {
       });
     }
 
+    // MANY AT ONCE: the review table's Record button. In order, so `recorded` says exactly which
+    // rows landed and a second press can't record them twice. Checked first: one row with no
+    // balance refuses the whole list rather than recording half of it.
+    if (Array.isArray(body.cards)) {
+      const rows = body.cards.map((r) => ({ code: String(r?.code ?? '').trim().slice(0, 120), pin: String(r?.pin ?? '').trim().slice(0, 40), balance: money(r?.balance), retailer: r?.retailer, label: r?.label }));
+      if (!rows.length || rows.length > 200) return send(res, 400, { ok: false, error: 'Record between 1 and 200 cards at a time.' });
+      if (rows.some((r) => !r.code || r.balance == null))
+        return send(res, 400, { ok: false, error: 'Every card needs a number and what is on it. Nothing was recorded.' });
+      let recorded = 0;
+      try {
+        for (const r of rows) {
+          await addBuyCartGiftCard({
+            cartId,
+            codeEnc: encryptSecret(r.code),
+            codeLast4: maskTail(r.code),
+            pinEnc: r.pin ? encryptSecret(r.pin) : null,
+            balance: r.balance,
+            retailer: String(r.retailer ?? cart.retailer ?? '').trim().slice(0, 120) || null,
+            label: String(r.label ?? '').trim().slice(0, 120) || null,
+            actor: user,
+          });
+          recorded++;
+        }
+      } catch (e) {
+        console.error('[cart/gift-card] bulk', e.message);
+        return send(res, 200, { ok: true, recorded, error: `${recorded} of ${rows.length} recorded, then the next one failed. Record the rest again.` });
+      }
+      return send(res, 200, { ok: true, recorded });
+    }
+
     const c = body.card || {};
     const code = String(c.code ?? '').trim().slice(0, 120);
     const pin = String(c.pin ?? '').trim().slice(0, 40);

@@ -8,7 +8,7 @@
 // Inline by default so the viewer can page through card photos left and right;
 // `download=1` forces the save, which is what a PDF receipt usually wants.
 import { send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
-import { requireBuyerAccess } from '../_lib/buycart.js';
+import { requireBuyerAccess, canOpenCardFiles } from '../_lib/buycart.js';
 import { getBuyCart, getBuyCartFile, dbConfigured } from '../_lib/db.js';
 import { getObject, r2Configured } from '../_lib/r2.js';
 
@@ -49,6 +49,9 @@ export default async function handler(req, res) {
     // the recorded cards reach them as the one PDF (`cart/gift-cards-pdf`).
     if (user.role === 'supplier' && !isPrivileged(user.role) && file.kind === 'gift_card')
       return send(res, 403, { ok: false, error: 'Download the cards as one PDF.' });
+    // Staff need the duty, not just the job title: the id in a link is no protection.
+    if (file.kind === 'gift_card' && !(await canOpenCardFiles(user, cart)))
+      return send(res, 403, { ok: false, error: 'Only the gift card desk and the auditor can open card files.' });
     // Keyed on the FILE's kind, never the `?kind=` the caller sent: that parameter is the
     // client's description of what it is asking for (found 2026-09-30).
 

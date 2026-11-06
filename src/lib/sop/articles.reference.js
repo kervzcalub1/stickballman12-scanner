@@ -236,4 +236,26 @@ export const REFERENCE_ARTICLES = [
     related: ['scan-guide', 'ph-grid-editing', 'print-labels', 'sign-in'],
     keywords: ['camera black', 'keyboard', 'ios', 'iphone', 'cache', 'hard refresh', 'stale', 'conflict', 'error', 'bug', 'not working'],
   },
+  {
+    id: 'expected-and-delay-alerts',
+    title: 'Expected This Week, delay alerts and drop-off receipts',
+    area: 'po',
+    roles: STAFF,
+    summary: 'See what is coming today and this week, know what has stopped moving, and chase the right person.',
+    when: 'Planning the week, or when the bot tells you a shipment was dropped off or has stopped moving.',
+    steps: [
+      { do: 'Open Expected This Week from the home screen. Suppliers and online stores each have their own table, with today, the rest of the week, later, no date yet, overdue and delayed.' },
+      { do: 'Tap a supplier or store to see its boxes and orders, with a tracking link for each.' },
+      { do: 'A number that has not moved in 7 days shows as Delayed. Inbound uses the same 7 days.', note: 'After 8 days with no movement, Inbound changes it to Investigate.' },
+      { do: 'To get the alerts, connect Telegram (the 🔔 bell) and keep Shipments delayed switched on.', note: 'The first message of the day comes after 10:00 EST. A shipment that stays stopped is repeated every 7 days.' },
+      { do: 'Follow the alert\'s advice on who to chase: never scanned means the sender, a carrier exception means call the carrier, and stopped means ask the carrier for a trace.' },
+      { do: 'PH: when "Dropped off: ask for the receipt" arrives, open the PO and ask the supplier for the receipt, or upload it yourself under the drop-off receipts.', note: 'It is sent when the supplier ships a box, or at the carrier\'s first scan if they never tap ship.' },
+    ],
+    rules: [
+      'Delayed means the carrier has shown no movement. It does not prove the box is lost, so check the tracking link before you chase.',
+      'A shipment stopped for over 60 days stays Delayed on screen but is no longer alerted.',
+    ],
+    related: ['telegram-alerts'],
+    keywords: ['expected', 'this week', 'delayed', 'delay', 'tracking', 'alert', 'drop off', 'drop-off', 'receipt', 'trace', 'inbound'],
+  },
 ];

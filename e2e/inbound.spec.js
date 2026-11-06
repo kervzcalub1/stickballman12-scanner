@@ -5,6 +5,7 @@
 // (thresholds, new carrier statuses). Pinning it here means a tweak that quietly
 // reclassifies half the warehouse's shipments fails in CI rather than on the floor.
 import { test, expect } from '@playwright/test';
+import { DELAY_DAYS } from '../src/lib/expected.js';
 import { inboundState, groupShipments, countStates, shipmentHasState, needsAttention, STALL_DAYS, INVESTIGATE_DAYS }
   from '../src/lib/inbound.js';
 
@@ -29,7 +30,10 @@ test('InfoReceived reads as with-supplier — the carrier never got the parcel',
 
 test('silence escalates: moving → delayed → investigate', () => {
   expect(inboundState(box({ tracking_status: 'InTransit', last_move_at: daysAgo(1) }), NOW)).toBe('in_transit');
-  expect(inboundState(box({ tracking_status: 'InTransit', last_move_at: daysAgo(STALL_DAYS + 1) }), NOW)).toBe('delayed');
+  // Six quiet days is not a delay any more: Delayed starts at the alert's 7.
+  expect(STALL_DAYS).toBe(DELAY_DAYS);
+  expect(inboundState(box({ tracking_status: 'InTransit', last_move_at: daysAgo(STALL_DAYS - 1) }), NOW)).toBe('in_transit');
+  expect(inboundState(box({ tracking_status: 'InTransit', last_move_at: daysAgo(STALL_DAYS + 0.5) }), NOW)).toBe('delayed');
   expect(inboundState(box({ tracking_status: 'InTransit', last_move_at: daysAgo(INVESTIGATE_DAYS + 1) }), NOW)).toBe('investigate');
 });
 

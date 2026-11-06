@@ -650,4 +650,28 @@ export const WAREHOUSE_ARTICLES = [
     related: ['receive-against-po', 'po-resolution', 'po-overview'],
     keywords: ['discrepancy', 'shortage', 'overage', 'wrong sku', 'copy report', 'archive', 'close', 'manifest', 'blind', 'print manifest', 'packing slip', 'pdf'],
   },
+  {
+    id: 'stock-check',
+    title: 'Stock Check: how many do we have, is this pair ours',
+    area: 'browse',
+    roles: WH,
+    summary: 'Scan a box or a VIN for one answer, then count a size against what Shopify is selling.',
+    when: 'Someone asks how many of a size we have, a pair looks wrong, or you are auditing one size.',
+    steps: [
+      { do: 'Home → Stock Check. Scan the box barcode or the VIN sticker, or type a SKU.' },
+      { do: 'A box barcode shows the size and how many Shopify has for sale. A SKU shows every size.', note: 'If Shopify can\'t be read, the screen says so. It never shows that as 0.' },
+      { do: 'A VIN shows whether this pair is still in inventory: ✅ In inventory with its shelf, ❌ Not in inventory with the day it left, or ⚠️ on hold, pre-sold or marked missing.' },
+      { do: 'To audit a size, tap Count this size, then scan every pair of it you can find. Each scan of that shoe and size adds one.', note: 'Turn on VIN sticker only when box barcodes could be scanned twice: two boxes of one size share the same barcode.' },
+      { do: 'Scanned the wrong one? Tap Undo. The scan stays on the record, marked undone.' },
+      { do: 'Tap Finish. Shopify is read again, and the screen shows matched, short or extra.' },
+      { do: 'Open My Scans for your scan history and your counts, as CSV or PDF.' },
+    ],
+    rules: [
+      'Count after the day\'s orders have shipped. A pair sold today but not shipped is on the shelf and no longer in Shopify\'s number.',
+      'A pair sold without a Mark Sold scan still reads In inventory. The VIN answer is only as good as the scan-outs.',
+      'Every scan is saved under your name, and a typed SKU never counts.',
+    ],
+    related: [],
+    keywords: ['stock check', 'count', 'audit', 'how many', 'my scans', 'in inventory', 'vin', 'shopify', 'upc'],
+  },
 ];

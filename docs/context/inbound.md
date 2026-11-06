@@ -122,7 +122,7 @@ inbound, in the current filter scope.
 | State | Means | Keyed on |
 |---|---|---|
 | **Investigate** | nobody is watching this and somebody must | `Expired`/`NotFound`, or ≥ `INVESTIGATE_DAYS` (8) of silence |
-| **Delayed** | carrier reports a problem, or it has stopped | `Exception*`, or ≥ `STALL_DAYS` (4) of silence |
+| **Delayed** | carrier reports a problem, or it has stopped | `Exception*`, or ≥ `STALL_DAYS` (7, the same number as the delay alert) of silence |
 | **No tracking** | expected, with no number to follow | no `tracking_number` |
 | **With supplier** | a label exists, the parcel was never scanned | `InfoReceived` |
 | **Out for delivery** | on the truck — arriving today | `OutForDelivery` |

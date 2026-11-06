@@ -251,6 +251,11 @@ A Telegram card still goes out as text with "⚠️ Photo unavailable" if the pi
 The PH team uploads card files, and some are bad. The supplier sees none of it.
 - **Server:** `redactCartForViewer` strips `gift_card` files, each card's `label` (usually a file
   name) and the trail events naming them. `cart/file` answers 403 for a supplier on a card file.
+- **Other staff need the duty too (2026-11-06).** A warehouse or PH login could open any card file by
+  its link. `canOpenCardFiles` now allows only `issue_gift_cards`, plus `audit_buying` once the cards
+  are released; admins hold both. `cart/get` leaves the file rows out for everyone else. They still see
+  each recorded card's last four and balance. `preset_id` is also cleared from a supplier's copy.
+  **A premium tip still reaches the supplier on purpose:** they type the proposal themselves.
 - **What the supplier has:** the recorded cards, masked, with Show code, and **Download all (PDF)**.
 - **The desk** can **Delete** a file with two taps (`cart/file-delete`, `issue_gift_cards`). Recorded
   cards stay. The removal is on the trail.

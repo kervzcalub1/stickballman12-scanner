@@ -1,10 +1,10 @@
 // What the warehouse should expect: today and this week, by supplier and by online store.
 // A plan, not a timetable, so the week is one column rather than a day each. Days come from
 // the carrier's own estimate, through the same `arrivalBucket` the Inbound screen uses.
-import { arrivalBucket, inboundState, daysSince, neverScanned } from './inbound.js';
+import { arrivalBucket, inboundState, daysSince, neverScanned, STALL_DAYS } from './inbound.js';
 
 // A week with no movement is delayed, and the team is told (`tracking-delay-worker`).
-export const DELAY_DAYS = 7;
+export const DELAY_DAYS = STALL_DAYS;
 const words = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
 
 // Days since it last moved, if it has a tracking number, isn't here, and has stopped. Else null.

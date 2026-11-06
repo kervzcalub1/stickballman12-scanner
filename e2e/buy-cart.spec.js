@@ -3685,6 +3685,16 @@ test.describe('gift cards read off a file', () => {
     const desk = await read_(request, 'issuer', `cart/get?id=${cartId}`);
     expect(JSON.stringify(desk.body)).toContain('bad-upload');
 
+    // A PH or warehouse login needs the duty, not just the job title. Refused by the link as well as
+    // left off the page. The storage answer differs in test, so "allowed" means "not refused".
+    const fileAs = (who) => request.get(`/api/cart/file?cartId=${cartId}&fileId=${fileId}`, { headers: { Authorization: `Bearer ${tokenFor(people[who])}` } });
+    expect((await fileAs('bystander')).status()).toBe(403);
+    expect((await fileAs('approver')).status()).toBe(403);
+    expect((await fileAs('issuer')).status()).not.toBe(403);
+    expect((await fileAs('auditor')).status()).not.toBe(403);
+    const staffView = await read_(request, 'bystander', `cart/get?id=${cartId}`);
+    if (staffView.status === 200) expect(staffView.body.cart.files.filter((f) => f.kind === 'gift_card')).toHaveLength(0);
+
     // A supplier can't delete one; the desk can, whoever uploaded it, and the card stays.
     expect((await call(request, 'buyer', 'cart/file-delete', { cartId, fileId })).status).toBe(403);
     const gone = await call(request, 'issuer', 'cart/file-delete', { cartId, fileId });
@@ -4307,6 +4317,7 @@ test.describe('the cost stack never reaches a supplier’s browser', () => {
     expect(row).toBeTruthy();
     noStack(mine.body);
     expect(row.cost_stack).toBeNull();
+    expect(row.preset_id).toBeNull();
     // The Needed column: shelf + declared tax, exactly.
     expect(row.funding_tax_pct).toBe(8.25);
     expect(row.funding_target).toBeCloseTo(108.25, 2);
@@ -4374,9 +4385,9 @@ test.describe('the cost stack never reaches a supplier’s browser', () => {
   test('redactCartForViewer (pure): bare queue rows stay bare, the tax survives, staff are untouched', async () => {
     const { redactCartForViewer } = await import('../api/_lib/buycart.js');
     const stack = { taxPct: 8.25, tipAmt: 5, shippingAmt: 8.25, cashbackPct: 2 };
-    const row = { id: 1, cost_stack: stack, funding_tax_pct: 8.25, funding_target: 108.25 };
+    const row = { id: 1, cost_stack: stack, preset_id: 7, funding_tax_pct: 8.25, funding_target: 108.25 };
     const supplier = { role: 'supplier', uid: 1 };
-    expect(redactCartForViewer(row, supplier)).toEqual({ id: 1, cost_stack: null, funding_tax_pct: 8.25, funding_target: 108.25 });
+    expect(redactCartForViewer(row, supplier)).toEqual({ id: 1, cost_stack: null, preset_id: null, funding_tax_pct: 8.25, funding_target: 108.25 });
     expect(redactCartForViewer(row, { role: 'warehouse', uid: 2 })).toBe(row);
     expect(redactCartForViewer(row, { role: 'admin', uid: 3 })).toBe(row);
     const ev = redactCartForViewer({ ...row, lines: [], events: [{ kind: 'costs_edited', body: 'Tip $ 5.00 → $ 9.00' }] }, supplier);

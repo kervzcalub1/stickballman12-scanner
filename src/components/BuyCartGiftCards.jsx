@@ -105,7 +105,8 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
   // The auditor's personal cards aren't the desk's: they live on the audit.
   const cards = (cart.giftCards || []).filter((c) => !c.personal);
   const live = cards.filter((c) => !c.voided_at);
-  const images = (cart.files || []).filter((f) => f.kind === 'gift_card');
+  // Only people who can open them (`canOpenCardFiles`): some replies still list them for other staff.
+  const images = canIssue || canAudit ? (cart.files || []).filter((f) => f.kind === 'gift_card') : [];
   // What the cards must carry: the shelf price of the approved pairs + the declared tax
   // (`funding_target`, computed server-side). Tips and shipping are not on the cards.
   const { shelf, tax: fundTax, target, pct: fundPct } = fundingBreakdown(cart);

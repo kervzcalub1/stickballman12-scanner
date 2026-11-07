@@ -3,6 +3,7 @@
 // Shopify within seconds or eBay / StockX / Alias can sell it again.
 //
 //   SHEIN webhook (order changed) ─┐
+//   new orders, every 10 seconds ──┤
 //   poll every minute (backstop) ──┴→ processOrders(orderNos) → order-detail → units
 //                                      → for each unit: Shopify −1 (or +1 if SHEIN cancelled
 //                                        it before it shipped)
@@ -15,7 +16,7 @@
 // request whose answer got lost is resent with the same key and can't take a pair twice.
 import { sheinCall, listOf } from './shein.js';
 import { shopifyStockForSku, shopifyAdjustAvailable, shopifyConfigured, sheinOrdersConfigured, shopifyFindSheinOrder, shopifyCreateSheinOrder, shopifyFulfilSheinOrder, shopifyCancelSheinOrder } from './shopify.js';
-import { getSetting, setSetting, upsertSheinUnits, sheinUnitsKnown, sheinUnitsToAct, markSheinUnit, sheinLinkedSku, claimSheinShopifyOrder, markSheinShopifyOrder, getSheinShopifyOrder, sheinOrdersDueForShopify, sheinShopifyOrdersFor, sheinUnitsOfOrder, sheinOrdersToFulfil, markSheinOrderFulfilled } from './db.js';
+import { getSetting, setSetting, upsertSheinUnits, sheinUnitsKnown, sheinOrdersKnown, sheinUnitsToAct, markSheinUnit, sheinLinkedSku, claimSheinShopifyOrder, markSheinShopifyOrder, getSheinShopifyOrder, sheinOrdersDueForShopify, sheinShopifyOrdersFor, sheinUnitsOfOrder, sheinOrdersToFulfil, markSheinOrderFulfilled } from './db.js';
 import { unitsFromOrders, unitAction, pickLocation, toSheinTime, sheinOrderState, shopifyOrderInput, sheinOrderTracking } from '../../src/lib/sheinLive.js';
 
 export const SYNC_KEY = 'shein_sync';
@@ -152,6 +153,21 @@ export async function pollOrders() {
   const r = await processOrders(nos);
   await writeSync({ polledTo: now.toISOString(), polledAt: now.toISOString(), lastPoll: { orders: nos.length, ...r } });
   return r;
+}
+
+// The 10-second check. SHEIN's webhook comes about 65 s after it releases an order, but its order
+// list has shown them by 30 s, so asking often beats waiting to be told (measured 2026-11-07).
+// NEW orders only: the webhook and the minute poll carry cancels and status changes. With nothing
+// new it stops before actOnUnits, or a pair Shopify keeps refusing would use its 8 tries in 80 s.
+export const NEW_ORDER_LOOKBACK_MS = 5 * 60_000;
+const NEW_ORDER_IO = { changed: (...a) => changedOrderNos(...a), known: sheinOrdersKnown, process: (...a) => processOrders(...a) };
+export async function checkNewOrders(io = NEW_ORDER_IO, now = Date.now()) {
+  const nos = await io.changed(new Date(now - NEW_ORDER_LOOKBACK_MS), new Date(now));
+  if (!nos.length) return null;
+  const known = await io.known(nos);
+  const fresh = nos.filter((no) => !known.has(no));
+  if (!fresh.length) return null;
+  return { orders: fresh.length, ...(await io.process(fresh)) };
 }
 
 // Switch on: from now every SHEIN sale comes off Shopify. The last 14 days are recorded

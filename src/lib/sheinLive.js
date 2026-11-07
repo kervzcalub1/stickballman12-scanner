@@ -338,7 +338,8 @@ export function unitsFromOrders(details, { since = null, known = new Set(), open
         exchange_tag: Number(g.goodsExchangeTag ?? 1) || 1, stock_mode: Number(o.stockMode ?? 3) || null,
         seller_sku: String(g.sellerSku ?? '').trim() || null, shein_sku: String(g.skuCode ?? '').trim() || null,
         title: String(g.goodsTitle ?? '').slice(0, 300) || null, price: g.sellerCurrencyPrice == null ? null : Number(g.sellerCurrencyPrice),
-        order_time: orderTime, shipped_seen: SHIPPED.has(status),
+        // order_time = when SHEIN released it to us; buyer_order_time = when the buyer placed it.
+        order_time: orderTime, buyer_order_time: fromSheinTime(o.orderTime), shipped_seen: SHIPPED.has(status),
         due: known.has(goodsId) ? false : !!(after || (openAtStart && OPEN.has(status))),
       });
     }

@@ -140,7 +140,7 @@ test.describe('eBay Sync page', () => {
     await loginAs(page, 'ph_team');
     await page.goto('/ph/ebay-listings?tab=sync&sync=listings&sf=no_shopify');
     const end = page.locator('[data-link-note="end"]');
-    await expect(end).toContainText('Ending these is done on the eBay page, in Not in Shopify');
+    await expect(end).toContainText('Ending these is done in the Not in Shopify');
     await expect(end.getByRole('link')).toHaveAttribute('href', '/ph/ebay-listings?tab=orphans');
     await expect(page.locator('.ebl-tabs')).toBeVisible();
     await page.getByRole('button', { name: /Price kept/ }).click();

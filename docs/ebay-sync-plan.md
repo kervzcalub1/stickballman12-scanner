@@ -1,21 +1,25 @@
 # eBay Sync: our own DPL (plan)
 
-**Goal (owner, 2026-11-08):** build into this system what the DPL app does for eBay, so we can
-stop depending on it. The owner approved every decision in advance; the reasoning for each one is
-written here so it can be checked later.
+**Goal (owner, 2026-11-08):** build into this system what the DPL app does for eBay **listings**:
+stock, price, content, new listings, ending. The owner approved every decision in advance; the
+reasoning for each one is written here so it can be checked later.
+
+**Out of scope (owner, same night): orders.** "I don't have any plans to replace the ebay integration
+DPL in handling orders. So do not build anything that relates to the handling of orders." DPL keeps
+bringing eBay orders into Shopify, permanently. Nothing here reads, writes, fulfils or cancels an
+order, and DPL stays installed.
 
 **What exists today:** `docs/context/dpl.md` (DPL's settings), `ebay-listings.md` (pull, orphans,
 end), `ebay-api-reprice.md` (price writes), `ebay-orders.md` (order read), `shein-live-fix.md`
-(the same pattern for SHEIN, including how DPL's orders behave with Intelligent Inventory).
+(the same pattern for SHEIN).
 
 ## The rule that shapes everything: one writer per field
-DPL is live on 1,159 listings and is the only thing bringing eBay sales into Shopify. Two systems
-writing the same field fight silently, and a mistake here oversells live stock or doubles an order.
+DPL is live on 1,159 listings. Two systems writing the same field fight silently, and a mistake
+here oversells live stock.
 So every part ships with its own switch, and DPL keeps running until the evidence says otherwise.
 
 | Switch | `off` | `shadow` (default) | `live` |
 |---|---|---|---|
-| Orders eBay → Shopify | nothing | record what we would write, and whether DPL did | write the order |
 | Stock Shopify → eBay | nothing | record the drift | send the quantity |
 | Price Shopify → eBay | nothing | record the drift | send the price |
 | Content (title, description, photos, sizes) | nothing | record the drift | revise the listing |
@@ -32,11 +36,9 @@ Plus one **kill switch** that stops every eBay write from this feature at once.
 | Auto upload for the `Footwear` collection | New-listing step, driven by the `products/create` webhook plus a sweep |
 | Syncs price, title, description, variations, images | Per-field drift check, then `ReviseFixedPriceItem` / `ReviseInventoryStatus` |
 | Stock from all Shopify locations to eBay | `inventory_levels/update` webhook → queue → `ReviseInventoryStatus` (4 sizes a call) |
-| eBay order → Shopify order with the order ID as a tag | Same tags, `DECREMENT_IGNORING_POLICY`, no customer emails (`shein-orders.js` is the template). Needs its own Shopify app so the Channel column reads eBay |
 | Product draft, archived or deleted → listing ends | `products/update|delete` webhook, then a **live re-read** before ending (the guard in `api/ebay/end.js`) |
 | Needs Attention with eBay's error | Per-product status, eBay's error, and **the fix in plain words** (for example "title is 87 characters, eBay's limit is 80") |
-| Not Synced orders | Orders tab with the reason, and Retry |
-| Screens | New **eBay Sync** page: Overview · Shopify Products · eBay Products · Orders · Linked Inventory · Profiles · Settings + Log |
+| Screens | New **eBay Sync** page: Overview · Shopify Products · eBay Products · Linked Inventory · Profiles · Settings + Log |
 
 **Better than DPL, on purpose:** per-listing price rules that respect `ebay_price_locks` and the
 reprice tools (the open DPL problem); plain-word errors; a one-click photo fix path; a full audit
@@ -44,21 +46,19 @@ log of every write.
 
 ## Shape (same as SHEIN live sync)
 - `src/lib/ebaySync.js`: pure logic, fully unit-tested. Link, stock decision, price decision, content diff,
-  listing builder, order mapper, error translator.
+  listing builder, error translator.
 - `api/_lib/ebay.js`: new Trading calls (`Verify/AddFixedPriceItem`, `ReviseFixedPriceItem`, quantity
   on `ReviseInventoryStatus`, `GetUserPreferences`).
 - `api/_lib/ebay-sync.js` + `ebay-sync-worker.js`: the server job (standing rule: a closed tab or
   restart never stops it). Queue in the DB, so a deploy replays it.
 - `api/shopify/webhook.js`: add routes **beside** SHEIN's, whose path stays exactly as pinned by its tests.
 - `api/ebay-sync/*`: page endpoints. `src/screens/EbaySync.jsx`: the page, phone-first.
-- Tables: `ebay_sync_links`, `ebay_sync_products`, `ebay_sync_orders`, `ebay_sync_profiles`,
+- Tables: `ebay_sync_links`, `ebay_sync_products`, `ebay_sync_profiles`,
   `ebay_sync_queue`, `ebay_sync_log` (added to `LIVE_TABLES` where a screen reads them).
 
 ## Safety rails
 1. Worker runs in production only. Dev and prod share one eBay account (`EBAY_SYNC_WORKER=off` in tests).
 2. Tests never reach eBay or Shopify: every call goes through a swappable `IO`, as in `shein-orders.js`.
-3. Orders: DB claim → look for the order-ID tag in Shopify → create. A lost answer waits and looks before
-   retrying, never blind. A watcher flags any eBay order with two Shopify orders.
 4. Blast limit: if one pass would change more than a set share of listings, it stops and alerts on
    Telegram. A bad read must never look like "everything is out of stock".
 5. "Couldn't read" is never treated as zero. Stock only goes to eBay from a complete, live Shopify read.
@@ -70,37 +70,29 @@ log of every write.
 |---|---|---|
 | 0 | Read real data (below) | Facts written into this doc |
 | 1 | Schema, switches, links, read-only screens | Tests, deployed, all switches `shadow` |
-| 2 | Orders in shadow, then live as DPL's backstop | Our computed order equals DPL's on real orders. Backstop writes only what DPL still hasn't after a delay measured from real lag |
-| 3 | Stock in shadow, then live | Drift list understood. Same source as DPL, so both send the same number |
-| 4 | Price: owner's rule replaces DPL's overwrite | Overwrite measured (`ebay_price_edits` vs live). Needs DPL's `Sync Price Changes` unticked, otherwise the two fight |
-| 5 | Content + new listings | `VerifyAddFixedPriceItem` passes on real products. First live listings are a handful, checked on eBay |
-| 6 | Hand over from DPL | Per the criteria below |
+| 2 | Stock in shadow, then live | Drift list understood. Same source as DPL, so both send the same number |
+| 3 | Price: owner's rule replaces DPL's overwrite | Overwrite measured (`ebay_price_edits` vs live). Needs DPL's `Sync Price Changes` unticked, otherwise the two fight |
+| 4 | Content + new listings | `VerifyAddFixedPriceItem` passes on real products. First live listings are a handful, checked on eBay |
+| 5 | Hand over listings from DPL | Per the criteria below |
 
 ### Phase 0: facts we need from production (read-only)
 1. Scopes the eBay token was approved with, and Trading API call limits (`GetApiAccessRules`).
 2. 20 DPL listings by `GetItem`: category, specifics, condition, policy IDs, description template,
    picture handling, how the size specific is named.
-3. 30 DPL orders in Shopify against `ebay_orders`: line mapping, tax, shipping, customer, tags, channel
-   name, **lag from sale to Shopify order**.
-4. Drift today: eBay quantity and price vs Shopify, per SKU. Price overwrite vs `ebay_price_edits`.
-5. The Not Synced orders and why.
-6. Who sends tracking to eBay today. If it has to come from us, the token needs `sell.fulfillment`
-   (write), meaning the seller approves again on eBay.
+3. Drift today: eBay quantity and price vs Shopify, per SKU. Price overwrite vs `ebay_price_edits`.
 
 ## Handing over from DPL
 Not a date: a measured condition. All must hold for 7 straight days in shadow or backstop:
-- every eBay order matched, zero duplicates, zero lines we couldn't map except ones with a stated reason;
 - stock and price drift explained to the listing;
 - content revise and new listing tested live on a small set.
 
-Order: DPL `Automatic Product Upload` off → price sync off → stock → orders last, because orders are
-what feed the sales report. DPL stays installed but idle for 30 days before anyone removes it, so
-going back is one setting. **Removing DPL or its profile is never done automatically.**
+Order: DPL `Automatic Product Upload` off → price sync off → content → stock. **DPL's order sync stays on, for good.**
+**Check first, in DPL's Order & Inventory settings:** whether orders can keep syncing with its inventory sync off (today: `Enable both order & inventory sync`), and that DPL still imports orders for a listing it didn't create (it links by SKU, so it should; prove it on the first small live set). If orders can't run without its inventory sync, stock stays with DPL, because it is already 99.8 % right.
+**Removing DPL or its profile is never done automatically.**
 
 ## Decisions made (owner delegated them)
 - Default for every switch is `shadow`. A deploy changes no live behaviour.
 - DPL stays on until the conditions above are met.
-- A separate Shopify app for orders, so the Channel column stays accurate.
 - eBay price after hand-over: reprice tools and locks own it; new listings start at Shopify price + a
   profile uplift. Shopify price changes stop overwriting eBay.
 - eBay Trading API, because the listings are Trading-model (`ebay-listings.md`).
@@ -117,7 +109,7 @@ going back is one setting. **Removing DPL or its profile is never done automatic
 - Title and description are the Shopify product's, verbatim. Title differs on only 11 of 2,330 rows.
 - Pictures: Shopify's media, 7 or 1; no variation pictures.
 
-**Orders (428 DPL orders vs 459 in `ebay_orders`):**
+**Orders, for the record only; we don't build on this (428 DPL orders vs 459 in `ebay_orders`):**
 - Shopify order: `name` = eBay order id, `processedAt` = sale time, `sourceName` `eBay`, `sourceIdentifier` = order id, tags
   `<order id>, ebay, ebay integration & importer`, `paymentGatewayNames ["EBAY"]`, PAID, tax as `Sales Tax` line with rate,
   shipping line title = eBay's service, `taxesIncluded false`. Shipped → fulfilled + closed.
@@ -125,8 +117,7 @@ going back is one setting. **Removing DPL or its profile is never done automatic
 - Lag from sale to Shopify order: normally 2 to 5 min. **September outage: 27 orders over an hour, worst 8 days.** Nothing else above an hour since May.
 - Of 25 eBay orders with no Shopify order, **21 were cancelled** and **4 shipped** with no Shopify order
   (`12-15269-07645`, `06-15204-51988`, `12-15184-99765`, `18-15169-44929`). So the real Not Synced gap is 4, not 21-30.
-- **Tracking flows eBay → Shopify:** all 120 compared have the same number, and Shopify's fulfilment comes seconds to minutes after
-  eBay's. So no `sell.fulfillment` write scope is needed: no re-connect.
+- Tracking flows eBay → Shopify: all 120 compared have the same number, and Shopify's fulfilment comes seconds to minutes after eBay's.
 
 **Stock:** live eBay vs live Shopify: **2,326 of 2,330 equal**. 4 differ, 2 of them offering a pair Shopify has at 0 or less.
 DPL's stock sync is good, so ours must match that bar. 1,371 zero-stock Shopify sizes are absent from eBay (DPL removes them), 46 rows
@@ -152,7 +143,6 @@ No `write_orders`, `read_customers` or `read_locations`. eBay token approved 202
 **Passes (`api/_lib/ebay-sync-worker.js`, production only, `EBAY_SYNC_WORKER=on|off` overrides):**
 | Pass | Every | Does |
 |---|---|---|
-| `orders` | 2 min | eBay orders changed since last run → match by tag in Shopify → state, lag, parity with DPL's order; live: write, fulfil, cancel |
 | `queue` | 30 s | Coalesced SKUs/products from the Shopify webhook → stock, end (live only; shadow leaves it to reconcile) |
 | `reconcile` | 30 min | Full live read both sides → `ebay_sync_links`, drift, blast check, stock/price decisions |
 | `content` | 30 min | Rolling content compare |
@@ -168,14 +158,12 @@ No `write_orders`, `read_customers` or `read_locations`. eBay token approved 202
 **Endpoints (all under `/api/ebay-sync/`, `requireRole ph_team`; writes marked ★ need admin or `connect_integrations`):**
 | Route | Shape |
 |---|---|
-| `GET status` | `{ ok, settings:{switches:{orders,stock,price,content,create,end},kill,blastPct,orderBackstopMin}, counts:{...}, passes:{orders:{at,ok,note},...}, budget:{used,limit,resetAt}, ordersAppConfigured, ebay:{connected,user}, facts:{...}, handover:[{key,label,ok,detail}] }` |
-| `POST settings` ★ | `{ switches?, kill?, blastPct?, orderBackstopMin? }` → `{ ok, settings }`, logged |
+| `GET status` | `{ ok, settings:{switches:{stock,price,content,create,end},kill,blastPct}, counts:{...}, passes:{orders:{at,ok,note},...}, budget:{used,limit,resetAt}, ebay:{connected,user}, facts:{...}, handover:[{key,label,ok,detail}] }` |
+| `POST settings` ★ | `{ switches?, kill?, blastPct? }` → `{ ok, settings }`, logged |
 | `POST run` ★ | `{ pass }` → `{ ok, started }`, runs a pass now in the background |
 | `GET products?tab=uploaded\|not_uploaded\|needs_attention&q=&offset=` | `{ ok, rows:[{shopify_product_id,title,style,status,item_id,view_url,image,sizes,qty,issues:[{code,message,fix}],checked_at}], total, tabs:{uploaded,not_uploaded,needs_attention} }` |
 | `POST products` ★ | `{ productId, action:'verify'\|'list'\|'relist' }` |
 | `GET listings?filter=all\|qty_drift\|price_kept\|price_drift\|no_shopify&q=&offset=` | `{ ok, rows:[{item_id,title,view_url,sku,size,ebay_qty,shopify_qty,ebay_price,shopify_price,price_rule,state,drift_since}], total, tabs }` |
-| `GET orders?tab=all\|synced\|not_synced\|cancelled&q=&offset=` | `{ ok, rows:[{order_id,created_at,total_cents,state,written_by,shopify_name,lag_min,reason,parity:[...],skus,buyer}], total, tabs }` |
-| `POST orders` ★ | `{ orderId, action:'retry' }` |
 | `GET inventory?q=&offset=` | SKU → stock, listings sharing it, duplicates |
 | `GET profiles` / `POST profiles` ★ | `{ ok, profiles:[{id,name,is_default,config}] }` |
 | `GET log?domain=&mode=&offset=` | `{ ok, rows:[{id,at,domain,action,mode,item_id,sku,before,after,ok,error,by}], total }` |

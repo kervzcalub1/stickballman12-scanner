@@ -211,6 +211,12 @@ export const ALERT_EVENTS = [
     who: (u) => u.role === 'warehouse' || u.role === 'ph_team' || isAdminRole(u.role),
   },
   {
+    key: 'ebay_sync', group: 'eBay Sync', emoji: '🛑', required: false,
+    title: 'eBay Sync stopped itself',
+    when: 'eBay Sync stops a pass (too many changes at once, or a bad read) or loses its eBay connection',
+    who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
+  },
+  {
     key: 'nudge', group: 'Nudges', emoji: '🔔', required: true,
     title: 'Nudges',
     when: 'Someone nudges you about a request or an order',
@@ -336,6 +342,7 @@ const ROUTES = {
   inboundissues: { main: '/inbound-issues', ph: '/ph/inbound-issues' },
   expected:  { main: '/expected',      ph: '/ph/expected' },
   postatus:  { main: '/reconcile',     ph: '/ph/po-status' },
+  ebaysync:  { main: '/ebay?tab=sync', ph: '/ph/ebay-listings?tab=sync' },
 };
 export const at = (page, query = '') => (u) => {
   const r = ROUTES[page];

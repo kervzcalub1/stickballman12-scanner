@@ -89,6 +89,8 @@ export default defineConfig({
       TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '', MAKE_RECEIPT_PARSER_URL: '', E2E_NO_RATE_LIMIT: '1',
       // Dev and prod share ONE StockX account: the suite must never send a price change.
       STOCKX_REPRICE_WORKER: 'off',
+      // eBay Sync writes to the real eBay + Shopify when its switches are live.
+      EBAY_SYNC_WORKER: 'off',
       // Nor may it ever write an order to the real Shopify store.
       SHEIN_ORDERS_CLIENT_ID: '', SHEIN_ORDERS_CLIENT_SECRET: '',
       RECEIPT_INGEST_KEY: process.env.RECEIPT_INGEST_KEY,

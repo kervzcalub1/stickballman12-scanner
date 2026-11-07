@@ -18,7 +18,7 @@
 // whose "auth accepted" URL is https://<host>/api/ebay/callback), EBAY_ENV=sandbox for
 // eBay's sandbox (default production).
 import crypto from 'node:crypto';
-import { getSetting, setSetting } from './db.js';
+import { getSetting, setSetting, ebaySyncStateGet, ebaySyncStateSet } from './db.js';
 import { encryptSecret, decryptSecret, secretsConfigured } from './secrets.js';
 
 const SANDBOX = () => String(process.env.EBAY_ENV || '').trim().toLowerCase() === 'sandbox';
@@ -196,7 +196,51 @@ const tags = (xml, name) => [...String(xml).matchAll(new RegExp(`<${name}(?:\\s[
 const attr = (xml, name, a) => { const m = String(xml).match(new RegExp(`<${name}\\s[^>]*\\b${a}="([^"]*)"`)); return m ? m[1] : null; };
 const num = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 
-async function trading(call, bodyXml) {
+// Trading API budget (docs/context/ebay-sync.md): eBay allows 5,000 calls a day for our app, counted
+// from 08:00 UTC. EVERY call is counted here; only callers that pass `guard` ('read' | 'write', the
+// eBay Sync passes) are refused when the day is nearly spent, so the older tools are never blocked.
+export const TRADING_BUDGET = { limit: 5000, readStop: 3000, writeStop: 4500 };
+const BUDGET_KEY = 'ebay_trading_budget';
+export const ebayDayKey = (now = Date.now()) => new Date(now - 8 * 3600_000).toISOString().slice(0, 10);
+export const ebayDayResetAt = (now = Date.now()) => {
+  const d = new Date(now); d.setUTCHours(8, 0, 0, 0);
+  if (d.getTime() <= now) d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString();
+};
+let budgetMem = null;
+let budgetFlushed = 0;
+// The counter lives in ebay_sync_state (not a live table) and is written at most once a minute.
+async function loadBudget() {
+  const day = ebayDayKey();
+  if (budgetMem?.day === day) return budgetMem;
+  let v = null;
+  try { const raw = await ebaySyncStateGet(BUDGET_KEY); v = raw ? JSON.parse(raw) : null; } catch { /* no db: count from 0 */ }
+  budgetMem = v?.day === day ? { day, used: Number(v.used) || 0 } : { day, used: 0 };
+  return budgetMem;
+}
+export async function tradingUsage() {
+  const b = await loadBudget().catch(() => budgetMem || { day: ebayDayKey(), used: 0 });
+  return { used: b.used, ...TRADING_BUDGET, resetAt: ebayDayResetAt() };
+}
+export const flushBudget = async () => { if (budgetMem) { budgetFlushed = Date.now(); await ebaySyncStateSet(BUDGET_KEY, JSON.stringify(budgetMem)).catch(() => {}); } };
+async function spendBudget(guard) {
+  const b = await loadBudget().catch(() => (budgetMem?.day === ebayDayKey() ? budgetMem : { day: ebayDayKey(), used: 0 }));
+  budgetMem = b;
+  if (guard) {
+    const stop = guard === 'write' ? TRADING_BUDGET.writeStop : TRADING_BUDGET.readStop;
+    if (b.used >= stop) throw Object.assign(new Error(`eBay Trading budget for today is nearly spent (${b.used} of ${TRADING_BUDGET.limit}); it resets at 08:00 UTC.`), { budget: true });
+  }
+  b.used += 1;
+  if (Date.now() - budgetFlushed >= 60_000) flushBudget();
+}
+// Every <Errors> block: { code, severity, short, long }.
+const parseErrors = (xml) => tags(xml, 'Errors').map((e) => ({
+  code: unesc(tag(e, 'ErrorCode') || ''), severity: tag(e, 'SeverityCode') || '', params: tags(e, 'ErrorParameters').map((q) => unesc(tag(q, 'Value') || '')),
+  short: unesc(tag(e, 'ShortMessage') || ''), long: unesc(tag(e, 'LongMessage') || ''),
+}));
+
+async function trading(call, bodyXml, { guard = null } = {}) {
+  await spendBudget(guard);
   const r = await fetch(`${HOST.api()}/ws/api.dll`, {
     method: 'POST',
     headers: {
@@ -213,7 +257,7 @@ async function trading(call, bodyXml) {
   const ack = tag(xml, 'Ack');
   if (!r.ok || ack === 'Failure' || ack === 'PartialFailure') {
     const msg = unesc(tag(tag(xml, 'Errors') || '', 'LongMessage') || tag(tag(xml, 'Errors') || '', 'ShortMessage') || `HTTP ${r.status}`);
-    throw new Error(`eBay ${call}: ${msg}`);
+    throw Object.assign(new Error(`eBay ${call}: ${msg}`), { errors: parseErrors(xml).filter((e) => e.severity !== 'Warning') });
   }
   return xml;
 }
@@ -266,13 +310,13 @@ export function rowsFromItem(itemXml, styleOf) {
 }
 
 // Every active listing, 200 per page. `onPage(done, total)` reports progress.
-export async function fetchActiveListings(styleOf, onPage = () => {}) {
+export async function fetchActiveListings(styleOf, onPage = () => {}, { guard = null } = {}) {
   const rows = [];
   let listings = 0;
   let reread = 0;
   for (let page = 1, pages = 1; page <= pages && page <= 200; page++) {
     const xml = await trading('GetMyeBaySelling',
-      `<ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList><DetailLevel>ReturnAll</DetailLevel>`);
+      `<ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList><DetailLevel>ReturnAll</DetailLevel>`, { guard });
     const list = tag(xml, 'ActiveList') || '';
     pages = num(tag(tag(list, 'PaginationResult') || '', 'TotalNumberOfPages')) || 1;
     const items = tags(tag(list, 'ItemArray') || '', 'Item');
@@ -284,7 +328,7 @@ export async function fetchActiveListings(styleOf, onPage = () => {}) {
       // row). Read it on its own; if that fails too, the SKU-less row stays and is never
       // judged against Shopify (ebay-orphans.js 'no_sku').
       if (got.length === 1 && !got[0].variation_key && !got[0].sku) {
-        const one = await ebayItemRows(got[0].item_id, styleOf).catch(() => null);
+        const one = await ebayItemRows(got[0].item_id, styleOf, { guard }).catch(() => null);
         if (one?.length && (one.length > 1 || one[0].sku)) {
           rows.push(...one.map((r) => ({ ...r, watch_count: r.watch_count ?? got[0].watch_count, image_url: r.image_url || got[0].image_url })));
           reread++;
@@ -301,8 +345,8 @@ export async function fetchActiveListings(styleOf, onPage = () => {}) {
 // One listing, read on its own (Trading GetItem, every variation) → the same rows as the pull.
 // Used to fill a listing the pull got without sizes, and LIVE by api/ebay/end.js right before
 // ending (ending ends every size eBay has, not just the ones we saved).
-export async function ebayItemRows(itemId, styleOf) {
-  const xml = await trading('GetItem', `<ItemID>${String(itemId).replace(/[^0-9]/g, '')}</ItemID><DetailLevel>ReturnAll</DetailLevel>`);
+export async function ebayItemRows(itemId, styleOf, { guard = null } = {}) {
+  const xml = await trading('GetItem', `<ItemID>${String(itemId).replace(/[^0-9]/g, '')}</ItemID><DetailLevel>ReturnAll</DetailLevel>`, { guard });
   const item = tag(xml, 'Item');
   if (!item) throw new Error('eBay GetItem: no item');
   return rowsFromItem(item, styleOf);
@@ -508,4 +552,149 @@ export async function ebayItemPicture(itemId) {
     const url = unesc(tag(pics, 'GalleryURL') || tags(pics, 'PictureURL')[0] || tags(tag(xml, 'Pictures') || '', 'PictureURL')[0] || '');
     return url ? url.replace(/^http:/, 'https:') : null;
   } catch { return null; }
+}
+
+/* ------------------------------ eBay Sync (Trading) ------------------------------ */
+// docs/context/ebay-sync.md. Everything below is called ONLY by api/_lib/ebay-sync.js, behind its
+// switches, and counts against the Trading budget (reads stop at 3,000 a day, writes at 4,500).
+
+const cdata = (s) => `<![CDATA[${String(s ?? '').replace(/\]\]>/g, ']]]]><![CDATA[>')}]]>`;
+const nameValue = (n, v) => `<NameValueList><Name>${xmlEsc(n)}</Name><Value>${xmlEsc(v)}</Value></NameValueList>`;
+
+// The listing data from src/lib/ebaySync.js buildListing (or a revise subset of it) -> the Trading <Item>.
+// mode 'add' writes every field; 'revise' / 'relist' only the fields present in `d`.
+export function itemXml(d, mode = 'add', itemId = null) {
+  const add = mode === 'add';
+  const x = [];
+  if (itemId) x.push(`<ItemID>${String(itemId).replace(/[^0-9]/g, '')}</ItemID>`);
+  // One id per listing request: eBay refuses a second Add / Relist carrying the same UUID (add, relist) or InvocationID (revise).
+  if (d.uuid) x.push(`<UUID>${xmlEsc(d.uuid)}</UUID>`);
+  if (d.invocationId) x.push(`<InvocationID>${xmlEsc(d.invocationId)}</InvocationID>`);
+  if (d.title != null) x.push(`<Title>${xmlEsc(d.title)}</Title>`);
+  if (d.description != null) x.push(`<Description>${cdata(d.description)}</Description>`);
+  if (add) {
+    x.push(`<PrimaryCategory><CategoryID>${xmlEsc(d.categoryId)}</CategoryID></PrimaryCategory>`);
+    x.push(`<ConditionID>${Number(d.conditionId) || 1000}</ConditionID>`);
+    x.push(`<Country>${xmlEsc(d.country)}</Country><Currency>${xmlEsc(d.currency)}</Currency>`);
+    x.push(`<DispatchTimeMax>${Number(d.dispatchDays) || 1}</DispatchTimeMax>`);
+    x.push(`<ListingDuration>${xmlEsc(d.duration)}</ListingDuration><ListingType>${xmlEsc(d.listingType)}</ListingType>`);
+    x.push(`<Location>${xmlEsc(d.location)}</Location><PostalCode>${xmlEsc(d.postalCode)}</PostalCode>`);
+  }
+  if (d.pictures) x.push(`<PictureDetails>${d.pictures.map((u) => `<PictureURL>${xmlEsc(u)}</PictureURL>`).join('')}</PictureDetails>`);
+  if (add) {
+    if (d.specifics?.length) x.push(`<ItemSpecifics>${d.specifics.map(([n, v]) => nameValue(n, v)).join('')}</ItemSpecifics>`);
+    const p = d.policies || {};
+    x.push(`<SellerProfiles><SellerShippingProfile><ShippingProfileID>${xmlEsc(p.shipping)}</ShippingProfileID></SellerShippingProfile>`
+      + `<SellerReturnProfile><ReturnProfileID>${xmlEsc(p.return)}</ReturnProfileID></SellerReturnProfile>`
+      + `<SellerPaymentProfile><PaymentProfileID>${xmlEsc(p.payment)}</PaymentProfileID></SellerPaymentProfile></SellerProfiles>`);
+    const k = d.package || {};
+    x.push(`<ShippingPackageDetails><MeasurementUnit>English</MeasurementUnit><PackageDepth unit="in">${Number(k.depth) || 0}</PackageDepth>`
+      + `<PackageLength unit="in">${Number(k.length) || 0}</PackageLength><PackageWidth unit="in">${Number(k.width) || 0}</PackageWidth>`
+      + `<ShippingPackage>${xmlEsc(k.type || 'PackageThickEnvelope')}</ShippingPackage>`
+      + `<WeightMajor unit="lbs">${Number(k.weightLbs) || 0}</WeightMajor><WeightMinor unit="oz">${Number(k.weightOz) || 0}</WeightMinor></ShippingPackageDetails>`);
+    x.push(`<Site>${xmlEsc(d.site || 'US')}</Site>`);
+  }
+  if (d.variations) {
+    const size = d.sizeName || 'Size';
+    x.push('<Variations>');
+    x.push(`<VariationSpecificsSet>${nameValueMany(size, d.sizeValues || d.variations.map((v) => v.size))}</VariationSpecificsSet>`);
+    for (const v of d.variations) {
+      x.push(`<Variation><SKU>${xmlEsc(v.sku)}</SKU><StartPrice>${Number(v.price).toFixed(2)}</StartPrice><Quantity>${Math.max(0, Math.round(Number(v.qty)))}</Quantity>`
+        + (v.upc ? `<VariationProductListingDetails><UPC>${xmlEsc(v.upc)}</UPC></VariationProductListingDetails>` : '')
+        + `<VariationSpecifics>${nameValue(size, v.size)}</VariationSpecifics></Variation>`);
+    }
+    x.push('</Variations>');
+  }
+  return `<Item>${x.join('')}</Item>`;
+}
+function nameValueMany(name, values) {
+  return `<NameValueList><Name>${xmlEsc(name)}</Name>${[...new Set(values)].map((v) => `<Value>${xmlEsc(v)}</Value>`).join('')}</NameValueList>`;
+}
+
+// eBay answers a repeated UUID with the ORIGINAL item id in the error: that call already listed it.
+export function uuidDuplicateItemId(errors) {
+  const dup = (errors || []).find((x) => /uuid/i.test(`${x.long} ${x.short}`) && /(already|used|duplicate)/i.test(`${x.long} ${x.short}`));
+  return (dup && [...(dup.params || []), dup.long].join(' ').match(/\b\d{11,13}\b/)?.[0]) || null;
+}
+// eBay's own dry run: nothing is listed, no fee. → { ok:true } or { ok:false, errors:[{code,short,long}], error }
+export async function verifyAddFixedPriceItem(data) {
+  try { await trading('VerifyAddFixedPriceItem', itemXml(data, 'add'), { guard: 'read' }); return { ok: true }; }
+  catch (e) { return { ok: false, error: e.message, errors: e.errors || [], budget: !!e.budget, auth: isAuthError(e.message) }; }
+}
+// List it. → { ok, itemId } or { ok:false, errors, error }
+export async function addFixedPriceItem(data) {
+  try {
+    const xml = await trading('AddFixedPriceItem', itemXml(data, 'add'), { guard: 'write' });
+    return { ok: true, itemId: unesc(tag(xml, 'ItemID') || '') };
+  } catch (e) {
+    // The same UUID already listed this: eBay answers with the ORIGINAL item id. That is a success, not a second listing.
+    const id = uuidDuplicateItemId(e.errors);
+    if (id) return { ok: true, itemId: id, duplicateUuid: true };
+    return { ok: false, error: e.message, errors: e.errors || [], budget: !!e.budget, auth: isAuthError(e.message) };
+  }
+}
+// Change title / description / pictures / sizes of a live listing. `data.variations` is the FULL set to
+// send (existing ones carrying their current price and quantity) with the union VariationSpecificsSet.
+export async function reviseFixedPriceItem(itemId, data) {
+  try { await trading('ReviseFixedPriceItem', itemXml(data, 'revise', itemId), { guard: 'write' }); return { ok: true }; }
+  catch (e) { return { ok: false, error: e.message, errors: e.errors || [], budget: !!e.budget, auth: isAuthError(e.message) }; }
+}
+// An ended listing back on, by its stored item id (eBay gives it a NEW id). → { ok, itemId }
+export async function relistFixedPriceItem(itemId, data = {}) {
+  try {
+    const xml = await trading('RelistFixedPriceItem', itemXml(data, 'relist', itemId), { guard: 'write' });
+    return { ok: true, itemId: unesc(tag(xml, 'ItemID') || '') || String(itemId) };
+  } catch (e) {
+    const id = uuidDuplicateItemId(e.errors);
+    if (id) return { ok: true, itemId: id, duplicateUuid: true };
+    return { ok: false, error: e.message, errors: e.errors || [], budget: !!e.budget, auth: isAuthError(e.message) };
+  }
+}
+
+// Quantity ONLY (never price). [{ key, itemId, sku|null, qty }] -> [{ key, ok, error?, auth? }]. Four per call;
+// a refused batch is re-sent one by one so each size gets its own answer (as reviseEbayPrices does).
+const qtyCall = (list) => trading('ReviseInventoryStatus', list.map((c) => `<InventoryStatus><ItemID>${String(c.itemId).replace(/[^0-9]/g, '')}</ItemID>${c.sku ? `<SKU>${xmlEsc(c.sku)}</SKU>` : ''}<Quantity>${Math.max(0, Math.round(Number(c.qty)))}</Quantity></InventoryStatus>`).join(''), { guard: 'write' });
+export async function reviseEbayQuantities(changes) {
+  const out = [];
+  for (let i = 0; i < changes.length; i += 4) {
+    const batch = changes.slice(i, i + 4);
+    try { await qtyCall(batch); batch.forEach((c) => out.push({ key: c.key, ok: true })); continue; } catch (e) {
+      if (batch.length === 1 || e.budget) { batch.forEach((c) => out.push({ key: c.key, ok: false, error: e.message, auth: isAuthError(e.message), budget: !!e.budget })); continue; }
+    }
+    for (const c of batch) {
+      try { await qtyCall([c]); out.push({ key: c.key, ok: true }); }
+      catch (e) { out.push({ key: c.key, ok: false, error: e.message, auth: isAuthError(e.message), budget: !!e.budget }); }
+    }
+  }
+  return out;
+}
+
+// One live listing's content for the drift check: title, description, picture count, sizes.
+const descOf = (raw) => { const t = String(raw ?? ''); const m = t.match(/^\s*<!\[CDATA\[([\s\S]*)\]\]>\s*$/); return m ? m[1] : unesc(t); };
+export function parseItemContent(xml) {
+  const item = tag(xml, 'Item') || xml;
+  const flat = String(item).replace(/<Variations>[\s\S]*<\/Variations>/, '');
+  const pics = tag(flat, 'PictureDetails') || '';
+  const variations = tags(tag(item, 'Variations') || '', 'Variation').map((v) => {
+    const sp = tags(tag(v, 'VariationSpecifics') || '', 'NameValueList').map((nv) => [unesc(tag(nv, 'Name') || ''), unesc(tag(nv, 'Value') || '')]);
+    const sold = num(tag(tag(v, 'SellingStatus') || '', 'QuantitySold')) ?? 0;
+    const quantity = num(tag(v, 'Quantity')) ?? 0;
+    return {
+      sku: unesc(tag(v, 'SKU') || ''), size: (sp.find(([n]) => /size/i.test(n)) || [])[1] || null,
+      upc: unesc(tag(tag(v, 'VariationProductListingDetails') || '', 'UPC') || '') || null,
+      price: num(tag(v, 'StartPrice')), quantity, sold, available: quantity - sold,
+    };
+  });
+  const set = tags(tag(tag(item, 'Variations') || '', 'VariationSpecificsSet') || '', 'NameValueList')
+    .map((nv) => ({ name: unesc(tag(nv, 'Name') || ''), values: tags(nv, 'Value').map(unesc) }));
+  const sizeSet = set.find((x) => /size/i.test(x.name)) || null;
+  return {
+    specificsSet: sizeSet, item_id: unesc(tag(flat, 'ItemID') || ''), title: unesc(tag(flat, 'Title') || ''), description: descOf(tag(flat, 'Description')),
+    pictureCount: tags(pics, 'PictureURL').length, status: tag(tag(flat, 'SellingStatus') || '', 'ListingStatus') || null,
+    sizeName: variations.length ? 'Size' : null, variations,
+  };
+}
+export async function fetchEbayItemContent(itemId) {
+  const xml = await trading('GetItem', `<ItemID>${String(itemId).replace(/[^0-9]/g, '')}</ItemID><DetailLevel>ReturnAll</DetailLevel>`, { guard: 'read' });
+  return parseItemContent(xml);
 }

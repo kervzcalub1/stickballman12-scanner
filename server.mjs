@@ -242,3 +242,9 @@ import('./api/_lib/gc-read-worker.js')
 import('./api/_lib/ebay-orders-worker.js')
   .then((m) => m.startEbayOrdersWorker())
   .catch((e) => console.error('[ebay-orders-worker] failed to start:', e.message));
+
+// eBay Sync: stock / price / content / new listings / ending, replacing DPL's (docs/context/ebay-sync.md).
+// Production only by default; EBAY_SYNC_WORKER=on|off overrides. Every switch ships in shadow.
+import('./api/_lib/ebay-sync-worker.js')
+  .then((m) => m.startEbaySyncWorker())
+  .catch((e) => console.error('[ebay-sync-worker] failed to start:', e.message));

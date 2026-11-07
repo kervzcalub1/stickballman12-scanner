@@ -4,7 +4,8 @@ Phase 1 of the listings hub (`docs/listings-hub-plan.md`): connect the company e
 account once, pull every live listing and size, and show it next to our stock.
 **Nothing here writes to eBay.** Today **DPL** (Digital Product Labs' Shopify → eBay app)
 owns eBay price, quantity and create/end, and brings eBay orders into Shopify. Until that
-ownership is settled (plan doc: one owner per field), we only look.
+ownership is settled (plan doc: one owner per field), we only look. DPL's actual settings:
+`dpl.md`.
 
 PH team + admin can view and pull; only **admin / superadmin** can connect or disconnect
 (it links the company account). Card in the PH home's Pricing & Listing section; route

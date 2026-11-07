@@ -34,8 +34,9 @@ PH team + admin. Rows come from the last **Pull listings** (`ebay_listings`), so
   so every size gets its own answer. Auth/scope refusal → "Connect eBay again".
 - Server re-checks every size against the last pull (exists, fixed-price, label) before sending,
   and on success writes the new price into `ebay_listings` so the page shows it without a pull.
-- **DPL caveat:** if DPL is ever set to sync PRICE Shopify → eBay, its next sync would overwrite
-  these prices. Today DPL is used for quantity/listing; the CSV tool has the same exposure.
+- **DPL caveat:** DPL's main profile has `Sync Price Changes` ON (seen 2026-11-07), so a Shopify
+  price change should overwrite these prices. Not yet measured; the CSV tool has the same
+  exposure. See `dpl.md`.
 
 ## Locks — 🔒 Keep price (2026-11-03)
 The exceptions: "listed at $120, market $60 — even +20 % doesn't get to 120, keep the 120" on

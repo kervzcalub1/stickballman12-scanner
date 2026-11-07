@@ -3413,6 +3413,128 @@ await sql(`CREATE INDEX IF NOT EXISTS stock_check_scans_count_idx ON stock_check
 await sql(`CREATE UNIQUE INDEX IF NOT EXISTS stock_check_scans_vin_once
              ON stock_check_scans (count_id, vin) WHERE counted AND NOT undone AND vin IS NOT NULL`);
 
+// ── eBay Sync (docs/ebay-sync-plan.md, docs/context/ebay-sync.md) ─────────────────────
+// Our own replacement for DPL's Shopify <-> eBay work. Every switch ships in shadow: nothing is
+// written to eBay or Shopify until a person turns it to live. No buyer data is kept in any of these
+// tables or in the log. Orders are not part of this: DPL keeps handling eBay orders.
+// Listing profiles (category, policies, package, specifics, location), seeded from the real
+// listings DPL made (STICKBALLMAN12). Editing a profile changes what NEW listings look like.
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_sync_profiles (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    is_default  BOOLEAN NOT NULL DEFAULT false,
+    config      JSONB NOT NULL DEFAULT '{}',
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+const EBAY_SYNC_PROFILE = JSON.stringify({
+  categoryId: '15709', conditionId: 1000, listingType: 'FixedPriceItem', duration: 'GTC', dispatchDays: 1,
+  location: 'Manheim, Pennsylvania', postalCode: '17545', country: 'US', currency: 'USD', site: 'US',
+  policies: { shipping: '325744987021', return: '325744597021', payment: '325744328021' },
+  package: { length: 16, width: 12, depth: 6, weightLbs: 4, weightOz: 0, type: 'PackageThickEnvelope' },
+  specifics: { Color: 'Multicolor', Department: 'Unisex Adults', Style: 'Sneaker', 'Upper Material': 'Leather', Type: 'Sneaker' },
+  sizeName: 'Size', collection: 'Footwear', uplift: 0, maxPictures: 12,
+});
+await sql(`
+  INSERT INTO ebay_sync_profiles (name, is_default, config, updated_by)
+  VALUES ('STICKBALLMAN12', true, '${EBAY_SYNC_PROFILE.replace(/'/g, "''")}'::jsonb, 'db-setup')
+  ON CONFLICT (name) DO NOTHING`);
+// One row per Shopify shoe that is on eBay or could be: its status, the precheck / eBay issues in
+// plain words, and the content drift found by the rolling check.
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_sync_products (
+    shopify_product_id  TEXT PRIMARY KEY,
+    title               TEXT,
+    style               TEXT,
+    handle              TEXT,
+    vendor              TEXT,
+    shopify_status      TEXT,
+    image               TEXT,
+    sizes               INT NOT NULL DEFAULT 0,
+    qty                 INT NOT NULL DEFAULT 0,
+    eligible            BOOLEAN NOT NULL DEFAULT false,
+    status              TEXT NOT NULL DEFAULT 'not_uploaded',   -- uploaded | not_uploaded | needs_attention
+    item_id             TEXT,
+    view_url            TEXT,
+    issues              JSONB NOT NULL DEFAULT '[]',
+    drift               JSONB,
+    shopify_key         TEXT,
+    verify_key          TEXT,
+    verify_ok           BOOLEAN,
+    verified_at         TIMESTAMPTZ,
+    not_on_ebay_since   TIMESTAMPTZ,
+    content_checked_at  TIMESTAMPTZ,
+    checked_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`ALTER TABLE ebay_sync_products ADD COLUMN IF NOT EXISTS content_key TEXT`);
+await sql(`ALTER TABLE ebay_sync_products ADD COLUMN IF NOT EXISTS ended_by_stock BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE ebay_sync_products ADD COLUMN IF NOT EXISTS last_prices JSONB`);
+await sql(`CREATE INDEX IF NOT EXISTS ebay_sync_products_status_idx ON ebay_sync_products (status)`);
+await sql(`CREATE INDEX IF NOT EXISTS ebay_sync_products_item_idx ON ebay_sync_products (item_id)`);
+// Shopify variant <-> eBay item + variation, by exact SKU. item_id '' = a Shopify size in stock
+// that is not on eBay. A SKU used twice is flagged (duplicate), never guessed.
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_sync_links (
+    link_key            TEXT PRIMARY KEY,
+    sku                 TEXT,
+    item_id             TEXT NOT NULL DEFAULT '',
+    variation_key       TEXT NOT NULL DEFAULT '',
+    shopify_product_id  TEXT,
+    shopify_variant_id  TEXT,
+    title               TEXT,
+    size                TEXT,
+    view_url            TEXT,
+    ebay_qty            INT,
+    shopify_qty         INT,
+    ebay_price          NUMERIC(12,2),
+    shopify_price       NUMERIC(12,2),
+    price_rule          TEXT,                        -- follows_shopify | kept_lock | kept_repriced
+    state               TEXT NOT NULL DEFAULT 'ok',  -- ok | qty_drift | price_drift | price_kept | no_shopify | not_on_ebay
+    duplicate           BOOLEAN NOT NULL DEFAULT false,
+    qty_drift_since     TIMESTAMPTZ,
+    price_drift_since   TIMESTAMPTZ,
+    seen_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS ebay_sync_links_sku_idx ON ebay_sync_links (sku)`);
+await sql(`CREATE INDEX IF NOT EXISTS ebay_sync_links_item_idx ON ebay_sync_links (item_id)`);
+// Audit of everything the feature did or, in shadow, would have done.
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_sync_log (
+    id        BIGSERIAL PRIMARY KEY,
+    at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    domain    TEXT NOT NULL,          -- stock | price | content | create | end | settings | profile
+    action    TEXT NOT NULL,
+    mode      TEXT NOT NULL,          -- live | shadow
+    item_id   TEXT,
+    sku       TEXT,
+    before    JSONB,
+    after     JSONB,
+    ok        BOOLEAN NOT NULL DEFAULT true,
+    error     TEXT,
+    by        TEXT
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS ebay_sync_log_at_idx ON ebay_sync_log (at DESC)`);
+await sql(`CREATE INDEX IF NOT EXISTS ebay_sync_log_domain_idx ON ebay_sync_log (domain, action, item_id, at DESC)`);
+// Pass state and the Trading call counter. NOT in LIVE_TABLES: these change every few seconds and no
+// screen should re-read on each one (app_settings is live, which is why they do not live there).
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_sync_state (
+    key         TEXT PRIMARY KEY,
+    value       TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+// Shopify webhooks land here and nothing else; the queue pass works through it. Coalesced by key.
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_sync_queue (
+    id          BIGSERIAL PRIMARY KEY,
+    kind        TEXT NOT NULL,        -- sku | product | product_delete
+    key         TEXT NOT NULL,
+    queued_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    claimed_at  TIMESTAMPTZ,
+    UNIQUE (kind, key)
+  )`);
+
 const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
@@ -3433,6 +3555,7 @@ const LIVE_TABLES = [
   'cancellations', 'cancellation_photos', 'cancellation_events',
   'inbound_issues', 'inbound_issue_events',
   'stock_counts', 'stock_check_scans',
+  'ebay_sync_products', 'ebay_sync_links', 'ebay_sync_log', 'ebay_sync_profiles',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

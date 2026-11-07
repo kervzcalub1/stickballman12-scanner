@@ -123,7 +123,9 @@ async function gql(query, variables) {
   // people doing different things, so the diagnosis has to be too.
   const unauthorized = r.status === 401 || /invalid api key|unrecognized login|wrong password/i.test(text);
   const denied = !unauthorized && /access denied|scope|not approved/i.test(text);
+  const throttled = r.status === 429 || errs.some((e) => e?.extensions?.code === 'THROTTLED') || /throttled/i.test(text);
   return {
+    throttled,
     ok: r.ok && !errs.length,
     status: r.status,
     data: data?.data,
@@ -131,6 +133,24 @@ async function gql(query, variables) {
     unauthorized,
     denied,
   };
+}
+
+// Reads for eBay Sync: at least a second between calls (SHEIN's sale mutations always have room), and a
+// throttled answer is waited out a few times before the read gives up (the caller then aborts cleanly).
+const PAGE_GAP_MS = () => Number(process.env.EBAY_SYNC_PAGE_GAP_MS ?? 1000);
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+let lastPaced = 0;
+export async function gqlPaced(query, variables) {
+  let r;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const wait = lastPaced + PAGE_GAP_MS() - Date.now();
+    if (wait > 0) await sleep(wait);
+    r = await gql(query, variables);
+    lastPaced = Date.now();
+    if (!r.throttled) return r;
+    await sleep(Math.min(8000, 1000 * 2 ** attempt) * (PAGE_GAP_MS() / 1000));   // scales with the page gap (tests set it tiny)
+  }
+  return r;
 }
 
 /* ------------------------------------------------------------------ */
@@ -397,6 +417,7 @@ export async function shopifyInventoryForSku(sku) {
 
 // Why a refusal happened, in words that send the reader to the right fix.
 function failure(r, what) {
+  if (r.throttled) return { error: 'Shopify is busy (throttled), so the read was stopped. It will be tried again later.', code: 'throttled' };
   if (r.unauthorized) return { error: 'Shopify rejected our access token, and a new one could not be minted — check SHOPIFY_CLIENT_ID / SHOPIFY_SECRET_KEY and that the app is still installed on the store.', code: 'unauthorized' };
   if (r.denied) {
     return what === 'write'
@@ -423,14 +444,15 @@ export const shopifyAdminStore = () => domain().replace(/\.myshopify\.com$/, '')
 // Every variant in the store (≈ 3,900 → ~16 pages), with the style code read off the
 // PRODUCT title the same way the sales feed does — the variant `sku` is an internal
 // number here ("10019029"), so it is used only when it looks like a style code itself.
-export async function shopifyAllVariants() {
+export async function shopifyAllVariants({ paced = false } = {}) {
   if (!shopifyConfigured()) return { error: 'Shopify is not configured on the server.', code: 'config' };
   const out = [];
   let after = null;
   for (let page = 0; page < 80; page++) {
-    const r = await gql(VARIANTS_QUERY, { after });
+    const r = await (paced ? gqlPaced : gql)(VARIANTS_QUERY, { after });
     if (!r.ok) return failure(r, 'read');
     const conn = r.data?.productVariants;
+    if (paced && !conn) return { error: 'Shopify answered without a variant list.', code: 'empty' };
     for (const { node: v } of conn?.edges || []) {
       const size = (v.selectedOptions || []).find((o) => /size/i.test(o.name))?.value ?? v.title;
       const skuStyle = /[A-Z]/i.test(v.sku || '') && /\d/.test(v.sku || '') && String(v.sku).length >= 5 ? String(v.sku).toUpperCase() : null;
@@ -474,9 +496,11 @@ export async function shopifyListingState(variantIds, productIds) {
     ... on Product { id title status }
   } }`, { ids });
   if (!r.ok) return failure(r, 'read');
+  // One entry per id, or the answer is not trusted. Only a null entry means the thing is gone.
+  if (!Array.isArray(r.data?.nodes) || r.data.nodes.length !== ids.length) return { error: 'Shopify answered with the wrong number of items.', code: 'empty' };
   const variants = new Map();
   const products = new Map();
-  for (const n of r.data?.nodes || []) {
+  for (const n of r.data.nodes) {
     if (!n?.id) continue;
     if (n.id.includes('/ProductVariant/')) variants.set(n.id, { price: n.price, compareAt: n.compareAtPrice ?? null, productId: n.product?.id });
     else products.set(n.id, { title: n.title, status: n.status });
@@ -756,6 +780,89 @@ export async function shopifyCancelSheinOrder(orderId, note) {
   const errs = [...(r.data?.orderCancel?.orderCancelUserErrors || []), ...(r.data?.orderCancel?.userErrors || [])];
   if (errs.length) return { error: errs.map((e) => e.message).join(' | ') };
   return { ok: true };
+}
+
+/* ------------------------- eBay Sync reads (docs/context/ebay-sync.md) ------------------------- */
+
+// Every product, light (no variants): the eBay Sync's status / vendor / image per product. 100 a page.
+export async function shopifyEbayProductsLight() {
+  if (!shopifyConfigured()) return { error: 'Shopify is not configured on the server.', code: 'config' };
+  const out = [];
+  let after = null;
+  for (let page = 0; page < 80; page++) {
+    const r = await gqlPaced(`query EbayProducts($after: String) { products(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id title handle vendor status updatedAt mediaCount { count } featuredMedia { preview { image { url(transform: { maxWidth: 160 }) } } } }
+    } }`, { after });
+    if (!r.ok) return failure(r, 'read');
+    const conn = r.data?.products;
+    if (!conn || !Array.isArray(conn.nodes)) return { error: 'Shopify answered without a product list.', code: 'empty' };
+    for (const p of conn.nodes) out.push({
+      id: p.id, title: p.title || '', handle: p.handle || null, vendor: p.vendor || '', status: p.status || null, updatedAt: p.updatedAt || null,
+      mediaCount: p.mediaCount?.count == null ? null : Number(p.mediaCount.count), image: p.featuredMedia?.preview?.image?.url || null,
+    });
+    if (!conn?.pageInfo?.hasNextPage) return { products: out };
+    after = conn.pageInfo.endCursor;
+  }
+  return { products: out, truncated: true };
+}
+
+// Ids of the products in the collection with this title (the profile's `Footwear`).
+export async function shopifyCollectionProductIds(title) {
+  if (!shopifyConfigured()) return { error: 'Shopify is not configured on the server.', code: 'config' };
+  const found = await gqlPaced(`query($q: String!) { collections(first: 5, query: $q) { nodes { id title } } }`, { q: `title:${JSON.stringify(String(title))}` });
+  if (!found.ok) return failure(found, 'read');
+  const col = (found.data?.collections?.nodes || []).find((c) => String(c.title).toLowerCase() === String(title).toLowerCase());
+  if (!col) return { error: `Shopify has no collection called ${title}.`, code: 'missing' };
+  const ids = new Set();
+  let after = null;
+  for (let page = 0; page < 40; page++) {
+    const r = await gqlPaced(`query($id: ID!, $after: String) { collection(id: $id) { products(first: 250, after: $after) { pageInfo { hasNextPage endCursor } nodes { id } } } }`, { id: col.id, after });
+    if (!r.ok) return failure(r, 'read');
+    const conn = r.data?.collection?.products;
+    if (!conn || !Array.isArray(conn.nodes)) return { error: 'Shopify answered without the collection\'s products.', code: 'empty' };
+    for (const p of conn.nodes) ids.add(p.id);
+    if (!conn?.pageInfo?.hasNextPage) return { ids };
+    after = conn.pageInfo.endCursor;
+  }
+  return { ids, truncated: true };
+}
+
+// Full product for a listing: description, vendor, status, collections, photos (with size), variants
+// (sku, barcode, price, stock, Size option, inventory item). By ids (nodes) or one page at a time.
+const FULL_PRODUCT = `id title handle vendor status updatedAt descriptionHtml
+  collections(first: 20) { nodes { title } }
+  media(first: 12) { nodes { ... on MediaImage { image { url width height } } } }
+  variants(first: 100) { nodes { id sku barcode price inventoryQuantity selectedOptions { name value } inventoryItem { id } } }`;
+const fullProduct = (p) => ({
+  id: p.id, title: p.title || '', handle: p.handle || null, vendor: p.vendor || '', status: p.status || null, updatedAt: p.updatedAt || null,
+  descriptionHtml: p.descriptionHtml || '', collections: (p.collections?.nodes || []).map((c) => c.title),
+  images: (p.media?.nodes || []).map((m) => m?.image).filter((i) => i?.url).map((i) => ({ url: i.url, width: i.width ?? null, height: i.height ?? null })),
+  variants: (p.variants?.nodes || []).map((v) => ({
+    variantId: v.id, sku: String(v.sku || '').trim(), barcode: String(v.barcode || '').trim(), price: v.price ?? null,
+    qty: v.inventoryQuantity == null ? null : Number(v.inventoryQuantity),
+    size: String((v.selectedOptions || []).find((o) => /size/i.test(o.name))?.value ?? '').trim(), inventoryItemId: v.inventoryItem?.id || null,
+  })),
+});
+// A product that is gone is simply absent from the answer (its id is in `missing`).
+export async function shopifyEbayProductsFull(ids) {
+  if (!shopifyConfigured()) return { error: 'Shopify is not configured on the server.', code: 'config' };
+  const want = [...new Set((ids || []).filter(Boolean))];
+  const products = [];
+  for (let i = 0; i < want.length; i += 5) {
+    const r = await gqlPaced(`query EbayFull($ids: [ID!]!) { nodes(ids: $ids) { ... on Product { ${FULL_PRODUCT} } } }`, { ids: want.slice(i, i + 5) });
+    if (!r.ok) return failure(r, 'read');
+    if (!Array.isArray(r.data?.nodes)) return { error: 'Shopify answered without the products.', code: 'empty' };
+    for (const p of r.data.nodes) if (p?.id) products.push(fullProduct(p));
+  }
+  const have = new Set(products.map((p) => p.id));
+  return { products, missing: want.filter((id) => !have.has(id)) };
+}
+export async function shopifyEbayProductsPage(after = null) {
+  const r = await gql(`query EbayFullPage($after: String) { products(first: 10, after: $after) { pageInfo { hasNextPage endCursor } nodes { ${FULL_PRODUCT} } } }`, { after });
+  if (!r.ok) return failure(r, 'read');
+  const conn = r.data?.products;
+  return { products: (conn?.nodes || []).map(fullProduct), next: conn?.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null };
 }
 
 /* ------------------------- inventory webhook (→ SHEIN) ------------------------- */

@@ -167,3 +167,7 @@ No `write_orders`, `read_customers` or `read_locations`. eBay token approved 202
 | `GET inventory?q=&offset=` | SKU → stock, listings sharing it, duplicates |
 | `GET profiles` / `POST profiles` ★ | `{ ok, profiles:[{id,name,is_default,config}] }` |
 | `GET log?domain=&mode=&offset=` | `{ ok, rows:[{id,at,domain,action,mode,item_id,sku,before,after,ok,error,by}], total }` |
+
+## Existing tools stay (owner, 2026-11-08)
+The owner really likes eBay **Reprice** and **Not in Shopify — end**. They keep working exactly as they do, and eBay Sync links to them
+instead of copying them. Repriced or locked sizes are never written by the sync. SKUs missing from Shopify are only reported here and ended from that tab.

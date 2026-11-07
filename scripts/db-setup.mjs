@@ -2859,6 +2859,8 @@ await sql(`
     first_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
+// When the buyer placed it. order_time is when SHEIN released it to us, which is later by an unknown gap.
+await sql(`ALTER TABLE shein_order_units ADD COLUMN IF NOT EXISTS buyer_order_time TIMESTAMPTZ`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_sku ON shein_order_units (seller_sku)`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_order ON shein_order_units (order_no)`);
 // SHEIN orders written to Shopify by our own "SHEIN via Stickballman12.com" app (replaced the

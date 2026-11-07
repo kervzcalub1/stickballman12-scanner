@@ -22,6 +22,17 @@ its top). The rules are the export fix's (`docs/context/shein-fix.md`), run per 
   path as called and without the dot. Signed with the APP
   id + secret over the path, body = form-data `eventData` AES-encrypted with the app secret
   (`sheinOpenWebhook`). It only names the order; we read the order from the API ourselves.
+- **Measured 2026-11-07:** 15 of 15 pairs off Shopify within 90 s of SHEIN's release time, typically 65 s, and
+  about 1 s after we first saw the order. The wait is SHEIN's: its webhook arrives 64-66 s after release, though
+  its order list has shown orders by 30 s. `order_time` is that release (`orderAllocateTime`);
+  `buyer_order_time` (`orderTime`) is when the buyer placed it, so `order_time − buyer_order_time` is the part
+  we can't touch.
+- **New orders, every 10 seconds** (`checkNewOrders`, `sheinNewOrderTick`, `SHEIN_FAST_ORDER_CHECK=off` stops it):
+  `order-list` for the last 5 minutes; orders with no pair recorded yet go through `processOrders`. It ignores
+  known orders, so cancels and status changes still come from the webhook and the poll, and with nothing new
+  it never reaches `actOnUnits` (a failing pair would burn its 8 tries in 80 s). Whichever route sees an order
+  first takes the pair off; `due` is only set on insert, and `actOnUnits` runs one pass at a time, so a pair
+  can't come off twice.
 - **Backstop:** every minute (`shein-worker.js`, production only; `SHEIN_SYNC_WATCH=on|off`)
   `order-list` by update time since the last poll (−10 min overlap; SHEIN windows ≤ 48 h,
   **Beijing time UTC+8** both ways — `toSheinTime`/`fromSheinTime`), then `order-detail`.

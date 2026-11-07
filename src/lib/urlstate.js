@@ -48,6 +48,12 @@ export function clearQuery() {
   } catch { /* ignore */ }
 }
 
+// Tell every useQueryParam on the page to re-read the URL, after code wrote several params at once (a
+// section link opening a filtered list). Not a popstate: that would also run the routers and the
+// "unsaved changes" prompt, for a move that leaves nothing.
+export const QUERY_SYNC = 'urlstate:sync';
+export const syncQueryParams = () => window.dispatchEvent(new Event(QUERY_SYNC));
+
 // `useState` whose value is mirrored into `?key=`. Seeded from the URL on mount, so a
 // refresh comes back to the same place. Also follows Back/Forward via popstate.
 export function useQueryParam(key, initial = '') {
@@ -56,7 +62,8 @@ export function useQueryParam(key, initial = '') {
   useEffect(() => {
     const onPop = () => setValue(readParam(key) || initial);
     window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
+    window.addEventListener(QUERY_SYNC, onPop);
+    return () => { window.removeEventListener('popstate', onPop); window.removeEventListener(QUERY_SYNC, onPop); };
   }, [key, initial]);
 
   const set = useCallback((next, opts) => {

@@ -1,11 +1,12 @@
 // GET /api/shein/callback?tempToken=…&state=…   SHEIN sends the owner's browser here after
 // they approve. No app login on this request, so the one-time `state` is the proof. Always
-// ends back on the SHEIN page with the outcome. docs/context/shein-fix.md → "SHEIN API".
+// ends back on the SHEIN page, Automatic sync section, with the outcome. /shein works for every
+// role: a PH account is moved to /ph/shein by the page itself (src/lib/sheinPage.js). docs/context/shein-fix.md → "SHEIN API".
 import { applySecurity, rateLimit } from '../_lib/util.js';
 import { sheinFinishConnect } from '../_lib/shein.js';
 import webhook from './webhook.js';
 
-const back = (res, q) => { res.statusCode = 302; res.setHeader('Location', `/ph/shein-check?${q}`); res.end(); };
+const back = (res, q) => { res.statusCode = 302; res.setHeader('Location', `/shein?section=live&${q}`); res.end(); };
 
 export default async function handler(req, res) {
   // SHEIN's webhooks POST to the app's one callback URL — this one (docs/context/shein-live-fix.md).

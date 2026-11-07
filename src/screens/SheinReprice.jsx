@@ -8,7 +8,7 @@
 //                verify, then the filled template + an audit report
 // The reading / filling / verifying is all src/lib/sheinReprice.js — pure.
 import React, { useEffect, useMemo, useState } from 'react';
-import { TopBar } from '../components/common.jsx';
+import { SheinAdvanced, HowItWorks } from '../components/SheinNav.jsx';
 import { useMarketPrices, MarketPricesStep } from '../components/MarketPrices.jsx';
 import { estToday } from '../lib/format.js';
 import { parseMarkup, multiplierLabel } from '../lib/ebayReprice.js';
@@ -48,7 +48,7 @@ function Stat({ n, label, tone }) {
   return <div className={`er-stat${tone ? ` ${tone}` : ''}`}><b>{n}</b><span>{label}</span></div>;
 }
 
-export function SheinReprice({ onHome, onSignOut }) {
+export function SheinReprice({ onSignOut }) {
   const [exportFile, setExportFile] = useState(null);
   const [exp, setExp] = useState(null);
   const [tplFile, setTplFile] = useState(null);   // null = the built-in template
@@ -105,18 +105,23 @@ export function SheinReprice({ onHome, onSignOut }) {
   const pctLabel = pctH == null ? '' : (pctH / 100).toString();
 
   return (
-    <div className="app">
-      <TopBar title="SHEIN Reprice" onHome={onHome} onSignOut={onSignOut} />
-
+    <>
       <div className="card er-step">
         <h3 className="er-step-title"><span className="er-num">1</span> Files</h3>
-        <p className="muted sm">Your file is only read, never changed. The upload is SHEIN’s own Edit+Price template, filled from row 4 down and checked before you can download it.</p>
+        <p className="sm">Cut SHEIN prices that are above today’s market. Start with SHEIN’s product export; nothing changes on SHEIN until you upload the file this makes.</p>
         <div className="er-files">
           <FileField id="sr-export" label="SHEIN Export Products file" file={exportFile} result={exp} onFile={pickExport}
             hint="SHEIN Seller Center → Products → Export Products — e.g. Export Products_2026-10-09 13_36_02.xlsx" />
-          <FileField id="sr-template" label="Edit+Price template (optional)" file={tplFile} result={tpl} onFile={pickTemplate}
-            hint="Built in — only drop a file here if SHEIN changes their template." />
         </div>
+        <SheinAdvanced param="priceadv" label="More options" hint="SHEIN’s price template">
+          <div className="er-files">
+            <FileField id="sr-template" label="Edit+Price template (optional)" file={tplFile} result={tpl} onFile={pickTemplate}
+              hint="Built in — only drop a file here if SHEIN changes their template." />
+          </div>
+        </SheinAdvanced>
+        <HowItWorks>
+          <p className="muted xs">Your file is only read, never changed. The upload is SHEIN’s own Edit+Price template, filled from row 4 down and checked before you can download it. Only price cuts go in it.</p>
+        </HowItWorks>
         {rows && (
           <>
             <div className="er-stats mt">
@@ -132,11 +137,11 @@ export function SheinReprice({ onHome, onSignOut }) {
         )}
       </div>
 
-      {canPrice && <MarketPricesStep mp={mp} num={2} hint="Keep this tab open while it runs — prices fetched today on eBay Reprice are reused." onCleared={() => setResult(null)} />}
+      {canPrice && <MarketPricesStep mp={mp} num={2} lookups="prices to look up" hint="Keep this tab open while it runs. You can move to another section; closing the tab pauses it. Prices fetched today on eBay Reprice are reused." onCleared={() => setResult(null)} />}
 
       {canPrice && (
         <div className="card er-step">
-          <h3 className="er-step-title"><span className="er-num">3</span> Reprice</h3>
+          <h3 className="er-step-title"><span className="er-num">3</span> Build the price file</h3>
           <p className="muted sm">Every listing priced <b>above</b> market + markup is cut to it, <b>rounded up</b> to a whole dollar. Nothing is ever raised. Only the cuts go in the upload file; everything else on SHEIN stays as it is.</p>
           <div className="er-controls">
             <label className="er-markup">
@@ -183,6 +188,6 @@ export function SheinReprice({ onHome, onSignOut }) {
           )}
         </div>
       )}
-    </div>
+    </>
   );
 }

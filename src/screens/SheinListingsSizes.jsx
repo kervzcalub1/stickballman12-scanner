@@ -1,11 +1,13 @@
 // SHEIN Listings → Sizes tab: every size our Shopify shoes use, per SHEIN category, and what we
 // would send SHEIN for it — SHEIN's own size (standard), a person's pick, a confirmed custom
 // spelling, or nothing yet. "Add as a custom size" saves to shein_size_map (OUR database only;
-// a later phase sends it). Above it, the Phase 0 probe: "Ask SHEIN (read-only)".
+// a later phase sends it). Above it, the Phase 0 probe: "Ask SHEIN which sizes it allows".
 import React, { useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { fmt, when, NEEDS_PRIV, CustomSizeModal } from '../components/SheinListingsBits.jsx';
+import { SheinAdvanced, HowItWorks } from '../components/SheinNav.jsx';
+import { plain } from '../lib/sheinWords.js';
 
 const GROUPS = [['M', 'Men’s / adult'], ['W', 'Women’s (W)'], ['Y', 'GS / youth (Y)'], ['C', 'Kids & toddler (C)'], ['?', 'Not a US size we can read']];
 const groupOf = (u) => (u.size_key ? u.size_key.split('|')[1] : '?');
@@ -27,7 +29,7 @@ export function ProbePanel({ canWrite, connected, active, onAct, busy, onSignOut
   const [spu, setSpu] = useState('');
   async function load() {
     try { setPr(await api.sheinListingProbe()); setErr(''); }
-    catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
+    catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); }
   }
   useLive(['shein_listing_jobs'], load);
   const p = pr?.probe;
@@ -35,21 +37,21 @@ export function ProbePanel({ canWrite, connected, active, onAct, busy, onSignOut
   const title = !canWrite ? NEEDS_PRIV : !connected ? 'Connect SHEIN first' : active ? 'A job is already running' : 'Reads only — nothing on SHEIN changes';
   const spuOk = !spu || /^[A-Za-z0-9_-]+$/.test(spu);
   return (
-    <div className="card shl-probe">
-      <h3 className="er-step-title">What SHEIN allows (Ask SHEIN)</h3>
-      <p className="muted sm">For each SHEIN category our shoes are in: SHEIN’s own US sizes, whether it takes <b>custom sizes</b> (like 14.5W), whether the product has a size chart, and any custom size already in the store — the spelling every new one must copy.</p>
+    <div className="shl-probe">
+      <h3 className="er-step-title">Which sizes SHEIN allows</h3>
+      <p className="muted sm">For each SHEIN category our shoes are in: SHEIN’s own US sizes, whether it takes <b>custom sizes</b> (like 14.5W), whether the product has a size chart, and any custom size already in the store — the spelling every new one must copy. This changes nothing on SHEIN.</p>
       <div className="shl-probe-ask">
-        <input className="input" value={spu} onChange={(e) => setSpu(e.target.value.trim())} placeholder="Also read one SHEIN product (SPU), optional" aria-label="SHEIN SPU to read" disabled={!canWrite} />
+        <input className="input" value={spu} onChange={(e) => setSpu(e.target.value.trim())} placeholder="Also read one SHEIN product (its code), optional" aria-label="SHEIN product code to read" disabled={!canWrite} />
         <button type="button" className="btn primary sm" disabled={!canWrite || !connected || !!active || !!busy || !spuOk} title={title}
-          onClick={() => onAct('probe', spu ? { spu } : {}, 'Asking SHEIN on the server — reads only.')}>{busy === 'probe' || running ? 'Asking SHEIN…' : 'Ask SHEIN (read-only)'}</button>
+          onClick={() => onAct('probe', spu ? { spu } : {}, 'Asking SHEIN on the server — reads only.')}>{busy === 'probe' || running ? 'Asking SHEIN…' : 'Ask SHEIN which sizes it allows'}</button>
       </div>
-      {!spuOk && <p className="error sm">That isn’t a SHEIN SPU code.</p>}
+      {!spuOk && <p className="error sm">That isn’t a SHEIN product code.</p>}
       {err && <p className="error sm">{err}</p>}
       {!pr && !err && <div className="shl-skel shl-skel-row" />}
       {pr && !p && <p className="muted xs mt">Not asked yet.{canWrite ? '' : ' An admin (or someone with Connect integrations) asks once; the answer stays here.'}</p>}
       {p && (
         <>
-          <p className="muted xs mt">Asked at {when(p.askedAt)}{p.by ? ` by ${p.by}` : ''} · {fmt(p.store?.spus)} SHEIN products in {fmt(p.store?.categories)} categories · {fmt(p.calls)} SHEIN reads, {fmt(p.writes)} writes.</p>
+          <p className="muted xs mt">Asked at {when(p.askedAt)}{p.by ? ` by ${p.by}` : ''} · {fmt(p.store?.spus)} SHEIN products in {fmt(p.store?.categories)} categories · {fmt(p.calls)} reads, {fmt(p.writes)} changes on SHEIN.</p>
           <table className="shl-rtable">
             <thead><tr><th>SHEIN category</th><th className="num">Our products</th><th>Size field</th><th>Custom sizes allowed</th><th>Size chart</th><th>SHEIN’s sizes</th><th>Custom sizes in the store</th></tr></thead>
             <tbody>
@@ -91,7 +93,7 @@ function SizeRow({ u, onAdd, onClear, goBlocker, busy }) {
   } else if (u.not_allowed > 0) {
     state = <><span className="ebo-chip bad">Blocked</span> <span className="xs"><b>SHEIN has no {u.size} and won’t take a custom size here.</b> Leave it off SHEIN — never a different size.</span></>;
   } else if (!Number(u.category_id)) {
-    state = <span className="muted xs">No SHEIN category yet (new product — a later phase).</span>;
+    state = <span className="muted xs">No SHEIN category yet.</span>;
   } else if (u.plan?.kind === 'value' || u.shein_size) {
     state = <><span className="ebo-chip ok">SHEIN size</span> → <b>{u.plan?.label || u.shein_size}</b></>;
   } else state = <span className="muted xs">—</span>;
@@ -119,7 +121,7 @@ export function SheinListingsSizes({ sz, setSz, canWrite, connected, active, onA
   const filter = FILTERS.some(([k]) => k === sz) ? sz : 'needs';
   async function load() {
     try { setD(await api.sheinSizeMaps()); setErr(''); }
-    catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
+    catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); }
   }
   useLive(['shein_size_map', 'shein_listing_variants'], load);
   const usage = d?.usage || [];
@@ -129,16 +131,16 @@ export function SheinListingsSizes({ sz, setSz, canWrite, connected, active, onA
     if (!window.confirm(`Clear the mapping for ${m.custom_value || m.shein_label}? The sizes go back to “needs mapping”. Nothing on SHEIN changes.`)) return;
     setWorking(true); setMsg('');
     try { await api.sheinSizeMapClear(m.id); setMsg('Cleared.'); await load(); }
-    catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
+    catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); }
     finally { setWorking(false); }
   }
 
   return (
     <>
-      <ProbePanel canWrite={canWrite} connected={connected} active={active} onAct={onAct} busy={busy} onSignOut={onSignOut} />
       <div className="card">
         <h3 className="er-step-title">Our sizes → SHEIN’s sizes</h3>
-        <p className="muted sm">Every size our Shopify shoes use, per SHEIN category. SHEIN’s own size is taken only when it’s <b>exactly</b> the same size — never the nearest one. A size SHEIN doesn’t have needs a person to confirm its custom spelling once; it is saved here only and goes to SHEIN with the add-sizes step (next phase).</p>
+        <p className="sm">Every size our Shopify shoes use, and what it goes to SHEIN as. We only ever use the <b>exact same</b> size.</p>
+        <HowItWorks><p className="muted xs">SHEIN’s own size is taken only when it’s exactly the same size, never the nearest one. A size SHEIN doesn’t have needs a person to confirm its custom spelling once. It’s saved here only, and goes to SHEIN when someone confirms “Add missing sizes”.</p></HowItWorks>
         <div className="seg sm shl-sz-filter" role="group" aria-label="Which sizes">
           {FILTERS.map(([k, l]) => <button key={k} type="button" className={`seg-btn${filter === k ? ' on' : ''}`} aria-pressed={filter === k} onClick={() => setSz(k === 'needs' ? '' : k)}>{l} <span className="seg-n">{fmt(counts[k])}</span></button>)}
         </div>
@@ -146,7 +148,7 @@ export function SheinListingsSizes({ sz, setSz, canWrite, connected, active, onA
         {msg && <p className="ebl-ok sm mt">{msg}</p>}
         {!d && !err && <><div className="shl-skel shl-skel-row" /><div className="shl-skel shl-skel-row" /></>}
         {d && !rows.length && (
-          <div className="empty-state">{filter === 'needs' ? 'No size needs mapping — every size is a SHEIN size, mapped, or not checked yet.' : filter === 'custom' ? 'No custom size confirmed yet.' : 'No sizes read yet — re-read Shopify + SHEIN.'}</div>
+          <div className="empty-state">{filter === 'needs' ? 'No size needs mapping — every size is a SHEIN size, mapped, or not checked yet.' : filter === 'custom' ? 'No custom size confirmed yet.' : 'No sizes read yet — refresh from SHEIN.'}</div>
         )}
         {d && GROUPS.map(([g, label]) => {
           const list = rows.filter((u) => groupOf(u) === g).sort(bySize);
@@ -162,6 +164,9 @@ export function SheinListingsSizes({ sz, setSz, canWrite, connected, active, onA
           );
         })}
       </div>
+      <SheinAdvanced param="sizeadv" label="Advanced" hint="Ask SHEIN which sizes it allows" className="card">
+        <ProbePanel canWrite={canWrite} connected={connected} active={active} onAct={onAct} busy={busy} onSignOut={onSignOut} />
+      </SheinAdvanced>
       {adding && (
         <CustomSizeModal size={adding.size} categoryId={adding.category_id} suggestion={adding.suggestion || ''} onSignOut={onSignOut}
           onClose={() => setAdding(null)} onSaved={async (r) => { setAdding(null); setMsg(`Saved ${r?.map?.custom_value || r?.map?.shein_label || ''} for ${adding.size} — our records only.`); await load(); }} />

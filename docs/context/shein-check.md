@@ -1,4 +1,4 @@
-# SHEIN ↔ Shopify check — `/ph/shein-check` (PH) · `/shein-check` (admin)
+# Fix problems (SHEIN ↔ Shopify check) — section of the SHEIN page: `/ph/shein?section=check` · `/shein?section=check`
 
 Built 2026-10-13, while SHEIN API access is pending. 4seller (today's Shopify → SHEIN tool)
 maps sizes wrong and lets SHEIN stock drift above Shopify's, so orders get cancelled and
@@ -7,7 +7,7 @@ store. **Read-only** — nothing on SHEIN or Shopify changes. The same rules (`s
 are meant to gate the future API sync before it writes anything.
 
 PH team + admin (Shopify read = `api/shopify-listings/variants`, PH + admin). PH home card
-under Pricing & Listing (`sheincheck`); admin home → **Marketplaces** (route `shein-check`).
+through the one **SHEIN** card (PH home; admin home → Marketplaces). Old `/ph/shein-check`, `/shein-check` still land here. The Problems / Match / Fix tab is in `?chk=`; the file itself stays in memory, and after a refresh the page says it's gone (only its name is kept, in sessionStorage).
 
 ## How it matches
 Each SHEIN size row → the Shopify variant whose SKU = the row's **`sellerSKU`** (the Shopify

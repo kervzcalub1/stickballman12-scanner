@@ -2,7 +2,7 @@
 // requirements checklist (docs/context/shein-listings.md → "Phase 4"). Every save here touches OUR
 // database only (listing-maps type=category|attr|brand|box, listings publish_choices); the only SHEIN
 // calls are READS (the category suggestion, a seed from one of our SHEIN products, and — for an admin
-// / Connect integrations — re-reading SHEIN's tree, brands, rules and store gates). Shared by the
+// / Connect integrations — refreshing SHEIN's tree, brands, rules and store gates). Shared by the
 // product drawer (the checklist, each ✕ with its fix inline) and the Setup tab.
 //   · CategoryPicker  — SHEIN's leaf categories, searchable by path, SHEIN's own suggestion first;
 //                       saved per Shopify product type + size group (every product of that type).
@@ -12,12 +12,13 @@
 //   · ColourPicker, TitleEditor — per product (publish_choices).
 //   · BoxDefaults     — D6: the default box size + weight per size group; UNCONFIRMED placeholders
 //                       block every publish until an admin / Connect integrations saves them.
-//   · useStoreGates / StoreGateBanner — SHEIN refusing new listings / quota 0 (dry runs still run).
+//   · useStoreGates / StoreGateBanner — SHEIN refusing new listings / quota 0 (previews still run).
 //   · PublishChecklist — the server's 18 lines (✓ / ✕ / not read yet), each ✕ with its fix.
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { fmt, when, NEEDS_PRIV, BlockerSay, FixButton } from './SheinListingsBits.jsx';
+import { plain } from '../lib/sheinWords.js';
 import { BOX_PLACEHOLDERS, sizeGroupOf, validateImperialBox, boxToImperial, boxFromImperial, cleanTitle, isKnownBrand, favouriteLeaves } from '../lib/sheinPublish.js';
 
 export const GROUP_LABEL = {
@@ -33,7 +34,7 @@ function useLoad(fn, deps, onSignOut) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
   async function reload() {
-    try { setD(await fn()); setErr(''); } catch (e) { if (e.unauthorized) onSignOut?.(); else setErr(e.message); }
+    try { setD(await fn()); setErr(''); } catch (e) { if (e.unauthorized) onSignOut?.(); else setErr(plain(e.message)); }
   }
   useEffect(() => { setD(null); setErr(''); reload(); }, deps); // eslint-disable-line react-hooks/exhaustive-deps
   return { d, err, reload };
@@ -43,11 +44,11 @@ const choose = (productId, patch) => api.sheinListingAction({ action: 'publish_c
 function ReadButton({ canWrite, label, busyLabel = 'Reading SHEIN…', onRead, hint }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  if (!canWrite) return <p className="muted xs">{hint || 'An admin (or someone with Connect integrations) reads it from SHEIN once; a publish dry run reads it too.'}</p>;
+  if (!canWrite) return <p className="muted xs">{hint || 'An admin (or someone with Connect integrations) reads it from SHEIN once; a publish preview reads it too.'}</p>;
   return (
     <span className="shl-pub-read">
       <button type="button" className="btn ghost sm" disabled={busy} title="Reads only — nothing on SHEIN changes"
-        onClick={async () => { setBusy(true); setErr(''); try { await onRead(); } catch (e) { setErr(e.message); } finally { setBusy(false); } }}>{busy ? busyLabel : label}</button>
+        onClick={async () => { setBusy(true); setErr(''); try { await onRead(); } catch (e) { setErr(plain(e.message)); } finally { setBusy(false); } }}>{busy ? busyLabel : label}</button>
       {err && <span className="error xs">{err}</span>}
     </span>
   );
@@ -68,7 +69,7 @@ export function CategoryPicker({ productType, sizeGroup, productId = null, curre
     let live = true;
     api.sheinListingMeta({ suggest: productId })
       .then((r) => { if (live) { setSug(r.suggestions || []); if (!current && r.suggestions?.[0]) setPick(String(r.suggestions[0].categoryId)); } })
-      .catch((e) => { if (e.unauthorized) onSignOut?.(); else if (live) { setSug([]); setSugErr(e.message); } });
+      .catch((e) => { if (e.unauthorized) onSignOut?.(); else if (live) { setSug([]); setSugErr(plain(e.message)); } });
     return () => { live = false; };
   }, [productId]); // eslint-disable-line react-hooks/exhaustive-deps
   const leaves = d?.leaves || null;
@@ -92,7 +93,7 @@ export function CategoryPicker({ productType, sizeGroup, productId = null, curre
       const s = suggested.find((x) => String(x.categoryId) === pick);
       const r = await api.sheinPublishMapSave('category', { action: 'set', productType: productType || '', sizeGroup, categoryId: Number(pick), suggestion: s ? { categoryId: s.categoryId, vote: s.vote, order: s.order } : null });
       onSaved?.(r.map);
-    } catch (e) { if (e.unauthorized) onSignOut?.(); else setSaveErr(e.message); }
+    } catch (e) { if (e.unauthorized) onSignOut?.(); else setSaveErr(plain(e.message)); }
     finally { setBusy(false); }
   }
   const Opt = ({ l, tag }) => {
@@ -161,7 +162,7 @@ export function BrandPicker({ vendor, canWrite, onSaved, onCancel, onSignOut }) 
   async function save() {
     setBusy(true); setSaveErr('');
     try { const r = await api.sheinPublishMapSave('brand', { action: 'set', vendor: key, brandCode: pick }); onSaved?.(r.map); }
-    catch (e) { if (e.unauthorized) onSignOut?.(); else setSaveErr(e.message); }
+    catch (e) { if (e.unauthorized) onSignOut?.(); else setSaveErr(plain(e.message)); }
     finally { setBusy(false); }
   }
   return (
@@ -185,14 +186,14 @@ export function BrandPicker({ vendor, canWrite, onSaved, onCancel, onSignOut }) 
           {/* D5 (review F2): an unmapped vendor blocks publishing; only a real generic one may go up with no brand — never a known brand */}
           {!isKnownBrand(vendor) && !map?.no_brand && (
             <p className="xs">Not a brand at all (a generic product)?{' '}
-              <button type="button" className="btn ghost xs" data-act="no-brand" disabled={busy} onClick={async () => { setBusy(true); setSaveErr(''); try { const r = await api.sheinPublishMapSave('brand', { action: 'no_brand', vendor: key }); onSaved?.(r.map); } catch (e) { if (e.unauthorized) onSignOut?.(); else setSaveErr(e.message); } finally { setBusy(false); } }}>Mark “no brand”</button>
+              <button type="button" className="btn ghost xs" data-act="no-brand" disabled={busy} onClick={async () => { setBusy(true); setSaveErr(''); try { const r = await api.sheinPublishMapSave('brand', { action: 'no_brand', vendor: key }); onSaved?.(r.map); } catch (e) { if (e.unauthorized) onSignOut?.(); else setSaveErr(plain(e.message)); } finally { setBusy(false); } }}>Mark “no brand”</button>
             </p>
           )}
           {isKnownBrand(vendor) && <p className="muted xs">{vendor} is a known brand — it only goes up under its SHEIN brand.</p>}
           {saveErr && <p className="error xs" role="alert">{saveErr}</p>}
           <div className="shl-pub-acts">
             {onCancel && <button type="button" className="btn ghost sm" onClick={onCancel}>Cancel</button>}
-            {map && <button type="button" className="btn ghost sm" disabled={busy} onClick={async () => { setBusy(true); try { await api.sheinPublishMapSave('brand', { action: 'clear', vendor: key }); onSaved?.(null); } catch (e) { setSaveErr(e.message); } finally { setBusy(false); } }}>Clear</button>}
+            {map && <button type="button" className="btn ghost sm" disabled={busy} onClick={async () => { setBusy(true); try { await api.sheinPublishMapSave('brand', { action: 'clear', vendor: key }); onSaved?.(null); } catch (e) { setSaveErr(plain(e.message)); } finally { setBusy(false); } }}>Clear</button>}
             <button type="button" className="btn primary sm" disabled={!pick || busy || pick === map?.brand_code} onClick={save}>{busy ? 'Saving…' : 'Save brand'}</button>
           </div>
         </>
@@ -280,7 +281,7 @@ export function AttrEditor({ productTypeId, categoryId = null, canWrite, onSaved
       setRowErr((m) => ({ ...m, [a.attributeId]: '' }));
       setDrafts((m) => { const n = { ...m }; delete n[a.attributeId]; return n; });
       return true;
-    } catch (e) { if (e.unauthorized) onSignOut?.(); setRowErr((m) => ({ ...m, [a.attributeId]: e.message })); return false; }
+    } catch (e) { if (e.unauthorized) onSignOut?.(); setRowErr((m) => ({ ...m, [a.attributeId]: plain(e.message) })); return false; }
   }
   async function run(label, fn) { setBusy(label); setMsg(''); try { await fn(); } finally { setBusy(''); } }
   const saveAll = () => run('all', async () => {
@@ -295,7 +296,7 @@ export function AttrEditor({ productTypeId, categoryId = null, canWrite, onSaved
       for (const p of r.proposed || []) if (attrs.some((a) => a.attributeId === Number(p.attributeId))) next[p.attributeId] = { valueIds: (p.valueIds || []).map(Number), extraValues: p.extraValues || [], proposed: true };
       setDrafts(next); setProposedFrom(spu.trim()); setAll(true);
       setMsg(`${fmt((r.proposed || []).length)} details copied from ${spu.trim()} — nothing is saved yet. Check each one, then “Save all changes”.`);
-    } catch (e) { if (e.unauthorized) onSignOut?.(); else setMsg(`Couldn’t copy: ${e.message}`); }
+    } catch (e) { if (e.unauthorized) onSignOut?.(); else setMsg(`Couldn’t copy: ${plain(e.message)}`); }
   });
 
   if (err) return <p className="error xs">{err}</p>;
@@ -305,7 +306,7 @@ export function AttrEditor({ productTypeId, categoryId = null, canWrite, onSaved
       <div className="shl-pub-panel" data-panel="attributes">
         <div className="notice xs">SHEIN’s list of details for this product type hasn’t been read yet.{' '}
           {categoryId ? <ReadButton canWrite={canWrite} label="Read SHEIN’s details (read-only)" onRead={async () => { await api.sheinListingMeta({ category: categoryId, refresh: 1 }); await reload(); }} />
-            : <span className="muted">A publish dry run of a product in this category reads it.</span>}
+            : <span className="muted">A publish preview of a product in this category reads it.</span>}
         </div>
       </div>
     );
@@ -314,7 +315,7 @@ export function AttrEditor({ productTypeId, categoryId = null, canWrite, onSaved
     <div className="shl-pub-panel" data-panel="attributes">
       <p className="xs shl-pub-lede">Shopify has none of these, so a person sets them once for every product of this SHEIN type ({fmt(attrs.length)} details · {fmt(missing.length)} required still missing). Nothing goes to SHEIN until a publish is confirmed.</p>
       <div className="shl-attr-seed">
-        <input className="input" value={spu} onChange={(e) => setSpu(e.target.value)} placeholder="SPU of one of our approved SHEIN products of this type" aria-label="Copy details from SHEIN SPU" />
+        <input className="input" value={spu} onChange={(e) => setSpu(e.target.value)} placeholder="Code of one of our approved SHEIN products of this type" aria-label="Copy details from SHEIN product" />
         <button type="button" className="btn ghost sm" disabled={!/^[A-Za-z0-9_-]{3,60}$/.test(spu.trim()) || !!busy} title="Reads that product on SHEIN and fills the boxes below — you check them, then save"
           onClick={seed}>{busy === 'seed' ? 'Reading…' : 'Copy from this product'}</button>
       </div>
@@ -367,11 +368,11 @@ export function ColourPicker({ productId, productTypeId, current, onSaved, onSig
   const values = (main?.values || []).filter((v) => status !== 3 || !/^(default|默认)$/i.test(v.label));
   async function save(v) {
     setBusy(true); setE2('');
-    try { await choose(productId, { skcValueId: v === '' ? null : Number(v) }); onSaved?.(); } catch (e) { if (e.unauthorized) onSignOut?.(); else setE2(e.message); } finally { setBusy(false); }
+    try { await choose(productId, { skcValueId: v === '' ? null : Number(v) }); onSaved?.(); } catch (e) { if (e.unauthorized) onSignOut?.(); else setE2(plain(e.message)); } finally { setBusy(false); }
   }
   if (err) return <p className="error xs">{err}</p>;
   if (!d) return <div className="shl-skel shl-skel-line" />;
-  if (!main) return <p className="notice xs">SHEIN’s colour list for this type hasn’t been read yet — a publish dry run reads it.</p>;
+  if (!main) return <p className="notice xs">SHEIN’s colour list for this type hasn’t been read yet — a publish preview reads it.</p>;
   if (status === 1) return <p className="muted xs">SHEIN uses its own “Default” colour for this type — nothing to pick.</p>;
   return (
     <div className="shl-pub-panel" data-panel="colour">
@@ -398,14 +399,14 @@ export function TitleEditor({ product, max = null, onSaved, onSignOut }) {
   const over = max && t.length > max;
   async function save(v) {
     setBusy(true); setErr('');
-    try { await choose(product.shopify_product_id, { titleOverride: v }); onSaved?.(); } catch (e) { if (e.unauthorized) onSignOut?.(); else setErr(e.message); } finally { setBusy(false); }
+    try { await choose(product.shopify_product_id, { titleOverride: v }); onSaved?.(); } catch (e) { if (e.unauthorized) onSignOut?.(); else setErr(plain(e.message)); } finally { setBusy(false); }
   }
   return (
     <div className="shl-pub-panel" data-panel="title">
       <p className="xs shl-pub-lede">The name shoppers see on SHEIN. Shopify’s title is not changed.</p>
       <label className="form-modal-label">
         <input className="input" value={text} maxLength={1000} aria-label="SHEIN title" aria-invalid={!!over} onChange={(e) => setText(e.target.value)} />
-        <i className={over ? 'shl-field-bad' : 'form-modal-hint'} data-count="">{fmt(t.length)}{max ? ` of ${fmt(max)}` : ''} characters{over ? ` — ${fmt(t.length - max)} too many for SHEIN` : max ? '' : ' (SHEIN’s limit is read with the dry run)'}</i>
+        <i className={over ? 'shl-field-bad' : 'form-modal-hint'} data-count="">{fmt(t.length)}{max ? ` of ${fmt(max)}` : ''} characters{over ? ` — ${fmt(t.length - max)} too many for SHEIN` : max ? '' : ' (SHEIN’s limit is read with the preview)'}</i>
       </label>
       {err && <p className="error xs">{err}</p>}
       <div className="shl-pub-acts">
@@ -434,7 +435,7 @@ export function BoxDefaults({ canWrite, onSaved, onSignOut, compact = false }) {
     try {
       await api.sheinPublishMapSave('box', { groups: boxFromImperial(draft) });
       setDraft(null); await reload(); onSaved?.();
-    } catch (e) { if (e.unauthorized) onSignOut?.(); else setSaveErr(e.message); } finally { setBusy(false); }
+    } catch (e) { if (e.unauthorized) onSignOut?.(); else setSaveErr(plain(e.message)); } finally { setBusy(false); }
   }
   if (err) return <p className="error xs">{err}</p>;
   if (!box || !draft) return <div className="shl-skel shl-skel-row" />;
@@ -479,7 +480,7 @@ export function BoxDefaults({ canWrite, onSaved, onSignOut, compact = false }) {
 }
 
 /* ------------------------------- store gates ------------------------------- */
-// What SHEIN said about taking new products, as last read (a dry run reads it; admins can re-read).
+// What SHEIN said about taking new products, as last read (a preview reads it; admins can refresh).
 export function useStoreGates(onSignOut) {
   const [g, setG] = useState(null);
   async function load() {
@@ -492,7 +493,7 @@ export function gateProblems(gates) {
   const out = [];
   if (!gates) return out;
   if (gates.perm && gates.perm.canPublishProduct === false) out.push({ key: 'store', text: `SHEIN won’t take new listings: ${gates.perm.reason || 'no reason given'}.` });
-  if (gates.quota && gates.quota.isControlled === true && !(Number(gates.quota.availableQuota) > 0)) out.push({ key: 'quota', text: `This month’s SHEIN publish quota is used up (0 left${gates.quota.totalQuota != null ? ` of ${fmt(gates.quota.totalQuota)}` : ''}).` });
+  if (gates.quota && gates.quota.isControlled === true && !(Number(gates.quota.availableQuota) > 0)) out.push({ key: 'quota', text: `This month’s SHEIN new-product limit is used up (0 left${gates.quota.totalQuota != null ? ` of ${fmt(gates.quota.totalQuota)}` : ''}).` });
   if (gates.shelf && gates.shelf.need === true && !(Number(gates.shelf.remain_count) > 0)) out.push({ key: 'shelf', text: 'SHEIN’s shelf limit for the store is reached.' });
   return out;
 }
@@ -503,7 +504,7 @@ export function StoreGateBanner({ gates, readAt }) {
     <div className="shl-banner warn" role="status" data-gates="closed">
       <b>SHEIN isn’t taking new products right now</b>
       <span className="sm">{probs.map((p) => <span key={p.key} className="shl-block">{p.text}</span>)}</span>
-      <span className="muted xs">Publishing new products is off for everyone until SHEIN opens it again (sort it out in <a className="ebl-link" href={SELLER_CENTER} target="_blank" rel="noreferrer">Seller Center ↗</a>). Dry runs still work — they show what would be sent. Adding sizes and price updates are not affected.{readAt ? ` As read ${when(readAt)}.` : ''}</span>
+      <span className="muted xs">Publishing new products is off for everyone until SHEIN opens it again (sort it out in <a className="ebl-link" href={SELLER_CENTER} target="_blank" rel="noreferrer">Seller Center ↗</a>). Previews still work — they show what would be sent. Adding sizes and price updates are not affected.{readAt ? ` As read ${when(readAt)}.` : ''}</span>
     </div>
   );
 }
@@ -524,7 +525,7 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
   useLive(['shein_category_map', 'shein_brand_map'], maps.reload, { mount: false });
   const cat = (maps.d?.maps || []).find((m) => m.shopify_product_type === String(p.product_type || '') && m.size_group === group) || null;
   const [open, setOpen] = useState('');
-  const [fixed, setFixed] = useState(() => new Set());   // lines saved in this session: re-checked by the next dry run
+  const [fixed, setFixed] = useState(() => new Set());   // lines saved in this session: re-checked by the next preview
   const [msg, setMsg] = useState('');
   const done = (key, text) => { setFixed((s) => new Set([...s, key])); setOpen(''); setMsg(text); maps.reload(); onReload?.(); };
   const n = { ok: list.filter((l) => l.ok === true).length, no: list.filter((l) => l.ok === false).length, unread: list.filter((l) => l.ok === null).length };
@@ -532,14 +533,14 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
   const titleMax = (line('title')?.blockers || []).find((b) => b.params?.max)?.params?.max || null;
   const focus = (line('attributes')?.blockers || []).map((b) => b.params?.attributeId).filter(Boolean);
   const togglePh = async (on) => {
-    try { await api.sheinListingAction({ action: 'publish_choices', productId: p.shopify_product_id, usePhPhotos: on }); done('photos', on ? 'The PH edited photos will be used — re-checked by the next dry run.' : 'Back to the Shopify photos.'); }
-    catch (e) { if (e.unauthorized) onSignOut?.(); else setMsg(`Not saved: ${e.message}`); }
+    try { await api.sheinListingAction({ action: 'publish_choices', productId: p.shopify_product_id, usePhPhotos: on }); done('photos', on ? 'The PH edited photos will be used — re-checked by the next preview.' : 'Back to the Shopify photos.'); }
+    catch (e) { if (e.unauthorized) onSignOut?.(); else setMsg(`Not saved: ${plain(e.message)}`); }
   };
 
   const panelFor = (key) => {
     const close = () => setOpen('');
     if (key === 'category') return <CategoryPicker productType={p.product_type || ''} sizeGroup={group} productId={p.shopify_product_id} current={cat?.category_id} canWrite={canWrite} onSignOut={onSignOut}
-      onCancel={close} onSaved={(m) => done('category', `Saved: every “${p.product_type || '(no type)'}” shoe in ${GROUP_LABEL[group]} goes to ${m?.category_path || 'that category'} — re-checked by the next dry run.`)} />;
+      onCancel={close} onSaved={(m) => done('category', `Saved: every “${p.product_type || '(no type)'}” shoe in ${GROUP_LABEL[group]} goes to ${m?.category_path || 'that category'} — re-checked by the next preview.`)} />;
     if (key === 'brand') return <BrandPicker vendor={p.vendor} canWrite={canWrite} onSignOut={onSignOut} onCancel={close} onSaved={(m) => done('brand', m ? `Saved: ${p.vendor} → SHEIN brand ${m.brand_name || m.brand_code}.` : 'Brand cleared.')} />;
     if (key === 'title') return <TitleEditor product={p} max={titleMax} onSignOut={onSignOut} onSaved={() => done('title', 'SHEIN title saved (Shopify unchanged).')} />;
     if (!cat && ['colour', 'attributes'].includes(key)) return <p className="notice xs">Choose the SHEIN category first — the colours and details SHEIN asks for depend on it.</p>;
@@ -557,13 +558,13 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
         <span className={`ebo-chip ${n.no ? 'bad' : ''}`.trim()}>{fmt(n.no)} to fix</span>
         {n.unread > 0 && <span className="ebo-chip">{fmt(n.unread)} not read yet</span>}
       </div>
-      <p className="muted xs shl-pub-from">{from.jobId ? <>As checked by dry run #{from.jobId}, {when(from.at)}. Fixed something? Dry run again to re-check.</> : <>From our records. SHEIN’s store checks, photos and seller SKUs are read by the dry run (“Publish new product” below — it sends nothing).</>}</p>
+      <p className="muted xs shl-pub-from">{from.jobId ? <>As checked by preview #{from.jobId}, {when(from.at)}. Fixed something? Preview again to re-check.</> : <>From our records. SHEIN’s store checks, photos and SKUs are read by the preview (“Publish new product” below — it sends nothing).</>}</p>
       {msg && <p className="ebl-ok xs" role="status">{msg}</p>}
       {list.map((l, idx) => {
         const hard = (l.blockers || []).filter((b) => !['note', 'review'].includes(b.level));
         const notes = (l.blockers || []).filter((b) => ['note', 'review'].includes(b.level));
         const saved = fixed.has(l.key) && l.ok !== true;
-        const icon = saved ? ['shl-wait', '…', 'Saved — checked again by the next dry run'] : l.ok === true ? ['shl-yes', '✓', 'OK'] : l.ok === false ? ['shl-no', '✕', 'Not OK'] : ['shl-wait', '–', 'Not read yet'];
+        const icon = saved ? ['shl-wait', '…', 'Saved — checked again by the next preview'] : l.ok === true ? ['shl-yes', '✓', 'OK'] : l.ok === false ? ['shl-no', '✕', 'Not OK'] : ['shl-wait', '–', 'Not read yet'];
         const panelLabel = l.ok !== true ? PANEL[l.key] : PANEL_OK[l.key];   // a line not read yet (null) can be fixed too
         const canPanel = !!panelLabel && !(l.key === 'category' && !group);
         const first = hard.find((b) => b.action && !['choose_category', 'set_attr', 'review_title', 'set_defaults', 'use_ph_photos', 'publish_again'].includes(b.action.kind));
@@ -575,8 +576,8 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
             <span>
               <span className="shl-pub-label">{l.n}. {l.label}</span>
               {l.ok === true && <OkDetail k={l.key} p={p} cat={cat} />}
-              {l.ok === null && !saved && <span className="muted xs shl-block">Not read yet — the dry run checks it.</span>}
-              {saved && <span className="xs shl-block shl-pub-saved">Saved — checked again by the next dry run.</span>}
+              {l.ok === null && !saved && <span className="muted xs shl-block">Not read yet — the preview checks it.</span>}
+              {saved && <span className="xs shl-block shl-pub-saved">Saved — checked again by the next preview.</span>}
               {hard.map((b, i) => <span key={i} className="xs shl-block"><BlockerSay b={b} /></span>)}
               {notes.map((b, i) => <span key={`n${i}`} className="muted xs shl-block"><BlockerSay b={b} compact={!b.fix} /></span>)}
               {l.key === 'category' && !group && (groups.length > 1 ? <span className="xs shl-block shl-bad-text">Mixed size groups ({groups.map((g) => GROUP_LABEL[g]).join(', ')}) — split the product on Shopify first.</span> : <span className="xs shl-block muted">No US size we can read, so no size group.</span>)}
@@ -588,7 +589,7 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
               {canPanel && <button type="button" className={`btn xs ${l.ok === false ? 'shl-fix' : 'ghost'}`} aria-expanded={open === l.key} onClick={() => setOpen(open === l.key ? '' : l.key)}>{open === l.key ? 'Close' : panelLabel}</button>}
               {l.key === 'flight' && hard.some((b) => b.code === 'publish_rejected') && (
                 <button type="button" className="btn xs shl-fix" disabled={!canWrite || !!busy} title={canWrite ? 'Lets the next publish go to SHEIN again (SHEIN may still count the old SKUs)' : NEEDS_PRIV}
-                  onClick={async () => { if (await onAct?.('publish_again', { productIds: [p.shopify_product_id] }, 'Publish again allowed — dry run it, check it, then publish.')) done('flight', 'Publish again allowed — dry run it, check it, then publish.'); }}>Publish again</button>
+                  onClick={async () => { if (await onAct?.('publish_again', { productIds: [p.shopify_product_id] }, 'Publish again allowed — preview it, check it, then publish.')) done('flight', 'Publish again allowed — preview it, check it, then publish.'); }}>Publish again</button>
               )}
               {first && <FixButton action={first.action} shopifyUrl={p.shopifyUrl} busy={busy} onAct={(k) => onFix?.(k, (d.variants || []).find((v) => (v.blockers || []).some((b) => b.code === first.code)) || {}, first)} />}
             </span>

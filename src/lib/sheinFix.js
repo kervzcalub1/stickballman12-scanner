@@ -12,8 +12,8 @@
 //   · SHEIN stock left above Shopify's, and SHEIN sales never taken off Shopify.
 //
 // THE rule that matters: a SHEIN order arrives with the SELLER SKU, and the warehouse picks
-// that SKU. So a SHEIN size whose seller SKU is a different Shopify size must sell NOTHING
-// until its seller SKU is corrected — fixing the number alone would ship the wrong shoe.
+// that SKU. So a SHEIN size whose SKU is a different Shopify size must sell NOTHING
+// until its SKU is corrected — fixing the number alone would ship the wrong shoe.
 import { zipSync } from 'fflate';
 import { readSheetRows, openWorkbook, readSheet } from './sheinReprice.js';
 import { buildXlsx } from './xlsx.js';
@@ -29,7 +29,7 @@ const DONE = /delivered|shipped|refund|cancel|return|closed|complete|rejected/i;
 export function readSheinOrders(bytes) {
   const book = readSheetRows(bytes, '0') || readSheetRows(bytes, 'Sheet1') || readSheetRows(bytes, 'sheet1');
   if (!book) return { ok: false, error: 'Not SHEIN’s order export (.xlsx).' };
-  // The header is the row that has "Seller SKU" (row 2 in SHEIN's export — row 1 groups).
+  // The header is the row that has "SKU" (row 2 in SHEIN's export — row 1 groups).
   const hr = book.findIndex((r) => (r || []).some((c) => String(c ?? '').trim() === 'Seller SKU'));
   if (hr < 0) return { ok: false, error: 'No “Seller SKU” column — use SHEIN’s Export Order file.' };
   const h = book[hr].map((c) => String(c ?? '').trim());
@@ -51,7 +51,7 @@ export function readSheinOrders(bytes) {
 
 /* ------------------------------- relinking ------------------------------- */
 
-// A SHEIN size whose seller SKU Shopify no longer has: find the Shopify variant it SHOULD
+// A SHEIN size whose SKU Shopify no longer has: find the Shopify variant it SHOULD
 // point at — same style code (read from the SHEIN product name) and the same size. Only a
 // single, exact answer counts; anything else goes to the AI helper (or stays unresolved).
 export function ruleRelink(row, variants) {
@@ -101,19 +101,19 @@ export function verifyAiLink(row, suggestion, variants) {
 // The decision for every SHEIN size (`checked` = checkRows output):
 //   { newQty, change, reason, action, linkTo }
 //   reason: ok | wrong_size | swap | no_shopify | duplicate | inactive | no_size | other_system | no_seller_sku
-// `openBySku` = SHEIN orders not yet shipped, per seller SKU (held back from the stock).
+// `openBySku` = SHEIN orders not yet shipped, per SKU (held back from the stock).
 // `aiLinks` = { [line]: verified link } from the AI helper.
 export const REASONS = {
   ok: 'Shopify stock (minus SHEIN orders not shipped yet)',
-  swap: 'Linked to another size — the right Shopify SKU exists: change the seller SKU',
+  swap: 'Linked to another size — the right Shopify SKU exists: change the SKU',
   wrong_size: 'Linked to another size — Shopify has no such size: stop selling it',
-  no_shopify: 'Seller SKU not in Shopify — stop selling it',
-  duplicate: 'Same seller SKU on another SHEIN size — only one may sell',
+  no_shopify: 'SKU not in Shopify — stop selling it',
+  duplicate: 'Same SKU on another SHEIN size — only one may sell',
   inactive: 'Shopify product is draft / archived',
   no_size: 'No size on SHEIN',
   other_system: 'EUR / CN / range size — can’t be matched to Shopify',
-  no_seller_sku: 'No seller SKU on SHEIN',
-  pending_change: 'Matched by a person — sells once SHEIN shows the new seller SKU',
+  no_seller_sku: 'No SKU on SHEIN',
+  pending_change: 'Matched by a person — sells once SHEIN shows the new SKU',
   delist: 'A person decided: stop selling this size',
 };
 // `decisions` = { [SHEIN SKU]: shein_links row } — what a person confirmed on the match screen.
@@ -122,7 +122,7 @@ export function buildFix(checked, variants, { openBySku = {}, aiLinks = {}, deci
   const byProduct = new Map();
   for (const v of variants) { const a = byProduct.get(v.productId) || []; a.push(v); byProduct.set(v.productId, a); }
   const firstOf = new Map();
-  // Swaps first: which seller SKU belongs on which SHEIN size, so the row losing it can say where it goes.
+  // Swaps first: which SKU belongs on which SHEIN size, so the row losing it can say where it goes.
   const movedTo = new Map();
   for (const r of checked) {
     if (!r.variant || !r.size || !r.issues.some((i) => ['wrong_size', 'wrong_group'].includes(i))) continue;
@@ -138,19 +138,19 @@ export function buildFix(checked, variants, { openBySku = {}, aiLinks = {}, deci
     if (d?.decision === 'delist') return done(0, 'delist', `Delist this size on SHEIN${d.decided_by ? ` (decided by ${d.decided_by})` : ''}`);
     if (d?.link_sku && d.link_sku !== r.sellerSku) {
       const v = bySku.get(String(d.link_sku));
-      return done(0, 'pending_change', `Change the seller SKU to ${d.link_sku}${v ? ` (Shopify size ${v.size})` : ''} — confirmed${d.decided_by ? ` by ${d.decided_by}` : ''}; sells once SHEIN shows it`,
+      return done(0, 'pending_change', `Change the SKU to ${d.link_sku}${v ? ` (Shopify size ${v.size})` : ''} — confirmed${d.decided_by ? ` by ${d.decided_by}` : ''}; sells once SHEIN shows it`,
         { sku: d.link_sku, size: v?.size ?? '', productTitle: v?.productTitle, by: 'person', confirmed: true });
     }
     if (d?.link_sku && d.link_sku === r.sellerSku) applied = true;   // SHEIN now carries the confirmed SKU
-    if (!r.sellerSku) return done(0, 'no_seller_sku', 'Add the seller SKU on SHEIN (or delist this size)');
+    if (!r.sellerSku) return done(0, 'no_seller_sku', 'Add the SKU on SHEIN (or delist this size)');
     if (r.issues.includes('duplicate')) {
-      if (firstOf.has(r.sellerSku)) return done(0, 'duplicate', `Seller SKU ${r.sellerSku} is also on SHEIN row ${firstOf.get(r.sellerSku)} — remove it from this size`);
+      if (firstOf.has(r.sellerSku)) return done(0, 'duplicate', `SKU ${r.sellerSku} is also on SHEIN row ${firstOf.get(r.sellerSku)} — remove it from this size`);
       firstOf.set(r.sellerSku, r.line);
     }
     if (!r.variant) {
       const link = ruleRelink(r, variants) || aiLinks[r.line] || null;
       return done(0, 'no_shopify', link
-        ? `Change the seller SKU to ${link.sku} (Shopify size ${link.size}${link.by === 'ai' ? ', AI match — size verified' : ''}) — it sells again on the next fix`
+        ? `Change the SKU to ${link.sku} (Shopify size ${link.size}${link.by === 'ai' ? ', AI match — size verified' : ''}) — it sells again on the next fix`
         : 'Delist this size on SHEIN, or link it to the right Shopify SKU', link);
     }
     // A size SHEIN writes in EUR/CN (or not at all) can't be checked by the rules; a person who
@@ -158,10 +158,10 @@ export function buildFix(checked, variants, { openBySku = {}, aiLinks = {}, deci
     const sizeIssue = r.issues.find((i) => ['wrong_size', 'wrong_group'].includes(i) || (!applied && ['blank', 'other_system'].includes(i)));
     if (sizeIssue) {
       const sib = (byProduct.get(r.variant.productId) || []).find((v) => v.sku !== r.sellerSku && r.size && sameSizeForLink(r.size, v.size, r.name, v.productTitle));
-      if (sib) return done(0, 'swap', `Change the seller SKU to ${sib.sku} (that is Shopify size ${sib.size}) — it sells again on the next fix`, { sku: sib.sku, size: sib.size, by: 'rule', productTitle: sib.productTitle });
+      if (sib) return done(0, 'swap', `Change the SKU to ${sib.sku} (that is Shopify size ${sib.size}) — it sells again on the next fix`, { sku: sib.sku, size: sib.size, by: 'rule', productTitle: sib.productTitle });
       if (sizeIssue === 'blank') return done(0, 'no_size', `Give this SHEIN size ${addLabel(r.variant.size)} (Shopify’s size for ${r.sellerSku})`);
       if (sizeIssue === 'other_system') return done(0, 'other_system', `Make this size ${addLabel(r.variant.size)} on SHEIN (Shopify’s size for ${r.sellerSku})`);
-      return done(0, 'wrong_size', `SHEIN ${r.size} ≠ Shopify ${r.variant.size}. Remove seller SKU ${r.sellerSku} from this size; ${movedTo.has(r.sellerSku)
+      return done(0, 'wrong_size', `SHEIN ${r.size} ≠ Shopify ${r.variant.size}. Remove SKU ${r.sellerSku} from this size; ${movedTo.has(r.sellerSku)
         ? `it moves to SHEIN ${movedTo.get(r.sellerSku)} (see that row)`
         : `add size ${addLabel(r.variant.size)} to the listing for it`}`);
     }
@@ -184,7 +184,7 @@ function sizesToAdd(rows, byProduct) {
       if (sold.has(v.sku) || !(Number(v.qty) > 0)) continue;
       const pendingSwap = rows.some((r) => r.linkTo?.sku === v.sku);
       out.push({ spu: sample.spu, sheinName: sample.name, productTitle: v.productTitle, sku: v.sku, size: v.size, qty: Number(v.qty),
-        note: pendingSwap ? 'fixed by the seller-SKU change above' : `add size ${addLabel(v.size)} on SHEIN`, pendingSwap });
+        note: pendingSwap ? 'fixed by the SKU change above' : `add size ${addLabel(v.size)} on SHEIN`, pendingSwap });
     }
   }
   return out.sort((a, b) => String(a.sheinName).localeCompare(String(b.sheinName)) || String(a.size).localeCompare(String(b.size), 'en', { numeric: true }));
@@ -219,11 +219,11 @@ const csv = (head, rows) => BOM + [head, ...rows].map((r) => r.map(csvCell).join
 // Every SHEIN size a person must touch on SHEIN, plus the sizes to add.
 export function fixListCsv(fix) {
   const head = ['What to do', 'Why', 'SHEIN product', 'SPU', 'SKC', 'SHEIN SKU', 'SHEIN size', 'Seller SKU now', 'Shopify size of that SKU',
-    'Change seller SKU to', 'Stock now', 'Stock after fix', 'Export row'];
+    'Change SKU to', 'Stock now', 'Stock after fix', 'Export row'];
   const rows = fix.rows.filter((r) => r.action).map((r) => [r.action, REASONS[r.reason], r.name, r.spu, r.skc, r.sheinSku, r.size, r.sellerSku,
     r.variant?.size ?? '', r.linkTo?.sku ?? '', r.qty, r.newQty, r.line]);
   for (const a of fix.sizesToAdd.filter((x) => !x.pendingSwap)) {
-    rows.push([`Add size ${addLabel(a.size)} on SHEIN for seller SKU ${a.sku}`, `Shopify has ${a.qty} in size ${a.size}; no SHEIN size sells it`, a.sheinName, a.spu, '', '', '', a.sku, a.size, '', '', a.qty, '']);
+    rows.push([`Add size ${addLabel(a.size)} on SHEIN for SKU ${a.sku}`, `Shopify has ${a.qty} in size ${a.size}; no SHEIN size sells it`, a.sheinName, a.spu, '', '', '', a.sku, a.size, '', '', a.qty, '']);
   }
   return csv(head, rows);
 }

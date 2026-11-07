@@ -1,4 +1,4 @@
-# SHEIN live sync + fix — top of `/ph/shein-check` · `/shein-check`
+# SHEIN live sync + fix — section **Automatic sync** of the SHEIN page: `/ph/shein?section=live` · `/shein?section=live` (switches + the full check under Advanced, `liveadv=1`)
 
 Built 2026-10-16. Our own Shopify ⇄ SHEIN link, replacing 4seller. Everything goes through
 the APIs — no export files, because an export is stale the moment a sale lands on another

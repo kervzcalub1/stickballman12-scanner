@@ -1,6 +1,6 @@
 // SHEIN listing fix (docs/context/shein-fix.md). What this pins:
 //   · stock = the Shopify stock of the SAME-size variant, minus SHEIN orders not shipped;
-//   · a SHEIN size linked to ANOTHER size sells nothing until its seller SKU is changed — a
+//   · a SHEIN size linked to ANOTHER size sells nothing until its SKU is changed — a
 //     swap names the exact SKU, the row losing it says where it goes;
 //   · dead SKUs: relinked by style + size when that's exact; the AI's suggestion counts only
 //     if the rules confirm the same product and size;
@@ -49,14 +49,14 @@ test.describe('SHEIN fix rules', () => {
     expect(addLabel('3Y')).toBe('US3Y');
   });
 
-  test('a second SHEIN size on the same seller SKU gets 0; dead SKUs relink only on an exact match', () => {
+  test('a second SHEIN size on the same SKU gets 0; dead SKUs relink only on an exact match', () => {
     const fix = buildFix(checkRows([S(2, 'A9', 'US9', 1), S(3, 'A9', 'US9', 1)], VARIANTS), VARIANTS);
     expect(fix.rows.map((r) => [r.newQty, r.reason])).toEqual([[1, 'ok'], [0, 'duplicate']]);
     expect(ruleRelink({ name: 'Nike Dunk Low (DD1391-100)', size: 'US10' }, VARIANTS)).toBeNull();   // no size 10 in that product
   });
 
   test('a women’s SHEIN size never links to a men’s Shopify size (US8W ≠ men’s 8)', () => {
-    // 2026-10-28, live dry run #52: Nike Ja 3 (men's sizes on Shopify, no W) listed on SHEIN as US8W / US8.5W —
+    // 2026-10-28, live preview #52: Nike Ja 3 (men's sizes on Shopify, no W) listed on SHEIN as US8W / US8.5W —
     // the swap would have linked SHEIN US8W to Shopify men's 8. Women's 8 ≈ men's 6.5.
     const JA = (sku, size) => V(sku, size, 2, 'PJ', { productTitle: 'Nike Ja 3 Twelve Time (IQ6755-300)', style: 'IQ6755-300' });
     const W = (sku, size) => V(sku, size, 2, 'PW', { productTitle: 'Nike AL8 Smoke Grey Women\'s (FJ3794-101)', style: 'FJ3794-101' });
@@ -91,7 +91,7 @@ test.describe('SHEIN fix rules', () => {
     const decisions = { S2: { link_sku: 'A8', decision: 'link', decided_by: 'Kervy' }, S4: { decision: 'delist', decided_by: 'Kervy' } };
     const fix = buildFix(checkRows(rows, VARIANTS), VARIANTS, { decisions });
     expect(fix.rows.map((r) => [r.reason, r.newQty])).toEqual([['pending_change', 0], ['other_system', 0], ['delist', 0]]);
-    expect(fix.rows[0].action).toContain('Change the seller SKU to A8 (Shopify size 8)');
+    expect(fix.rows[0].action).toContain('Change the SKU to A8 (Shopify size 8)');
     // SHEIN now shows the changes: S2 carries A8, and a person matched the EUR size S3 to A8 too… one SKU, one size —
     const after = buildFix(checkRows([S(2, 'A8', 'US8', 0), S(3, 'A10', 'EUR44', 0)], VARIANTS), VARIANTS,
       { decisions: { S2: { link_sku: 'A8', decision: 'link' }, S3: { link_sku: 'A10', decision: 'link' } } });
@@ -143,13 +143,13 @@ test.describe('SHEIN fix page', () => {
     });
     await loginAs(page, 'ph_team');
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto('/ph/shein-check');
+    await page.goto('/ph/shein-check?fixadv=1');
     await page.getByLabel('SHEIN export file').setInputFiles({ name: 'Export Products_2026-10-13 09_00_00.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: exportBytes() });
     await page.getByRole('button', { name: 'Fix & download' }).click();
     const panel = page.locator('.shf');
     await expect(panel).toContainText('pause 4seller');
     await expect(panel.locator('.er-stat').filter({ hasText: 'pairs offered on SHEIN' })).toContainText('12 → 2');
-    await expect(panel.locator('.er-stat').filter({ hasText: 'seller SKUs to change' })).toContainText('1');
+    await expect(panel.locator('.er-stat').filter({ hasText: 'SKUs to change' })).toContainText('1');
     const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /SHEIN inventory file \(3 SKUs\)/ }).click()]);
     expect(dl.suggestedFilename()).toMatch(/^SHEIN inventory fix \(\d{4}-\d{2}-\d{2}\) - plain\.xlsx$/);
     const rows = readSheetRows(new Uint8Array(await (await import('node:fs')).promises.readFile(await dl.path())), 'Inventory fix');
@@ -158,8 +158,8 @@ test.describe('SHEIN fix page', () => {
     await page.getByRole('button', { name: /Match 1 product with AI/ }).click();
     await expect(panel).toContainText('gpt-5.5: 1 link confirmed by the rules');
     expect(asked[0].products[0]).toMatchObject({ key: 'spu3', sizes: [{ line: 4, sellerSku: 'DEAD1', size: 'US9' }] });
-    await expect(panel.locator('.er-stat').filter({ hasText: 'seller SKUs to change' }).locator('b')).toHaveText('2');
-    await expect(panel.locator('.er-stat').filter({ hasText: 'seller SKUs to change' })).toContainText('(1 by AI)');
+    await expect(panel.locator('.er-stat').filter({ hasText: 'SKUs to change' }).locator('b')).toHaveText('2');
+    await expect(panel.locator('.er-stat').filter({ hasText: 'SKUs to change' })).toContainText('(1 by AI)');
     const wide = await page.evaluate(() => [...document.querySelectorAll('body *')].filter((el) => !el.closest('.ap-tablewrap') && el.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 6).map((el) => `${el.tagName}.${el.className}`));
     expect(wide).toEqual([]);
   });
@@ -186,7 +186,6 @@ test.describe('SHEIN match screen', () => {
       ['spu1', 'k1', 'S3', 'US8', 'Nike Air Max 95 (IB7936-100)', 'A9', '1'],
     ] }));
     await page.getByLabel('SHEIN export file').setInputFiles({ name: 'Export Products_2026-10-13 09_00_00.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: bytes });
-    await expect(page.getByText('waiting for SHEIN to approve our developer app')).toBeVisible();
     await page.getByRole('button', { name: 'Match sizes' }).click();
     await page.getByLabel('Search SHEIN shoes to match').fill('IB7936');
     await page.locator('.shm-head').first().click();
@@ -221,6 +220,6 @@ test.describe('SHEIN API client (waiting for keys)', () => {
     await loginAs(page, 'admin');
     const r = await request.get('/api/shein/callback?tempToken=x&state=forged', { maxRedirects: 0 });
     expect(r.status()).toBe(302);
-    expect(r.headers().location).toMatch(/^\/ph\/shein-check\?shein_error=/);
+    expect(r.headers().location).toMatch(/^\/shein\?section=live&shein_error=/);
   });
 });

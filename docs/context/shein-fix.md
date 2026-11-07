@@ -1,4 +1,4 @@
-# SHEIN listing fix — tabs **Match sizes** + **Fix & download** on `/ph/shein-check` · `/shein-check`
+# SHEIN listing fix — tabs **Match sizes** + **Fix & download** in Fix problems (`?section=check&chk=match|fix`) on `/ph/shein` · `/shein`
 
 > Since 2026-10-16 the same rules run LIVE through the API, product by product — see
 > `docs/context/shein-live-fix.md`. This page is the export-file way.

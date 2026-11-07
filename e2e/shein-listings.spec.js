@@ -10,7 +10,7 @@
 //     answers read paths and REFUSES every write path) and a fake Shopify: a restart mid-run →
 //     interrupted → Resume carries on from the first unfinished product; ZERO write calls;
 //   · Shopify webhooks: inventory_levels/update goes to the live push exactly as before; a price
-//     change flips the size to Out of date without a re-read; a stock-only update changes nothing;
+//     change flips the size to Out of date without a refresh; a stock-only update changes nothing;
 //   · the endpoints: list / filters / search / detail, the gates (probe 403 without the privilege,
 //     the log admin-only), 409 while a job runs, the size map's validation (DB only);
 //   · the PAGE (/ph/shein-listings, /shein-listings): an empty database renders the designed
@@ -112,6 +112,9 @@ const byKey = (rows) => new Map(rows.flatMap((p) => p.variants).map((v) => [v.ro
 
 /* -------------------------------- the engine -------------------------------- */
 
+// Jobs, Setup and the automatic-price switch live behind Advanced on the Shoes on SHEIN section.
+const openAdvanced = async (page) => { const t = page.locator('[data-adv-toggle]'); if (await t.getAttribute('aria-expanded') !== 'true') await t.click(); };
+
 test.describe('SHEIN Listings — the engine', () => {
   test('statuses: 8 + unknown, roll-up order, a chip and a label each', () => {
     expect(STATUS_ORDER).toEqual(['blocked', 'error', 'out_of_date', 'not_on_shein', 'shein_only', 'in_review', 'synced', 'excluded']);
@@ -172,7 +175,7 @@ test.describe('SHEIN Listings — the engine', () => {
     expect(resolveSize('7W', { ...ctx, permission: 1, sizeTable: true }).blocker.code).toBe('no_size_table_value');
   });
 
-  test('matching: seller SKU, then shein_links — never the SPU/SKC supplier_code (4seller’s borrowed parent SKU)', () => {
+  test('matching: SKU, then shein_links — never the SPU/SKC supplier_code (4seller’s borrowed parent SKU)', () => {
     const m = matchStore({ products: SHOPIFY(), sheinRows: PAYLOADS().flatMap((p) => p.rows), links: LINKS });
     expect(m.byVariant.get(gidV(770107))).toMatchObject({ match: 'sku', row: { sheinSku: 'E2E1-07' } });
     expect(m.byVariant.get(gidV(770110))).toMatchObject({ match: 'link', row: { sheinSku: 'E2E1-10', sellerSku: 'OLD10' } });
@@ -276,7 +279,7 @@ test.describe('SHEIN Listings — the engine', () => {
 /* ------------------------- the fake SHEIN + the database ------------------------- */
 
 // Phase 2: `fake.p2` turns on a STATEFUL partialEdit (else every write is refused): what SHEIN was
-// sent (edits), the seller SKUs it now knows (in review), each SPU's review state, refusals / no answer.
+// sent (edits), the SKUs it now knows (in review), each SPU's review state, refusals / no answer.
 const fake = { calls: [], writes: [], gate: null, traces: 0, p2: null };
 // Stricter since the API review (scratchpad plan/phase2-review.md): partialEdit VALIDATES the body
 // the way doc 3002047 describes (one SKC; the siblings' one sale attribute; value id XOR custom text;
@@ -285,7 +288,7 @@ const fake = { calls: [], writes: [], gate: null, traces: 0, p2: null };
 // size chart; the SKC title re-sent where the store carries one) and refuses with a CODED answer
 // (code ≠ 0 + info.pre_valid_result) like SHEIN does. It answers every SKU of the SKC (untouched
 // ones with supplier_sku ""), answers query-document-state for the version ASKED, can lag the
-// seller-SKU check, and plays the IP-whitelist / "system busy" / no-version answers.
+// SKU check, and plays the IP-whitelist / "system busy" / no-version answers.
 const P2 = () => ({ edits: [], pending: new Map(), docs: {}, hist: {}, refuse: {}, refuseCoded: {}, fail503: 0, busy: 0, whitelist: false, noVersion: 0, warn: false, lag: false,
   approved: {}, relinked: {}, sort: true, nextId: 9901, versions: 0,
   // Phase 3: SHEIN's prices / special prices / stopped sizes / titles as they are now, price/save calls, rises in review
@@ -394,7 +397,7 @@ const P4FILL = { fill_in_standard_list: [{ module: 'basic_info', field_key: 'bra
 const P4 = () => ({ canPublish: true, reason: null, quota: { isControlled: true, availableQuota: 5, totalQuota: 10, usedCount: 5 }, shelf: { need: false, remain_count: null },
   calls: [], transforms: [], rejectNext: 0, noAnswer: 0, refuse: null, pending: new Map(), docs: {}, hist: {}, versions: 0, spus: 0,
   // review S10: the store's rules can be swapped (new picture plans A/B, supplier_code at SPU level, brand optional),
-  // answers can carry filtered_result / an mcc type-2 block, the seller-SKU check can lag, a request can be dropped
+  // answers can carry filtered_result / an mcc type-2 block, the SKU check can lag, a request can be dropped
   fill: null, answer: null, lag: false, drop: 0 });
 const P4PLAN_A = [{ field_key: 'spu_image_detail_show', is_true: true }, { field_key: 'spu_image_detail_single', is_true: true }, { field_key: 'skc_image_detail_required', is_true: true },
   { field_key: 'skc_image_square_required', is_true: true }, { field_key: 'sku_image_required', is_true: false }];
@@ -694,13 +697,14 @@ test.describe('SHEIN Listings — the page before anything was read', () => {
     await loginAs(page, 'ph_team');
     await page.goto('/ph/shein-listings');
     await expect(page.getByRole('heading', { name: 'Nothing read yet' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Check all listings' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Refresh from SHEIN', exact: true })).toBeVisible();
     await expect(page.locator('.error')).toHaveCount(0);
     // The probe lives on the Sizes tab and is reachable before any read; a PH account without
     // the privilege sees it disabled, with the reason.
     await page.getByRole('tab', { name: /Sizes/ }).click();
     await expect(page).toHaveURL(/tab=sizes/);
-    const ask = page.getByRole('button', { name: 'Ask SHEIN (read-only)' });
+    await page.locator('[data-adv="sizeadv"] > summary').click();
+    const ask = page.getByRole('button', { name: 'Ask SHEIN which sizes it allows' });
     await expect(ask).toBeDisabled();
     await expect(ask).toHaveAttribute('title', /Connect integrations/);
     await expect(page.getByText('Not asked yet.')).toBeVisible();
@@ -717,10 +721,10 @@ test.describe('SHEIN Listings — the page before anything was read', () => {
     });
     await loginAs(page, 'admin');
     await page.goto('/shein-listings?tab=jobs');
-    await expect(page.getByRole('button', { name: 'Register Shopify webhooks', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Connect Shopify updates', exact: true })).toBeVisible();
     hooks = { on: true, at: '2026-10-27T06:11:55Z' };
     await page.reload();
-    await expect(page.getByRole('button', { name: 'Re-register Shopify webhooks' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Reconnect Shopify updates' })).toBeVisible();
     await expect(page.getByText(/Shopify product updates: on/)).toBeVisible();
   });
 
@@ -728,7 +732,7 @@ test.describe('SHEIN Listings — the page before anything was read', () => {
     test.skip(!pool || foreign, 'needs the database (and no real SHEIN Listings data)');
     await loginAs(page, 'admin');
     await page.goto('/shein-listings?tab=jobs');
-    await expect(page.locator('.brand', { hasText: 'SHEIN Listings' })).toBeVisible();
+    await expect(page.locator('.brand', { hasText: 'SHEIN' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Jobs', exact: true })).toBeVisible();
   });
 });
@@ -829,7 +833,7 @@ test.describe.serial('SHEIN Listings — the snapshot (a server job, read-only)'
     expect(v.get(gidV(770207)).notes.map((n) => n.code)).toContain('price_locked');
   });
 
-  test('Shopify webhooks: a price change flips the size to Out of date with no re-read of SHEIN; a stock-only update changes nothing', async () => {
+  test('Shopify webhooks: a price change flips the size to Out of date with no refresh of SHEIN; a stock-only update changes nothing', async () => {
     const L = await import('../api/_lib/shein-listing.js');
     const before = fake.calls.length;
     // stock only (products/update fires on stock changes too)
@@ -838,7 +842,7 @@ test.describe.serial('SHEIN Listings — the snapshot (a server job, read-only)'
     const asRest = (p) => ({ id: Number(p.productId.split('/').pop()), admin_graphql_api_id: p.productId, title: p.title, vendor: p.vendor, product_type: p.productType, tags: '', status: p.status.toLowerCase(),
       options: [{ name: 'Size', position: 1 }], variants: p.variants.map((x) => ({ admin_graphql_api_id: x.variantId, sku: x.sku, option1: x.size, price: x.price, compare_at_price: null, inventory_quantity: x.qty, barcode: '' })) });
     expect(await L.recheckProducts([normalizeWebhookProduct(asRest(stock[0]))], { io: io1 })).toMatchObject({ rechecked: 0 });
-    // price: through the webhook's own path (coalesce → re-read Shopify → recompute from stored SHEIN rows)
+    // price: through the webhook's own path (coalesce → refresh Shopify → recompute from stored SHEIN rows)
     const priced = SHOPIFY(); priced[0].variants[0].price = '149.00';
     const io2 = testIO(L.IO, { shopify: () => priced });
     L.listingProductChanged(asRest(priced[0]), { io: io2 });
@@ -933,7 +937,7 @@ test.describe.serial('SHEIN Listings — the endpoints', () => {
     expect((await request.get('/api/shein/listings?status=missing', { headers: auth.ph })).status()).toBe(400);
   });
 
-  test('the list: each tile = its filtered list (a product counts under every status one of its in-stock sizes has); filters; search by seller SKU / SHEIN SKU / SPU / style; ?product= detail', async ({ request }) => {
+  test('the list: each tile = its filtered list (a product counts under every status one of its in-stock sizes has); filters; search by SKU / SHEIN SKU / SPU / style; ?product= detail', async ({ request }) => {
     test.skip(!pool || !secretsOk || foreign, 'needs the snapshot data from above');
     const get = async (qs) => (await request.get(`/api/shein/listings${qs}`, { headers: auth.ph })).json();
     const all = await get('?pageSize=200');
@@ -1076,9 +1080,9 @@ test.describe.serial('SHEIN Listings — the page', () => {
     await page.goto('/ph/shein-listings');
     expect(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)).toBe('Asia/Manila');
     const strip = page.locator('.shl-strip');
-    await expect(strip).toContainText('Last read 10/27, 2:44 PM EST');
+    await expect(strip).toContainText('Last refreshed 10/27, 2:44 PM EST');
     await expect(strip).not.toContainText('10/28');
-    await page.getByRole('tab', { name: /Jobs/ }).click();
+    await openAdvanced(page); await page.getByRole('tab', { name: /Jobs/ }).click();
     await expect(page.locator('.shl-rtable tr', { hasText: 'e2e-ui' })).toContainText('10/27, 2:40 PM EST');
   });
 
@@ -1106,15 +1110,15 @@ test.describe.serial('SHEIN Listings — the page', () => {
     await expect(drawer).toContainText('14.5W isn’t a SHEIN size yet.');
     await page.reload();
     await expect(page.getByRole('dialog', { name: 'Product details' })).toContainText('Nike Dunk Low Women');
-    await expect(page.getByRole('dialog', { name: 'Product details' }).getByRole('button', { name: 'Add missing sizes' })).toBeVisible();   // Phase 2: Send is on the dry run’s sheet (Phase 3 renamed it)
+    await expect(page.getByRole('dialog', { name: 'Product details' }).getByRole('button', { name: 'Add missing sizes' })).toBeVisible();   // Phase 2: Send is on the preview’s sheet (Phase 3 renamed it)
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog', { name: 'Product details' })).toHaveCount(0);
     await expect(page).not.toHaveURL(/product=/);
   });
 
-  // docs/context/shein-live-fix.md → "One shoe": Match sizes inside the drawer, then the live fix for
+  // docs/context/shein-live-fix.md → "One shoe": Match sizes inside the drawer, then automatic sync for
   // this shoe only. The live endpoint is faked here — a real one-shoe run would call SHEIN.
-  test('Fix SHEIN sizes: “Match sizes” opens it in the drawer; save a choice, dry run THIS shoe; Fix needs the privilege + a fresh dry run', async ({ page }) => {
+  test('Fix SHEIN sizes: “Match sizes” opens it in the drawer; save a choice, preview THIS shoe; Fix needs the privilege + a fresh preview', async ({ page }) => {
     const posted = { links: [], live: [] };
     let shoe = { ok: true, run: null, items: [], links: [], running: null, walkRunning: false };
     await page.route('**/api/shein/listings?*', async (r) => {   // the list says whether SHEIN is connected
@@ -1139,29 +1143,29 @@ test.describe.serial('SHEIN Listings — the page', () => {
     const fix = drawer.locator('[data-shoe-fix]');
     await expect(fix).toHaveAttribute('open', '');   // a wrong link opens it by itself
     await drawer.locator('.shl-req', { hasText: 'carries this SKU' }).getByRole('button', { name: 'Match sizes' }).click();   // not the SHEIN check page
-    await expect(page).toHaveURL(/shein-listings/);
+    await expect(page).toHaveURL(/\/ph\/shein\?/);
     const us9 = fix.locator('.shl-shoe-match tr', { hasText: 'US9' });
     await expect(us9).toContainText('wrong size');
     const sel = us9.getByRole('combobox');
     await expect(sel.locator('option')).toContainText(['Leave as it is', 'A9 — our size 9', 'Take this size off SHEIN']);   // only the SAME size is offered
     await expect(sel.locator('option', { hasText: 'our size 8' })).toHaveCount(0);
     await sel.selectOption('A9');
-    await expect(fix.getByRole('button', { name: 'Dry run this shoe' })).toBeDisabled();   // save first
+    await expect(fix.getByRole('button', { name: 'Preview this shoe' })).toBeDisabled();   // save first
     await fix.getByRole('button', { name: 'Save choices (1)' }).click();
     await expect.poll(() => posted.links.at(-1)?.links?.[0]).toMatchObject({ linkSku: 'A9', decision: 'link', source: 'person', sellerSkuWas: 'A8' });
     await expect(fix.getByRole('button', { name: 'Fix this shoe' })).toBeDisabled();
-    await fix.getByRole('button', { name: 'Dry run this shoe' }).click();
+    await fix.getByRole('button', { name: 'Preview this shoe' }).click();
     await expect.poll(() => posted.live.at(-1)).toMatchObject({ action: 'shoe', mode: 'dry', productId: gidP(7701) });
     await expect(fix.locator('[data-shoe-run="done"]')).toContainText('nothing was written');
     await expect(fix).toContainText('would change A8 → A9');
-    await expect(fix.getByRole('button', { name: 'Fix this shoe' })).toHaveAttribute('title', /admin|Connect integrations/);   // PH: the dry run only
+    await expect(fix.getByRole('button', { name: 'Fix this shoe' })).toHaveAttribute('title', /admin|Connect integrations/);   // PH: the preview only
   });
 
   test('ticked products are not restored by a refresh', async ({ page }) => {
     await page.goto('/ph/shein-listings');
     await page.locator(`.shl-product[data-product="${P7702}"] .shl-chk input`).check();
     await expect(page.locator('.shl-bar')).toContainText('1 product');
-    await expect(page.locator('.shl-bar').getByRole('button', { name: /^Add missing sizes/ })).toBeEnabled();    // Phase 2: a dry run (reads only)
+    await expect(page.locator('.shl-bar').getByRole('button', { name: /^Add missing sizes/ })).toBeEnabled();    // Phase 2: a preview (reads only)
     expect(page.url()).not.toMatch(/gid|pick|sel=/);
     await page.reload();
     await expect(page.locator(`.shl-product[data-product="${P7702}"]`)).toBeVisible();
@@ -1218,7 +1222,7 @@ test.describe.serial('SHEIN Listings — the page', () => {
     await page.getByRole('tab', { name: /Sizes/ }).click();
     await expect(page.getByRole('heading', { name: /Our sizes/ })).toBeVisible();
     await noSideScroll('sizes');
-    await page.getByRole('tab', { name: /Jobs/ }).click();
+    await openAdvanced(page); await page.getByRole('tab', { name: /Jobs/ }).click();
     await expect(page.locator('.shl-rtable tr', { hasText: 'e2e-ui' })).toBeVisible();
     await noSideScroll('jobs');
   });
@@ -1247,7 +1251,7 @@ test.describe.serial('SHEIN Listings — the page', () => {
 
 /* ------------------------- Phase 2: add sizes to shoes on SHEIN ------------------------- */
 // docs/shein-listings-plan.md §3 Phase 2 — every acceptance line has a test below. The fake SHEIN's
-// partialEdit is stateful (fake.p2): it records what it was sent, knows the new seller SKUs (in
+// partialEdit is stateful (fake.p2): it records what it was sent, knows the new SKUs (in
 // review), keeps each SPU's review state, and can refuse / not answer. Nothing reaches a real API.
 
 test.describe('SHEIN Listings Phase 2 — the add-size engine (pure)', () => {
@@ -1293,7 +1297,7 @@ test.describe('SHEIN Listings Phase 2 — the add-size engine (pure)', () => {
     expect(p.sizes[0]).toMatchObject({ price: 230, priceFrom: 'market' });
   });
 
-  test('blocked before sending: taken seller SKU, a size SHEIN already has, multi-colour SPU, size chart without a foot length (and with one)', () => {
+  test('blocked before sending: taken SKU, a size SHEIN already has, multi-colour SPU, size chart without a foot length (and with one)', () => {
     expect(plan({ taken: new Set(['W145']) }).plan.skipped[0].blocker.code).toBe('seller_sku_taken');
     const two = JSON.parse(JSON.stringify(SHEIN.E2ESPU2)); two.skcInfoList.push({ ...two.skcInfoList[0], skcName: 'E2ESKC2B' });
     expect(plan({ spu: two }).plan.blockers[0].code).toBe('multi_skc_size');
@@ -1331,7 +1335,7 @@ function p2IO(IO, { shopify = SHOPIFY, market = new Map(), stock = [] } = {}) {
     marketTargets: async (products) => new Map(products.flatMap((p) => (p.variants || []).filter((v) => market.has(`${p.style}|${v.size}`)).map((v) => [v.variantId, market.get(`${p.style}|${v.size}`)]))) };
 }
 
-test.describe.serial('SHEIN Listings Phase 2 — dry run, run, review (server jobs vs the fake SHEIN)', () => {
+test.describe.serial('SHEIN Listings Phase 2 — preview, run, review (server jobs vs the fake SHEIN)', () => {
   let L; let D; let previewId; let runId; let auth;
   const stocked = [];
   const items = async (jobId) => new Map((await D.listListingJobItems(jobId, { limit: 1000 })).map((i) => [Number(i.shopify_product_id.split('/').pop()), i]));
@@ -1358,7 +1362,7 @@ test.describe.serial('SHEIN Listings Phase 2 — dry run, run, review (server jo
   });
   test.beforeEach(() => { test.skip(!pool || !secretsOk || foreign, 'needs the database + BUY_GC_KEY (and no real SHEIN Listings data)'); });
 
-  test('the dry run: the exact partialEdit body per product, saved with its hash — and ZERO writes', async ({ request }) => {
+  test('the preview: the exact partialEdit body per product, saved with its hash — and ZERO writes', async ({ request }) => {
     fake.writes.length = 0;
     const io = p2IO(L.IO, { market: new Map([['IB7936-100|12', 15000]]) });
     const job = await preview([7701, 7702, 7703, 7704, 7705], io);
@@ -1404,7 +1408,7 @@ test.describe.serial('SHEIN Listings Phase 2 — dry run, run, review (server jo
     expect(ad.items.find((i) => i.shopify_product_id === gidP(7702)).body.spu_name).toBe('E2ESPU2');
   });
 
-  test('Run: 403 without admin / Connect integrations, 400 without a dry-run id (retry too)', async ({ request }) => {
+  test('Run: 403 without admin / Connect integrations, 400 without a preview id (retry too)', async ({ request }) => {
     const post = (h, data) => request.post('/api/shein/listings', { headers: h, data });
     expect((await post(auth.ph, { action: 'run', previewJobId: previewId })).status()).toBe(403);
     expect((await post(auth.ph, { action: 'retry', itemIds: [1] })).status()).toBe(403);
@@ -1417,13 +1421,13 @@ test.describe.serial('SHEIN Listings Phase 2 — dry run, run, review (server jo
   });
 
   test('the run: ONE partialEdit per product (sizes + relink), stock 0; Shopify changed → skipped, nothing sent; review open → deferred +30 min', async () => {
-    const live = SHOPIFY(); live.find((p) => p.productId === gidP(7702)).variants.find((v) => v.sku === 'W145').sku = 'W145B';   // Shopify changed after the dry run
+    const live = SHOPIFY(); live.find((p) => p.productId === gidP(7702)).variants.find((v) => v.sku === 'W145').sku = 'W145B';   // Shopify changed after the preview
     const io = p2IO(L.IO, { shopify: () => live, market: new Map([['IB7936-100|12', 15000]]), stock: stocked });
     const job = await run(previewId, io);
     runId = job.id;
     expect(job).toMatchObject({ kind: 'run', mode: 'run', status: 'done', preview_job_id: previewId, confirmed_by: 'e2e-p2' });
     const it = await items(job.id);
-    expect([...it.keys()].sort()).toEqual([7701, 7702, 7704]);                     // only the dry run's sendable items
+    expect([...it.keys()].sort()).toEqual([7701, 7702, 7704]);                     // only the preview's sendable items
     // Air Max: sent once, both changes in the one call, new size at stock 0 → In review with SHEIN's version + new SKU code
     expect(edits('E2ESPU1')).toHaveLength(1);
     expect(edits('E2ESPU1')[0].body).toEqual(it.get(7701).body);
@@ -1436,7 +1440,7 @@ test.describe.serial('SHEIN Listings Phase 2 — dry run, run, review (server jo
     expect(w.response).toMatchObject({ code: '0', info: { version: 'E2EV1', success: true } });   // SHEIN's whole answer
     expect((await variant(770112)).status).toBe('in_review');
     expect((await variant(770110)).status).toBe('in_review');
-    // Women's: Shopify changed since the dry run → skipped, NOTHING sent for it
+    // Women's: Shopify changed since the preview → skipped, NOTHING sent for it
     expect(it.get(7702)).toMatchObject({ status: 'changed', error: 'Shopify changed since the dry run — dry run again. Nothing was sent.', idem_key: null });
     expect(edits('E2ESPU2')).toEqual([]);
     // GS: SHEIN reviewing an earlier edit → deferred 30 min, never sent
@@ -1446,7 +1450,7 @@ test.describe.serial('SHEIN Listings Phase 2 — dry run, run, review (server jo
     expect(mins).toBeGreaterThan(29); expect(mins).toBeLessThan(31);
     expect(edits('E2ESPU3')).toEqual([]);
     expect(job.phase).toMatch(/1 waiting, next try .* EST$/);
-    // a dry run is run once
+    // a preview is run once
     await expect(L.startRunJob({ previewJobId: previewId, by: 'e2e-p2', io })).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/already run/) });
   });
 
@@ -1538,7 +1542,7 @@ test.describe.serial('SHEIN Listings Phase 2 — dry run, run, review (server jo
     expect(await L.listingReviewEvent({ spu_name: 'E2ESPU5', audit_state: 3 }, '', { io })).toMatchObject({ handled: 0 });
   });
 
-  test('a custom spelling no person confirmed is skipped by the dry run (and never reaches SHEIN)', async () => {
+  test('a custom spelling no person confirmed is skipped by the preview (and never reaches SHEIN)', async () => {
     await pool.query(`INSERT INTO shein_size_map (category_id, attribute_id, size_key, custom_value, shein_label, source, set_by) VALUES (1001, $1, '14.5|M', 'US14.5', 'US14.5', 'custom_created', NULL)`, [ATTR]);
     await L.recomputeStored({ io: testIO(L.IO) });
     const pv = await preview([7701], p2IO(L.IO));
@@ -1547,7 +1551,7 @@ test.describe.serial('SHEIN Listings Phase 2 — dry run, run, review (server jo
     expect(am.plan.skipped).toEqual([expect.objectContaining({ sku: 'A145', blocker: expect.objectContaining({ code: 'custom_unconfirmed', params: expect.objectContaining({ text: 'US14.5' }) }) })]);
   });
 
-  test('the server dies while a product is being SENT: on resume it looks first (seller-SKU check + spu-info) and never sends twice', async () => {
+  test('the server dies while a product is being SENT: on resume it looks first (SKU check + spu-info) and never sends twice', async () => {
     fake.p2.docs.E2ESPU3 = { state: 2 };                                         // SHEIN's earlier review of the GS shoe closed
     await pool.query(`UPDATE shein_listing_job_items SET next_attempt_at = now() - interval '1 minute' WHERE job_id = $1 AND status = 'deferred'`, [runId]);
     let hit; const hitP = new Promise((r) => { hit = r; }); let open; const openP = new Promise((r) => { open = r; });
@@ -1604,12 +1608,12 @@ test.describe.serial('SHEIN Listings Phase 2 — dry run, run, review (server jo
   });
 });
 
-/* ---------------- Phase 2: the page — dry run → review sheet → confirm → job card ---------------- */
+/* ---------------- Phase 2: the page — preview → review sheet → confirm → job card ---------------- */
 // The browser's POST preview / run / retry are answered by THIS process (page.route): the job runs
 // in-process with the fake SHEIN + a fake Shopify (p2IO), exactly like the server tests above, and
 // the page reads it back from the real endpoints (GET) — so no test server job can ever reach a
 // real Shopify or SHEIN. Everything else the page does goes to the real server.
-test.describe.serial('SHEIN Listings Phase 2 — the page (dry run, confirm, progress)', () => {
+test.describe.serial('SHEIN Listings Phase 2 — the page (preview, confirm, progress)', () => {
   test.use({ timezoneId: 'Asia/Manila' });
   let L; let D;
   const posted = [];
@@ -1641,7 +1645,7 @@ test.describe.serial('SHEIN Listings Phase 2 — the page (dry run, confirm, pro
       return route.continue();
     });
   }
-  const sheet = (page) => page.getByRole('dialog', { name: 'Dry run and send' });
+  const sheet = (page) => page.getByRole('dialog', { name: 'Preview and send' });
   const item = (page, n) => sheet(page).locator(`.shl-ditem[data-product="${gidP(n)}"]`);
   async function dryRun(page, ids, path = '/ph/shein-listings') {
     await page.goto(path);
@@ -1672,13 +1676,13 @@ test.describe.serial('SHEIN Listings Phase 2 — the page (dry run, confirm, pro
   test.beforeEach(() => { test.skip(!pool || !secretsOk || foreign, 'needs the database + BUY_GC_KEY (and no real SHEIN Listings data)'); shopifyNow = SHOPIFY; });
   test.afterAll(() => { fake.p2 = null; });
 
-  test('PH: Dry run opens the review sheet — counts, “0 SHEIN writes”, one line per product, the plan; Confirm disabled without the privilege; no raw request', async ({ page }) => {
+  test('PH: Preview opens the review sheet — counts, “0 SHEIN writes”, one line per product, the plan; Confirm disabled without the privilege; no raw request', async ({ page }) => {
     await loginAs(page, 'ph_team');
     await routeWrites(page);
     fake.writes.length = 0;
     await dryRun(page, [7701, 7702, 7704]);
     const s = sheet(page);
-    await expect(s.locator('[data-proof]')).toContainText('0 SHEIN writes');
+    await expect(s.locator('[data-proof]')).toContainText('0 changes on SHEIN');
     await expect(s.locator('.er-stat', { hasText: 'products to send' })).toContainText('3');
     await expect(s.locator('.er-stat', { hasText: 'sizes to add' })).toContainText('4');
     await expect(s.locator('.er-stat', { hasText: 'custom sizes' })).toContainText('1 new to SHEIN');
@@ -1687,7 +1691,7 @@ test.describe.serial('SHEIN Listings Phase 2 — the page (dry run, confirm, pro
     await expect(item(page, 7702)).toContainText('Will add 2 sizes: US 9.5W (custom), US14.5W (custom, new)');
     await expect(item(page, 7701)).toContainText('change 1 SKU SHEIN has wrong: OLD10 → A10');
     await expect(item(page, 7704)).toContainText('SHEIN is reviewing an earlier edit');
-    // the plan: our size → SHEIN size, seller SKU, price + where from, stock 0; skipped sizes say why
+    // the plan: our size → SHEIN size, SKU, price + where from, stock 0; skipped sizes say why
     await item(page, 7701).getByRole('button', { name: /What is sent/ }).click();
     const row12 = item(page, 7701).locator('.shl-plan tr', { hasText: 'A12' });
     await expect(row12).toContainText('✓ US12');
@@ -1698,7 +1702,7 @@ test.describe.serial('SHEIN Listings Phase 2 — the page (dry run, confirm, pro
     await item(page, 7702).getByRole('button', { name: /What is sent/ }).click();
     await expect(item(page, 7702).locator('.shl-plan tr', { hasText: 'W145' })).toContainText('✚ US14.5W custom size (new');
     await expect(s.getByText(/Exact request to SHEIN/)).toHaveCount(0);           // admin only — and not even in the answer
-    const confirm = s.getByRole('button', { name: 'Add sizes to 3 products' });
+    const confirm = s.getByRole('button', { name: /to SHEIN \(3 products\)/ });
     await expect(confirm).toBeDisabled();
     await expect(confirm).toHaveAttribute('title', /Needs an admin/);
     expect(fake.writes).toEqual([]); expect(fake.p2.edits).toEqual([]);
@@ -1707,32 +1711,32 @@ test.describe.serial('SHEIN Listings Phase 2 — the page (dry run, confirm, pro
     // closing the sheet doesn't touch the job; the Jobs tab lists it, waiting for a person
     await s.getByRole('button', { name: 'Not now' }).click();
     await expect(sheet(page)).toHaveCount(0);
-    await page.getByRole('tab', { name: /Jobs/ }).click();
-    await expect(page.locator('.shl-rtable tr', { hasText: 'e2e-p2ui' }).filter({ hasText: 'Dry run' }).first()).toContainText('Waiting for you');
+    await openAdvanced(page); await page.getByRole('tab', { name: /Jobs/ }).click();
+    await expect(page.locator('.shl-rtable tr', { hasText: 'e2e-p2ui' }).filter({ hasText: 'Preview' }).first()).toContainText('Waiting for you');
   });
 
-  test('admin: confirms → the sheet becomes the job card: In review, Shopify-changed “dry run again”, waiting; SHEIN approves → Done', async ({ page }) => {
+  test('admin: confirms → the sheet becomes the job card: In review, Shopify-changed “preview again”, waiting; SHEIN approves → Done', async ({ page }) => {
     await loginAs(page, 'admin');
     await routeWrites(page);
     await page.setViewportSize({ width: 1320, height: 1000 });
     await page.goto('/shein-listings');
     for (const n of [7701, 7702, 7704]) await page.locator(`.shl-product[data-product="${gidP(n)}"] .shl-chk input`).check();
     await page.locator('.shl-bar').getByRole('button', { name: 'Add missing sizes 3' }).click();
-    await expect(sheet(page).locator('[data-proof]')).toContainText('0 SHEIN writes', { timeout: 20_000 });
+    await expect(sheet(page).locator('[data-proof]')).toContainText('0 changes on SHEIN', { timeout: 20_000 });
     await item(page, 7702).getByRole('button', { name: /What is sent/ }).click();
     await item(page, 7702).getByText('Exact request to SHEIN (admin)').click();
     await expect(item(page, 7702).locator('.shl-json')).toContainText('"custom_attribute_value": "US14.5W"');
     await shot(page, 'desktop-dryrun-admin');
-    // Shopify changes the Air Max after the dry run → that product is not sent
+    // Shopify changes the Air Max after the preview → that product is not sent
     shopifyNow = () => { const l = SHOPIFY(); l.find((p) => p.productId === gidP(7701)).variants.find((v) => v.sku === 'A12').sku = 'A12B'; return l; };
-    await sheet(page).getByRole('button', { name: 'Add sizes to 3 products' }).click();
+    await sheet(page).getByRole('button', { name: /to SHEIN \(3 products\)/ }).click();
     const run = posted.filter((b) => b.action === 'run').pop();
     await expect(sheet(page).locator('.shl-pname')).toContainText('Send to SHEIN #', { timeout: 20_000 });
     expect(run.previewJobId).toBeGreaterThan(0);
     await expect(item(page, 7702).locator('.ebo-chip')).toHaveText('In review');
     await expect(item(page, 7701).locator('.ebo-chip')).toHaveText('Not sent');
-    await expect(item(page, 7701)).toContainText('Shopify changed since the dry run — dry run again');
-    await expect(item(page, 7701).getByRole('button', { name: 'Dry run again' })).toBeEnabled();
+    await expect(item(page, 7701)).toContainText('Shopify changed since the preview — preview again');
+    await expect(item(page, 7701).getByRole('button', { name: 'Preview again' })).toBeEnabled();
     await expect(item(page, 7704).locator('.ebo-chip')).toHaveText('Waiting');
     await expect(item(page, 7704)).toContainText(/(Next try|try again at) .* EST/);
     expect(edits('E2ESPU2')).toHaveLength(1); expect(edits('E2ESPU1')).toEqual([]);
@@ -1743,7 +1747,7 @@ test.describe.serial('SHEIN Listings Phase 2 — the page (dry run, confirm, pro
     await expect(item(page, 7702).locator('.ebo-chip')).toHaveText('Done', { timeout: 15_000 });
     await expect(item(page, 7702)).toContainText('SHEIN approved it');
     await sheet(page).getByRole('button', { name: 'Close', exact: true }).last().click();
-    // the drawer's history: this product's dry run + send, with the summary and status
+    // the drawer's history: this product's preview + send, with the summary and status
     await page.goto(`/shein-listings?product=${encodeURIComponent(gidP(7702))}`);
     const drawer = page.getByRole('dialog', { name: 'Product details' });
     const sent = drawer.locator('.shl-hist-item[data-hist="run"]').first();
@@ -1753,16 +1757,16 @@ test.describe.serial('SHEIN Listings Phase 2 — the page (dry run, confirm, pro
   });
   const edits = (spu) => fake.p2.edits.filter((e) => e.body.spu_name === spu);
 
-  test('a refusal shows SHEIN’s words verbatim (+ Dry run again); a no-answer failure has Retry (admin) — in the Jobs tab too', async ({ page }) => {
+  test('a refusal shows SHEIN’s words verbatim (+ Preview again); a no-answer failure has Retry (admin) — in the Jobs tab too', async ({ page }) => {
     await loginAs(page, 'admin');
     await routeWrites(page);
     const MSG = 'Size chart: foot length must be an integer';
     fake.p2.refuse.E2ESPU1 = MSG;
     await dryRun(page, [7701], '/shein-listings');
-    await sheet(page).getByRole('button', { name: 'Add sizes to 1 product' }).click();
+    await sheet(page).getByRole('button', { name: /to SHEIN \(1 product\)/ }).click();
     await expect(item(page, 7701).locator('.ebo-chip')).toHaveText('Error', { timeout: 20_000 });
     await expect(item(page, 7701)).toContainText(`SHEIN said: “${MSG}”`);
-    await expect(item(page, 7701).getByRole('button', { name: 'Dry run again' })).toBeVisible();
+    await expect(item(page, 7701).getByRole('button', { name: 'Preview again' })).toBeVisible();
     await expect(item(page, 7701).getByRole('button', { name: 'Retry' })).toHaveCount(0);   // SHEIN refused: retrying sends the same refusal
     delete fake.p2.refuse.E2ESPU1;
     // a product SHEIN never answered (5 tries) → Retry
@@ -1791,14 +1795,14 @@ test.describe.serial('SHEIN Listings Phase 2 — the page (dry run, confirm, pro
     };
     await dryRun(page, [7702, 7704]);
     expect((await sheet(page).boundingBox()).width).toBeLessThanOrEqual(390);
-    // only the ticked shoes with a size to add are dry-run (2026-10-28) — 7702 was sent and approved above
+    // only the ticked shoes with a size to add are previewed (2026-10-28) — 7702 was sent and approved above
     for (const n of [7702, 7704]) {
       const open = item(page, n).getByRole('button', { name: /What is sent/ });
       if (await open.count()) await open.click();
     }
     await noSideScroll('review');
     await shot(page, 'phone-dryrun');
-    await expect(sheet(page).getByRole('button', { name: /^Add sizes to/ })).toBeDisabled();
+    await expect(sheet(page).getByRole('button', { name: /to SHEIN \(\d+ products?\)/ })).toBeDisabled();
     await sheet(page).getByRole('button', { name: 'Not now' }).click();
     // the earlier send, opened from the drawer's history: the job card
     await page.goto(`/ph/shein-listings?product=${encodeURIComponent(gidP(7701))}`);
@@ -1946,7 +1950,7 @@ test.describe.serial('SHEIN Listings Phase 2 — the API review fixes, end to en
   test.beforeEach(() => { test.skip(!pool || !secretsOk || foreign, 'needs the database + BUY_GC_KEY (and no real SHEIN Listings data)'); });
   test.afterAll(() => { fake.p2 = null; });
 
-  test('M7 + S4: a CODED refusal → Error with the reason from info.pre_valid_result; the key is released, so a later dry run sends again; S5/S6 on the answer', async () => {
+  test('M7 + S4: a CODED refusal → Error with the reason from info.pre_valid_result; the key is released, so a later preview sends again; S5/S6 on the answer', async () => {
     const MSG = 'Toddler sizes need an insole length';
     fake.p2.refuseCoded.E2ESPU4 = MSG;
     let job = await run((await preview([7703], io())).id, io());
@@ -1986,7 +1990,7 @@ test.describe.serial('SHEIN Listings Phase 2 — the API review fixes, end to en
     expect(sent[0].body.skc_list[0].skc_title).toBe('Dunk Low Women White');
   });
 
-  test('S2 + M6: busy → first look after 5 min; success WITHOUT a version → “unknown”, looked up later; a lagging seller-SKU check is caught by the new document version — sent once', async () => {
+  test('S2 + M6: busy → first look after 5 min; success WITHOUT a version → “unknown”, looked up later; a lagging SKU check is caught by the new document version — sent once', async () => {
     fake.p2.busy = 1;
     const job = await run((await preview([7701], io())).id, io());
     let it = (await items(job.id)).get(7701);
@@ -2007,7 +2011,7 @@ test.describe.serial('SHEIN Listings Phase 2 — the API review fixes, end to en
     it = (await items(job.id)).get(7701);
     fake.p2.lag = false;
     expect(it).toMatchObject({ status: 'in_review', version: fake.p2.docs.E2ESPU1.version, error: expect.stringMatching(/not sent twice/) });
-    expect(edits('E2ESPU1')).toHaveLength(before + 1);                                  // the seller-SKU check lagged; the new version said "arrived"
+    expect(edits('E2ESPU1')).toHaveLength(before + 1);                                  // the SKU check lagged; the new version said "arrived"
   });
 
   test('M6 + S9: the poll asks about OUR version; another submission’s rejection, or a webhook without a version, changes nothing; −1 = “SHEIN didn’t receive it”', async () => {
@@ -2071,7 +2075,7 @@ test.describe('SHEIN Listings Phase 2 — the re-review fixes (pure)', () => {
     expect(r.plan.blockers[0]).toMatchObject({ code: 'skc_field_uncopyable', params: { why: 'fill_unread' } });
     expect(renderBlocker(r.plan.blockers[0]).title).toMatch(/couldn’t read SHEIN’s listing rules/);
   });
-  test('N2: the live walk never skips STOCK for a product with a listing edit in flight — only its seller-SKU edits', async () => {
+  test('N2: the live walk never skips STOCK for a product with a listing edit in flight — only its SKU edits', async () => {
     const { walkModeFor } = await import('../api/_lib/shein-live.js');
     for (const flight of ['sending', 'sent', 'in_review', 'deferred']) {
       expect(walkModeFor(flight, 'full')).toBe('stock');
@@ -2161,7 +2165,7 @@ test.describe('SHEIN Listings Phase 3 — the engine (pure)', () => {
     expect(down.body.productPriceList[0].shopPrice).toBe(114);                  // 133.33 − 15 % = 113.33 → $114 (up)
     const shop = planPrice({ spu, stored, targets: new Map([[gidV(770107), { price: 50, from: 'market' }]]), auto: true, shopifyFloor: new Map([[gidV(770107), 120.2]]) });
     expect(shop.body.productPriceList[0].shopPrice).toBe(121);                  // never below Shopify $120.20 → $121
-    expect(planPrice({ spu, stored, targets: new Map([[gidV(770107), { price: 300, from: 'market' }]]) }).body.productPriceList[0].shopPrice).toBe(300);   // a person's dry run: no cap
+    expect(planPrice({ spu, stored, targets: new Map([[gidV(770107), { price: 300, from: 'market' }]]) }).body.productPriceList[0].shopPrice).toBe(300);   // a person's preview: no cap
   });
   test('D8a: the automatic re-sync cuts at most 15 % a day and never below the Shopify price; market targets only', () => {
     const spu = JSON.parse(JSON.stringify(SHEIN.E2ESPU1));
@@ -2173,7 +2177,7 @@ test.describe('SHEIN Listings Phase 3 — the engine (pure)', () => {
     expect(a.plan.notes.map((n) => n.code)).toContain('auto_capped');
     const b = planPrice({ spu, stored, targets: t, auto: true, shopifyFloor: new Map([[gidV(770107), 150]]) });
     expect(b.body.productPriceList[0].shopPrice).toBe(150);                     // never below the Shopify price
-    expect(planPrice({ spu, stored, targets: t, auto: false }).body.productPriceList[0].shopPrice).toBe(100);   // a person's dry run: unchanged
+    expect(planPrice({ spu, stored, targets: t, auto: false }).body.productPriceList[0].shopPrice).toBe(100);   // a person's preview: unchanged
     expect(sheinNewSizePrice({ shopifyPrice: '120', marketOnly: true })).toBe(null);
   });
   test('the idempotency key includes SHEIN’s state before the send: the same price later is a new send, the same intent twice is not', async () => {
@@ -2229,7 +2233,7 @@ const P3 = () => {
   p(7704).title = 'Jordan 1 GS Retro (GS0001-001)';
   return list;
 };
-test.describe.serial('SHEIN Listings Phase 3 — dry run, run, review (server jobs vs the fake SHEIN)', () => {
+test.describe.serial('SHEIN Listings Phase 3 — preview, run, review (server jobs vs the fake SHEIN)', () => {
   let L; let D; let auth; let previewId; let runId; let savedAuto;
   const stocked = [];
   const items = async (jobId) => (await D.listListingJobItems(jobId, { limit: 1000 })).map((i) => ({ ...i, n: Number(i.shopify_product_id.split('/').pop()) }));
@@ -2278,7 +2282,7 @@ test.describe.serial('SHEIN Listings Phase 3 — dry run, run, review (server jo
     expect((await variant(770404)).diffs).toEqual([]);                          // GS 4Y: $110 = $110
   });
 
-  test('the dry run (ops price + edit): price/save bodies and ONE partialEdit per product — zero writes', async ({ request }) => {
+  test('the preview (ops price + edit): price/save bodies and ONE partialEdit per product — zero writes', async ({ request }) => {
     fake.writes.length = 0; fake.p2.priceCalls.length = 0;
     const j = await L.startListingJob({ kind: 'preview', by: 'e2e-p3', scope: { productIds: [7701, 7702, 7703, 7704].map(gidP), ops: ['price', 'edit'] }, io: io() });
     jobsMade.add(j.id);
@@ -2318,7 +2322,7 @@ test.describe.serial('SHEIN Listings Phase 3 — dry run, run, review (server jo
     expect(await one(runId, 7701, 'price')).toMatchObject({ status: 'done', sku_codes: [expect.objectContaining({ skuCode: 'E2E1-07', status: 1, to: 149 })] });
     expect(await one(runId, 7703, 'price')).toMatchObject({ status: 'in_review', sku_codes: [expect.objectContaining({ skuCode: 'E2E4-4C', status: 2, to: 70 })] });
     expect((await variant(770304)).status).toBe('in_review');
-    expect((await D.listingInflightSpus()).has('E2ESPU4')).toBe(false);         // S10: a price review never holds the walk's seller-SKU edits
+    expect((await D.listingInflightSpus()).has('E2ESPU4')).toBe(false);         // S10: a price review never holds the walk's SKU edits
     expect((await variant(770107)).shein_price).toBe('149.00');                 // read back from SHEIN after the cut
     expect(await one(runId, 7701, 'edit')).toMatchObject({ status: 'in_review', version: expect.stringMatching(/^E2EV/) });
     { const x = await one(runId, 7704, 'edit'); expect(x, x.error).toMatchObject({ status: 'in_review' }); }
@@ -2365,7 +2369,7 @@ test.describe.serial('SHEIN Listings Phase 3 — dry run, run, review (server jo
     shelf = new Set(); fake.p2.mall['E2E1-07'] = 1;
   });
 
-  test('D8 “auto re-sync price”: OFF by default (nothing happens); only an admin / Connect integrations turns it on; ON it runs the SAME dry run → run', async ({ request }) => {
+  test('D8 “automatic price update”: OFF by default (nothing happens); only an admin / Connect integrations turns it on; ON it runs the SAME preview → run', async ({ request }) => {
     expect(await L.readAutoPrice()).toMatchObject({ on: false });
     expect(await L.autoPriceTick({ io: io() })).toEqual({ why: 'off' });
     expect((await request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'auto_price', on: true } })).status()).toBe(403);
@@ -2453,7 +2457,7 @@ test.describe.serial('SHEIN Listings Phase 3 — dry run, run, review (server jo
 
 /* ------------------- Phase 3 — the page (Needs update → Synced) ------------------- */
 
-test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices & sizes, auto re-sync price)', () => {
+test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices & sizes, automatic price update)', () => {
   test.use({ timezoneId: 'Asia/Manila' });
   let L; let D; let savedAuto;
   const posted = [];
@@ -2483,7 +2487,7 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
       return route.continue();
     });
   }
-  const sheet = (page) => page.getByRole('dialog', { name: 'Dry run and send' });
+  const sheet = (page) => page.getByRole('dialog', { name: 'Preview and send' });
   const item = (page, n, op) => sheet(page).locator(`.shl-ditem[data-product="${gidP(n)}"][data-op="${op}"]`);
   async function updateDryRun(page, ids, path = '/ph/shein-listings') {
     await page.goto(path);
@@ -2541,19 +2545,20 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
     const a7 = air.locator(`tr[data-row="${gidV(770107)}"]`);
     await expect(a7).toContainText('SHEIN $160 → $149');
     await expect(a7).toContainText('Turned off on SHEIN — will turn back on');
-    await expect(a7.getByRole('button', { name: 'Dry run the update' })).toBeEnabled();
+    await expect(a7.getByRole('button', { name: 'Preview the update' })).toBeEnabled();
     await expect(air.locator(`tr[data-row="${gidV(770110)}"]`)).toContainText('SHEIN has the wrong SKU: OLD10 → will change to A10');
     const tod = page.locator(`.shl-product[data-product="${gidP(7703)}"]`);
     await tod.locator('.shl-caret').click();
     await expect(tod.locator(`tr[data-row="${gidV(770304)}"]`)).toContainText('SHEIN $60 → $70 ↑ SHEIN may review it');
     // D8: PH sees the state, can't change it
+    await openAdvanced(page);
     const auto = page.locator('.shl-auto');
     await expect(auto).toHaveAttribute('data-auto', 'off');
-    await expect(auto).toContainText('Auto re-sync price: Off');
+    await expect(auto).toContainText('Automatic price update: Off');
     await expect(auto).toContainText('An admin (or the Connect integrations privilege) can change this.');
     await expect(auto.getByRole('button')).toHaveCount(0);
     await shot(page, 'desktop-update-row');
-    // the drawer: "was …" next to what it will be; the two dry runs, named apart
+    // the drawer: "was …" next to what it will be; the two previews, named apart
     await page.goto(`/ph/shein-listings?product=${encodeURIComponent(gidP(7701))}`);
     const drawer = page.getByRole('dialog', { name: 'Product details' });
     const r7 = drawer.locator('.shl-plan tr', { hasText: 'US7' }).first();
@@ -2565,7 +2570,7 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
     await shot(page, 'desktop-update-drawer');
   });
 
-  test('PH: “Update prices & sizes” opens a dry run with the price lines — SHEIN now → will be, the rise flagged, where the price came from, skipped with the reason; Confirm needs the privilege', async ({ page }) => {
+  test('PH: “Update prices & sizes” opens a preview with the price lines — SHEIN now → will be, the rise flagged, where the price came from, skipped with the reason; Confirm needs the privilege', async ({ page }) => {
     await loginAs(page, 'ph_team');
     await page.setViewportSize({ width: 1320, height: 1000 });
     await routeWrites(page);
@@ -2574,7 +2579,7 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
     expect(posted.at(-1)).toMatchObject({ action: 'preview', ops: ['price', 'edit'] });
     const s = sheet(page);
     await expect(s.locator('.shl-sheet-head')).toContainText('Update prices & sizes — what WOULD be sent');
-    await expect(s.locator('[data-proof]')).toContainText('0 SHEIN writes');
+    await expect(s.locator('[data-proof]')).toContainText('0 changes on SHEIN');
     const stat = (t) => s.locator('[data-stats="update"] .er-stat', { hasText: t });
     await expect(stat('products checked')).toContainText('3');
     await expect(stat('products to update')).toContainText('2');
@@ -2607,17 +2612,17 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
     await p72.getByRole('button', { name: /What is sent/ }).click();
     await expect(p72).toContainText('US7W — In a SHEIN promotion: price can’t go up.');
     await expect(p72).toContainText('SHEIN special $115 is live (original $120) — the target is $110.');
-    const confirm = s.getByRole('button', { name: 'Update 2 products' });
+    const confirm = s.getByRole('button', { name: 'Send changes for 2 products to SHEIN' });
     await expect(confirm).toBeDisabled();
     await expect(confirm).toHaveAttribute('title', /Needs an admin/);
     expect(fake.writes).toEqual([]); expect(fake.p2.priceCalls).toEqual([]);
     await shot(page, 'desktop-update-dryrun');
     await s.getByRole('button', { name: 'Not now' }).click();
-    await page.getByRole('tab', { name: /Jobs/ }).click();
-    await expect(page.locator('.shl-rtable tr', { hasText: 'e2e-p3ui' }).filter({ hasText: 'Dry run · update prices & sizes' }).first()).toContainText('Waiting for you');
+    await openAdvanced(page); await page.getByRole('tab', { name: /Jobs/ }).click();
+    await expect(page.locator('.shl-rtable tr', { hasText: 'e2e-p3ui' }).filter({ hasText: 'Preview · update prices & sizes' }).first()).toContainText('Waiting for you');
   });
 
-  test('390 px: the Needs update rows, the update dry run and the drawer — no horizontal scroll', async ({ page }) => {
+  test('390 px: the Needs update rows, the update preview and the drawer — no horizontal scroll', async ({ page }) => {
     await loginAs(page, 'ph_team');
     await routeWrites(page);
     await page.setViewportSize({ width: 390, height: 844 });
@@ -2630,8 +2635,8 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
     await page.locator('.shl-bar').getByRole('button', { name: /^Update prices & sizes/ }).click();
     await expect(sheet(page).locator('[data-proof]')).toBeVisible({ timeout: 20_000 });
     for (const op of ['price', 'edit']) await item(page, 7701, op).getByRole('button', { name: /What is sent/ }).click();
-    await noSideScroll(page, 'update dry run');
-    await expect(sheet(page).getByRole('button', { name: 'Update 1 product' })).toBeDisabled();
+    await noSideScroll(page, 'update preview');
+    await expect(sheet(page).getByRole('button', { name: 'Send changes for 1 product to SHEIN' })).toBeDisabled();
     await shot(page, 'phone-update-dryrun');
     await sheet(page).getByRole('button', { name: 'Not now' }).click();
     await page.goto(`/ph/shein-listings?product=${encodeURIComponent(gidP(7701))}`);
@@ -2640,24 +2645,25 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
     await shot(page, 'phone-update-drawer');
   });
 
-  test('admin: auto re-sync price round trip (confirm says what it does, who/when shows); Update → the job card: a cut Approved, a rise In review per size', async ({ page }) => {
+  test('admin: automatic price update round trip (confirm says what it does, who/when shows); Update → the job card: a cut Approved, a rise In review per size', async ({ page }) => {
     await loginAs(page, 'admin');
     await routeWrites(page);
     await page.setViewportSize({ width: 1320, height: 1000 });
     await page.goto('/shein-listings');
+    await openAdvanced(page);
     const auto = page.locator('.shl-auto');
     await expect(auto).toContainText('never turned on');
     await auto.getByRole('button', { name: 'Turn on…' }).click();
-    const dlg = page.getByRole('dialog').filter({ hasText: 'Turn on auto re-sync price?' });
+    const dlg = page.getByRole('dialog').filter({ hasText: 'Turn on automatic price update?' });
     await expect(dlg).toContainText('Once a day (EST)');
-    await expect(dlg).toContainText('dry run');
+    await expect(dlg).toContainText('preview');
     await page.waitForTimeout(300);                                          // the modal's fade-in, for the screenshot
     await shot(page, 'desktop-update-autoprice');
     await dlg.getByRole('button', { name: 'Cancel' }).click();
     await expect(auto).toHaveAttribute('data-auto', 'off');                  // Cancel changes nothing
     expect((await pool.query(`SELECT 1 FROM app_settings WHERE key = 'shein_listing_auto_price'`)).rowCount).toBe(0);
     await auto.getByRole('button', { name: 'Turn on…' }).click();
-    await page.getByRole('dialog').getByRole('button', { name: 'Turn on auto re-sync' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Turn on automatic price update' }).click();
     await expect(auto).toHaveAttribute('data-auto', 'on');
     await expect(auto).toContainText('turned on by Alex');
     await expect(auto).toContainText('EST');
@@ -2668,7 +2674,7 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
     expect(JSON.parse((await pool.query(`SELECT value FROM app_settings WHERE key = 'shein_listing_auto_price'`)).rows[0].value)).toMatchObject({ on: false });
     // confirm an update → the job card
     await updateDryRun(page, [7701, 7703], '/shein-listings');
-    await sheet(page).getByRole('button', { name: 'Update 2 products' }).click();
+    await sheet(page).getByRole('button', { name: 'Send changes for 2 products to SHEIN' }).click();
     await expect(sheet(page).locator('.shl-pname')).toContainText('Send to SHEIN #', { timeout: 20_000 });
     await expect(sheet(page).locator('.shl-sheet-head')).toContainText('Updating prices, sizes turned off and wrong SKUs on SHEIN');
     const p71 = item(page, 7701, 'price');
@@ -2729,7 +2735,7 @@ test.describe('SHEIN Listings Phase 4 — the planner (pure)', () => {
 });
 
 test.describe('SHEIN Listings — an edit carries the details SHEIN now requires (2026-10-28, pure)', () => {
-  // 4seller's Nikes lack "Reflection" (made required later): SHEIN refused every seller-SKU fix and size add
+  // 4seller's Nikes lack "Reflection" (made required later): SHEIN refused every SKU fix and size add
   // ("Reflection: The template attribute under type is required."). partialEdit re-checks the whole product.
   const cur = (id, valueId, text = null) => ({ attributeId: id, attributeValueId: valueId, attributeValue: text });
   const spuWith = (list) => ({ ...SHEIN.E2ESPU3, productAttributeInfoList: list });
@@ -2914,11 +2920,11 @@ test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fak
     const line = (k) => d.checklist.find((l) => l.key === k);
     expect(line('category')).toMatchObject({ n: 6, ok: false });
     expect(line('box')).toMatchObject({ n: 15, ok: false });
-    expect(line('store').ok).toBe(null);                                         // store gates: only a dry run reads them
+    expect(line('store').ok).toBe(null);                                         // store gates: only a preview reads them
     expect(d.checklistFrom).toEqual({ readiness: true });
   });
 
-  test('a dry run refuses a product while any line is ✕ — “skipped” with the reason; SHEIN suggests a category; zero writes', async () => {
+  test('a preview refuses a product while any line is ✕ — “skipped” with the reason; SHEIN suggests a category; zero writes', async () => {
     fake.writes.length = 0;
     const job = await preview([7708]);
     expect(job.status).toBe('done');                                             // nothing sendable
@@ -2959,7 +2965,7 @@ test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fak
     expect((await request.post('/api/shein/listing-maps?type=box', { headers: auth.admin, data: { groups: { ...groups, adult: { ...groups.adult, width: 'x' } } } })).status()).toBe(400);
     expect((await request.post('/api/shein/listing-maps?type=box', { headers: auth.admin, data: { groups: { ...groups, toddler: { ...groups.toddler, length: '421.64' } } } })).status()).toBe(400);   // 166 in
     expect((await (await request.post('/api/shein/listing-maps?type=box', { headers: auth.admin, data: { groups } })).json()).box).toMatchObject({ confirmed: true, by: 'Alex', groups: { adult: { length: '34', weight: 1450 } } });
-    // saving recounts at once (DB only): box_unconfirmed is gone from the shoe without a Re-read
+    // saving recounts at once (DB only): box_unconfirmed is gone from the shoe without a Refresh
     const codes = async () => (await pool.query(`SELECT blockers FROM shein_listing_variants WHERE row_key = $1`, [gidV(770809)])).rows[0].blockers.map((b) => b.code);
     expect(await codes()).not.toContain('box_unconfirmed');
     // a box saved BEFORE the limit (166 in) reads unconfirmed with the reason — it blocks publishing
@@ -3003,8 +3009,8 @@ test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fak
     expect(u(0)).toMatch(/^https:\/\/img\.ltwebstatic\.com\//);
     expect(it.plan.checklist.every((l) => l.ok === true)).toBe(true);
     expect(it.plan).toMatchObject({ quota: { controlled: true, available: 5, uses: 1 }, photos: { source: 'shopify', count: 3, converted: 4 } });
-    expect(summarizePlan(it.plan)).toBe('Will publish “Nike Air Force 1 Low White (CW2288-111)” with 4 sizes: US9 $110, US10 $110, US11 $115, US14 $120 · 4 photos · uses 1 of 5 publish quota');
-    // photos are cached by source + render + IMAGE TYPE: a second dry run converts nothing
+    expect(summarizePlan(it.plan)).toBe('Will publish “Nike Air Force 1 Low White (CW2288-111)” with 4 sizes: US9 $110, US10 $110, US11 $115, US14 $120 · 4 photos · uses 1 of 5 monthly new-product limit');
+    // photos are cached by source + render + IMAGE TYPE: a second preview converts nothing
     const again = fake.p4.transforms.length;
     await preview([7708]);
     expect(fake.p4.transforms.length).toBe(again);
@@ -3119,8 +3125,8 @@ test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fak
 /* ------------------------- Phase 4: the page (publish brand-new products) ------------------------- */
 // The drawer's 18-line checklist (✓ / ✕ / not read yet, each ✕ with its fix inline), the category pick
 // (DB only), the D6 box banner (UNCONFIRMED blocks; only admin / Connect integrations save it), the publish
-// dry run sheet, the job card (In review → Rejected with SHEIN's reason → Publish again), the store-gate
-// banner, 390 px. Dry runs / runs are answered in-process against the fake SHEIN (routeWrites).
+// preview sheet, the job card (In review → Rejected with SHEIN's reason → Publish again), the store-gate
+// banner, 390 px. Previews / runs are answered in-process against the fake SHEIN (routeWrites).
 test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Publish new products)', () => {
   test.use({ timezoneId: 'Asia/Manila' });
   let L; let D; let auth; let png; let small; let runId = 0; let started; const savedRows = {}; let verifyTok;
@@ -3162,7 +3168,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     });
   }
   const drawer = (page) => page.getByRole('dialog', { name: 'Product details' });
-  const sheet = (page) => page.getByRole('dialog', { name: 'Dry run and send' });
+  const sheet = (page) => page.getByRole('dialog', { name: 'Preview and send' });
   const line = (page, key) => drawer(page).locator(`.shl-pub-line[data-line="${key}"]`);
   const item = (page, n) => sheet(page).locator(`.shl-ditem[data-product="${gidP(n)}"][data-op="publish"]`);
   const noSideScroll = async (page, where) => {
@@ -3226,14 +3232,14 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await expect(dr.locator('.shl-pub-line')).toHaveCount(18);
     await expect(line(page, 'shopify')).toHaveAttribute('data-ok', 'yes');
     await expect(line(page, 'store')).toHaveAttribute('data-ok', 'unread');
-    await expect(line(page, 'store')).toContainText('Not read yet — the dry run checks it');
+    await expect(line(page, 'store')).toContainText('Not read yet — the preview checks it');
     await expect(line(page, 'category')).toHaveAttribute('data-ok', 'no');
     await expect(line(page, 'category')).toContainText('No SHEIN category picked.');
     await expect(line(page, 'box')).toHaveAttribute('data-ok', 'no');
     await expect(line(page, 'box')).toContainText('placeholders nobody confirmed');
     await expect(line(page, 'box').getByRole('button', { name: 'Confirm box sizes' })).toBeVisible();
     await expect(line(page, 'photos').getByRole('checkbox', { name: /Use PH edited photos/ })).not.toBeChecked();
-    // the safety net (2026-10-28): ✕ lines left → the button says so (it shows them, never a dry run)
+    // the safety net (2026-10-28): ✕ lines left → the button says so (it shows them, never a preview)
     await expect(dr.locator('[data-dry="publish"]')).toHaveText(/^Fix \d+ first$/, { timeout: 10_000 });
     await expect(dr.getByRole('button', { name: 'Add missing sizes' })).toHaveCount(0);
     await shot(page, 'desktop-publish-drawer');
@@ -3258,7 +3264,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     expect(fake.writes).toEqual([]);
   });
 
-  test('the box banner: UNCONFIRMED placeholders, PH can’t save them; a publish dry run lists the shoe as “Can’t publish yet” with each ✕ line', async ({ page }) => {
+  test('the box banner: UNCONFIRMED placeholders, PH can’t save them; a publish preview lists the shoe as “Can’t publish yet” with each ✕ line', async ({ page }) => {
     await loginAs(page, 'ph_team');
     await page.setViewportSize({ width: 1320, height: 1000 });
     await routeWrites(page);
@@ -3271,11 +3277,11 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await expect(box.getByRole('textbox', { name: /Adult — men’s and women’s Length/ })).toBeDisabled();
     await expect(page.locator('[data-setup="categories"] [data-type="E2E Sneakers"] tr[data-group="adult"]')).toContainText('E2E Shoes › E2E Men’s Sneakers');
     await shot(page, 'desktop-publish-setup');
-    // the dry run from the selection bar — separate from Add missing sizes / Update prices & sizes
+    // the preview from the selection bar — separate from Add missing sizes / Update prices & sizes
     await page.goto('/ph/shein-listings');
     await page.locator(`.shl-product[data-product="${gidP(7708)}"] .shl-chk input`).check();
     await expect(page.locator('.shl-bar [data-dry="add"]')).toBeDisabled();
-    // the safety net (2026-10-28): a ticked new shoe with ✕ lines opens the fix step (bulk edit) — never the dry run
+    // the safety net (2026-10-28): a ticked new shoe with ✕ lines opens the fix step (bulk edit) — never the preview
     const before = posted.length;
     await page.locator('.shl-bar [data-dry="publish"]').click();
     const bs = page.getByRole('dialog', { name: 'Bulk edit before publishing' });
@@ -3284,17 +3290,17 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await expect(bs.locator('[data-dry="publish-ready"]')).toBeDisabled();
     expect(posted.slice(before).filter((b) => b.action === 'preview')).toEqual([]);
     await bs.locator('.shl-d-foot').getByRole('button', { name: 'Close' }).click();
-    // the server stays the last guard: “Dry run anyway” from the drawer → the dry run refuses it line by line
+    // the server stays the last guard: “Preview anyway” from the drawer → the preview refuses it line by line
     await page.goto(`/ph/shein-listings?product=${encodeURIComponent(gidP(7708))}`);
     await expect(drawer(page).locator('[data-dry="publish"]')).toHaveText(/^Fix \d+ first$/, { timeout: 10_000 });
     await drawer(page).locator('[data-dry="publish"]').click();
-    await expect(drawer(page).locator('[data-fix-first]')).toContainText('nothing was sent or dry-run');
+    await expect(drawer(page).locator('[data-fix-first]')).toContainText('nothing was sent or previewed');
     expect(posted.slice(before).filter((b) => b.action === 'preview')).toEqual([]);
     await drawer(page).locator('[data-act="dry-anyway"]').click();
     await expect(sheet(page).locator('[data-proof]')).toBeVisible({ timeout: 20_000 });
     expect(posted.at(-1)).toMatchObject({ action: 'preview', ops: ['publish'], productIds: [gidP(7708)] });
     await expect(sheet(page).locator('.shl-sheet-head')).toContainText('Publish new products — what WOULD be sent');
-    await expect(sheet(page).locator('[data-proof]')).toContainText('0 SHEIN writes · 0 photos converted');
+    await expect(sheet(page).locator('[data-proof]')).toContainText('0 changes on SHEIN · 0 photos converted');
     const it = item(page, 7708);
     await expect(it.locator('.shl-ditem-head .ebo-chip')).toHaveText('Can’t publish yet');
     await expect(it).toContainText('Can’t publish yet:');
@@ -3306,7 +3312,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await shot(page, 'desktop-publish-blocked');
   });
 
-  test('everything set (brand + details in the drawer, box by an admin) → a PH dry run converts no photos (says who does); the admin’s dry run sheet: title, category path, brand, photos converted, sizes, price, quota', async ({ page, request }) => {
+  test('everything set (brand + details in the drawer, box by an admin) → a PH preview converts no photos (says who does); the admin’s preview sheet: title, category path, brand, photos converted, sizes, price, quota', async ({ page, request }) => {
     expect((await post(request, 'box', { groups: { adult: { length: '34', width: '22', height: '13', weight: 1450 }, youth: { length: '30', width: '19', height: '11', weight: 1000 }, child: { length: '27', width: '17', height: '10', weight: 800 }, toddler: { length: '24', width: '16', height: '9', weight: 600 } } })).status()).toBe(403);
     expect((await post(request, 'box', { groups: { adult: { length: '34', width: '22', height: '13', weight: 1450 }, youth: { length: '30', width: '19', height: '11', weight: 1000 }, child: { length: '27', width: '17', height: '10', weight: 800 }, toddler: { length: '24', width: '16', height: '9', weight: 600 } } }, 'admin')).status()).toBe(200);
     await loginAs(page, 'ph_team');
@@ -3318,11 +3324,11 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     const bp = line(page, 'brand').locator('[data-panel="brand"]');
     await bp.getByRole('combobox', { name: /SHEIN brand for E2E Nike/ }).selectOption('NIKE01');
     await bp.getByRole('button', { name: 'Save brand' }).click();
-    await expect(line(page, 'brand')).toContainText('Saved — checked again by the next dry run.');
+    await expect(line(page, 'brand')).toContainText('Saved — checked again by the next preview.');
     // SHEIN details: the per-type defaults editor (Required first); the attribute SHEIN adds with leather goes in by API
     await line(page, 'attributes').getByRole('button', { name: 'Set SHEIN details' }).click();
     const ap = line(page, 'attributes').locator('[data-panel="attributes"]');
-    await expect(ap).toContainText('required still missing');           // the last dry run read SHEIN's template for this type
+    await expect(ap).toContainText('required still missing');           // the last preview read SHEIN's template for this type
     const upper = ap.locator('.shl-attr[data-attr="7000"]');
     await expect(upper).toContainText('Required');
     await upper.getByRole('combobox', { name: 'Upper Material' }).selectOption('7001');
@@ -3330,31 +3336,31 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await expect(upper.locator('.ebo-chip.ok')).toHaveText('Saved');
     expect((await post(request, 'attr', { action: 'set', productTypeId: P4TYPE, attributeId: 7200, valueIds: [7201] })).status()).toBe(200);
     await shot(page, 'desktop-publish-details');
-    // security H2: a PH dry run converts NO photos (no R2 upload, no SHEIN transform-pic) — the plan says who does
+    // security H2: a PH preview converts NO photos (no R2 upload, no SHEIN transform-pic) — the plan says who does
     const pics = async () => (await pool.query(`SELECT count(*)::int AS n FROM shein_api_log WHERE path = '/open-api/goods/transform-pic' AND at >= $1`, [started])).rows[0].n;
     const picsBefore = await pics();
     await drawer(page).getByRole('button', { name: 'Publish new product' }).click();
     await expect(sheet(page).locator('[data-proof]')).toBeVisible({ timeout: 20_000 });
-    await expect(item(page, 7708)).toContainText('Photos are converted when an admin or Connect integrations holder runs the dry run');
-    await expect(sheet(page).getByRole('button', { name: 'Publish 1 product' })).toHaveCount(0);
+    await expect(item(page, 7708)).toContainText('Photos are converted when an admin, or someone with the Connect integrations privilege, runs the preview');
+    await expect(sheet(page).getByRole('button', { name: 'Publish 1 new product on SHEIN' })).toHaveCount(0);
     expect(await pics()).toBe(picsBefore);
     await page.goto(`/ph/shein-listings?product=${encodeURIComponent(gidP(7708))}`);
-    await expect(line(page, 'photos')).toContainText('Not read yet — the dry run checks it.');
-    // the admin's dry run converts them
+    await expect(line(page, 'photos')).toContainText('Not read yet — the preview checks it.');
+    // the admin's preview converts them
     await loginAs(page, 'admin');
     await routeWrites(page);
     await page.goto(`/shein-listings?product=${encodeURIComponent(gidP(7708))}`);
     await drawer(page).getByRole('button', { name: 'Publish new product' }).click();
     await expect(sheet(page).locator('[data-proof]')).toBeVisible({ timeout: 20_000 });
     const s = sheet(page);
-    await expect(s.locator('[data-proof]')).toContainText('0 SHEIN writes · 4 photos converted');
+    await expect(s.locator('[data-proof]')).toContainText('0 changes on SHEIN · 4 photos converted');
     const stat = (t) => s.locator('[data-stats="publish"] .er-stat', { hasText: t });
     await expect(stat('ready to publish')).toContainText('1');
     await expect(stat('sizes')).toContainText('4');
-    await expect(s.locator('[data-quota]')).toContainText(/uses 1 of 5\s*publish quota left this month/);
+    await expect(s.locator('[data-quota]')).toContainText(/uses 1 of 5\s*monthly new-product limit left this month/);
     const it = item(page, 7708);
     await expect(it.locator('.shl-ditem-head .ebo-chip')).toHaveText('Ready to publish');
-    await expect(it).toContainText('Will publish “Nike Air Force 1 Low White (CW2288-111)” with 4 sizes: US9 $110, US10 $110, US11 $115, US14 $120 · 4 photos · uses 1 of 5 publish quota');
+    await expect(it).toContainText('Will publish “Nike Air Force 1 Low White (CW2288-111)” with 4 sizes: US9 $110, US10 $110, US11 $115, US14 $120 · 4 photos · uses 1 of 5 monthly new-product limit');
     const pl = it.locator('[data-plan="publish"]');
     await expect(pl).toContainText('E2E Shoes › E2E Men’s Sneakers');
     await expect(pl).toContainText('Nike');
@@ -3362,16 +3368,16 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await expect(pl).toContainText('uses 1 of 5 left this month');
     await expect(pl).toContainText('SB12-P7708');
     await expect(pl.locator('.shl-pthumb-w')).toHaveCount(4);
-    await expect(pl.locator('[data-photos]')).toContainText('3 source photos from Shopify · 4 converted for SHEIN in this dry run');
+    await expect(pl.locator('[data-photos]')).toContainText('3 source photos from Shopify · 4 converted for SHEIN in this preview');
     await expect(pl.locator('[data-plan="sizes"] tr', { hasText: 'US9' })).toContainText('$110');
     await expect(pl.locator('[data-plan="sizes"] tr', { hasText: 'US9' })).toContainText('SHEIN size');
     await expect(pl.locator('[data-plan="cant"]')).toHaveCount(0);
-    await expect(s.getByRole('button', { name: 'Publish 1 product' })).toBeEnabled();   // an admin may confirm (not pressed here)
+    await expect(s.getByRole('button', { name: 'Publish 1 new product on SHEIN' })).toBeEnabled();   // an admin may confirm (not pressed here)
     expect(fake.writes).toEqual([]); expect(fake.p4.published || []).toEqual([]);
     await shot(page, 'desktop-publish-dryrun');
     await s.getByRole('button', { name: 'Not now' }).click();
-    await page.getByRole('tab', { name: /Jobs/ }).click();
-    await expect(page.locator('.shl-rtable tr', { hasText: 'e2e_ph' }).or(page.locator('.shl-rtable tr', { hasText: 'e2e-p4ui' })).filter({ hasText: 'Dry run · publish new products' }).first()).toContainText('Waiting for you');
+    await openAdvanced(page); await page.getByRole('tab', { name: /Jobs/ }).click();
+    await expect(page.locator('.shl-rtable tr', { hasText: 'e2e_ph' }).or(page.locator('.shl-rtable tr', { hasText: 'e2e-p4ui' })).filter({ hasText: 'Preview · publish new products' }).first()).toContainText('Waiting for you');
   });
 
   test('admin: “Publish 1 product” → the job card: In review; SHEIN rejects → Rejected with SHEIN’s reason + Publish again', async ({ page }) => {
@@ -3381,7 +3387,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await page.goto(`/shein-listings?product=${encodeURIComponent(gidP(7708))}`);
     await drawer(page).getByRole('button', { name: 'Publish new product' }).click();
     await expect(sheet(page).locator('[data-proof]')).toBeVisible({ timeout: 20_000 });
-    await sheet(page).getByRole('button', { name: 'Publish 1 product' }).click();
+    await sheet(page).getByRole('button', { name: 'Publish 1 new product on SHEIN' }).click();
     await expect(sheet(page).locator('.shl-pname')).toContainText('Send to SHEIN #', { timeout: 20_000 });
     await expect(sheet(page).locator('.shl-sheet-head')).toContainText('Publishing new products on SHEIN');
     const it = item(page, 7708);
@@ -3444,7 +3450,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     expect((await page.request.post('/api/shein/listing-maps?type=box', { headers: auth.admin, data: { groups: before } })).status()).toBe(200);
   });
 
-  test('admin: Publish again → recorded, and a fresh dry run opens (ready to publish again)', async ({ page }) => {
+  test('admin: Publish again → recorded, and a fresh preview opens (ready to publish again)', async ({ page }) => {
     fake.p4.pending.clear();                                                    // SHEIN no longer counts the rejected SKUs
     await loginAs(page, 'admin');
     await page.setViewportSize({ width: 1320, height: 1000 });
@@ -3452,12 +3458,12 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await page.goto(`/shein-listings?tab=jobs&job=${runId}`);
     await page.locator(`.shl-ditem[data-product="${gidP(7708)}"]`).getByRole('button', { name: 'Publish again' }).click();
     await expect(page.locator('.shl-dinline [data-proof]')).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator('.shl-dinline h3')).toContainText('Dry run #');
+    await expect(page.locator('.shl-dinline h3')).toContainText('Preview (changes nothing) #');
     await expect(page.locator(`.shl-ditem[data-product="${gidP(7708)}"] .shl-ditem-head .ebo-chip`)).toHaveText('Ready to publish');
     expect((await pool.query(`SELECT publish_again_by FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(7708)])).rows[0].publish_again_by).toBe('Alex');
   });
 
-  test('the store-gate banner: SHEIN refuses new listings → a banner for everyone, dry runs still allowed', async ({ page }) => {
+  test('the store-gate banner: SHEIN refuses new listings → a banner for everyone, previews still allowed', async ({ page }) => {
     await pool.query(`DELETE FROM shein_listing_cache WHERE kind = 'publish_perm' AND key = 'store'`);
     await pool.query(`INSERT INTO shein_listing_cache (kind, key, payload) VALUES ('publish_perm', 'store', $1)`, [JSON.stringify({ canPublishProduct: false, reason: 'KYC not finished' })]);
     await loginAs(page, 'ph_team');
@@ -3466,16 +3472,16 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     const b = page.locator('[data-gates="closed"]');
     await expect(b).toContainText('SHEIN isn’t taking new products right now');
     await expect(b).toContainText('SHEIN won’t take new listings: KYC not finished.');
-    await expect(b).toContainText('Dry runs still work');
+    await expect(b).toContainText('Previews still work');
     await page.locator(`.shl-product[data-product="${gidP(7709)}"] .shl-chk input`).check();
     await expect(page.locator('.shl-bar [data-dry="publish"]')).toBeEnabled();
-    await page.getByRole('tab', { name: /Setup/ }).click();
+    await openAdvanced(page); await page.getByRole('tab', { name: /Setup/ }).click();
     await expect(page.locator('[data-setup="gates"]')).toContainText('SHEIN said: “KYC not finished”');
     await shot(page, 'desktop-publish-gates');
     await pool.query(`DELETE FROM shein_listing_cache WHERE kind = 'publish_perm' AND key = 'store'`);
   });
 
-  test('390 px: the checklist with a fix open, Setup, and the publish dry run sheet — no horizontal scroll', async ({ page }) => {
+  test('390 px: the checklist with a fix open, Setup, and the publish preview sheet — no horizontal scroll', async ({ page }) => {
     await loginAs(page, 'ph_team');
     await routeWrites(page);
     await page.setViewportSize({ width: 390, height: 844 });
@@ -3496,10 +3502,10 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await page.goto('/ph/shein-listings');
     await page.locator(`.shl-product[data-product="${gidP(7709)}"] .shl-chk input`).check();
     await noSideScroll(page, 'bar');
-    await page.locator('.shl-bar [data-dry="publish"]').click();   // 7709 is ready by now → straight to the dry run
+    await page.locator('.shl-bar [data-dry="publish"]').click();   // 7709 is ready by now → straight to the preview
     await expect(sheet(page).locator('[data-proof]')).toBeVisible({ timeout: 20_000 });
     await expect(item(page, 7709).locator('[data-plan="publish"]')).toBeVisible();
-    await noSideScroll(page, 'publish dry run');
+    await noSideScroll(page, 'publish preview');
     await shot(page, 'phone-publish-dryrun');
   });
 
@@ -3572,7 +3578,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
   });
 
   // 2026-10-28 (user): a shoe with too few Shopify photos, “Use PH photos on all” pressed — still ✕. The readiness
-  // counted Shopify’s photos only; the dry run sends the style’s PH edited photos. Now it counts those, and says so when there are none.
+  // counted Shopify’s photos only; the preview sends the style’s PH edited photos. Now it counts those, and says so when there are none.
   test('photos: “Use PH edited photos” on → the photo line counts the style’s PH photos; none → it says the PH team has none (not “use PH photos”)', async ({ request }) => {
     const style = 'DD1391-100';
     const setup = async () => (await (await request.get(`/api/shein/listings?publishSetup=${encodeURIComponent(gidP(7709))}`, { headers: auth.ph })).json()).products[0];
@@ -3641,6 +3647,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await routeWrites(page);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/ph/shein-listings');
+    await page.getByRole('button', { name: 'More filters' }).click();
     await page.locator('[data-shopfilter] [data-shop="active"]').click();
     await expect(page).toHaveURL(/[?&]shop=active/);
     await page.reload();
@@ -3654,7 +3661,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     const bs = page.getByRole('dialog', { name: 'Bulk edit before publishing' });
     await expect(bs.locator('[data-bulk-row]')).toHaveCount(2, { timeout: 10_000 });
     await expect(bs.locator('[data-bulk-fixes] [data-fix="category"]')).toBeVisible();
-    await expect(bs.locator('[data-dry="publish-ready"]')).toHaveText(/^Dry run publish \(\d+ ready\)$/);
+    await expect(bs.locator('[data-dry="publish-ready"]')).toHaveText(/^Preview \(changes nothing\): \d+ ready$/);
     await noSideScroll(page, 'bulk sheet');
     await shot(page, 'phone-bulk-sheet');
     expect(posted.slice(before).filter((b) => b.action === 'preview')).toEqual([]);   // opening it starts nothing
@@ -3807,7 +3814,7 @@ test.describe.serial('SHEIN Listings Phase 4 review fixes — publish end to end
     expect(fake.p4.published).toHaveLength(1);                                  // sent exactly once
   });
 
-  test('F1: with a lagging seller-SKU check a look finds nothing — still never resent by itself; once SHEIN shows it, Look again → In review', async () => {
+  test('F1: with a lagging SKU check a look finds nothing — still never resent by itself; once SHEIN shows it, Look again → In review', async () => {
     await reset();
     fake.p4.noAnswer = 1; fake.p4.lag = true;
     const before = fake.p4.published.length;
@@ -3839,7 +3846,7 @@ test.describe.serial('SHEIN Listings Phase 4 review fixes — publish end to end
     fake.p4.fill = null; await pool.query(`DELETE FROM shein_listing_cache WHERE kind = 'fill_standard' AND key = $1`, [String(P4CAT)]);
   });
 
-  test('S4 + S8: a dry run judges each product alone (quota 1, 2 products → both ready; uses 2); the category suggestion is cached per product', async () => {
+  test('S4 + S8: a preview judges each product alone (quota 1, 2 products → both ready; uses 2); the category suggestion is cached per product', async () => {
     await reset();
     fake.p4.quota = { isControlled: true, availableQuota: 1, totalQuota: 10, usedCount: 9 };
     const pv = await preview([7711, 7712]);
@@ -3884,7 +3891,7 @@ test.describe.serial('SHEIN Listings Phase 4 review fixes — publish end to end
   });
 
   // ---- final fix batch: security review H1/H2 + Phase 4 re-review G1/G2 ----
-  test('G1: while a publish of a product is unconfirmed, a NEW dry run (even with a changed body) can’t publish it, and its readiness says so', async () => {
+  test('G1: while a publish of a product is unconfirmed, a NEW preview (even with a changed body) can’t publish it, and its readiness says so', async () => {
     await reset();
     fake.p4.drop = 1;
     const sent0 = (fake.p4.published || []).length;
@@ -3917,7 +3924,7 @@ test.describe.serial('SHEIN Listings Phase 4 review fixes — publish end to end
     expect(fake.p4.published.length).toBe(before + 1);                          // one publish, never a second
   });
 
-  test('H2: a dry run a PH user starts converts NO photos (no R2, no transform-pic) and sends nothing; the photo line stays “not read yet”', async () => {
+  test('H2: a preview a PH user starts converts NO photos (no R2, no transform-pic) and sends nothing; the photo line stays “not read yet”', async () => {
     await reset();
     await pool.query(`DELETE FROM shein_listing_cache WHERE kind = 'pic'`);
     const hosted = []; const t0 = fake.p4.calls.filter((c) => c === '/open-api/goods/transform-pic').length;
@@ -3932,7 +3939,7 @@ test.describe.serial('SHEIN Listings Phase 4 review fixes — publish end to end
     expect(hosted).toEqual([]);
     expect(fake.p4.calls.filter((c) => c === '/open-api/goods/transform-pic').length).toBe(t0);
     const { renderBlocker } = await import('../src/lib/sheinListings.js');
-    expect(renderBlocker({ code: 'photos_need_priv' }).fix).toBe('Photos are converted when an admin or Connect integrations holder runs the dry run.');
+    expect(renderBlocker({ code: 'photos_need_priv' }).fix).toBe('Photos are converted when an admin, or someone with the Connect integrations privilege, runs the preview.');
   });
 
   test('H2: the daily transform-pic cap (setting shein_transform_cap, EST day) → “photo limit used up”, nothing more converted', async () => {
@@ -4038,9 +4045,9 @@ test.describe('SHEIN Listings final fixes — security + re-review (pure)', () =
   });
 });
 
-/* ------------------------- Phase 5 — the 4seller cut-over + go-live ------------------------- */
+/* ------------------------- Phase 5 — the Switching over from 4seller + go-live ------------------------- */
 
-test.describe('SHEIN Listings Phase 5 — the cut-over checks (pure)', () => {
+test.describe('SHEIN Listings Phase 5 — the switch-over checks (pure)', () => {
   const at = (s) => new Date(s);
   const nights = (from, to) => { const out = []; for (let d = Date.parse(`${from}T12:00:00Z`); d <= Date.parse(`${to}T12:00:00Z`); d += 86_400_000) out.push({ id: out.length + 1, status: 'done', created_at: new Date(d - 4 * 3600_000).toISOString() }); return out; };   // 08:00 UTC = 03:00/04:00 EST that day
   test('a shoe is answered by Synced / In review / a blocker with a reason / a person’s “Don’t list” — not by Not on SHEIN or a Shopify draft', async () => {
@@ -4113,7 +4120,7 @@ test.describe('SHEIN Listings Phase 5 — the cut-over checks (pure)', () => {
   });
 });
 
-test.describe.serial('SHEIN Listings Phase 5 — the cut-over + go-live cards (endpoint + page)', () => {
+test.describe.serial('SHEIN Listings Phase 5 — the switch-over + go-live cards (endpoint + page)', () => {
   test.use({ timezoneId: 'Asia/Manila' });
   let auth; let savedTicks = null; let jobId = null; let snapId = null;
   const KEY = 'shein_cutover_ticks';
@@ -4193,7 +4200,7 @@ test.describe.serial('SHEIN Listings Phase 5 — the cut-over + go-live cards (e
     await loginAs(page, 'ph_team');
     await page.setViewportSize({ width: 1320, height: 1000 });
     await page.goto('/ph/shein-listings?tab=setup');
-    await expect(card(page, 'golive')).toContainText('Go-live checklist');
+    await expect(card(page, 'golive')).toContainText('Before going live');
     await expect(line(page, 'golive', 'db')).toHaveAttribute('data-ok', 'yes');
     await expect(line(page, 'golive', 'shein_console_hooks')).toContainText('product_price_audit_status_notice');
     await expect(line(page, 'golive', 'paused_first')).toHaveAttribute('data-ok', 'no');
@@ -4217,7 +4224,7 @@ test.describe.serial('SHEIN Listings Phase 5 — the cut-over + go-live cards (e
     await expect(card(page, 'cutover').locator('[data-tick="paused_4seller"]')).toHaveAttribute('data-ticked', 'yes');
     await expect(card(page, 'cutover').locator('[data-tick="paused_4seller"]')).toContainText('Ticked by Alex');
     await expect(card(page, 'cutover').locator('[data-cutover-sum]')).toContainText('Day 0 of 30');
-    await expect(page.locator('[data-cutover-line]')).toContainText('4seller cut-over: day 0 of 30');
+    await expect(page.locator('[data-cutover-line]')).toContainText('Switching over from 4seller: day 0 of 30');
     // the shoes first seen 4–5 days ago are before the start → not counted yet
     await expect(line(page, 'cutover', 'b')).not.toContainText('E2E Cutover Missed Shoe');
     // move the start back 10 days (as if ticked then) — the window now covers both shoes

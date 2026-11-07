@@ -1,13 +1,13 @@
-// SHEIN live sync (docs/context/shein-live-fix.md). What this pins:
-//   · SHEIN's API rows read like the export rows did: size, seller SKU, sellable, held;
+// SHEIN automatic sync (docs/context/shein-live-fix.md). What this pins:
+//   · SHEIN's API rows read like the export rows did: size, SKU, sellable, held;
 //   · per product: stock = Shopify (live) − SHEIN sales not yet off Shopify; the write is an
 //     OVERWRITE of the TOTAL (sellable + what SHEIN holds); a stopped size isn't written;
-//   · seller-SKU fixes: only proven links, never onto a SKU used elsewhere, a swap parks the
+//   · SKU fixes: only proven links, never onto a SKU used elsewhere, a swap parks the
 //     size that loses its SKU, an AI link writes only at ≥ 0.8;
 //   · one step end to end with fake SHEIN + Shopify: dry writes nothing, stock writes and
-//     reads back, full edits seller SKUs and remembers them, a product in review isn't edited;
+//     reads back, full edits SKUs and remembers them, a product in review isn't edited;
 //   · SHEIN sales → Shopify: one unit = −1, never twice (the key carries the goodsId), a sale
-//     elsewhere in between makes us re-read, a cancel before shipping puts it back, units sold
+//     elsewhere in between makes us refresh, a cancel before shipping puts it back, units sold
 //     before the switch-on aren't touched;
 //   · webhooks: SHEIN's signature + AES, Shopify's HMAC — a forged one is refused.
 import { test, expect } from '@playwright/test';
@@ -24,7 +24,7 @@ const STOCK = (rows) => [{ spuName: 'x', skcName: 'x', skuList: rows.map(([code,
 const V = (sku, size, qty, productId = 'P1', extra = {}) => ({ sku, size, qty, productId, status: 'ACTIVE', productTitle: 'Nike Air Max 95 (IB7936-100)', style: 'IB7936-100', ...extra });
 
 test.describe('SHEIN live — reading the API', () => {
-  test('spu-info + stock → rows: size, seller SKU, sellable, held for orders, only our warehouses', () => {
+  test('spu-info + stock → rows: size, SKU, sellable, held for orders, only our warehouses', () => {
     const spu = SPU('spu1', [SKU('s7', 'A7', 'US7'), SKU('s8', 'A8', 'US8', { mallState: 2 })]);
     const rows = rowsFromSpu(spu, STOCK([['s7', 3, 1], ['s8', 0]]).concat([{ skuList: [{ skuCode: 's7', warehouseInventoryList: [{ warehouseCode: 'SHEINWH', inventoryQuantity: 9, usableInventory: 9 }] }] }]), { merchant: new Set(['W1']) });
     expect(rows).toHaveLength(2);
@@ -71,7 +71,7 @@ test.describe('SHEIN live — the plan for one product', () => {
     expect(p.writes).toEqual([]);
   });
 
-  test('a swap: the size gets 0 now, its seller SKU is changed, the size losing that SKU is parked', () => {
+  test('a swap: the size gets 0 now, its SKU is changed, the size losing that SKU is parked', () => {
     // SHEIN US8 carries A9 (Shopify 9); SHEIN US7.5 carries A8 (Shopify 8) — Shopify has no 7.5.
     const r = rows([['s8', 'A9', 'US8', 3, 0], ['s75', 'A8', 'US7.5', 2, 0]]);
     const p = planProduct({ rows: r, variants: VARS, owners: ownersFrom(r, VARS), holders: indexRows(r).holders, target: 'W1', links: true });
@@ -126,7 +126,7 @@ test.describe('SHEIN live — the plan for one product', () => {
     expect(p2.skipped[0].why).toContain('already sells A8 correctly');
   });
 
-  test('the same seller SKU on two SHEIN products: only the right-size owner sells it', () => {
+  test('the same SKU on two SHEIN products: only the right-size owner sells it', () => {
     const r = rows([['s7', 'A7', 'US7', 2, 0]]);
     const elsewhere = { spu: 'spu9', sheinSku: 'z7', sellerSku: 'A7', size: 'US7', held: 0 };
     const owners = ownersFrom([elsewhere, ...r], VARS);   // both fit; the first seen owns it
@@ -187,7 +187,7 @@ test.describe('SHEIN live — one product, end to end (fakes)', () => {
   const shopify = [V('A7', '7', 5), V('A8', '8', 2), V('A9', '9', 4)];
   const scan = () => rowsFromSpu(spu, STOCK(stock), {});
 
-  test('dry run: decides and logs every size, writes nothing', async () => {
+  test('preview: decides and logs every size, writes nothing', async () => {
     const { stepProduct } = await import('../api/_lib/shein-live.js');
     const f = fakeIO({ spu, stock, shopify });
     const r = await stepProduct('spu1', ctxFor(f.io, 'dry', scan()));
@@ -196,13 +196,13 @@ test.describe('SHEIN live — one product, end to end (fakes)', () => {
     const s7 = f.calls.items.find((i) => i.shein_sku === 's7');
     expect(s7).toMatchObject({ before_qty: 9, target_qty: 4, shopify_qty: 5, held: 1, wrote: 'dry', reason: 'ok' });
     expect(s7.action).toContain('would set 9 → 4');
-    // …and it shows the seller-SKU fix full mode would send (checked, not sent).
+    // …and it shows the SKU fix full mode would send (checked, not sent).
     expect(f.calls.items.find((i) => i.shein_sku === 's75').action).toContain('would change A8 → A8-off');
     expect(f.calls.items.find((i) => i.shein_sku === 's8').action).toContain('step 2 of 2');
     expect(r.counts).toMatchObject({ sizes: 3, links_changed: 0, links_skipped: 1 });   // step 1 only parks; s8's move is step 2
   });
 
-  test('stock mode: SHEIN gets Shopify’s live number (total incl. held), read back; seller SKUs untouched', async () => {
+  test('stock mode: SHEIN gets Shopify’s live number (total incl. held), read back; SKUs untouched', async () => {
     const { stepProduct } = await import('../api/_lib/shein-live.js');
     const f = fakeIO({ spu, stock, shopify });
     const r = await stepProduct('spu1', ctxFor(f.io, 'stock', scan()));
@@ -261,7 +261,7 @@ test.describe('SHEIN live — one product, end to end (fakes)', () => {
     const f = fakeIO({ spu: live(), stock: [['x8', 0], ['x9', 0]], shopify: [V('A8', '8', 2), V('A9', '9', 2)] });
     f.io.sheinSpuInfo = async () => live();
     f.io.sheinSetSellerSkus = async (n, edits) => {
-      for (const e of edits) if (Object.entries(state).some(([code, sku]) => code !== e.skuCode && sku === e.supplierSku)) return { ok: false, version: null, messages: [`Duplicate seller SKU. Seller SKU: ${e.supplierSku}`] };
+      for (const e of edits) if (Object.entries(state).some(([code, sku]) => code !== e.skuCode && sku === e.supplierSku)) return { ok: false, version: null, messages: [`Duplicate SKU. SKU: ${e.supplierSku}`] };
       for (const e of edits) state[e.skuCode] = e.supplierSku;
       f.calls.edits.push(...edits);
       return { ok: true, version: 'v1', messages: [] };
@@ -282,7 +282,7 @@ test.describe('SHEIN live — one product, end to end (fakes)', () => {
     expect(state).toEqual({ x8: 'A8', x9: 'A9' });
   });
 
-  test('full mode: the seller-SKU edit carries the details SHEIN now requires; with no default set it waits (SHEIN would refuse it)', async () => {
+  test('full mode: the SKU edit carries the details SHEIN now requires; with no default set it waits (SHEIN would refuse it)', async () => {
     const { stepProduct } = await import('../api/_lib/shein-live.js');
     const list = [{ attribute_id: 1002260, attribute_value_id: 459 }];
     const f = fakeIO({ spu, stock, shopify });
@@ -417,7 +417,7 @@ test.describe('SHEIN sales → Shopify', () => {
     expect(pickLocation([L(1, 'Warehouse', 1), L(2, 'Store', 1)], '2')).toMatchObject({ location: 'Store' });
   });
 
-  test('taking a unit off Shopify: compare-and-set, re-read when a sale elsewhere got there first, key = goodsId + definite refusals', async () => {
+  test('taking a unit off Shopify: compare-and-set, refresh when a sale elsewhere got there first, key = goodsId + definite refusals', async () => {
     const { applyToShopify } = await import('../api/_lib/shein-orders.js');
     let available = 3; const adjusts = []; const marks = [];
     const io = {
@@ -437,7 +437,7 @@ test.describe('SHEIN sales → Shopify', () => {
     expect(marks.at(-1)[1].note).toContain('Shopify 2 → 1');
   });
 
-  test('the order carries the size’s OLD seller SKU Shopify no longer has: taken off the SKU it was relinked to — but not on a unit that already gave up', async () => {
+  test('the order carries the size’s OLD SKU Shopify no longer has: taken off the SKU it was relinked to — but not on a unit that already gave up', async () => {
     const { applyToShopify } = await import('../api/_lib/shein-orders.js');
     const asked = []; const adjusts = []; const marks = [];
     const io = {
@@ -562,7 +562,7 @@ test.describe('SHEIN live — webhooks', () => {
 });
 
 test.describe('SHEIN live — the page', () => {
-  test('connected: sync switches, a live fix needs “4seller paused”, the run’s sizes filter', async ({ page }) => {
+  test('connected: sync switches, a automatic sync needs “4seller paused”, the run’s sizes filter', async ({ page }) => {
     const { loginAs } = await import('./helpers/auth.js');
     const posted = [];
     const live = {
@@ -582,15 +582,15 @@ test.describe('SHEIN live — the page', () => {
       return r.fulfill({ json: live });
     });
     await loginAs(page, 'admin');
-    await page.goto('/shein-check');
-    await expect(page.getByRole('heading', { name: 'Live sync' })).toBeVisible();
+    await page.goto('/shein?section=live&liveadv=1');
+    await expect(page.locator('[data-section="live"]').getByText('SHEIN sales → Shopify').first()).toBeVisible();
     await expect(page.getByText('SHEIN sales → Shopify', { exact: false }).first()).toBeVisible();
     // Turning the sales sync on asks about the orders already sold but not shipped.
     await page.getByRole('button', { name: 'Turn on SHEIN sales → Shopify…' }).click();
     await expect(page.getByText('already sold but not shipped yet')).toBeVisible();
     await page.getByRole('button', { name: 'Turn on', exact: true }).click();
     await expect.poll(() => posted.at(-1)).toEqual({ action: 'orders_on', openAtStart: true });
-    // A live fix can't start until 4seller is said to be paused.
+    // A automatic sync can't start until 4seller is said to be paused.
     await page.getByRole('button', { name: 'Fix stock', exact: true }).click();
     const start = page.getByRole('button', { name: 'Start: Fix stock' });
     await expect(start).toBeDisabled();
@@ -630,7 +630,7 @@ test.describe('SHEIN live — the page', () => {
       return r.fulfill({ json: { ok: true } });
     });
     await loginAs(page, 'admin');
-    await page.goto('/shein-check');
+    await page.goto('/shein?section=live&liveadv=1');
     await page.getByText('Latest SHEIN sales', { exact: false }).click();
     const row = (no) => page.locator('tr', { hasText: no });
     await expect(row('GSUDONE').getByRole('link', { name: '#40000' })).toHaveAttribute('href', 'https://admin.shopify.com/store/teststore/orders/55');
@@ -671,7 +671,7 @@ test.describe('SHEIN live — the page', () => {
       return r.fulfill({ json: live });
     });
     await loginAs(page, 'admin');
-    await page.goto('/shein-check');
+    await page.goto('/shein?section=live&liveadv=1');
     await expect(page.getByText('Showing the first 3,000 of 3,005 sizes', { exact: false })).toBeVisible();
     const download = page.waitForEvent('download');
     await page.getByRole('button', { name: /This run \(CSV · 3,005\)/ }).click();
@@ -696,7 +696,7 @@ test.describe('SHEIN live — whole shoes off the shelf', () => {
       .toEqual([{ skc: 'skcX', act: 'delist', sites: ['shein-us'], why: 'every size is at 0' }]);
   });
 
-  test('delete only when every seller SKU is gone from Shopify AND it is already off the shelf; a 0-stock shoe still on Shopify is never deleted', () => {
+  test('delete only when every SKU is gone from Shopify AND it is already off the shelf; a 0-stock shoe still on Shopify is never deleted', () => {
     const gone = [row('8', 0, 'no_shopify'), row('9', 0, 'no_shopify')];
     expect(shelfPlan({ rows: gone, shelf: shelf(true) })[0]).toMatchObject({ act: 'delist', why: 'every size’s seller SKU is gone from Shopify' });
     expect(shelfPlan({ rows: gone, shelf: shelf(false) })[0]).toMatchObject({ act: 'delete' });
@@ -708,7 +708,7 @@ test.describe('SHEIN live — whole shoes off the shelf', () => {
     expect(shelfPlan({ rows: gone, shelf: shelf(false), records: rec('deleted') })).toEqual([]);
   });
 
-  test('seller SKUs gone but Shopify still sells the STYLE (re-made with new SKUs): delisted at 0, never deleted', () => {
+  test('SKUs gone but Shopify still sells the STYLE (re-made with new SKUs): delisted at 0, never deleted', () => {
     const gone = [row('8', 0, 'no_shopify'), row('9', 0, 'no_shopify')];
     const kept = new Set(['skcX']);
     expect(shelfPlan({ rows: gone, shelf: shelf(true), styleOnShopify: kept })[0]).toMatchObject({ act: 'delist' });
@@ -739,7 +739,7 @@ test.describe('SHEIN live — whole shoes off the shelf', () => {
     expect(f.calls.items[0].action).toContain('shoe DELISTED on SHEIN');
   });
 
-  test('a walk: every seller SKU gone from Shopify and off the shelf → delete requested; its sizes no longer “need a person”', async () => {
+  test('a walk: every SKU gone from Shopify and off the shelf → delete requested; its sizes no longer “need a person”', async () => {
     const { stepProduct } = await import('../api/_lib/shein-live.js');
     const spu = SPUS(false, [SKU('s7', 'DEAD7', 'US7'), SKU('s8', 'DEAD8', 'US8')]);
     const scan = rowsFromSpu(spu, STOCK([['s7', 0], ['s8', 0]]), {});
@@ -759,7 +759,7 @@ test.describe('SHEIN live — whole shoes off the shelf', () => {
     expect(q.calls.items[0].action).toContain('SHEIN won’t delete it: quota used up');
   });
 
-  test('a walk: seller SKUs gone but the style is on Shopify under new SKUs → no delete, its sizes still need a person (relink)', async () => {
+  test('a walk: SKUs gone but the style is on Shopify under new SKUs → no delete, its sizes still need a person (relink)', async () => {
     const { stepProduct } = await import('../api/_lib/shein-live.js');
     const spu = SPUS(false, [SKU('s7', 'DEAD7', 'US7'), SKU('s8', 'DEAD8', 'US8')]);
     const scan = rowsFromSpu(spu, STOCK([['s7', 0], ['s8', 0]]), {});
@@ -777,7 +777,7 @@ test.describe('SHEIN live — whole shoes off the shelf', () => {
     const spu = SPUS(false, [SKU('s7', 'DEAD7', 'US7'), SKU('s8', 'DEAD8', 'US8')]);
     const scan = rowsFromSpu(spu, STOCK([['s7', 0], ['s8', 0]]), {});
     const remade = [V('N7', '7', 2, 'P2'), V('N8', '8', 1, 'P2')];   // same style IB7936-100, new product + SKUs
-    // Before 2026-10-28 the one-shoe run only saw the seller SKUs' own products: none here → "gone".
+    // Before 2026-10-28 the one-shoe run only saw the SKUs' own products: none here → "gone".
     const f = fakeIO({ spu, stock: [['s7', 0], ['s8', 0]], shopify: remade });
     const asked = [];
     f.io.listingProductIdsForStyle = async (style) => { asked.push(style); return ['P2']; };
@@ -786,7 +786,7 @@ test.describe('SHEIN live — whole shoes off the shelf', () => {
     expect(f.calls.items.map((i) => [i.shein_sku, i.link_to])).toEqual([['s7', 'N7'], ['s8', 'N8']]);
     expect(f.calls.items.some((i) => /DELETE/.test(i.action))).toBe(false);
     expect(f.calls.edits).toEqual([]); expect(f.calls.deletes).toEqual([]);
-    // Truly gone (no product of that style): the dry run says the walk decides — Fix this shoe never deletes.
+    // Truly gone (no product of that style): the preview says the walk decides — Fix this shoe never deletes.
     const g = fakeIO({ spu, stock: [['s7', 0], ['s8', 0]], shopify: [] });
     g.io.listingProductIdsForStyle = async () => [];
     const r = await stepProduct('spuX', { ...ctxFor(g.io, 'dry', scan), source: 'shoe' });
@@ -812,7 +812,7 @@ test.describe('SHEIN live — whole shoes off the shelf', () => {
     expect(no.calls.saved[0]).toMatchObject({ state: 'delete_refused', note: 'order in the last year' });
   });
 
-  test('dry run: says what it would delist / delete, touches nothing', async () => {
+  test('preview: says what it would delist / delete, touches nothing', async () => {
     const { stepProduct } = await import('../api/_lib/shein-live.js');
     const spu = SPUS(true, [SKU('s7', 'A7', 'US7')]);
     const f = fakeIO({ spu, stock: [['s7', 2]], shopify: [V('A7', '7', 0)] });
@@ -832,7 +832,7 @@ test.describe('SHEIN live — one shoe', () => {
   const stock = [['s78', 0], ['s75', 0], ['s9', 0]];
   const scan = () => rowsFromSpu(spu, STOCK(stock), {});
 
-  test('a size a person took off SHEIN keeps its live seller SKU — unless parkDelisted (one shoe only): then it is parked so the right size can carry it', () => {
+  test('a size a person took off SHEIN keeps its live SKU — unless parkDelisted (one shoe only): then it is parked so the right size can carry it', () => {
     const r = scan();
     const decisions = { s75: { shein_sku: 's75', decision: 'delist', link_sku: null, decided_by: 'Kervy' } };
     const base = { rows: r, variants: VARS, decisions, owners: ownersFrom(r, VARS), holders: indexRows(r).holders, target: 'W1' };
@@ -860,7 +860,7 @@ test.describe('SHEIN live — one shoe', () => {
       decisions: { s75: { shein_sku: 's75', decision: 'delist', link_sku: null }, s9: { shein_sku: 's9', decision: 'link', link_sku: 'B9' } } };
     const out = await stepProduct('spu1', ctx);
     expect(asked).toEqual(expect.arrayContaining(['P1', 'P2']));
-    expect(f.calls.stock).toEqual([]); expect(f.calls.edits).toEqual([]);   // a dry run writes nothing
+    expect(f.calls.stock).toEqual([]); expect(f.calls.edits).toEqual([]);   // a preview writes nothing
     const by = Object.fromEntries(f.calls.items.map((i) => [i.shein_sku, i]));
     expect(by.s75).toMatchObject({ source: 'shoe', reason: 'delist', wrote: 'dry' });
     expect(by.s75.action).toContain('A8 → A8-off');
@@ -895,7 +895,7 @@ test.describe('SHEIN live — one shoe', () => {
     }
   });
 
-  test('the endpoint: dry run open to PH, Fix needs admin / Connect integrations; a bad SPU is refused before SHEIN is called', async ({ request }) => {
+  test('the endpoint: preview open to PH, Fix needs admin / Connect integrations; a bad SPU is refused before SHEIN is called', async ({ request }) => {
     const { signToken } = await import('../api/_lib/util.js');
     const ph = { Authorization: `Bearer ${signToken({ uid: 'e2e-ph', username: 'e2e_ph', name: 'E2E PH', role: 'ph_team' })}` };
     const admin = { Authorization: `Bearer ${signToken({ uid: 'admin', username: 'admin', name: 'Alex', role: 'admin' })}` };

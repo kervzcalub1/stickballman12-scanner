@@ -1,5 +1,5 @@
-// SHEIN Listings Phase 5 — the Setup tab's Go-live checklist and 4seller cut-over cards, and the one
-// line on the connection strip once the cut-over has started (docs/context/shein-listings.md →
+// SHEIN Listings Phase 5 — the Setup tab's Go-live checklist and Switching over from 4seller cards, and the one
+// line on the connection strip once the switch-over has started (docs/context/shein-listings.md →
 // "Phase 5"). Every ✓ / ✕ comes from the SERVER (api/shein/listing-cutover.js → src/lib/sheinCutover.js);
 // this file only draws it. Ticks need an admin or the “Connect integrations” privilege; everyone sees
 // the cards. Nothing here calls SHEIN or Shopify.
@@ -9,6 +9,7 @@ import { useLive } from '../hooks.js';
 import { estToday } from '../lib/format.js';
 import { TICKS, WINDOW_DAYS, SETTLE_DAYS } from '../lib/sheinCutover.js';
 import { fmt, when, NEEDS_PRIV } from './SheinListingsBits.jsx';
+import { plain } from '../lib/sheinWords.js';
 
 // One fetch for the strip line and both cards (the page shell owns it).
 export function useCutover(onSignOut) {
@@ -17,7 +18,7 @@ export function useCutover(onSignOut) {
   const seq = useRef(0);
   async function load() {
     const mine = ++seq.current;
-    try { const r = await api.sheinCutover(); if (mine === seq.current) { setD(r); setErr(''); } } catch (e) { if (e.unauthorized) onSignOut(); else if (mine === seq.current) setErr(e.message); }
+    try { const r = await api.sheinCutover(); if (mine === seq.current) { setD(r); setErr(''); } } catch (e) { if (e.unauthorized) onSignOut(); else if (mine === seq.current) setErr(plain(e.message)); }
   }
   useLive(['app_settings', 'shein_listing_jobs', 'shein_listing_products'], load);
   async function act(body) {
@@ -41,7 +42,7 @@ function TickRow({ k, tick, canWrite, onAct, blockedWhy = '', compact = false })
   async function go(body, ask) {
     if (ask && !window.confirm(ask)) return;
     setBusy(true); setErr('');
-    try { await onAct(body); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+    try { await onAct(body); } catch (e) { setErr(plain(e.message)); } finally { setBusy(false); }
   }
   if (tick) {
     return (
@@ -94,8 +95,8 @@ export function GoLiveCard({ cut, canWrite }) {
   const g = d?.golive;
   return (
     <div className="card" data-setup="golive">
-      <h3 className="er-step-title">Go-live checklist</h3>
-      <p className="muted sm">What has to be true before the first real send, and the three pilots after it. ✓ is read live where we can check it; the rest a person ticks (your name and the time are kept).</p>
+      <h3 className="er-step-title">Before going live</h3>
+      <p className="muted sm">What has to be true before the first real send, and the three first tries after it. ✓ is read live where we can check it; the rest a person ticks (your name and the time are kept).</p>
       {err && !d && <p className="error sm">Couldn’t load the checklist: {err}</p>}
       {!d && !err && <div className="shl-skel shl-skel-row" />}
       {g && (
@@ -113,7 +114,7 @@ export function GoLiveCard({ cut, canWrite }) {
   );
 }
 
-/* ------------------------------- cut-over ------------------------------- */
+/* ------------------------------- switch-over ------------------------------- */
 export function CutoverCard({ cut, canWrite, onOpenProduct, onOpenJob }) {
   const { d, err, act } = cut;
   const c = d?.cutover;
@@ -122,12 +123,12 @@ export function CutoverCard({ cut, canWrite, onOpenProduct, onOpenJob }) {
   async function restart() {
     if (!window.confirm(`Start the ${WINDOW_DAYS} days again from now? Use this after a miss is fixed. The 4seller-paused date stays as it is.`)) return;
     setBusy(true); setMsg('');
-    try { await act({ action: 'restart' }); setMsg(`The ${WINDOW_DAYS} days start again from now.`); } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+    try { await act({ action: 'restart' }); setMsg(`The ${WINDOW_DAYS} days start again from now.`); } catch (e) { setMsg(plain(e.message)); } finally { setBusy(false); }
   }
   const failedWindow = c?.items.some((i) => ['b', 'c'].includes(i.key) && i.ok === false && c.started);
   return (
     <div className="card" data-setup="cutover">
-      <h3 className="er-step-title">4seller cut-over</h3>
+      <h3 className="er-step-title">Switching over from 4seller</h3>
       <p className="muted sm">Turning 4seller off for good. Once 4seller’s SHEIN sync is paused, {WINDOW_DAYS} days start; when every line below passes, 4seller can be cancelled.</p>
       {err && !d && <p className="error sm">Couldn’t load the checklist: {err}</p>}
       {!d && !err && <div className="shl-skel shl-skel-row" />}
@@ -161,7 +162,7 @@ export function CutoverCard({ cut, canWrite, onOpenProduct, onOpenJob }) {
                 <span className="xs shl-block">{it.jobs.map((j) => <button key={j.id} type="button" className="btn ghost xs shl-co-job" onClick={() => onOpenJob?.(j.id)}>Job #{j.id} · {JOB_KIND[j.kind] || j.kind} · {fmt(j.done)} of {fmt(j.total)} →</button>)}</span>
               )}
               {it.numbers && it.numbers.byCode.length > 0 && (
-                <span className="muted xs shl-block">Blocked by SHEIN: {it.numbers.byCode.map((b) => `${b.code.replace(/_/g, ' ')} ${fmt(b.sizes)}`).join(' · ')}</span>
+                <span className="muted xs shl-block">Blocked by SHEIN: {it.numbers.byCode.map((b) => `${plain(b.code.replace(/_/g, ' '))} ${fmt(b.sizes)}`).join(' · ')}</span>
               )}
             </Line>
           ))}
@@ -178,16 +179,16 @@ export function CutoverCard({ cut, canWrite, onOpenProduct, onOpenJob }) {
     </div>
   );
 }
-const JOB_KIND = { snapshot: 'Re-read', probe: 'Ask SHEIN', preview: 'Dry run', run: 'Send', recheck: 'Re-check' };
+const JOB_KIND = { snapshot: 'Refresh', probe: 'Ask SHEIN', preview: 'Preview', run: 'Send', recheck: 'Check' };
 const SETTLE_LEFT = (s) => `still inside its ${SETTLE_DAYS} days (status: ${String(s.status || '').replace(/_/g, ' ')})`;
 
-// The connection strip's one line, once the cut-over has started.
+// The connection strip's one line, once the switch-over has started.
 export function CutoverStripLine({ cut, onOpen }) {
   const c = cut.d?.cutover;
   if (!c?.started) return null;
   return (
     <span className="sm" data-cutover-line="">
-      4seller cut-over:{' '}
+      Switching over from 4seller:{' '}
       <button type="button" className="shl-linkbtn" onClick={onOpen}>
         {c.ready ? <b className="ebl-ok">Ready to cancel 4seller</b> : <>day {fmt(c.dayN)} of {WINDOW_DAYS} · {fmt(c.passing)} of {fmt(c.total)} pass</>}
       </button>

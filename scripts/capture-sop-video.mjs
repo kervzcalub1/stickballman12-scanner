@@ -1163,7 +1163,7 @@ const VIDEOS = [
     // Recorded against the demo seed (a fake SHEIN + sample products), never live data: a dry run
     // needs SHEIN, and this machine must never reach the real store. SOP_SHEIN_DEMO_JOBS names the
     // seeded dry runs ({"add":id,"update":id}); the two dry-run buttons are answered with them.
-    id: 'ph-shein-listings', role: 'admin', title: 'SHEIN Listings — check, fix, dry run, send', path: '/shein-listings',
+    id: 'ph-shein-listings', role: 'admin', title: 'SHEIN Listings — check, fix, dry run, send', path: '/shein?section=listings',
     async setup(page) {
       const jobs = JSON.parse(process.env.SOP_SHEIN_DEMO_JOBS || '{}');
       const json = (route, body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });

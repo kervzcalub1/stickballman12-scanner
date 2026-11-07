@@ -8,6 +8,8 @@ import { api } from '../api.js';
 import { PH_DATETIME } from '../lib/format.js';
 import { STATUSES, validateCustomText, customTextConflict, sizeKey } from '../lib/sheinListings.js';
 import { compareSize } from '../lib/sheinCheck.js';
+import { useSheinNav } from './SheinNav.jsx';
+import { plain } from '../lib/sheinWords.js';
 
 export const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 export const when = (t) => {
@@ -17,7 +19,7 @@ export const when = (t) => {
 };
 export const money = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? '—' : `$${Number(v).toFixed(2).replace(/\.00$/, '')}`);
 // A SHEIN write that belongs to a later phase is drawn, disabled, with this.
-export const NEXT_PHASE = 'Coming in a later phase — this doesn’t send anything to SHEIN yet';
+export const NEXT_PHASE = 'Not available yet. This doesn’t send anything to SHEIN.';
 export const NEEDS_PRIV = 'Needs an admin or the “Connect integrations” privilege';
 
 // status → the edge / dot colour of a row or tile.
@@ -35,7 +37,6 @@ export function goPath(href) {
   window.history.pushState(null, '', href);
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
-export const checkPath = () => (inPh() ? '/ph/shein-check' : '/shein-check');
 
 // The fix button a blocker carries. Kinds that only touch OUR database (a size spelling, a
 // "leave off SHEIN") or open another page are live; everything that would change SHEIN, or
@@ -46,6 +47,7 @@ const LIVE_KINDS = new Set(['add_custom_size', 'edit_size_map', 'leave_off', 'in
 // open_match with `here`: the fix is this shoe's own "Fix SHEIN sizes" (onMatch — the drawer opens /
 // scrolls to it); without it (another SHEIN product holds the SKU) the SHEIN check page.
 export function FixButton({ action, shopifyUrl, onAct, busy, onMatch }) {
+  const go = useSheinNav();
   if (!action) return null;
   const k = action.kind;
   const cls = 'btn xs shl-fix';
@@ -59,7 +61,7 @@ export function FixButton({ action, shopifyUrl, onAct, busy, onMatch }) {
     return <a className={cls} href="https://sellerhub.shein.com/" target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{action.label}</a>;
   }
   if (k === 'open_match') {
-    return <button type="button" className={cls} onClick={(e) => { e.stopPropagation(); if (action.here && onMatch) onMatch(); else goPath(checkPath()); }}>{action.label}</button>;
+    return <button type="button" className={cls} onClick={(e) => { e.stopPropagation(); if (action.here && onMatch) onMatch(); else go('check', { chk: 'match' }); }}>{action.label}</button>;
   }
   if (k === 'open_shopify_listings') {
     return inPh()
@@ -104,7 +106,7 @@ export function CustomSizeModal({ size, categoryId, suggestion, onClose, onSaved
     let live = true;
     api.sheinSizeMaps()
       .then((r) => { if (!live) return; setStoreCustom(r.customValues || []); setCat((r.categories || []).find((c) => Number(c.categoryId) === Number(categoryId)) || null); })
-      .catch((e) => { if (e.unauthorized) onSignOut?.(); else if (live) { setLoadErr(e.message); setCat(null); } });
+      .catch((e) => { if (e.unauthorized) onSignOut?.(); else if (live) { setLoadErr(plain(e.message)); setCat(null); } });
     return () => { live = false; };
   }, [categoryId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -117,7 +119,7 @@ export function CustomSizeModal({ size, categoryId, suggestion, onClose, onSaved
   // The server runs the same checks (api/shein/listing-maps.js): text rules, same size, a category where
   // SHEIN allows custom sizes, no look-alike of a store value or of one of SHEIN's own sizes.
   const permProblem = !categoryId ? 'Custom sizes are confirmed per SHEIN category — open it from a product in that category.'
-    : cat && cat.hasPermission !== 1 ? `SHEIN doesn’t allow custom sizes in this category${cat.hasPermission == null ? ' (not asked yet — Ask SHEIN on the Sizes tab)' : ''}.` : null;
+    : cat && cat.hasPermission !== 1 ? `SHEIN doesn’t allow custom sizes in this category${cat.hasPermission == null ? ' (not asked yet: Sizes → Advanced → Ask SHEIN)' : ''}.` : null;
   const problem = pick ? null : (validateCustomText(text) || (compareSize(text, size) !== 'ok' ? `“${text}” doesn’t read as size ${size} — a custom size must say the same size (e.g. US${size}).` : null)
     || (cat ? customTextConflict(text, { values: cat.sheinSizes || [], customValues: storeCustom }) : null) || permProblem);
   const footBad = foot !== '' && !(Number(foot) > 0 && Number(foot) <= 100);
@@ -132,7 +134,7 @@ export function CustomSizeModal({ size, categoryId, suggestion, onClose, onSaved
       if (pick) body.attributeValueId = Number(pick); else body.customValue = text;
       const r = await api.sheinSizeMapSave(body);
       onSaved?.(r);
-    } catch (e2) { if (e2.unauthorized) onSignOut?.(); else { setErr(e2.message); setBusy(false); } }
+    } catch (e2) { if (e2.unauthorized) onSignOut?.(); else { setErr(plain(e2.message)); setBusy(false); } }
   }
 
   return createPortal(
@@ -170,7 +172,7 @@ export function CustomSizeModal({ size, categoryId, suggestion, onClose, onSaved
         )}
         <p className="notice shl-modal-note">{pick
           ? 'Saved here only. Every size like this one then maps to SHEIN’s own size.'
-          : <>A custom size is <b>store-wide and permanent</b> on SHEIN — a typo stays forever. Saving here only records the spelling; nothing is sent to SHEIN until someone confirms a dry run that adds it.</>}</p>
+          : <>A custom size is <b>store-wide and permanent</b> on SHEIN — a typo stays forever. Saving here only records the spelling; nothing is sent to SHEIN until someone confirms a preview that adds it.</>}</p>
         {err && <div className="error sm">{err}</div>}
         <div className="modal-actions">
           <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>

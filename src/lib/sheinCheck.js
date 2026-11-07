@@ -1,5 +1,5 @@
 // SHEIN ↔ Shopify check — the pure half (docs/context/shein-check.md). SHEIN's Export
-// Products file against the live Shopify store, matched by the seller SKU (the Shopify
+// Products file against the live Shopify store, matched by the SKU (the Shopify
 // variant SKU the listing tool copied to SHEIN). It answers the two things that cost us
 // cancellations and oversells: is each SHEIN size the SAME size as the Shopify variant
 // behind it, and does SHEIN offer more pairs than Shopify has?
@@ -95,10 +95,10 @@ export function compareSize(sheinRaw, shopifyRaw) {
   return 'ok_suffix';                                            // 6 vs 6W, 9 vs 9M
 }
 
-// Before a seller SKU is LINKED (written to SHEIN), "same number, only the W marker differs" is not
+// Before a SKU is LINKED (written to SHEIN), "same number, only the W marker differs" is not
 // enough. In our Shopify store women's sizes carry the W ("8W"), so a bare "8" is MEN'S — and SHEIN
 // "US8W" → Shopify men's 8 sells a women's 8 as a men's 8 (2026-10-28: 8 such links on 5 men's shoes
-// in one dry run). Both sides must be women's or both not; a bare size counts as women's only when
+// in one preview). Both sides must be women's or both not; a bare size counts as women's only when
 // the product's own title says so. Display (compareSize / ok_suffix) is unchanged.
 const WOMEN_TITLE = /\b(women'?s?|wmns)\b|\(w\)/i;
 const womensSide = (raw, title) => { const p = parseSize(raw); return p.group === 'women' || (p.group === 'adult' && WOMEN_TITLE.test(String(title || ''))); };
@@ -119,7 +119,7 @@ export const ISSUES = {
   not_in_shopify: { label: 'Not in Shopify', tone: 'bad', help: 'No Shopify variant has this SKU, and SHEIN still offers pairs — a sale there deducts nothing anywhere.' },
   not_in_shopify_zero: { label: 'Not in Shopify (0 on SHEIN)', tone: 'warn', help: 'No Shopify variant has this SKU; SHEIN shows 0, so nothing sells today — clean it up before stock comes back.' },
   over_stock: { label: 'More on SHEIN than Shopify', tone: 'bad', help: 'SHEIN offers more pairs than Shopify has — an oversell waiting to happen.' },
-  no_seller_sku: { label: 'No seller SKU', tone: 'bad', help: 'The SHEIN size carries no seller SKU, so nothing links it to Shopify.' },
+  no_seller_sku: { label: 'No SKU', tone: 'bad', help: 'The SHEIN size carries no SKU, so nothing links it to Shopify.' },
   duplicate: { label: 'SKU used twice on SHEIN', tone: 'warn', help: 'Two SHEIN sizes point at the same Shopify variant — both sell the same pairs.' },
   check_group: { label: 'Youth vs adult', tone: 'warn', help: 'Shopify says Y (GS), SHEIN says the adult size (or the other way) — usually wrong for kids’ shoes.' },
   other_system: { label: 'EUR / CN / range size', tone: 'warn', help: 'SHEIN lists this in another size system (or a range), so it can’t be checked — make it the US size.' },

@@ -2,14 +2,15 @@
 // for every product of a kind (docs/context/shein-listings.md → "Phase 4"): what SHEIN says about new
 // listings (store gates, quota), the D6 box sizes (UNCONFIRMED placeholders block every publish), the
 // category per Shopify product type + size group, the SHEIN brand per Shopify vendor, and the SHEIN
-// details (attribute defaults) per SHEIN product type. All DB only; re-reading SHEIN is a read
+// details (attribute defaults) per SHEIN product type. All DB only; refreshing SHEIN is a read
 // (admin / Connect integrations). `?pt=` = the product type open in the details editor.
-// Phase 5: the Go-live checklist and the 4seller cut-over card sit on top (src/components/SheinCutover.jsx).
+// Phase 5: the Go-live checklist and the Switching over from 4seller card sit on top (src/components/SheinCutover.jsx).
 import React, { useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { SIZE_GROUPS } from '../lib/sheinPublish.js';
+import { plain } from '../lib/sheinWords.js';
 import { fmt, when, NEEDS_PRIV } from '../components/SheinListingsBits.jsx';
 import { CategoryPicker, BrandPicker, AttrEditor, BoxDefaults, gateProblems, GROUP_LABEL, SELLER_CENTER } from '../components/SheinPublishBits.jsx';
 import { GoLiveCard, CutoverCard } from '../components/SheinCutover.jsx';
@@ -22,20 +23,20 @@ function Gates({ gates, readAt, canWrite, reload, onSignOut }) {
   const yes = (v) => (v === true ? <span className="ebo-chip ok">Yes</span> : v === false ? <span className="ebo-chip bad">No</span> : <span className="ebo-chip">Not read yet</span>);
   async function refresh() {
     setBusy(true); setErr('');
-    try { await api.sheinListingMeta({ gates: 1, refresh: 1 }); await reload(); } catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); } finally { setBusy(false); }
+    try { await api.sheinListingMeta({ gates: 1, refresh: 1 }); await reload(); } catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); } finally { setBusy(false); }
   }
   return (
     <div className="card" data-setup="gates">
       <h3 className="er-step-title">SHEIN and new products</h3>
-      <p className="muted sm">Checked again right before every publish. Each published product uses 1 of the store’s monthly publish quota; deleting it later doesn’t give it back.</p>
+      <p className="muted sm">Checked again right before every publish. Each published product uses 1 of the store’s monthly new-product limit; deleting it later doesn’t give it back.</p>
       <dl className="shl-facts">
         <dt>SHEIN takes new listings</dt><dd>{yes(g.perm ? g.perm.canPublishProduct === true : null)}{g.perm?.reason ? <span className="shl-shein-said">SHEIN said: “{g.perm.reason}”</span> : null}</dd>
-        <dt>Publish quota this month</dt><dd>{!g.quota ? <span className="ebo-chip">Not read yet</span> : g.quota.isControlled ? <><b>{fmt(g.quota.availableQuota)}</b> left{g.quota.totalQuota != null ? ` of ${fmt(g.quota.totalQuota)}` : ''}</> : 'Not limited'}</dd>
+        <dt>New products left this month</dt><dd>{!g.quota ? <span className="ebo-chip">Not read yet</span> : g.quota.isControlled ? <><b>{fmt(g.quota.availableQuota)}</b> left{g.quota.totalQuota != null ? ` of ${fmt(g.quota.totalQuota)}` : ''}</> : 'Not limited'}</dd>
         <dt>Shelf limit</dt><dd>{!g.shelf ? <span className="ebo-chip">Not read yet</span> : g.shelf.need ? <><b>{fmt(g.shelf.remain_count)}</b> left</> : 'Not limited'}</dd>
       </dl>
-      {probs.length > 0 && <p className="notice sm mt">{probs.map((p) => <span key={p.key} className="shl-block">{p.text}</span>)}Dry runs still work. Sort it out in <a className="ebl-link" href={SELLER_CENTER} target="_blank" rel="noreferrer">Seller Center ↗</a>.</p>}
+      {probs.length > 0 && <p className="notice sm mt">{probs.map((p) => <span key={p.key} className="shl-block">{p.text}</span>)}Previews still work. Sort it out in <a className="ebl-link" href={SELLER_CENTER} target="_blank" rel="noreferrer">Seller Center ↗</a>.</p>}
       <div className="er-actions">
-        <span className="muted xs shl-grow">{readAt ? `As read ${when(readAt)} — every publish dry run reads it again (1 h cache).` : 'Not read yet — the first publish dry run reads it.'}</span>
+        <span className="muted xs shl-grow">{readAt ? `As read ${when(readAt)} — every publish preview reads it again (1 h cache).` : 'Not read yet — the first publish preview reads it.'}</span>
         <button type="button" className="btn ghost sm" disabled={!canWrite || busy} title={canWrite ? 'Reads only — nothing on SHEIN changes' : NEEDS_PRIV} onClick={refresh}>{busy ? 'Asking SHEIN…' : 'Ask SHEIN again (read-only)'}</button>
       </div>
       {err && <p className="error sm">{err}</p>}
@@ -48,7 +49,7 @@ function Categories({ canWrite, onSignOut }) {
   const [err, setErr] = useState('');
   const [edit, setEdit] = useState(null);   // { productType, sizeGroup, current }
   const [msg, setMsg] = useState('');
-  async function load() { try { setD(await api.sheinPublishMaps('category')); setErr(''); } catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); } }
+  async function load() { try { setD(await api.sheinPublishMaps('category')); setErr(''); } catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); } }
   useLive(['shein_category_map', 'shein_listing_products'], load);
   const maps = d?.maps || [];
   const types = useMemo(() => {
@@ -58,7 +59,7 @@ function Categories({ canWrite, onSignOut }) {
   }, [d]); // eslint-disable-line react-hooks/exhaustive-deps
   async function clear(m) {
     if (!window.confirm(`Clear the SHEIN category for “${m.shopify_product_type}” · ${GROUP_LABEL[m.size_group]}? Those products go back to “No SHEIN category picked”. Nothing on SHEIN changes.`)) return;
-    try { await api.sheinPublishMapSave('category', { action: 'clear', productType: m.shopify_product_type, sizeGroup: m.size_group }); setMsg('Cleared.'); await load(); } catch (e) { setErr(e.message); }
+    try { await api.sheinPublishMapSave('category', { action: 'clear', productType: m.shopify_product_type, sizeGroup: m.size_group }); setMsg('Cleared.'); await load(); } catch (e) { setErr(plain(e.message)); }
   }
   return (
     <div className="card" data-setup="categories">
@@ -67,7 +68,7 @@ function Categories({ canWrite, onSignOut }) {
       {err && <p className="error sm">{err}</p>}
       {msg && <p className="ebl-ok sm">{msg}</p>}
       {!d && !err && <div className="shl-skel shl-skel-row" />}
-      {d && <p className="muted xs">{d.leaves ? `${fmt(d.leaves.length)} SHEIN categories read.` : 'SHEIN’s category list hasn’t been read yet — an admin reads it from the picker, or a publish dry run does.'}</p>}
+      {d && <p className="muted xs">{d.leaves ? `${fmt(d.leaves.length)} SHEIN categories read.` : 'SHEIN’s category list hasn’t been read yet — an admin reads it from the picker, or a publish preview does.'}</p>}
       {d && !types.length && <div className="empty-state">Every Shopify shoe is on SHEIN — no new product needs a category.</div>}
       {types.map((t) => {
         const rows = maps.filter((m) => m.shopify_product_type === t.productType);
@@ -110,7 +111,7 @@ function Brands({ canWrite, onSignOut }) {
   const [err, setErr] = useState('');
   const [edit, setEdit] = useState('');
   const [msg, setMsg] = useState('');
-  async function load() { try { setD(await api.sheinPublishMaps('brand')); setErr(''); } catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); } }
+  async function load() { try { setD(await api.sheinPublishMaps('brand')); setErr(''); } catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); } }
   useLive(['shein_brand_map'], load);
   const vendors = d?.vendors || [];
   return (
@@ -184,7 +185,7 @@ export function SheinListingsSetup({ canWrite, gates, cut, onSignOut, onOpenProd
       {cut && <CutoverCard cut={cut} canWrite={canWrite} onOpenProduct={onOpenProduct} onOpenJob={onOpenJob} />}
       <div className="card shl-setup-lede">
         <h3 className="er-step-title">Publishing setup</h3>
-        <p className="muted sm">What SHEIN needs before a Shopify shoe that isn’t on SHEIN can be published — set once, used by every product of that kind. Saving here changes <b>our records only</b>; nothing goes to SHEIN until a publish dry run is checked and confirmed. Each product’s Details shows exactly which of these it is still missing.</p>
+        <p className="muted sm">What SHEIN needs before a Shopify shoe that isn’t on SHEIN can be published — set once, used by every product of that kind. Saving here changes <b>our records only</b>; nothing goes to SHEIN until a publish preview is checked and confirmed. Each product’s Details shows exactly which of these it is still missing.</p>
       </div>
       <Gates gates={gates.gates} readAt={gates.readAt} canWrite={canWrite} reload={gates.reload} onSignOut={onSignOut} />
       <div className="card" data-setup="box">

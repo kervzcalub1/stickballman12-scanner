@@ -7,6 +7,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { getUser, clearAuth, api } from './api.js';
 import { isUnsavedDirty } from './hooks.js';
 import { pathForView, viewForPath, hasPriv } from './lib/constants.js';
+import { sheinSectionsFor } from './lib/sheinPage.js';
 import { clearQuery, writeParam } from './lib/urlstate.js';
 import { setMarkupPct } from './lib/config.js';
 import { onAppUpdated } from './lib/chunkLoad.js';
@@ -23,8 +24,7 @@ import { Inventory } from './screens/Inventory.jsx';
 import { PHTeamApp, PHGrid } from './screens/PHTeam.jsx';
 import { EbayListings } from './screens/EbayListings.jsx';
 import { StockxListings } from './screens/StockxListings.jsx';
-import { SheinCheck } from './screens/SheinCheck.jsx';
-import { SheinListings } from './screens/SheinListings.jsx';
+import { Shein } from './screens/Shein.jsx';
 import { NoBoxHub } from './screens/NoBoxHub.jsx';
 import { ItemCosts } from './screens/ItemCosts.jsx';
 import { BoxLabels } from './screens/BoxLabels.jsx';
@@ -236,9 +236,8 @@ export default function App() {
   if (view === 'receipts') return withAdvisor(<Receipts user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // Pairs listed straight to Alias + StockX from a scan — never inventory (presell-listings.md).
   // eBay (admin + superadmin): the PH workspace's eBay page, reachable from the admin app.
-  // SHEIN Listings: PH + admin (the endpoints refuse anyone else), docs/context/shein-listings.md.
-  if (view === 'shein-listings' && isPrivilegedRole(user.role)) return withAdvisor(<SheinListings user={user} onHome={() => go('home')} onSignOut={signOut} />);
-  if (view === 'shein-check' && (isPrivilegedRole(user.role) || hasPriv(user, 'connect_integrations'))) return withAdvisor(<SheinCheck user={user} onHome={() => go('home')} onSignOut={signOut} />);
+  // SHEIN: one page; which sections show depends on who it is (sheinPage.js). The endpoints refuse anyone else.
+  if (view === 'shein' && sheinSectionsFor(user).length) return withAdvisor(<Shein user={user} base="/shein" onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'ebay' && (isPrivilegedRole(user.role) || hasPriv(user, 'connect_integrations'))) return withAdvisor(<EbayListings user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'stockx-listings' && isPrivilegedRole(user.role)) return withAdvisor(<StockxListings onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'presell-listings') return withAdvisor(<PresellListings onHome={() => go('home')} onSignOut={signOut} />);

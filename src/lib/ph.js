@@ -3,6 +3,8 @@
 import { compareSizes } from './codes.js';
 import { getMarkupMult } from './config.js';
 import { estDate } from './format.js';
+import { isSheinPath } from './sheinPage.js';
+import { CARD_WORDS } from './sheinWords.js';
 
 // Frozen columns and their fixed widths (px): Date, Title, SKU, Qty.
 // Rows are merged per SKU+status; the size breakdown is a scrolling column.
@@ -451,7 +453,7 @@ export function phListingStatus(g) {
 
 // PH pages are URL-routed under /ph/* (their own namespace, separate from the
 // warehouse/admin ROUTES) so a refresh restores the page and Back/Forward work.
-export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', expected: '/ph/expected', undelivered: '/ph/undelivered', duptracking: '/ph/duplicate-tracking', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', sheinreprice: '/ph/shein-reprice', sheincheck: '/ph/shein-check', sheinlistings: '/ph/shein-listings', ebaylistings: '/ph/ebay-listings', stockxlistings: '/ph/stockx-listings', shopifylistings: '/ph/shopify-listings', cancellations: '/ph/cancellations', inboundissues: '/ph/inbound-issues', access: '/ph/access' };
+export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', expected: '/ph/expected', undelivered: '/ph/undelivered', duptracking: '/ph/duplicate-tracking', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', shein: '/ph/shein', ebaylistings: '/ph/ebay-listings', stockxlistings: '/ph/stockx-listings', shopifylistings: '/ph/shopify-listings', cancellations: '/ph/cancellations', inboundissues: '/ph/inbound-issues', access: '/ph/access' };
 export const phPathForPage = (page) => (page && PH_PATHS[page]) || '/';
 export const phPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';
@@ -459,6 +461,8 @@ export const phPageForPath = (p) => {
   if (path === '/ph/edited-photos') return 'imagefinder';
   // Shopify Reprice became Shopify Listings (a table you edit and reprice from).
   if (path === '/ph/shopify-reprice') return 'shopifylistings';
+  // The SHEIN page, and the old pages it replaced (the page itself tidies the URL).
+  if (isSheinPath(path)) return 'shein';
   return Object.keys(PH_PATHS).find((k) => PH_PATHS[k] === path) || null;
 };
 
@@ -483,9 +487,7 @@ export const PH_HOME_SECTIONS = [
     { key: 'ebayreprice', icon: 'ebay-reprice', title: 'eBay Reprice', sub: 'Cut eBay prices above market + markup — CSV in, CSV out' },
     { key: 'ebaylistings', icon: 'ebay-listings', title: 'eBay', sub: 'Orders & late shipments, listings, reprice, coupons' },
     { key: 'stockxlistings', icon: 'profit', title: 'StockX Listings', sub: 'Our StockX asks vs the Standard / Direct lowest ask — bulk reprice to the market' },
-    { key: 'sheinreprice', icon: 'shein-reprice', title: 'SHEIN Reprice', sub: 'Cut SHEIN prices above market + markup — export in, Edit+Price file out' },
-    { key: 'sheinlistings', icon: 'shein-listings', title: 'SHEIN Listings', sub: 'Every Shopify shoe on SHEIN size by size — what’s listed, what isn’t and why' },
-    { key: 'sheincheck', icon: 'shein-check', title: 'SHEIN ↔ Shopify check', sub: 'Wrong sizes, SKUs gone from Shopify, more stock on SHEIN — export in, fix list out' },
+    { key: 'shein', icon: 'shein', title: CARD_WORDS.title, sub: CARD_WORDS.sub },
     { key: 'presellListings', icon: 'presell-listings', title: 'Pre-sell Listings', sub: 'List pairs straight to Alias + StockX from a scan' },
   ] },
   { title: 'Queues & Requests', accent: 'requests', cards: [

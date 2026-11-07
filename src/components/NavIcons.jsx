@@ -263,23 +263,11 @@ const PATHS = {
     <path d="M12.5 16.5c1.6-2.3 3.2-3.5 5-3.5s3.4 1.2 5 3.5c-1.6 2.3-3.2 3.5-5 3.5s-3.4-1.2-5-3.5z" />
     <circle cx="17.5" cy="16.5" r="1.4" />
   </>),
-  // SHEIN Listings — a tag with rows (each shoe's sizes, listed or not)
-  'shein-listings': (<>
+  // SHEIN — a tag with rows (each shoe's sizes, listed or not)
+  shein: (<>
     <path d="M3 4h8l9 9-7 7-9-9V4z" />
     <circle cx="7.5" cy="8.5" r="1.4" />
     <path d="M10 13l3-3M12.5 15.5l3-3" />
-  </>),
-  // SHEIN ↔ Shopify check — two lists side by side with a tick between
-  'shein-check': (<>
-    <rect x="2.5" y="4" width="7" height="16" rx="1.5" />
-    <rect x="14.5" y="4" width="7" height="16" rx="1.5" />
-    <path d="M10.5 12.5l1.5 1.5 2.5-3" />
-  </>),
-  // SHEIN Reprice — a spreadsheet grid with a downward arrow (xlsx in, xlsx out; only cuts)
-  'shein-reprice': (<>
-    <rect x="3" y="4" width="12" height="16" rx="1.5" />
-    <path d="M3 9h12M3 14h12M8 4v16" />
-    <path d="M19 8v10M16.5 15.5L19 18l2.5-2.5" />
   </>),
   // Platform Profit — a rising trend line
   profit: (<>

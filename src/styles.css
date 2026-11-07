@@ -6474,7 +6474,6 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .shl-was { color: #e0b05f; }
 .shl-linkbtn { background: none; border: 0; padding: 0; color: #9db8ff; font: inherit; cursor: pointer; text-decoration: none; }
 .shl-linkbtn:hover, .shl-linkbtn.on { text-decoration: underline; }
-.shl-crosslink { margin: 0 0 12px; font-size: 13px; color: var(--muted); }
 .shl-h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); font-weight: 600; }
 .shl-pad { padding: 10px 14px; margin: 0; }
 
@@ -7126,4 +7125,111 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
   .esy-run { margin: 6px 0 0 0; }
   .ebay-page .card { padding: 14px; }
   .sl-list.ebr-list { padding: 12px; }
+}
+
+/* ── The one SHEIN page (src/screens/Shein.jsx) ─────────────────────────────────────── */
+/* The section row: stronger than the sub-tabs under it, two rows on a phone, never sideways. */
+.shein-sections { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.shein-sections .seg-btn { flex: 1 1 auto; min-height: 44px; padding: 8px 12px; font-size: 14px; }
+.shein-sections .seg-btn.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+@media (max-width: 480px) { .shein-sections .seg-btn { font-size: 13px; padding: 8px 10px; } }
+/* Sub-tabs inside a section; the row sits between cards, so it needs its own gap below. */
+.shein-subtabs.ebl-tabs.seg { margin: 0 0 16px; }
+.shein-subtabs .seg-btn, .shl-tabs .seg-btn { min-height: 44px; }
+.shein-tabgroup { display: contents; }
+.shein-advcard .shein-subtabs.ebl-tabs.seg { margin-bottom: 12px; }
+.shein-adv-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
+/* Advanced / More options */
+.shein-adv { margin: 12px 0 16px; }
+.shein-adv.card { padding-top: 0; padding-bottom: 0; }
+.shein-adv > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; min-height: 44px; cursor: pointer; font-weight: 600; font-size: 14px; }
+.shein-adv-body { padding: 4px 0 14px; }
+.shein-adv:not(.card) .shein-adv-body { padding-bottom: 4px; }
+.shein-adv .shl-h4 { margin-top: 8px; }
+/* How this works */
+.shein-how { margin: 8px 0 0; }
+.shein-how > summary { display: inline-flex; align-items: center; min-height: 44px; cursor: pointer; font-size: 13px; color: #9db8ff; }
+.shein-how-body p { margin: 0 0 8px; line-height: 1.5; }
+.shein-filterbtn { flex: none; }
+/* Today */
+.shein-today-health { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; font-size: 14px; font-weight: 600; border: 1px solid var(--border); }
+.shein-today-health.ok { color: #7bc99a; border-color: rgba(123,201,154,0.5); background: rgba(123,201,154,0.1); }
+.shein-today-health.warn { color: #e9c46a; border-color: rgba(233,196,106,0.4); background: rgba(233,196,106,0.1); }
+.shein-today-health.bad { color: #ec8f8f; border-color: rgba(236,143,143,0.5); background: rgba(236,143,143,0.1); }
+.shein-today-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border); }
+.shein-today-n { font-size: 20px; font-variant-numeric: tabular-nums; text-align: right; }
+.shein-today-row.e-bad .shein-today-n { color: #ec8f8f; }
+.shein-today-row.e-warn .shein-today-n { color: #e0b05f; }
+.shein-today-row.e-info .shein-today-n { color: #9db8ff; }
+.shein-today-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 14px; }
+.shein-today-row .btn { min-height: 44px; }
+.shein-today-clear { margin: 0; }
+/* Small segmented rows wrap here instead of pushing the page sideways, with a full tap target on a phone. */
+.shein-page .seg.sm { display: flex; flex-wrap: wrap; max-width: 100%; }
+@media (max-width: 768px) { .shein-page .seg.sm .seg-btn { min-height: 44px; padding: 6px 10px; } }
+/* A disclosure the eye can read as one: the flex summary loses the browser's own triangle. */
+.shein-adv > summary, .shein-how > summary { list-style: none; }
+.shein-adv > summary::-webkit-details-marker, .shein-how > summary::-webkit-details-marker { display: none; }
+.shein-adv > summary::before, .shein-how > summary::before { content: '▸'; margin-right: 6px; }
+.shein-adv[open] > summary::before, .shein-how[open] > summary::before { content: '▾'; }
+/* The same small type in every section (the Shoes section always had it), and no gap above a card's first line. */
+.shein-page .xs { font-size: 12px; }
+.shein-page .sm { font-size: 13px; }
+.shein-page .card > p:first-child { margin-top: 0; }
+
+/* ── SHEIN design pass: one calm rhythm for the whole page (Shein.jsx and every section). Classes are
+   shein-* / shl-* (SHEIN-only), so no other screen moves. ───────────────────────────────────────── */
+/* Section tabs: five equal buttons on a desk; on a phone 3 + 2 filling the row, never a ragged pair. */
+.shein-sections { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; margin: 0 0 12px; }
+.shein-lead { margin: 0 0 12px; color: var(--muted); font-size: 13.5px; line-height: 1.45; }
+@media (max-width: 767px) {
+  .shein-sections { grid-auto-flow: row; grid-auto-columns: auto; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .shein-sections .seg-btn { grid-column: span 2; }
+  .shein-sections:has(> :nth-child(5)) .seg-btn:nth-child(n+4), .shein-sections:not(:has(> :nth-child(3))) .seg-btn,
+  .shein-sections:has(> :nth-child(4):last-child) .seg-btn { grid-column: span 3; }
+}
+/* Advanced / More options / How this works: no blank band above or below a closed one. */
+.shein-adv { margin: 8px 0 12px; }
+.shein-adv.card { margin: 0 0 16px; }
+.shein-adv > summary { align-items: center; align-content: center; row-gap: 0; padding: 0; }
+.shein-how { margin: 0; }
+.shein-how > summary { min-height: 36px; }
+@media (max-width: 768px) {
+  .shein-how > summary { min-height: 44px; }
+  .shein-adv-hint { flex: 1 0 100%; margin: 0 0 8px 18px; }
+  .shein-adv > summary { min-height: 52px; }
+}
+/* Today: every action button the same width, so the right edge reads as one column. */
+.shein-today-row { grid-template-columns: 48px minmax(0, 1fr) 104px; }
+.shein-today-row .btn { width: 100%; justify-content: center; }
+@media (max-width: 480px) { .shein-today-row { grid-template-columns: 40px minmax(0, 1fr) 88px; gap: 8px; } }
+/* Shoes: the status column stacks its chips with an even gap and never runs into the coverage bar. */
+.shl-phead { grid-template-columns: 28px 56px minmax(0, 1fr) 150px 150px 96px; gap: 14px; }
+.shl-rollup { flex-direction: column; align-items: flex-start; gap: 6px; }
+.shl-rollup .ebo-chip { white-space: nowrap; margin: 0; }
+.shl-inrev { margin-left: 0; }
+.shl-tabs [data-adv-toggle] { flex: 0 0 auto; margin-left: auto; padding-left: 20px; padding-right: 20px; background: transparent; }
+.shl-steps { margin: 0 0 12px; padding-left: 18px; line-height: 1.5; }
+.shl-steps li + li { margin-top: 2px; }
+@media (max-width: 768px) {
+  .shl-phead { grid-template-columns: 44px minmax(0, 1fr) 44px; }
+  .shl-rollup { flex-direction: row; flex-wrap: wrap; }
+  .shl-phead > .shl-chk { min-width: 44px; min-height: 44px; justify-content: center; align-self: start; margin: -8px -8px 0 0; }
+  .shl-chk input { width: 22px; height: 22px; }
+}
+/* Headings inside an Advanced area: room above each block, none above the first. */
+.shein-adv-body > .shl-h4, .shein-adv-body > h4.shl-h4 { margin-top: 20px; }
+.shein-adv-body > .shl-h4:first-child { margin-top: 4px; }
+.shein-adv-body .er-actions + .shl-h4 { margin-top: 20px; }
+.shl-strip-card:empty { display: none; }
+/* Phone: every control inside a section is a 44px target (the top bar is the shared TopBar, left alone). */
+@media (max-width: 768px) {
+  .shein-page [data-section] .btn:not(.icon), .shein-page [data-section] .seg-btn, .shein-page [data-section] select.input { min-height: 44px; }
+  .shein-page [data-section] details > summary, .shl-drawer details > summary { padding-top: 12px; padding-bottom: 12px; }
+  .shein-page [data-section] .shein-adv > summary { padding: 0; }
+  .shein-page [data-section] .shl-linkbtn { padding: 14px 2px; margin: -14px 0; }
+}
+@media (max-width: 768px) {
+  .shein-page [data-section] details > summary, .shl-drawer details > summary { padding-top: 14px; padding-bottom: 14px; }
+  .shl-vtable td.c-todo .btn.shl-fix, .shl-rt-act .btn { min-height: 44px; }
 }

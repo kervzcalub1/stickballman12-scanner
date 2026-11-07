@@ -1,6 +1,6 @@
 // SHEIN listing fix (docs/context/shein-fix.md) — the panel under the SHEIN check. One
 // download sets every SHEIN size's stock from Shopify by the hard-coded rules
-// (src/lib/sheinFix.js); the fix list says which seller SKUs to change and which sizes to
+// (src/lib/sheinFix.js); the fix list says which SKUs to change and which sizes to
 // add. The AI helper only suggests links for dead SKUs the rules couldn't place, and each
 // suggestion is re-checked by the rules before it's used. Nothing is written to SHEIN or
 // Shopify from here — the file is uploaded in SHEIN Seller Center.
@@ -8,7 +8,9 @@ import React, { useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { downloadCSV } from '../lib/csv.js';
 import { estToday } from '../lib/format.js';
+import { SheinAdvanced, HowItWorks } from '../components/SheinNav.jsx';
 import { XLSX_MIME } from '../lib/xlsx.js';
+import { TERMS, plain } from '../lib/sheinWords.js';
 import {
   readSheinOrders, readInventoryTemplate, fillInventoryTemplate, verifyInventoryFile, plainInventoryXlsx,
   stockRows, fixListCsv, candidatesFor, verifyAiLink, addLabel, REASONS,
@@ -100,7 +102,7 @@ export function SheinFixPanel({ fix, variants, exportName, orders, setOrders, ai
         }
       } catch (e) {
         if (e.unauthorized) return onSignOut();
-        st.error = e.message;
+        st.error = plain(e.message);
         break;
       }
       st.done += batch.length;
@@ -125,49 +127,53 @@ export function SheinFixPanel({ fix, variants, exportName, orders, setOrders, ai
 
   return (
     <div className="card shf">
-      <h3 className="er-step-title">Fix the listings</h3>
+      <h3 className="er-step-title">Fix stock with a file</h3>
       <div className="notice sm"><b>First, pause 4seller’s SHEIN inventory sync.</b> Otherwise its next sync puts the wrong numbers back.</div>
-      <p className="muted sm mt">The rules: every SHEIN size gets the <b>exact Shopify stock</b> of the variant its seller SKU points at, minus SHEIN orders not shipped yet. A SHEIN size whose seller SKU is <b>another size</b>, gone from Shopify, blank or in EUR/CN gets <b>0</b>, because the warehouse ships whatever SKU the order carries. Those are listed below with the exact change to make on SHEIN, and they sell again on the next fix.</p>
-
-      <div className="shf-picks">
-        <FilePick label="SHEIN orders export (optional)" hint="Holds back pairs sold on SHEIN but not shipped yet" picked={orders && `${orders.name} · ${fmt(orders.open.length)} open order line${orders.open.length === 1 ? '' : 's'} held back`} onFile={pickOrders} />
-        <FilePick label="SHEIN inventory template (optional)" hint="Seller Center → batch edit inventory → download template; we fill it so it uploads as-is" picked={tpl && `${tpl.name} · sheet “${tpl.sheet}”, columns ${tpl.headers[tpl.cols.sku]} + ${tpl.headers[tpl.cols.qty]}${tpl.cols.wh >= 0 ? ` + ${tpl.headers[tpl.cols.wh]}` : ''}`} onFile={pickTemplate} />
-      </div>
+      <p className="sm mt">Download a file that sets every SHEIN size to Shopify’s stock, then upload it in SHEIN Seller Center. Nothing changes until you upload it.</p>
+      <HowItWorks>
+        <p className="muted xs">Every SHEIN size gets the <b>exact Shopify stock</b> of the size its SKU points at, minus SHEIN orders not shipped yet. A SHEIN size whose SKU is <b>another size</b>, gone from Shopify, blank or in EUR/CN gets <b>0</b>, because the warehouse ships whatever SKU the order carries. Those are listed below with the exact change to make on SHEIN, and they sell again on the next fix.</p>
+      </HowItWorks>
       {err && <div className="error mt">{err}</div>}
 
       <div className="er-stats mt">
         <div className="er-stat"><b>{fmt(s.changed)}</b><span>SHEIN sizes change stock</span></div>
         <div className="er-stat bad"><b>{fmt(s.toZero)}</b><span>stop selling (set to 0)</span></div>
         <div className="er-stat"><b>{fmt(s.pairsBefore)} → {fmt(s.pairsAfter)}</b><span>pairs offered on SHEIN</span></div>
-        <div className="er-stat"><b>{fmt(relinks.length)}</b><span>seller SKUs to change{s.linksAi ? ` (${fmt(s.linksAi)} by AI)` : ''}</span></div>
+        <div className="er-stat"><b>{fmt(relinks.length)}</b><span>SKUs to change{s.linksAi ? ` (${fmt(s.linksAi)} by AI)` : ''}</span></div>
         <div className="er-stat"><b>{fmt(toAdd.length)}</b><span>Shopify sizes to add on SHEIN</span></div>
       </div>
 
       <div className="er-actions">
-        <button type="button" className="btn primary" disabled={!changes.length} onClick={downloadInventory}>⬇ SHEIN inventory file ({fmt(changes.length)} SKUs)</button>
+        <button type="button" className="btn primary" disabled={!changes.length} onClick={downloadInventory}>⬇ SHEIN inventory file ({fmt(changes.length)} SKU{changes.length === 1 ? '' : 's'})</button>
         <button type="button" className="btn" onClick={() => downloadCSV(`SHEIN fix list (${stamp}).csv`, fixListCsv(fix))}>⬇ Fix list — what to change on SHEIN (CSV)</button>
       </div>
       {!tpl && <p className="muted xs">Without SHEIN’s template you get a plain sheet (SHEIN SKU · new inventory) to copy into SHEIN’s. Load the template once and the file uploads as-is.</p>}
       {verify && <p className={verify.ok ? 'muted xs' : 'error xs'}>{verify.ok ? `✓ Checked: ${verify.detail}` : `✗ Not downloaded — ${verify.detail}`}</p>}
-      {exportName && <p className="muted xs">Built from {exportName}. Upload the file in SHEIN Seller Center, then export again and re-check: the list should be down to the seller-SKU changes.</p>}
-
-      <div className="shf-ai mt">
-        <div>
-          <b className="sm">AI helper</b>
-          <p className="muted xs">{fmt(s.unresolved)} SHEIN size{s.unresolved === 1 ? '' : 's'} still offered point at a seller SKU Shopify no longer has, and the rule (same style code + size) couldn’t place them. The AI suggests which Shopify variant each should link to; a suggestion is used only if the rules confirm the same shoe and the same size. It never changes stock.</p>
-        </div>
-        {ai?.running
-          ? <span className="muted sm">Asking AI… {fmt(ai.done)} of {fmt(ai.total)} products</span>
-          : <button type="button" className="btn" disabled={!aiWork.length} onClick={askAi}>✨ Match {fmt(aiWork.length)} product{aiWork.length === 1 ? '' : 's'} with AI</button>}
+      <SheinAdvanced param="fixadv" label={TERMS.more} hint="Orders file, SHEIN’s template, AI suggestions" force={!!(orders || tpl || ai)}>
+        <div className="shf-picks">
+        <FilePick label="SHEIN orders export (optional)" hint="Holds back pairs sold on SHEIN but not shipped yet" picked={orders && `${orders.name} · ${fmt(orders.open.length)} open order line${orders.open.length === 1 ? '' : 's'} held back`} onFile={pickOrders} />
+        <FilePick label="SHEIN inventory template (optional)" hint="Seller Center → batch edit inventory → download template; we fill it so it uploads as-is" picked={tpl && `${tpl.name} · sheet “${tpl.sheet}”, columns ${tpl.headers[tpl.cols.sku]} + ${tpl.headers[tpl.cols.qty]}${tpl.cols.wh >= 0 ? ` + ${tpl.headers[tpl.cols.wh]}` : ''}`} onFile={pickTemplate} />
       </div>
-      {ai && !ai.running && <p className={ai.error ? 'error xs' : 'muted xs'}>{ai.error ? `AI stopped: ${ai.error}` : `${ai.model || 'AI'}: ${fmt(ai.accepted)} link${ai.accepted === 1 ? '' : 's'} confirmed by the rules (of ${fmt(ai.tried)} suggested) — added to the fix list.`}</p>}
+        <div className="shf-ai mt">
+          <div>
+            <b className="sm">AI suggestions</b>
+            <p className="muted xs">{fmt(s.unresolved)} SHEIN size{s.unresolved === 1 ? '' : 's'} still offered use a SKU Shopify no longer has. The AI suggests the right Shopify size; a suggestion is used only if the rules confirm the same shoe and the same size. It never changes stock.</p>
+          </div>
+          {ai?.running
+            ? <span className="muted sm">Asking AI… {fmt(ai.done)} of {fmt(ai.total)} products</span>
+            : <button type="button" className="btn" disabled={!aiWork.length} onClick={askAi}>✨ Match {fmt(aiWork.length)} product{aiWork.length === 1 ? '' : 's'} with AI</button>}
+        </div>
+        {ai && !ai.running && <p className={ai.error ? 'error xs' : 'muted xs'}>{ai.error ? `AI stopped: ${ai.error}` : `${ai.model || 'AI'}: ${fmt(ai.accepted)} link${ai.accepted === 1 ? '' : 's'} confirmed by the rules (of ${fmt(ai.tried)} suggested) — added to the fix list.`}</p>}
+      </SheinAdvanced>
+
+      {exportName && <p className="muted xs">Built from {exportName}. Upload the file in SHEIN Seller Center, then export again and re-check: the list should be down to the SKU changes.</p>}
 
       {relinks.length > 0 && (
         <details className="mt" open={relinks.length <= 30}>
-          <summary className="sm"><b>Seller SKUs to change on SHEIN ({fmt(relinks.length)})</b></summary>
+          <summary className="sm"><b>SKUs to change on SHEIN ({fmt(relinks.length)})</b></summary>
           <div className="ap-tablewrap">
             <table className="table shc-table">
-              <thead><tr><th>SHEIN product</th><th>SHEIN size</th><th>Seller SKU now</th><th>Change to</th><th>Why</th></tr></thead>
+              <thead><tr><th>SHEIN product</th><th>SHEIN size</th><th>SKU now</th><th>Change to</th><th>Why</th></tr></thead>
               <tbody>
                 {relinks.map((r) => (
                   <tr key={r.line}>
@@ -187,7 +193,7 @@ export function SheinFixPanel({ fix, variants, exportName, orders, setOrders, ai
           <p className="muted xs">If SHEIN’s size list hasn’t got the size (4, 4.5, 15.5W…), add it as a custom size value on SHEIN — never map it to the nearest size.</p>
           <div className="ap-tablewrap">
             <table className="table shc-table">
-              <thead><tr><th>SHEIN product</th><th>Add size</th><th>Seller SKU</th><th className="num">Shopify stock</th></tr></thead>
+              <thead><tr><th>SHEIN product</th><th>Add size</th><th>SKU</th><th className="num">Shopify stock</th></tr></thead>
               <tbody>
                 {toAdd.map((a) => <tr key={a.sku}><td className="xs">{a.sheinName}</td><td><b>{addLabel(a.size)}</b></td><td className="ebl-sku">{a.sku}</td><td className="num">{a.qty}</td></tr>)}
               </tbody>

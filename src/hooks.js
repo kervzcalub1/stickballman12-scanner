@@ -1,5 +1,5 @@
 // Shared React hooks.
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
 import { onLiveChange } from './lib/live.js';
 
@@ -70,7 +70,11 @@ export const afterTyping = (sel) => new Promise((resolve) => {
 //   · never a spinner: `reload` replaces data quietly, and each caller only swaps state
 //     that actually changed, so a half-typed input is never disturbed.
 // `mount: false` when the screen already loads on its own and only wants the updates.
-export function useLive(tables, reload, { paused = false, every = 60_000, mount = true, minGap = 1500 } = {}) {
+// A section kept mounted but hidden (the SHEIN page) wraps itself in this: every useLive inside it, however
+// deep, stops reading while hidden and catches up when shown. Default false, so no other screen changes.
+export const LivePausedContext = createContext(false);
+export function useLive(tables, reload, { paused: pausedOpt = false, every = 60_000, mount = true, minGap = 1500 } = {}) {
+  const paused = useContext(LivePausedContext) || pausedOpt;
   const fnRef = useRef(reload); fnRef.current = reload;
   const pausedRef = useRef(paused); pausedRef.current = paused;
   const busy = useRef(false);

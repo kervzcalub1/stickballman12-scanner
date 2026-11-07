@@ -262,7 +262,7 @@ export function buildAttributes({ parts, defaults = [], assoc = [] }) {
   return { rows, problems };
 }
 
-// An EDIT of a product already on SHEIN (partialEdit: sizes, seller SKUs, sizes back on) is re-checked
+// An EDIT of a product already on SHEIN (partialEdit: sizes, SKUs, sizes back on) is re-checked
 // WHOLE — a detail SHEIN made required after the product was listed (4seller's Nikes lack "Reflection",
 // found 2026-10-28) refuses every edit. product_attribute_list REPLACES the list (doc 3002047 rule 3),
 // so the patch = the product's CURRENT details (spu-info mixes in sale attributes — only the template's
@@ -329,14 +329,14 @@ export function fillRules(fill) {
 
 const LINES = [
   [1, 'store', 'SHEIN can take new listings', ['store_cannot_publish']],
-  [2, 'quota', 'Publish quota', ['publish_quota_used']],
-  [3, 'shelf', 'Shelf quota', ['shelf_quota_full']],
+  [2, 'quota', 'Monthly new-product limit', ['publish_quota_used']],
+  [3, 'shelf', 'Shelf limit', ['shelf_quota_full']],
   [4, 'site', 'Selling on shein-us', ['store_cannot_publish:no_us_site', 'no_warehouse']],
   [5, 'shopify', 'Active on Shopify, with stock', ['shopify_inactive', 'no_shopify_stock']],
   [6, 'category', 'Category picked', ['no_category', 'mixed_size_groups']],
   [7, 'brand', 'Brand', ['brand_not_authorized', 'brand_unset', 'brand_none', 'brand_list_unread']],
   [8, 'title', 'Title', ['title_too_long', 'language_not_en']],
-  [9, 'colour', 'Colour (SKC value)', ['missing_attr:skc_colour', 'missing_attr:no_default_value']],
+  [9, 'colour', 'Colour', ['missing_attr:skc_colour', 'missing_attr:no_default_value']],
   [10, 'attributes', 'SHEIN details', ['missing_attr']],
   [11, 'size_chart', 'Size chart', ['size_table_not_yet', 'no_size_table_value']],
   [12, 'sizes', 'Sizes', ['size_needs_map', 'size_not_on_shein', 'custom_unconfirmed', 'size_unchecked', 'custom_text_invalid', 'size_unreadable', 'size_already_on_shein', 'nothing_to_add']],
@@ -576,7 +576,7 @@ export function planPublish(input) {
   return done(body);
 }
 
-// One line for a person (the dry-run sheet / job list) — the shared summarizePlan handles op 'publish'.
+// One line for a person (the preview sheet / job list) — the shared summarizePlan handles op 'publish'.
 export { summarizePlan as summarizePublish } from './sheinListings.js';
 
 // The readiness (a snapshot / a Shopify webhook — NO SHEIN call): the publish plan from what is cached,

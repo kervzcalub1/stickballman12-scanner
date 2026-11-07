@@ -1,13 +1,13 @@
 // SHEIN Listings → a product's Details drawer (`?product=<gid>`, refresh-proof). Shows the
 // requirements checklist (the server's blockers, grouped), what SHEIN would receive per size
-// (our size → SHEIN size: standard / custom-new, seller SKU, price, stock; "was …" for what
-// changed), and the history (dry runs / sends of this product with their summary + status, SHEIN
-// calls, EST). Footer: the two dry runs — "Add missing sizes" (Phase 2) and "Update prices &
+// (our size → SHEIN size: standard / custom-new, SKU, price, stock; "was …" for what
+// changed), and the history (previews / sends of this product with their summary + status, SHEIN
+// calls, EST). Footer: the two previews — "Add missing sizes" (Phase 2) and "Update prices &
 // sizes" (Phase 3: SHEIN price, a size turned off, a wrong SKU) — server jobs that only read →
 // the review sheet, where Send is; "Don't list on SHEIN" / "List on SHEIN again" only touch our
 // database. Phase 3 diffs show as "was …" (amber) → the new value. Phase 4: a Shopify shoe NOT on
 // SHEIN shows the server's 18-line publishing checklist instead (src/components/SheinPublishBits.jsx —
-// each ✕ with its fix inline) and one dry run, "Publish new product".
+// each ✕ with its fix inline) and one preview, "Publish new product".
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api.js';
@@ -15,6 +15,7 @@ import { useLive } from '../hooks.js';
 import { CopyText, RemoteThumb } from './common.jsx';
 import { fmt, money, when, StatusChip, BlockerSay, FixButton } from './SheinListingsBits.jsx';
 import { itemStatus } from '../lib/sheinListings.js';
+import { plain } from '../lib/sheinWords.js';
 import { NEEDS_PRIV } from './SheinListingsBits.jsx';
 import { useFixes, UPDATE_OPS, isRise } from '../screens/SheinListingsProducts.jsx';
 import { PublishChecklist } from './SheinPublishBits.jsx';
@@ -22,8 +23,8 @@ import { SheinShoeFix } from './SheinShoeFix.jsx';
 
 const CHECKS = [
   ['shopify', 'Active on Shopify', ['shopify_inactive']],
-  ['skus', 'Every size has its own seller SKU', ['no_seller_sku', 'dup_seller_sku', 'seller_sku_taken']],
-  ['links', 'SHEIN sizes carry the right seller SKUs', ['wrong_link', 'spu_spans_products']],
+  ['skus', 'Every size has its own SKU', ['no_seller_sku', 'dup_seller_sku', 'seller_sku_taken']],
+  ['links', 'SHEIN sizes carry the right SKUs', ['wrong_link', 'spu_spans_products']],
   ['sizes', 'Every in-stock size has a SHEIN size', ['size_needs_map', 'size_not_on_shein', 'size_unreadable', 'custom_text_invalid', 'no_size_table_value', 'multi_skc_size', 'size_field_retired']],
   ['price', 'Every size has a price', ['no_price']],
   ['shein', 'SHEIN hasn’t refused anything', ['review_rejected', 'shein_prevalid', 'api_error']],
@@ -38,14 +39,14 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
       const r = await api.sheinListingProduct(id); setD(r); setErr('');
       if (r.product && !r.product.spu && !String(id).startsWith('shein:')) api.sheinPublishSetup([id]).then((x) => setSetup(x.products?.[0] || null)).catch(() => setSetup(null));
       else setSetup(null);
-    } catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
+    } catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); }
   }
   useEffect(() => { setD(null); setErr(''); setSetup(null); }, [id]);
   useLive(['shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_job_items', 'shein_category_map', 'shein_brand_map', 'app_settings'], load);
   const { onFix, modal } = useFixes({ onAct, onSignOut, reload: load });
   const [matchOpen, setMatchOpen] = useState(false);
   const toMatch = () => { setMatchOpen(true); setTimeout(() => document.getElementById('shl-shoe-fix')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); };
-  const [fixFirst, setFixFirst] = useState(false);   // "Publish new product" pressed with ✕ lines left → the checklist, not the dry run
+  const [fixFirst, setFixFirst] = useState(false);   // "Publish new product" pressed with ✕ lines left → the checklist, not the preview
   const listRef = useRef(null);
   useEffect(() => { setFixFirst(false); }, [id]);
   useEffect(() => {
@@ -73,12 +74,12 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
   const toUpdate = onShein.filter((v) => v.diffs?.length);
   const isShopify = p && !String(p.shopify_product_id).startsWith('shein:');
   const isNew = isShopify && !p.spu;   // Phase 4: not on SHEIN at all → publish it
-  const why = !connected ? 'Connect SHEIN first' : active ? `Job #${active.id} is running — dry run when it finishes` : p?.excluded ? 'Marked “Don’t list on SHEIN”' : '';
-  // from OUR records, re-read on every save (the drawer's checklist may be the last dry run's, which a fix doesn't change)
+  const why = !connected ? 'Connect SHEIN first' : active ? `Job #${active.id} is running — preview when it finishes` : p?.excluded ? 'Marked “Don’t list on SHEIN”' : '';
+  // from OUR records, refresh on every save (the drawer's checklist may be the last preview's, which a fix doesn't change)
   const toFixLines = (setup?.checklist || []).filter((l) => l.ok === false);
   const toFix = toFixLines.length;
-  // the safety net (2026-10-28): a shoe with a ✕ on its checklist isn't dry-run by the publish button —
-  // the checklist is shown with what's left; a person can still re-check with a dry run (it sends nothing).
+  // the safety net (2026-10-28): a shoe with a ✕ on its checklist isn't preview by the publish button —
+  // the checklist is shown with what's left; a person can still re-check with a preview (it sends nothing).
   const publishClick = () => {
     if (toFix > 0) { setFixFirst(true); listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
     onDryRun?.([p.shopify_product_id], ['publish']);
@@ -101,7 +102,7 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                 {p.style && <CopyText className="shl-mono" text={p.style}>{p.style}</CopyText>}
                 <StatusChip status={p.status} />
                 {p.shopifyUrl && <a className="ebl-link" href={p.shopifyUrl} target="_blank" rel="noreferrer">Shopify ↗</a>}
-                {p.spu && <span>SPU <CopyText className="shl-mono" text={p.spu}>{p.spu}</CopyText></span>}
+                {p.spu && <span>On SHEIN <CopyText className="shl-mono" text={p.spu}>{p.spu}</CopyText></span>}
               </div>
             )}
           </div>
@@ -116,10 +117,10 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                 <div ref={listRef}>
                   {fixFirst && toFix > 0 && (
                     <div className="shl-banner warn" role="status" data-fix-first="">
-                      <b>Fix {toFix === 1 ? 'this' : `these ${fmt(toFix)}`} first — nothing was sent or dry-run</b>
+                      <b>Fix {toFix === 1 ? 'this' : `these ${fmt(toFix)}`} first — nothing was sent or previewed</b>
                       <span className="xs">Still ✕: {toFixLines.map((l) => l.label).join(' · ')}. Each one has its fix below.</span>
-                      <span className="muted xs">Think our records are out of date? A dry run re-checks everything with SHEIN and sends nothing.{' '}
-                        <button type="button" className="btn ghost xs" data-act="dry-anyway" disabled={!!busy || !!why} onClick={() => { setFixFirst(false); onDryRun?.([p.shopify_product_id], ['publish']); }}>Dry run anyway</button></span>
+                      <span className="muted xs">Think our records are out of date? A preview re-checks everything with SHEIN and sends nothing.{' '}
+                        <button type="button" className="btn ghost xs" data-act="dry-anyway" disabled={!!busy || !!why} onClick={() => { setFixFirst(false); onDryRun?.([p.shopify_product_id], ['publish']); }}>Preview anyway</button></span>
                     </div>
                   )}
                   <PublishChecklist d={d} canWrite={!!d.canWrite} busy={busy} onFix={onFix} onReload={load} onSignOut={onSignOut} onAct={onAct} />
@@ -129,13 +130,13 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                 <section className="shl-d-sec" data-published={pubRun.status}>
                   <h4 className="shl-h4">Published from this page</h4>
                   {pubRun.status === 'failed'
-                    ? <p className="sm shl-pline bad">{pubRejected ? 'SHEIN rejected the new product in its review' : 'SHEIN refused the publish'}{pubRun.error ? <>: “{pubRun.error}”</> : '.'} {pubRejected ? 'Fix it, then an admin presses Publish again and checks a new dry run.' : 'Fix it, then dry run again.'}</p>
-                    : <p className="sm shl-pline violet">Sent {when(pubRun.sent_at || pubRun.updated_at)} — SHEIN is reviewing the new product (hours to days). It shows In review until SHEIN approves it; then the live sync sets its stock.</p>}
+                    ? <p className="sm shl-pline bad">{pubRejected ? 'SHEIN rejected the new product in its review' : 'SHEIN refused the publish'}{pubRun.error ? <>: “{pubRun.error}”</> : '.'} {pubRejected ? 'Fix it, then an admin presses Publish again and checks a new preview.' : 'Fix it, then preview again.'}</p>
+                    : <p className="sm shl-pline violet">Sent {when(pubRun.sent_at || pubRun.updated_at)} — SHEIN is reviewing the new product (hours to days). It shows In review until SHEIN approves it; then automatic sync sets its stock.</p>}
                   <div className="shl-pub-acts">
                     <button type="button" className="btn ghost sm" onClick={() => onOpenJob?.(pubRun.job_id)}>Open the send #{pubRun.job_id}</button>
                     {pubRejected && (
-                      <button type="button" className="btn sm shl-fix" disabled={!d.canWrite || !!busy} title={d.canWrite ? 'Lets it go to SHEIN again, then starts a new dry run for you to check (SHEIN may still count the old SKUs)' : NEEDS_PRIV}
-                        onClick={async () => { if (await onAct('publish_again', { productIds: [p.shopify_product_id] }, 'Publish again allowed — check the new dry run, then publish.')) onDryRun?.([p.shopify_product_id], ['publish']); }}>Publish again</button>
+                      <button type="button" className="btn sm shl-fix" disabled={!d.canWrite || !!busy} title={d.canWrite ? 'Lets it go to SHEIN again, then starts a new preview for you to check (SHEIN may still count the old SKUs)' : NEEDS_PRIV}
+                        onClick={async () => { if (await onAct('publish_again', { productIds: [p.shopify_product_id] }, 'Publish again allowed — check the new preview, then publish.')) onDryRun?.([p.shopify_product_id], ['publish']); }}>Publish again</button>
                     )}
                   </div>
                 </section>
@@ -171,7 +172,7 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                   <h4 className="shl-h4">What SHEIN will receive</h4>
                   {!plan.length ? <p className="muted xs">No Shopify size to send.</p> : (
                     <table className="shl-rtable shl-plan">
-                      <thead><tr><th>Our size</th><th>SHEIN size</th><th>Seller SKU</th><th className="num">Price</th><th className="num">Stock</th></tr></thead>
+                      <thead><tr><th>Our size</th><th>SHEIN size</th><th>SKU</th><th className="num">Price</th><th className="num">Stock</th></tr></thead>
                       <tbody>
                         {[...toAdd, ...onShein].map((v) => {
                           const sp = v.size_plan;
@@ -187,7 +188,7 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                                 : sp?.kind === 'custom' ? <span>✚ <b>{sp.label}</b> <span className="muted xs">custom size · new</span></span>
                                   : sp?.kind === 'value' ? <span>✚ <b>{sp.label}</b> <span className="muted xs">SHEIN size · new</span></span>
                                     : <span className="shl-bad-text xs">{v.blockers?.[0]?.title || 'no SHEIN size yet'}</span>}</td>
-                              <td data-label="Seller SKU" className={sku ? '' : 'shl-mono'}>{sku ? <span><span className="muted xs shl-block">SHEIN has the wrong SKU:</span><span className="shl-was shl-mono">was {sku.from || '—'}</span> → will change to <b className="shl-mono">{sku.to}</b></span> : v.seller_sku || '—'}</td>
+                              <td data-label="SKU" className={sku ? '' : 'shl-mono'}>{sku ? <span><span className="muted xs shl-block">SHEIN has the wrong SKU:</span><span className="shl-was shl-mono">was {sku.from || '—'}</span> → will change to <b className="shl-mono">{sku.to}</b></span> : v.seller_sku || '—'}</td>
                               <td data-label="Price" className="num">{sp3 ? <span><span className="muted xs shl-block">SHEIN price</span><span className="shl-was">was {money(sp3.from)}</span> → <b>{money(sp3.to)}</b>{isRise(sp3) && <span className="shl-rise xs shl-block">↑ SHEIN may review it</span>}</span>
                                 : price ? <span><span className="shl-was">was {money(price.from)}</span> → <b>{money(price.to)}</b></span> : money(v.shopify_price)}</td>
                               <td data-label="Stock" className="num">{isNew ? <span>0 <span className="muted xs">at first</span></span> : v.shein_qty == null ? '—' : fmt(v.shein_qty)}</td>
@@ -197,7 +198,7 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                       </tbody>
                     </table>
                   )}
-                  <p className="muted xs">Highlighted rows are new or changed on SHEIN; amber “was …” is what SHEIN has now. New sizes go up at stock 0; the live sync sets their stock once SHEIN approves. Stock never makes a size need an update.{isAdmin ? ' The exact request is on the dry run’s sheet.' : ''}</p>
+                  <p className="muted xs">Highlighted rows are new or changed on SHEIN; amber “was …” is what SHEIN has now. New sizes go up at stock 0; automatic sync sets their stock once SHEIN approves. Stock never makes a size need an update.{isAdmin ? ' The exact request is on the preview’s sheet.' : ''}</p>
                 </section>
               )}
 
@@ -206,17 +207,17 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                 {!d.jobItems?.length && !d.log?.length && <p className="muted xs">Nothing yet{p.last_snapshot_at ? ` — last checked ${when(p.last_snapshot_at)}` : ''}.</p>}
                 {d.jobItems?.map((it) => {
                   const st = ['preview', 'run'].includes(it.kind) ? itemStatus(it.kind, it.status) : { label: it.status, chip: 'ebo-chip' };
-                  const label = it.kind === 'preview' ? 'Dry run' : it.kind === 'run' ? 'Send' : it.kind === 'snapshot' ? 'Re-read' : it.kind;
+                  const label = it.kind === 'preview' ? 'Preview' : it.kind === 'run' ? 'Send' : it.kind === 'snapshot' ? 'Refresh' : it.kind;
                   return (
                     <div key={`i${it.id}`} className="xs shl-hist shl-hist-item" data-hist={it.kind}>
                       <span>{when(it.updated_at || it.created_at)} · {label} #{it.job_id} · <span className={st.chip}>{st.label}</span>
                         {['preview', 'run'].includes(it.kind) && <> · <button type="button" className="shl-linkbtn" onClick={() => onOpenJob?.(it.job_id)}>Open</button></>}</span>
-                      {it.summary && it.kind !== 'snapshot' && <span className="shl-block">{it.summary}</span>}
+                      {it.summary && it.kind !== 'snapshot' && <span className="shl-block">{plain(it.summary)}</span>}
                       {it.status === 'failed' && it.error && it.error !== it.summary && <span className="shl-bad-text shl-block">SHEIN said: “{it.error}”</span>}
                     </div>
                   );
                 })}
-                {d.log?.map((l) => <p key={`l${l.id}`} className="xs muted shl-hist">{when(l.at)} · SHEIN {l.write ? 'write' : 'read'} {String(l.path || '').split('/').pop()} · {l.code === '0' ? 'OK' : `${l.code || l.http_status}: ${l.msg || ''}`}{l.trace_id ? ` · trace ${l.trace_id}` : ''}</p>)}
+                {d.log?.map((l) => <p key={`l${l.id}`} className="xs muted shl-hist">{when(l.at)} · SHEIN {l.write ? 'change' : 'read'} · {l.code === '0' ? 'OK' : `${l.code || l.http_status}: ${l.msg || ''}`}{l.trace_id ? ` · ref ${l.trace_id}` : ''}</p>)}
               </section>
             </>
           )}
@@ -225,21 +226,21 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
           {p && isShopify && (p.excluded
             ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={async () => { if (await onAct('include', { productIds: [p.shopify_product_id] }, 'Listed on SHEIN again.')) load(); }}>List on SHEIN again</button>
             : <button type="button" className="btn ghost sm" disabled={!!busy} title="Our records only — nothing changes on SHEIN" onClick={async () => { if (await onAct('exclude', { productIds: [p.shopify_product_id] }, 'Marked “Don’t list on SHEIN” (our records only).')) load(); }}>Don’t list on SHEIN</button>)}
-          {p && isShopify && <span className="muted xs shl-foot-lead">Dry run first — nothing is sent:</span>}
+          {p && isShopify && <span className="muted xs shl-foot-lead">Preview first. Nothing is sent:</span>}
           {(isNew || republish) && (
             <button type="button" className="btn primary sm" disabled={!!busy || !!why} data-dry="publish"
-              title={why || (toFix ? `${toFix} line${toFix === 1 ? '' : 's'} still to fix — this shows them first (nothing is sent or dry-run).` : 'Dry run: what SHEIN would receive for this new product — category, brand, photos, sizes, prices. Nothing is sent until someone confirms.')}
+              title={why || (toFix ? `${toFix} line${toFix === 1 ? '' : 's'} still to fix — this shows them first (nothing is sent or previewed).` : 'Preview: what SHEIN would receive for this new product — category, brand, photos, sizes, prices. Nothing is sent until someone confirms.')}
               data-needs-fix={toFix || undefined}
               onClick={isNew ? publishClick : () => onDryRun?.([p.shopify_product_id], ['publish'])}>{busy === 'preview' ? 'Starting…' : isNew && toFix ? `Fix ${fmt(toFix)} first` : 'Publish new product'}</button>
           )}
           {p && isShopify && !isNew && !republish && (
             <button type="button" className={`btn ${toUpdate.length && !toAddLive.length ? 'ghost' : 'primary'} sm`} disabled={!!busy || !!why || !toAdd.length} data-dry="add"
-              title={why || (!toAdd.length ? 'Every Shopify size is already on SHEIN' : `Dry run: add ${fmt(toAdd.length)} size${toAdd.length === 1 ? '' : 's'} SHEIN doesn’t have. Nothing is sent until someone confirms.`)}
+              title={why || (!toAdd.length ? 'Every Shopify size is already on SHEIN' : `Preview: add ${fmt(toAdd.length)} size${toAdd.length === 1 ? '' : 's'} SHEIN doesn’t have. Nothing is sent until someone confirms.`)}
               onClick={() => onDryRun?.([p.shopify_product_id])}>{busy === 'preview' ? 'Starting…' : 'Add missing sizes'}</button>
           )}
           {p && isShopify && !isNew && !republish && (
             <button type="button" className={`btn ${toUpdate.length && !toAddLive.length ? 'primary' : 'ghost'} sm`} disabled={!!busy || !!why || !toUpdate.length} data-dry="update"
-              title={why || (!toUpdate.length ? 'Nothing on SHEIN differs — no size needs an update' : `Dry run: ${fmt(toUpdate.length)} size${toUpdate.length === 1 ? '' : 's'} with a SHEIN price, a size turned off or a wrong SKU. Nothing is sent until someone confirms.`)}
+              title={why || (!toUpdate.length ? 'Nothing on SHEIN differs — no size needs an update' : `Preview: ${fmt(toUpdate.length)} size${toUpdate.length === 1 ? '' : 's'} with a SHEIN price, a size turned off or a wrong SKU. Nothing is sent until someone confirms.`)}
               onClick={() => onDryRun?.([p.shopify_product_id], UPDATE_OPS)}>{busy === 'preview' ? 'Starting…' : 'Update prices & sizes'}</button>
           )}
         </div>

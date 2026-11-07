@@ -1,5 +1,52 @@
 # SHEIN Listings — Shopify → SHEIN listing sync (retires 4seller)
 
+## The one page (`/ph/shein`, `/shein`; `src/screens/Shein.jsx`)
+Every SHEIN screen is one page with one home card ("SHEIN"), sections in `?section=` (keys stay, words are in `sheinWords.js`):
+
+| Section | `section=` | What it is | Its own params |
+|---|---|---|---|
+| Today | `today` | Health line + counts with a button each. Reads `api/shein/listings` + `api/shein/live`, nothing new; a failed read says "couldn't read this", never 0 | none |
+| Shoes on SHEIN | `listings` | `SheinListings.jsx` | `tab status q brand blocker shop p product job sz pt adv sizeadv` |
+| Fix problems | `check` | `SheinCheck.jsx` (+ Match, Fix) | `chk fixadv` |
+| Prices | `reprice` | `SheinReprice.jsx` | `priceadv` |
+| Automatic sync | `live` | Connect card + `SheinLivePanel.jsx` | `liveadv`, and `shein` / `shein_error` once on return from SHEIN |
+
+- **Kept mounted, hidden.** A section mounts on first visit and stays, so an uploaded file, a reprice and prices being fetched survive a switch. `LivePausedContext` (`src/hooks.js`) pauses every `useLive` inside a hidden section; it catches up when shown. Drawers and sheets are portalled, so a hidden Listings stops rendering them (`visible`).
+- **Moving between sections** is `replaceState` (the app's tab convention), so Back leaves the page. A link passes params through `useSheinNav()`, and `syncQueryParams()` makes the hooks re-read them. It is not a popstate, which would run the routers and the unsaved-changes prompt.
+- **Who sees what** (`sheinSectionsFor`, `src/lib/sheinPage.js`): PH and admin all five; a warehouse account holding `connect_integrations` Fix problems + Automatic sync; anyone else never reaches the page. Each endpoint still enforces its own role.
+- **Old addresses** (`canonicalSheinUrl`): `/ph/shein-listings`, `/shein-listings`, `/ph/shein-check`, `/shein-check`, `/ph/shein-reprice` land on the right section with their query. `?tab=match` on the old check path becomes `chk=match`. `/shein` and `/ph/shein` move to the person's own workspace, which is why `api/shein/callback.js` can return to `/shein?section=live&…` for every role.
+- **Advanced**: `SheinAdvanced` (`src/components/SheinNav.jsx`) keeps its open state in the URL. Under it: Jobs, Setup, Shopify updates, automatic price update (`adv=1`); Ask SHEIN (`sizeadv=1`); sync switches + the full check (`liveadv=1`, opens by itself while a check runs or the sync is off); orders file, template, AI suggestions (`fixadv=1`); the price template (`priceadv=1`).
+
+## Words
+**One place:** `src/lib/sheinWords.js` holds section names, status words and meanings, job words and terms. Blocker text is in `BLOCKERS` (`src/lib/sheinListings.js`). Display text only: API fields, database values and URL keys did not change. Text the server writes (a job's phase, a summary, an API error, old rows) goes through `plain()` at the screen; `api/` keeps the old words and SHEIN's own quoted messages are left as they are.
+
+| Old word | New word |
+|---|---|
+| SHEIN Listings (page) | Shoes on SHEIN |
+| SHEIN ↔ Shopify check (page) | Fix problems |
+| SHEIN Reprice (page) | Prices |
+| Live sync, live fix | Automatic sync |
+| Dry run | Preview (changes nothing) |
+| Re-read Shopify + SHEIN, snapshot | Refresh from SHEIN |
+| Walk, Fix every SHEIN listing | Full check of every SHEIN listing |
+| Seller SKU | SKU |
+| SPU | Product (`On SHEIN <code>` beside a shoe) |
+| SKC value | Colour |
+| Blocker (filter) | What's stopping it |
+| 4seller cut-over | Switching over from 4seller |
+| Go-live checklist | Before going live |
+| Pilot — Phase N | First try |
+| Publish quota, Shelf quota | Monthly new-product limit, Shelf limit |
+| Register Shopify webhooks | Connect Shopify updates |
+| Auto re-sync price | Automatic price update |
+| Ask SHEIN (read-only) | Ask SHEIN which sizes it allows |
+| 0 SHEIN writes | 0 changes on SHEIN |
+| Add sizes to N products (confirm) | Send N sizes to SHEIN (N products) |
+| Update N products (confirm) | Send changes for N products to SHEIN |
+| Publish N products (confirm) | Publish N new products on SHEIN |
+| trace | ref |
+
+
 Plan + decisions: `docs/shein-listings-plan.md` (its **Build log** at the end records what was built
 and every deviation). API fields: `docs/shein-listing-api-reference.md` (publish, templates, custom
 sizes, review, **searchProduct**) and `docs/shein-api-reference.md` (spu-info, stock, price).
@@ -137,7 +184,7 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
   the same size (`compareSize`) and in the category's list (409 if not read yet). DB only.
 - `GET /api/shein/listing-log?job=&spu=&trace=&writes=1&limit=` (admin) → `{ ok, log }`.
 
-## The page (`/ph/shein-listings` PH card above "SHEIN ↔ Shopify check"; `/shein-listings` admin, Marketplaces)
+## The section (Shoes on SHEIN: `/ph/shein?section=listings`, `/shein?section=listings`)
 - **Who:** PH + admin/superadmin (the endpoints refuse anyone else, so the admin card has NO
   `privKey` — a warehouse holder of Connect integrations would land on 403s). **Ask SHEIN** and
   **Register Shopify webhooks** (**Re-register** once done; it only creates what's missing) need admin or `connect_integrations`; others see them disabled with

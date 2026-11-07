@@ -9,9 +9,9 @@
 //   · photos     "Use PH edited photos" on / off for all of them (publish_choices_bulk)
 //   · titles     a tidy-up preview (tidyTitle) → apply; each title editable inline too
 //   · box        D6 (BoxDefaults — saving stays admin / Connect integrations)
-// Every save is OUR database only; the sheet re-reads after each one. "Dry run publish (n ready)" starts
-// the same publish dry run as the drawer, for the shoes with no ✕ — nothing goes to SHEIN until the
-// dry run's own confirm. Opened from the ticked-products bar ("Bulk edit", or "Fix & publish" when a
+// Every save is OUR database only; the sheet re-reads after each one. "Preview publish (n ready)" starts
+// the same publish preview as the drawer, for the shoes with no ✕ — nothing goes to SHEIN until the
+// preview's own confirm. Opened from the ticked-products bar ("Bulk edit", or "Fix & publish" when a
 // ticked shoe still needs fixing). In memory only — never in the URL.
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -21,6 +21,7 @@ import { RemoteThumb, CopyText } from './common.jsx';
 import { fmt, NEEDS_PRIV } from './SheinListingsBits.jsx';
 import { CategoryPicker, BrandPicker, AttrEditor, BoxDefaults, GROUP_LABEL } from './SheinPublishBits.jsx';
 import { tidyTitle, cleanTitle } from '../lib/sheinPublish.js';
+import { plain } from '../lib/sheinWords.js';
 
 const saveChoices = (body) => api.sheinListingAction({ action: 'publish_choices_bulk', ...body });
 const lineOf = (p, key) => (p.checklist || []).find((l) => l.key === key) || null;
@@ -39,7 +40,7 @@ export function SheinBulkPublish({ ids, leftOut = [], intent = 'edit', active, b
     try {
       const [r, bm] = await Promise.all([api.sheinPublishSetup(ids), api.sheinPublishMaps('brand').catch(() => null)]);
       setD(r); setBrandMaps(bm?.maps || []); setErr('');
-    } catch (e) { if (e.unauthorized) onSignOut?.(); else setErr(e.message); }
+    } catch (e) { if (e.unauthorized) onSignOut?.(); else setErr(plain(e.message)); }
   }
   useEffect(() => { setD(null); reload(); }, [ids.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
   useLive(['shein_category_map', 'shein_brand_map', 'shein_listing_products', 'app_settings'], reload, { mount: false });
@@ -93,9 +94,9 @@ export function SheinBulkPublish({ ids, leftOut = [], intent = 'edit', active, b
   async function bulk(body, text) {
     setErr('');
     try { const r = await saveChoices(body); await saved(typeof text === 'function' ? text(r) : text); return true; }
-    catch (e) { if (e.unauthorized) onSignOut?.(); else setErr(e.message); return false; }
+    catch (e) { if (e.unauthorized) onSignOut?.(); else setErr(plain(e.message)); return false; }
   }
-  const why = active ? `Job #${active.id} is running — dry run when it finishes` : '';
+  const why = active ? `Job #${active.id} is running — preview when it finishes` : '';
 
   return createPortal(
     <>
@@ -115,7 +116,7 @@ export function SheinBulkPublish({ ids, leftOut = [], intent = 'edit', active, b
           {d && intent === 'fix' && fixing.length > 0 && (
             <div className="shl-banner warn" role="status" data-fix-first="">
               <b>{plural(fixing.length, 'shoe')} can’t be published yet — fix {fixing.length === 1 ? 'it' : 'them'} first</b>
-              <span className="xs">Nothing was sent or dry-run. Each row below says what’s missing; the fixes underneath apply to many shoes at once. “Dry run publish” only takes the ready ones.</span>
+              <span className="xs">Nothing was sent or previewed. Each row below says what’s missing; the fixes underneath apply to many shoes at once. The preview only takes the ready ones.</span>
             </div>
           )}
           {skipped.length > 0 && (
@@ -135,7 +136,7 @@ export function SheinBulkPublish({ ids, leftOut = [], intent = 'edit', active, b
                 <thead><tr><th>Shoe</th><th>Style</th><th>Type · size group</th><th>Vendor</th><th>What blocks it</th></tr></thead>
                 <tbody>{products.map((p) => <BulkRow key={p.productId} p={p} onOpen={onOpen} onSave={(title) => bulk({ titles: { [p.productId]: title } }, title ? `SHEIN title saved for “${cleanTitle(p.title || '')}” (Shopify unchanged).` : 'Back to the Shopify title.')} />)}</tbody>
               </table>
-              <p className="muted xs">✓ / ✕ are from our records (checked again on every save). “Checked by the dry run” lines — SHEIN’s store checks, photos, seller SKUs — are read when you dry run; nothing is sent then either.</p>
+              <p className="muted xs">✓ / ✕ are from our records (checked again on every save). “Checked by the preview” lines — SHEIN’s store checks, photos, SKUs — are read when you preview; nothing is sent then either.</p>
             </section>
           )}
 
@@ -196,7 +197,7 @@ export function SheinBulkPublish({ ids, leftOut = [], intent = 'edit', active, b
                 <p className="xs">{fmt(phOn)} of {fmt(live.length)} use the PH edited photos{photoNo ? <> · <span className="shl-bad-text">{fmt(photoNo)} short of photos</span></> : ''}. The PH team’s photos for each style are used when there are any, else Shopify’s.</p>
                 <div className="shl-pub-acts">
                   <button type="button" className="btn ghost xs" disabled={phOn === 0} onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { usePhPhotos: false } }, `Back to the Shopify photos on ${plural(live.length, 'shoe')}.`)}>Shopify photos on all</button>
-                  <button type="button" className="btn xs shl-fix" disabled={phOn === live.length} onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { usePhPhotos: true } }, `PH edited photos on ${plural(live.length, 'shoe')} — checked again by the dry run.`)}>Use PH photos on all {fmt(live.length)}</button>
+                  <button type="button" className="btn xs shl-fix" disabled={phOn === live.length} onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { usePhPhotos: true } }, `PH edited photos on ${plural(live.length, 'shoe')} — checked again by the preview.`)}>Use PH photos on all {fmt(live.length)}</button>
                 </div>
               </BulkBlock>
 
@@ -211,7 +212,7 @@ export function SheinBulkPublish({ ids, leftOut = [], intent = 'edit', active, b
                     </div>
                   </>
                 )}
-                {!titleMaxKnown && <p className="muted xs">SHEIN’s title limit is read with the dry run (or with SHEIN’s rules for the category). Each title can also be edited in its row above.</p>}
+                {!titleMaxKnown && <p className="muted xs">SHEIN’s title limit is read with the preview (or with SHEIN’s rules for the category). Each title can also be edited in its row above.</p>}
               </BulkBlock>
 
               {boxNo && (
@@ -224,11 +225,11 @@ export function SheinBulkPublish({ ids, leftOut = [], intent = 'edit', active, b
           )}
         </div>
         <div className="shl-d-foot">
-          <span className="muted xs shl-foot-lead">{d ? <>{fmt(ready.length)} ready · {fmt(fixing.length)} still need{fixing.length === 1 ? 's' : ''} fixing · nothing is sent by a dry run</> : ''}</span>
+          <span className="muted xs shl-foot-lead">{d ? <>{fmt(ready.length)} ready · {fmt(fixing.length)} still need{fixing.length === 1 ? 's' : ''} fixing · nothing is sent by a preview</> : ''}</span>
           <button type="button" className="btn ghost sm" onClick={onClose}>Close</button>
           <button type="button" className="btn primary sm" data-dry="publish-ready" disabled={!ready.length || !!busy || !!why}
-            title={why || (ready.length ? `Dry run: what SHEIN would receive for the ${plural(ready.length, 'ready shoe')} — the ${fmt(fixing.length)} still to fix are left out. Nothing is sent until someone confirms.` : 'No shoe is ready yet — fix the ✕ lines first')}
-            onClick={async () => { if (await onDryRun(ready.map((p) => p.productId), ['publish'])) onClose(); }}>{busy === 'preview' ? 'Starting…' : `Dry run publish (${fmt(ready.length)} ready)`}</button>
+            title={why || (ready.length ? `Preview: what SHEIN would receive for the ${plural(ready.length, 'ready shoe')} — the ${fmt(fixing.length)} still to fix are left out. Nothing is sent until someone confirms.` : 'No shoe is ready yet — fix the ✕ lines first')}
+            onClick={async () => { if (await onDryRun(ready.map((p) => p.productId), ['publish'])) onClose(); }}>{busy === 'preview' ? 'Starting…' : `Preview (changes nothing): ${fmt(ready.length)} ready`}</button>
         </div>
       </aside>
     </>,
@@ -288,9 +289,9 @@ function BulkRow({ p, onOpen, onSave }) {
       <td data-label="What blocks it">
         <span className="shl-chiprow shl-bulk-chips">
           {!p.syncable && <span className="ebo-chip warn" data-chip="stock">{stockWhy(p)} — won’t be published</span>}
-          {p.ready && <span className="ebo-chip ok" data-chip="ready">✓ Ready to dry run</span>}
+          {p.ready && <span className="ebo-chip ok" data-chip="ready">✓ Ready to preview</span>}
           {no.filter((l) => !(l.key === 'shopify' && !p.syncable)).map((l) => <span key={l.key} className="ebo-chip bad" data-chip={l.key} title={(l.blockers || []).filter((b) => !['note', 'review'].includes(b.level)).map((b) => `${b.title} ${b.fix || ''}`).join(' · ')}>✕ {l.label}</span>)}
-          {unread > 0 && <span className="ebo-chip" title="SHEIN’s store checks, photos, seller SKUs … — read by the dry run">{fmt(unread)} checked by the dry run</span>}
+          {unread > 0 && <span className="ebo-chip" title="SHEIN’s store checks, photos, SKUs … — read by the preview">{fmt(unread)} checked by the preview</span>}
         </span>
         {no.length > 0 && <span className="xs muted shl-block">{(no[0].blockers || []).find((b) => !['note', 'review'].includes(b.level))?.fix || ''}</span>}
       </td>
@@ -319,7 +320,7 @@ function BulkColour({ g, onSave, onSignOut }) {
       <span className="sm">{g.path || `SHEIN type ${g.ptid}`} <span className="muted xs">— {plural(g.list.length, 'shoe')}{missing ? `, ${fmt(missing)} without a colour` : ''}{set.size > 1 ? ' (different colours now)' : ''}</span></span>
       {err && <p className="error xs">{err}</p>}
       {!t && !err && <div className="shl-skel shl-skel-line" />}
-      {t && !main && <p className="notice xs">SHEIN’s colour list for this type hasn’t been read yet — a publish dry run reads it.</p>}
+      {t && !main && <p className="notice xs">SHEIN’s colour list for this type hasn’t been read yet — a publish preview reads it.</p>}
       {t && main && status === 1 && <p className="muted xs">SHEIN uses its own “Default” colour for this type — nothing to pick.</p>}
       {t && main && status !== 1 && (
         <span className="shl-bulk-colour">

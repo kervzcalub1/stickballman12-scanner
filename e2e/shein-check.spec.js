@@ -1,7 +1,7 @@
 // SHEIN ↔ Shopify check (docs/context/shein-check.md). What this pins:
 //   · sizes are compared as number + who-it-fits: "US8" vs "9" is WRONG, "US6" vs "6W" is
 //     fine, "7 Toddler" vs "7Y" is the wrong age group, "CN35"/"US7-8" can't be checked;
-//   · each SHEIN size is matched to Shopify by seller SKU: gone from Shopify, more stock on
+//   · each SHEIN size is matched to Shopify by SKU: gone from Shopify, more stock on
 //     SHEIN, a SKU used twice — all flagged; the fix list CSV carries only real findings;
 //   · the page: upload the export → tiles → worst product first, phone width, PH + admin.
 // Shopify is mocked; the export is built here with our own xlsx writer.
@@ -27,7 +27,7 @@ test.describe('SHEIN check rules', () => {
     expect(parseSize('4C')).toMatchObject({ n: 4, group: 'child' });
   });
 
-  test('matched by seller SKU: wrong size, gone from Shopify, more stock on SHEIN, used twice', () => {
+  test('matched by SKU: wrong size, gone from Shopify, more stock on SHEIN, used twice', () => {
     const shein = [
       { line: 2, sellerSku: '100', size: 'US9', qty: 1 },
       { line: 3, sellerSku: '101', size: 'US8', qty: 2 },     // Shopify says 9
@@ -106,8 +106,10 @@ test.describe('SHEIN check page', () => {
   test('admins reach it from their home (Marketplaces)', async ({ page }) => {
     await loginAs(page, 'admin');
     await page.goto('/');
-    await page.getByRole('button', { name: /SHEIN ↔ Shopify check/ }).click();
-    await expect(page).toHaveURL(/\/shein-check$/);
+    await page.getByRole('button', { name: /^SHEIN/ }).click();
+    await expect(page).toHaveURL(/\/shein$/);
+    await page.getByRole('tab', { name: 'Fix problems' }).click();
+    await expect(page).toHaveURL(/section=check/);
     await expect(page.getByLabel('SHEIN export file')).toBeAttached();
   });
 });

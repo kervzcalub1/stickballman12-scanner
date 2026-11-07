@@ -1,4 +1,4 @@
-// SHEIN Listings Phase 5 — the 4seller cut-over and go-live checklists (docs/shein-listings-plan.md
+// SHEIN Listings Phase 5 — the Switching over from 4seller and go-live checklists (docs/shein-listings-plan.md
 // §3 Phase 5, D9; docs/context/shein-listings.md → "Phase 5"). PURE: the server reads the facts
 // (api/shein/listing-cutover.js → db.js listingCutoverFacts) and this module turns them into
 // ✓ / ✕ / … lines, the same on the server and in the page. `now` is always passed in — never a
@@ -21,10 +21,10 @@ export const SHEIN_CONTROLLED = ['size_not_on_shein', 'brand_not_authorized', 's
 export const TICKS = {
   paused_4seller: { card: 'cutover', label: '4seller’s SHEIN sync is paused (stock and listings)', date: 'Paused on' },
   last_action_4seller: { card: 'cutover', label: '4seller’s last action on SHEIN', date: 'Last 4seller action in Seller Center’s operation log' },
-  shein_console_hooks: { card: 'golive', label: 'SHEIN console webhook subscriptions' },
-  pilot_phase2: { card: 'golive', label: 'Pilot — Phase 2: one shoe, one custom size', date: 'Done on', note: 'Which shoe' },
-  pilot_phase3: { card: 'golive', label: 'Pilot — Phase 3: one cut, one size back on', date: 'Done on', note: 'Which shoe' },
-  pilot_phase4: { card: 'golive', label: 'Pilot — Phase 4: one men’s sneaker, SHEIN sizes only', date: 'Done on', note: 'Which shoe' },
+  shein_console_hooks: { card: 'golive', label: 'SHEIN order and review alerts turned on' },
+  pilot_phase2: { card: 'golive', label: 'First try: one shoe, one custom size', date: 'Done on', note: 'Which shoe' },
+  pilot_phase3: { card: 'golive', label: 'First try: one cut, one size back on', date: 'Done on', note: 'Which shoe' },
+  pilot_phase4: { card: 'golive', label: 'First try: one men’s sneaker, SHEIN sizes only', date: 'Done on', note: 'Which shoe' },
 };
 export const SHEIN_HOOK_TOPICS = ['product_document_audit_status_notice', 'product_document_receive_status_notice', 'product_price_audit_status_notice'];
 export const GOLIVE_TABLES = ['shein_listing_products', 'shein_listing_variants', 'shein_listing_jobs', 'shein_listing_job_items', 'shein_listing_cache',
@@ -56,7 +56,7 @@ export function productAnswered(p, levelOf = () => 'blocked') {
   return false;
 }
 
-/* ------------------------------- the cut-over card ------------------------------- */
+/* ------------------------------- the switch-over card ------------------------------- */
 // facts = { newProducts: [{shopify_product_id, title, style, status, first_seen_at, settled_at}],
 //           nightly: [{id, status, created_at, finished_at}], interrupted: [{id, kind, created_at, done, total}],
 //           sizes: { snapshot: bool, toAdd, sheinBlocked, leftOff, byCode: [{code, sizes}] } }
@@ -93,7 +93,7 @@ export function evaluateCutover({ ticks = {}, facts = {}, now }) {
   const bad = shoes.filter((s) => s.state === 'late' || s.state === 'missed');
   const waiting = shoes.filter((s) => s.state === 'waiting');
   items.push({
-    key: 'b', title: `Every new Shopify shoe reached Synced or a named blocker within ${SETTLE_DAYS} days`,
+    key: 'b', title: `Every new Shopify shoe reached Synced or a stated reason within ${SETTLE_DAYS} days`,
     how: 'From our records: when each ACTIVE Shopify shoe first appeared on this page, and when it first read Synced, In review, Blocked / Error with a reason, or “Don’t list on SHEIN” by a person.',
     ok: !paused ? false : bad.length ? false : complete ? true : null,
     detail: !paused ? 'Starts when 4seller is ticked paused.'
@@ -113,7 +113,7 @@ export function evaluateCutover({ ticks = {}, facts = {}, now }) {
   const missedNights = nights.filter((d) => !doneNights.has(d));
   items.push({
     key: 'c', title: 'The nightly read ran every night for 30 days',
-    how: 'From the Jobs list: one finished “Re-read” started by the 03:00 EST nightly on each EST night since the start (the nightly runs on the live server only).',
+    how: 'From the Jobs list: one finished “Refresh” started by the 03:00 EST nightly on each EST night since the start (the nightly runs on the live server only).',
     ok: !paused ? false : missedNights.length ? false : complete ? true : null,
     detail: !paused ? 'Starts when 4seller is ticked paused.'
       : missedNights.length ? `Missed ${missedNights.length} night${missedNights.length === 1 ? '' : 's'}: ${missedNights.slice(0, 6).join(', ')}${missedNights.length > 6 ? ' …' : ''} (EST).`
@@ -135,7 +135,7 @@ export function evaluateCutover({ ticks = {}, facts = {}, now }) {
   const sz = facts.sizes || {};
   items.push({
     key: 'e', title: 'Sizes still to add are only the ones SHEIN won’t take',
-    how: 'From the last read: in-stock Shopify sizes of shoes already on SHEIN that SHEIN doesn’t sell (the same rule as “Shopify sizes to add on SHEIN” on the SHEIN ↔ Shopify check), against the ones blocked for a reason SHEIN controls — custom size not allowed, brand not authorised, publish quota / shelf full.',
+    how: 'From the last read: in-stock Shopify sizes of shoes already on SHEIN that SHEIN doesn’t sell (the same rule as “Shopify sizes to add on SHEIN” in Fix problems), against the ones blocked for a reason SHEIN controls — custom size not allowed, brand not authorised, monthly new-product limit / shelf full.',
     ok: !sz.snapshot ? false : sz.toAdd <= sz.sheinBlocked,
     detail: !sz.snapshot ? 'Nothing read yet.'
       : `${sz.toAdd} size${sz.toAdd === 1 ? '' : 's'} to add · ${sz.sheinBlocked} blocked by SHEIN${sz.toAdd > sz.sheinBlocked ? ` — ${sz.toAdd - sz.sheinBlocked} we could still add` : ''}.${sz.leftOff ? ` ${sz.leftOff} more left off on purpose (“Don’t list on SHEIN”), not counted.` : ''}`,
@@ -160,28 +160,28 @@ export function evaluateGolive({ ticks = {}, facts = {}, cutover = null }) {
   const paused = tick('paused_4seller');
   const run = facts.firstRun || null;
   const items = [
-    { key: 'db', title: 'Production db:setup done', how: 'Live: the SHEIN Listings tables and columns exist on this database.',
+    { key: 'db', title: 'Database is up to date', how: 'Live: the SHEIN Listings tables and columns exist on this database.',
       ok: !missingTables.length && !missingCols.length,
       detail: missingTables.length || missingCols.length ? `Missing: ${[...missingTables, ...missingCols].join(', ')} — run npm run db:setup on this server.` : 'Every table is there.' },
-    { key: 'hooks', title: 'Shopify product webhooks registered', how: 'Live: “Register Shopify webhooks” on the strip above was pressed here.',
+    { key: 'hooks', title: 'Shopify product updates connected', how: 'Live: “Connect Shopify updates” under Advanced was pressed here.',
       ok: !!facts.hooks?.on, at: facts.hooks?.at || null, by: facts.hooks?.by || null,
-      detail: facts.hooks?.on ? null : 'Press “Register Shopify webhooks” on the strip above (admin / Connect integrations).' },
+      detail: facts.hooks?.on ? null : 'Press “Connect Shopify updates” under Advanced (admin / Connect integrations).' },
     { key: 'probe', title: 'Ask SHEIN done (sizes per category)', how: 'Live: the Sizes tab has an answer from “Ask SHEIN”.',
       ok: !!facts.probe, at: facts.probe?.at || null, by: facts.probe?.by || null,
       detail: facts.probe ? null : 'Sizes tab → Ask SHEIN (reads only).' },
-    { key: 'snapshot', title: 'First read of Shopify + SHEIN finished', how: 'Live: a finished Re-read in the Jobs list.',
+    { key: 'snapshot', title: 'First read of Shopify + SHEIN finished', how: 'Live: a finished Refresh in the Jobs list.',
       ok: !!facts.firstSnapshot, at: facts.firstSnapshot?.finished_at || null, job: facts.firstSnapshot?.id || null,
-      detail: facts.firstSnapshot ? null : '“↻ Re-read Shopify + SHEIN” on the strip above.' },
-    { key: 'shein_console_hooks', title: 'SHEIN console webhook subscriptions', how: `A person ticks it: in SHEIN’s developer console, subscribe our callback URL to ${SHEIN_HOOK_TOPICS.join(', ')}.`,
+      detail: facts.firstSnapshot ? null : '“↻ Refresh from SHEIN” at the top of Shoes on SHEIN.' },
+    { key: 'shein_console_hooks', title: 'SHEIN order and review alerts turned on', how: `A person ticks it: in SHEIN’s developer console, subscribe our callback URL to ${SHEIN_HOOK_TOPICS.join(', ')}.`,
       ok: !!tick('shein_console_hooks'), tick: 'shein_console_hooks', topics: SHEIN_HOOK_TOPICS,
       detail: tick('shein_console_hooks') ? null : 'Without them a send stays “In review” until the next read.' },
-    { key: 'paused_first', title: '4seller paused before the first Phase-2 run', how: 'Live: the “4seller paused” date on the cut-over card against the first send (any confirmed run) in the Jobs list. 4seller maps to the nearest size and would fight our sizes.',
+    { key: 'paused_first', title: '4seller paused before the first send', how: 'Live: the “4seller paused” date on the “Switching over from 4seller” card against the first send (any confirmed run) in the Jobs list. 4seller maps to the nearest size and would fight our sizes.',
       ok: !paused ? false : !run ? true : paused.date ? paused.date <= estDate(run.created_at) : false,
-      detail: !paused ? (run ? `Send #${run.id} went on ${estDate(run.created_at)} and 4seller isn’t ticked paused.` : 'Tick “4seller paused” on the cut-over card before the first send.')
+      detail: !paused ? (run ? `Send #${run.id} went on ${estDate(run.created_at)} and 4seller isn’t ticked paused.` : 'Tick “4seller paused” on the “Switching over from 4seller” card before the first send.')
         : !run ? `Paused ${paused.date || estDate(paused.at)}; nothing sent yet.`
           : paused.date && paused.date <= estDate(run.created_at) ? `Paused ${paused.date}; first send #${run.id} on ${estDate(run.created_at)}.`
             : `First send #${run.id} went on ${estDate(run.created_at)}, before 4seller was paused (${paused.date || estDate(paused.at)}). Check the shoes it touched.` },
-    { key: 'box', title: 'Box sizes and weight confirmed (D6)', how: 'Live: the “Box size and weight” card below was confirmed by a person.',
+    { key: 'box', title: 'Box sizes and weight confirmed', how: 'Live: the “Box size and weight” card below was confirmed by a person.',
       ok: !!facts.box?.confirmed, at: facts.box?.at || null, by: facts.box?.by || null,
       detail: facts.box?.confirmed ? null : 'Still the placeholders — confirm them below (admin / Connect integrations).' },
     ...['pilot_phase2', 'pilot_phase3', 'pilot_phase4'].map((k) => ({

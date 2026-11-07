@@ -1,14 +1,18 @@
 // App-wide constants: top-level routing, role labels, receiving domain lists,
 // sync/home-card config, and small shared helpers.
+import { isSheinPath } from './sheinPage.js';
+import { CARD_WORDS } from './sheinWords.js';
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'expected', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'shein-check', 'shein-listings', 'cancellations', 'inbound-issues', 'stock-check', 'my-scans'];
+export const ROUTES = ['receiving', 'inbound', 'expected', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'shein', 'cancellations', 'inbound-issues', 'stock-check', 'my-scans'];
 // No Box lives at /no-box (and /no-box/box-swap, /no-box/print-box-labels — no-box.md);
 // the old /nobox still opens it.
 const PATH_ALIAS = { nobox: 'no-box' };
 export const pathForView = (v) => (v && v !== 'home' ? `/${PATH_ALIAS[v] || v}` : '/');
 export const viewForPath = (p) => {
+  // The SHEIN page, and the old pages it replaced, in either workspace's spelling (sheinPage.js).
+  if (isSheinPath(p)) return 'shein';
   const raw = String(p || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
   const seg = Object.keys(PATH_ALIAS).find((k) => PATH_ALIAS[k] === raw) || raw;
   return ROUTES.includes(seg) ? seg : 'home';
@@ -212,10 +216,8 @@ export const HOME_SECTIONS = [
   { title: 'Marketplaces', adminOnly: true, accent: 'listing', cards: [
     { key: 'ebay', privKey: 'connect_integrations', icon: '🛒', title: 'eBay', sub: 'Orders & late shipments, sales report (CSV), listings, reprice, coupons — and connect the account' },
     { key: 'stockx-listings', icon: '📈', title: 'StockX Listings', sub: 'Our StockX asks vs the Standard / Direct lowest ask — bulk reprice to the market, never under the floor' },
-    // No privKey: the page's endpoints are PH + admin only, so a non-admin holder of Connect
-    // integrations (e.g. a warehouse account) would land on a page that 403s.
-    { key: 'shein-listings', icon: '🏷️', title: 'SHEIN Listings', sub: 'Every Shopify shoe on SHEIN size by size — what’s listed, what isn’t and why; Ask SHEIN' },
-    { key: 'shein-check', privKey: 'connect_integrations', icon: '🧭', title: 'SHEIN ↔ Shopify check', sub: 'Wrong sizes, SKUs gone from Shopify, more stock on SHEIN — export in, fix list out' },
+    // privKey: a warehouse account holding Connect integrations gets the two sections it may use (sheinPage.js).
+    { key: 'shein', privKey: 'connect_integrations', icon: '🏷️', title: CARD_WORDS.title, sub: CARD_WORDS.sub },
   ] },
   { title: 'Administration', adminOnly: true, accent: 'orders', cards: [
     { key: 'access', privKey: 'manage_access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, reset password, or remove accounts' },

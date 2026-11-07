@@ -1,23 +1,29 @@
 // SHEIN ↔ Shopify check (docs/context/shein-check.md). Upload SHEIN's Export Products
-// file; every SHEIN size is matched to the live Shopify variant with the same seller SKU and
+// file; every SHEIN size is matched to the live Shopify variant with the same SKU and
 // checked: same size? same age group? does SHEIN offer more pairs than Shopify has? does
 // the SKU still exist in Shopify? Read-only — nothing on SHEIN or Shopify changes. The fix
 // list downloads as a CSV.
 import React, { useEffect, useMemo, useState } from 'react';
-import { TopBar } from '../components/common.jsx';
 import { api } from '../api.js';
-import { hasPriv } from '../lib/constants.js';
 import { downloadCSV } from '../lib/csv.js';
 import { estToday, PH_DATETIME } from '../lib/format.js';
 import { SheinFixPanel } from './SheinFixPanel.jsx';
 import { SheinMatch } from './SheinMatch.jsx';
-import { SheinLivePanel } from './SheinLivePanel.jsx';
+import { HowItWorks, useSheinNav } from '../components/SheinNav.jsx';
 import { useLive } from '../hooks.js';
+import { useQueryParam } from '../lib/urlstate.js';
+import { plain } from '../lib/sheinWords.js';
 import { buildFix } from '../lib/sheinFix.js';
 import { readSheinExport, checkRows, tally, groupByProduct, issuesCsv, exportDate, ISSUES, ISSUE_ORDER } from '../lib/sheinCheck.js';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const SHOW = 60;
+// The file itself stays in memory, on purpose (urlstate.js). Only its NAME is kept for this tab, so a
+// refresh can say what was lost instead of quietly showing an empty page.
+const FILE_NAME_KEY = 'shein.check.exportName';
+const lastFileName = () => { try { return sessionStorage.getItem(FILE_NAME_KEY) || ''; } catch { return ''; } };
+const rememberFileName = (n) => { try { sessionStorage.setItem(FILE_NAME_KEY, n); } catch { /* private mode */ } };
+const CHK_TABS = [['check', 'Problems'], ['match', 'Match sizes'], ['fix', 'Fix & download']];
 
 function Thumb({ src }) {
   const [bad, setBad] = useState(false);
@@ -25,11 +31,8 @@ function Thumb({ src }) {
     : <span className="ebl-thumb ebl-thumb-empty" aria-hidden="true" />;
 }
 
-export function SheinCheck({ user, onHome, onSignOut }) {
-  // Connect + the live-sync switches: an admin, or "Connect integrations" (2026-10-27).
-  const isAdmin = user?.role === 'admin' || user?.role === 'superadmin' || hasPriv(user, 'connect_integrations');
-  // SHEIN Listings lives under the same workspace (PH /ph/…, admin /…).
-  const listingsPath = window.location.pathname.startsWith('/ph') ? '/ph/shein-listings' : '/shein-listings';
+export function SheinCheck({ sheinApi, onSignOut }) {
+  const go = useSheinNav();
   const [file, setFile] = useState(null);       // { name, rows }
   const [variants, setVariants] = useState(null);
   const [loadedAt, setLoadedAt] = useState(null);
@@ -38,30 +41,19 @@ export function SheinCheck({ user, onHome, onSignOut }) {
   const [filter, setFilter] = useState('problems');   // problems | all | <issue key>
   const [q, setQ] = useState('');
   const [shown, setShown] = useState(SHOW);
-  const [tab, setTab] = useState('check');           // check | match | fix
+  const [chkRaw, setChk] = useQueryParam('chk', '');  // '' (Problems) | match | fix: survives a refresh
+  const tab = ['match', 'fix'].includes(chkRaw) ? chkRaw : 'check';
+  const [lostFile] = useState(lastFileName);
   const [links, setLinks] = useState({});            // SHEIN SKU → saved match (shein_links)
   const [orders, setOrders] = useState(null);        // SHEIN order export: { name, bySku, open }
   const [aiLinks, setAiLinks] = useState({});        // export line → AI link the rules verified
-  const [sheinApi, setSheinApi] = useState(null);
 
   async function loadLinks() {
     try { const r = await api.sheinLinks(); setLinks(Object.fromEntries((r.links || []).map((l) => [l.shein_sku, l]))); }
     catch (e) { if (e.unauthorized) onSignOut(); }
   }
-  useEffect(() => {
-    loadLinks();
-    api.sheinStatus().then(setSheinApi).catch(() => setSheinApi(null));
-    // Back from SHEIN's approval page.
-    const p = new URLSearchParams(window.location.search);
-    if (p.get('shein_error')) setErr(p.get('shein_error'));
-    if (p.get('shein') || p.get('shein_error')) window.history.replaceState(null, '', window.location.pathname);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadLinks(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useLive(['shein_links'], loadLinks, { mount: false });
-  async function connectShein() {
-    setErr('');
-    try { const r = await api.sheinConnect(); window.location.href = r.url; }
-    catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
-  }
 
   async function loadShopify() {
     setBusy('shopify'); setErr('');
@@ -69,7 +61,7 @@ export function SheinCheck({ user, onHome, onSignOut }) {
       const r = await api.shopifyListingsVariants();
       setVariants(r.variants || []); setLoadedAt(new Date().toISOString());
       if (r.truncated) setErr('Shopify has more variants than one load reads — some SKUs may show as “Not in Shopify”.');
-    } catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
+    } catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); }
     finally { setBusy(''); }
   }
   async function pick(f) {
@@ -79,6 +71,7 @@ export function SheinCheck({ user, onHome, onSignOut }) {
       const r = readSheinExport(new Uint8Array(await f.arrayBuffer()));
       if (!r.ok) { setErr(r.error); setFile(null); return; }
       setFile({ name: f.name, rows: r.rows });
+      rememberFileName(f.name);
       setShown(SHOW);
       if (!variants) await loadShopify();
     } catch (e) { setErr(`Couldn’t read that file: ${e.message}`); }
@@ -104,36 +97,38 @@ export function SheinCheck({ user, onHome, onSignOut }) {
   const stale = age && age < estToday();
 
   return (
-    <div className="app">
-      <TopBar title="SHEIN listings — check & fix" onHome={onHome} onSignOut={onSignOut} />
-      {(listingsPath.startsWith('/ph') || user?.role === 'admin' || user?.role === 'superadmin') && <p className="shl-crosslink">New: <a className="ebl-link" href={listingsPath} onClick={(e) => { e.preventDefault(); window.history.pushState(null, '', listingsPath); window.dispatchEvent(new PopStateEvent('popstate')); }}>SHEIN Listings</a> — every Shopify shoe on SHEIN size by size: what’s listed, what isn’t and why.</p>}
-      {sheinApi?.connected && <SheinLivePanel isAdmin={isAdmin} onSignOut={onSignOut} />}
+    <>
       <div className="card">
-        <p className="muted sm">{sheinApi?.connected && <><b>From an export file</b> (the old way — the live fix above doesn’t need one). </>}Upload SHEIN’s <b>Export Products</b> file (Seller Center → Products → Export). Every SHEIN size is matched to the Shopify variant with the same <b>seller SKU</b> and checked for the wrong size, wrong age group, a SKU that’s gone from Shopify, and more stock on SHEIN than in Shopify. Nothing on SHEIN or Shopify is changed.</p>
+        {!file && <>
+          <p className="sm">Upload SHEIN’s <b>Export Products</b> file to find wrong sizes, wrong age groups, SKUs gone from Shopify, and more stock on SHEIN than in Shopify. This only checks: nothing on SHEIN or Shopify changes.</p>
+          <p className="muted xs">Get the file in SHEIN Seller Center: Products → Export.</p>
+        </>}
         <div className="shc-upload">
           <label className="btn primary">
             {busy === 'file' ? 'Reading…' : file ? 'Choose another export' : 'Choose SHEIN export (.xlsx)'}
             <input type="file" hidden accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" aria-label="SHEIN export file"
               onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
-          {file && <span className="sm"><b>{file.name}</b> · {fmt(file.rows.length)} SHEIN sizes</span>}
-          {variants && <button type="button" className="btn ghost sm" disabled={!!busy} onClick={loadShopify}>{busy === 'shopify' ? 'Reading Shopify…' : '↻ Re-read Shopify'}</button>}
-          {busy === 'shopify' && !variants && <span className="muted sm">Reading every Shopify variant…</span>}
+          {file && <span className="sm"><b>{file.name}</b> · {fmt(file.rows.length)} SHEIN size{file.rows.length === 1 ? '' : 's'}</span>}
+          {variants && <button type="button" className="btn ghost sm" disabled={!!busy} onClick={loadShopify}>{busy === 'shopify' ? 'Reading Shopify…' : '↻ Read Shopify again'}</button>}
+          {busy === 'shopify' && !variants && <span className="muted sm">Reading every Shopify size…</span>}
         </div>
-        {variants && <p className="muted xs">Shopify read {PH_DATETIME.format(new Date(loadedAt))} EST · {fmt(variants.length)} variants.</p>}
-        {sheinApi && (
-          <p className="muted xs">SHEIN API: {sheinApi.connected ? <b className="ebl-ok">connected</b>
-            : !sheinApi.configured ? 'waiting for SHEIN to approve our developer app — until then, fixes go through SHEIN’s upload files.'
-              : isAdmin ? <button type="button" className="btn xs" onClick={connectShein}>Connect SHEIN</button> : 'not connected yet — an admin connects it.'}</p>
+        {!file && (lostFile || tab !== 'check') && (
+          <p className="notice sm" data-file-gone="" role="status">{lostFile ? <>Your export <b>{lostFile}</b> was only held in this tab, so it’s gone after a refresh.</> : 'This needs an export file.'}{' '}Choose it again{tab !== 'check' ? <> and you’ll be back on <b>{CHK_TABS.find(([k]) => k === tab)[1]}</b></> : ''}.</p>
         )}
+        {variants && <p className="muted xs">Shopify read {PH_DATETIME.format(new Date(loadedAt))} EST · {fmt(variants.length)} size{variants.length === 1 ? '' : 's'}.</p>}
         {stale && <p className="notice xs">This export is from <b>{age}</b>. Sizes don’t change with time, but the stock columns do — export again for an exact stock check.</p>}
         {err && <div className="error mt">{err}</div>}
+        <HowItWorks>
+          <p className="muted xs">In SHEIN Seller Center: Products → Export. Every SHEIN size is matched to the Shopify size with the same <b>SKU</b> and checked for the wrong size, the wrong age group, a SKU that’s gone from Shopify, and more stock on SHEIN than in Shopify.</p>
+          {sheinApi?.connected && <p className="muted xs">This is the old way: <button type="button" className="shl-linkbtn" onClick={() => go('live')}>Automatic sync</button> does the same without a file.</p>}
+        </HowItWorks>
       </div>
 
       {t && (
-        <div className="ebl-tabs seg">
-          {[['check', 'Problems'], ['match', 'Match sizes'], ['fix', 'Fix & download']].map(([k, l]) => (
-            <button key={k} type="button" className={`seg-btn${tab === k ? ' on' : ''}`} aria-pressed={tab === k} onClick={() => setTab(k)}>{l}</button>
+        <div className="ebl-tabs seg shein-subtabs">
+          {CHK_TABS.map(([k, l]) => (
+            <button key={k} type="button" className={`seg-btn${tab === k ? ' on' : ''}`} aria-pressed={tab === k} onClick={() => setChk(k === 'check' ? '' : k)}>{l}</button>
           ))}
         </div>
       )}
@@ -159,9 +154,9 @@ export function SheinCheck({ user, onHome, onSignOut }) {
 
           <div className="card">
             <div className="ebl-filters">
-              <input type="search" className="input" value={q} onChange={(e) => { setQ(e.target.value); setShown(SHOW); }} placeholder="Search product, seller SKU, size…" aria-label="Search SHEIN sizes" />
+              <input type="search" className="input" value={q} onChange={(e) => { setQ(e.target.value); setShown(SHOW); }} placeholder="Search product, SKU, size…" aria-label="Search SHEIN sizes" />
               <div className="seg sm">
-                {[['problems', 'Problems'], ['all', 'Everything']].map(([k, l]) => (
+                {[['problems', 'Only problems'], ['all', 'Everything']].map(([k, l]) => (
                   <button key={k} type="button" className={`seg-btn${filter === k ? ' on' : ''}`} aria-pressed={filter === k} onClick={() => { setFilter(k); setShown(SHOW); }}>{l}</button>
                 ))}
               </div>
@@ -173,12 +168,12 @@ export function SheinCheck({ user, onHome, onSignOut }) {
                   <Thumb src={g.image} />
                   <span className="ebl-orphan-main">
                     <span className="ebl-title">{g.name || '(no name)'}</span>
-                    <span className="muted xs">{[g.brand, g.spu && `SPU ${g.spu}`].filter(Boolean).join(' · ')}{g.link && <> · <a className="ebl-link" href={g.link} target="_blank" rel="noreferrer">on SHEIN ↗</a></>}</span>
+                    <span className="muted xs">{[g.brand, g.spu && `Product ${g.spu}`].filter(Boolean).join(' · ')}{g.link && <> · <a className="ebl-link" href={g.link} target="_blank" rel="noreferrer">on SHEIN ↗</a></>}</span>
                   </span>
                 </div>
                 <div className="ap-tablewrap">
                   <table className="table shc-table">
-                    <thead><tr><th>Seller SKU</th><th>SHEIN size</th><th>Shopify size</th><th className="num">SHEIN stock</th><th className="num">Shopify stock</th><th>Finding</th></tr></thead>
+                    <thead><tr><th>SKU</th><th>SHEIN size</th><th>Shopify size</th><th className="num">SHEIN stock</th><th className="num">Shopify stock</th><th>Finding</th></tr></thead>
                     <tbody>
                       {g.rows.map((r) => {
                         const worst = r.issues.find((i) => ISSUES[i].tone === 'bad') || r.issues.find((i) => ISSUES[i].tone === 'warn');
@@ -206,6 +201,6 @@ export function SheinCheck({ user, onHome, onSignOut }) {
           </div>
         </>
       )}
-    </div>
+    </>
   );
 }

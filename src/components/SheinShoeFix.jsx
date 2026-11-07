@@ -1,16 +1,17 @@
 // SHEIN Listings → Details → "Fix SHEIN sizes" (docs/context/shein-live-fix.md → "One shoe"). For ONE
 // shoe already on SHEIN: Match sizes in place (each SHEIN size → the same-size Shopify SKU it should
 // carry, or take it off SHEIN — saved in shein_links, the same decisions the SHEIN check page saves),
-// then the live fix for this shoe only: "Dry run this shoe" (reads, writes nothing — PH) and "Fix this
-// shoe" (seller SKUs + stock, read back — admin / Connect integrations, after a fresh dry run). A
+// then automatic sync for this shoe only: "Preview this shoe" (reads, writes nothing — PH) and "Fix this
+// shoe" (SKUs + stock, read back — admin / Connect integrations, after a fresh preview). A
 // server job: closing the drawer never stops it. No store-wide scan.
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { compareSize } from '../lib/sheinCheck.js';
+import { plain } from '../lib/sheinWords.js';
 import { fmt, when, NEEDS_PRIV } from './SheinListingsBits.jsx';
 
-const FRESH_MIN = 30;   // "Fix this shoe" needs a dry run of it from the last 30 minutes
+const FRESH_MIN = 30;   // "Fix this shoe" needs a preview of it from the last 30 minutes
 const sameSize = (sheinSize, shopifySize) => ['ok', 'ok_suffix', 'check_group'].includes(compareSize(sheinSize, shopifySize));
 const tone = (it) => (it.result === 'failed' || it.result === 'mismatch' ? 'bad' : it.reason !== 'ok' && it.reason !== 'gone' ? 'warn' : it.result === 'changed' || it.wrote === 'dry' ? 'info' : 'ok');
 const RESULT = { changed: 'changes', ok: 'no change', skipped: 'not changed', failed: 'refused', mismatch: 'SHEIN shows old stock' };
@@ -28,7 +29,7 @@ export function SheinShoeFix({ p, variants, canWrite, connected, open: openProp,
   async function load() {
     if (!spu) return;
     try { setD(await api.sheinShoe(spu)); setErr(''); }
-    catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
+    catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); }
   }
   useEffect(() => { setD(null); setPick({}); load(); }, [spu]); // eslint-disable-line react-hooks/exhaustive-deps
   const run = d?.run || null;
@@ -60,16 +61,16 @@ export function SheinShoeFix({ p, variants, canWrite, connected, open: openProp,
         }));
       }
       if (clear.length) await api.sheinLinksClear(clear);
-      setPick({}); setMsg(`Saved ${changes.length} choice${changes.length === 1 ? '' : 's'} — now dry run this shoe.`);
+      setPick({}); setMsg(`Saved ${changes.length} choice${changes.length === 1 ? '' : 's'} — now preview this shoe.`);
       await load(); onReload?.();
-    } catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
+    } catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); }
     finally { setBusy(''); }
   }
   async function start(mode) {
-    if (mode === 'full' && !window.confirm('Fix this shoe on SHEIN now? Seller SKU changes go to SHEIN’s review; stock is set straight away.')) return;
+    if (mode === 'full' && !window.confirm('Fix this shoe on SHEIN now? SKU changes go to SHEIN’s review; stock is set straight away.')) return;
     setBusy(mode); setMsg(''); setErr('');
     try { await api.sheinLiveAction({ action: 'shoe', spu, mode, productId: p.shopify_product_id }); await load(); }
-    catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
+    catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); }
     finally { setBusy(''); }
   }
 
@@ -77,9 +78,9 @@ export function SheinShoeFix({ p, variants, canWrite, connected, open: openProp,
   const lastDecided = Math.max(0, ...(d?.links || []).map((l) => new Date(l.decided_at).getTime() || 0));
   const dryOk = run?.mode === 'shoe:dry' && run.status === 'done' && run.finished_at
     && Date.now() - new Date(run.finished_at).getTime() < FRESH_MIN * 60_000 && lastDecided <= new Date(run.started_at).getTime();
-  const blocked = !connected ? 'Connect SHEIN first' : running ? 'Running…' : d?.walkRunning ? 'The full SHEIN walk is running — try again when it ends'
+  const blocked = !connected ? 'Connect SHEIN first' : running ? 'Running…' : d?.walkRunning ? 'A full check of every SHEIN product is running. Try again when it ends.'
     : d?.running && d.running !== spu ? 'Another shoe is being checked — try again in a moment' : changes.length ? 'Save your choices first' : '';
-  const fixWhy = blocked || (!canWrite ? NEEDS_PRIV : !dryOk ? `Dry run this shoe first (a dry run from the last ${FRESH_MIN} min, after your last Match sizes save)` : '');
+  const fixWhy = blocked || (!canWrite ? NEEDS_PRIV : !dryOk ? `Preview this shoe first (a preview from the last ${FRESH_MIN} min, after your last Match sizes save)` : '');
   const c = run?.counts || {};
   const items = d?.items || [];
 
@@ -88,13 +89,17 @@ export function SheinShoeFix({ p, variants, canWrite, connected, open: openProp,
       <summary className="shl-h4">Fix SHEIN sizes — this shoe only</summary>
       {spus.length > 1 && (
         <div className="seg sm">
-          {spus.map((s) => <button key={s} type="button" className={`seg-btn${s === spu ? ' on' : ''}`} aria-pressed={s === spu} onClick={() => setSpu(s)}>SPU {s}</button>)}
+          {spus.map((s) => <button key={s} type="button" className={`seg-btn${s === spu ? ' on' : ''}`} aria-pressed={s === spu} onClick={() => setSpu(s)}>Product {s}</button>)}
         </div>
       )}
-      <p className="muted xs">1 · For each SHEIN size, pick the Shopify SKU it should carry — only the <b>same size</b> is offered — or take it off SHEIN. 2 · Dry run this shoe (nothing is written). 3 · Fix this shoe. No store-wide scan: seconds, not the whole store.</p>
+      <ol className="muted xs shl-steps">
+        <li>For each SHEIN size, pick the Shopify SKU it should carry (only the <b>same size</b> is offered), or take it off SHEIN.</li>
+        <li>Preview this shoe. Nothing is written.</li>
+        <li>Fix this shoe. It changes only this shoe, and takes seconds.</li>
+      </ol>
 
       <table className="shl-rtable shl-shoe-match">
-        <thead><tr><th>SHEIN size</th><th>Seller SKU on SHEIN</th><th>Carries</th><th>Should carry</th></tr></thead>
+        <thead><tr><th>SHEIN size</th><th>SKU on SHEIN</th><th>Carries</th><th>Should carry</th></tr></thead>
         <tbody>
           {shein.map((v) => {
             const opts = shopify.filter((x) => sameSize(v.shein_size, x.shopify_size) && x.seller_sku !== v.shein_seller_sku);
@@ -103,7 +108,7 @@ export function SheinShoeFix({ p, variants, canWrite, connected, open: openProp,
             return (
               <tr key={v.shein_sku} className={wrong || v.status === 'shein_only' ? 'shl-chg' : ''} data-shein-sku={v.shein_sku}>
                 <td data-label="SHEIN size"><b>{v.shein_size || '—'}</b></td>
-                <td data-label="Seller SKU" className="shl-mono">{v.shein_seller_sku || '—'}</td>
+                <td data-label="SKU" className="shl-mono">{v.shein_seller_sku || '—'}</td>
                 <td data-label="Carries">{v.shopify_variant_id
                   ? <span className={wrong ? 'shl-bad-text' : ''}>our size {v.shopify_size}{wrong ? ' — wrong size' : ''}</span>
                   : <span className="muted">no Shopify size</span>}</td>
@@ -122,13 +127,13 @@ export function SheinShoeFix({ p, variants, canWrite, connected, open: openProp,
           })}
         </tbody>
       </table>
-      <p className="muted xs">“Take this size off” holds it at 0 and frees its seller SKU (renamed …-off), so the right SHEIN size can carry it — then “Add missing sizes” can add it.</p>
+      <p className="muted xs">“Take this size off” holds it at 0 and frees its SKU (renamed …-off), so the right SHEIN size can carry it — then “Add missing sizes” can add it.</p>
 
       <div className="shl-pub-acts">
         <button type="button" className="btn sm" disabled={!changes.length || !!busy} onClick={save}>{busy === 'save' ? 'Saving…' : `Save choices${changes.length ? ` (${changes.length})` : ''}`}</button>
         <button type="button" className="btn primary sm" data-shoe="dry" disabled={!!busy || !!blocked} title={blocked || 'Reads this shoe on SHEIN and Shopify and shows what a fix would do — writes nothing'}
-          onClick={() => start('dry')}>{busy === 'dry' ? 'Starting…' : 'Dry run this shoe'}</button>
-        <button type="button" className="btn sm" data-shoe="full" disabled={!!busy || !!fixWhy} title={fixWhy || 'Writes the seller SKU changes (SHEIN reviews them) and the stock, then reads SHEIN back'}
+          onClick={() => start('dry')}>{busy === 'dry' ? 'Starting…' : 'Preview this shoe'}</button>
+        <button type="button" className="btn sm" data-shoe="full" disabled={!!busy || !!fixWhy} title={fixWhy || 'Writes the SKU changes (SHEIN reviews them) and the stock, then reads SHEIN back'}
           onClick={() => start('full')}>{busy === 'full' ? 'Starting…' : 'Fix this shoe'}</button>
       </div>
       {msg && <p className="sm" role="status">{msg}</p>}
@@ -136,24 +141,24 @@ export function SheinShoeFix({ p, variants, canWrite, connected, open: openProp,
 
       {run && (
         <div className="shl-shoe-run" data-shoe-run={run.status}>
-          <p className="sm"><b>{run.mode === 'shoe:full' ? 'Fix' : 'Dry run'} #{run.id}</b> · {run.status}{run.phase ? ` — ${run.phase}` : ''} · {when(run.started_at)}{run.started_by ? ` by ${run.started_by}` : ''}</p>
-          {run.error && <p className="error xs">{run.error}</p>}
+          <p className="sm"><b>{run.mode === 'shoe:full' ? 'Fix' : 'Preview'} #{run.id}</b> · {run.status}{run.phase ? ` — ${plain(run.phase)}` : ''} · {when(run.started_at)}{run.started_by ? ` by ${run.started_by}` : ''}</p>
+          {run.error && <p className="error xs">{plain(run.error)}</p>}
           {run.status === 'done' && (
-            <p className="xs">{fmt(c.sizes)} SHEIN size{c.sizes === 1 ? '' : 's'} · {run.mode === 'shoe:dry' ? 'stock would change' : 'stock set'}: <b>{fmt(c.stock_changed)}</b> · {run.mode === 'shoe:dry' ? 'seller SKUs to change' : 'seller SKUs changed'}: <b>{fmt(c.links_changed)}</b>
+            <p className="xs">{fmt(c.sizes)} SHEIN size{c.sizes === 1 ? '' : 's'} · {run.mode === 'shoe:dry' ? 'stock would change' : 'stock set'}: <b>{fmt(c.stock_changed)}</b> · {run.mode === 'shoe:dry' ? 'SKUs to change' : 'SKUs changed'}: <b>{fmt(c.links_changed)}</b>
               {Number(c.needs_person) > 0 && <> · <span className="shl-bad-text">need a person: {fmt(c.needs_person)}</span></>}
-              {Number(c.products_in_flight) > 0 && <> · a SHEIN Listings send of this shoe is in flight, so seller SKUs were left alone</>}
+              {Number(c.products_in_flight) > 0 && <> · a send of this shoe is already going to SHEIN, so SKUs were left alone</>}
               {run.mode === 'shoe:dry' && <span className="muted"> · nothing was written</span>}</p>
           )}
           {!!items.length && (
             <table className="shl-rtable shl-shoe-items">
-              <thead><tr><th>SHEIN size</th><th>Seller SKU</th><th className="num">SHEIN stock</th><th>What happens</th></tr></thead>
+              <thead><tr><th>SHEIN size</th><th>SKU</th><th className="num">SHEIN stock</th><th>What happens</th></tr></thead>
               <tbody>
                 {items.map((it) => (
                   <tr key={it.id} className={tone(it) === 'bad' ? 'shl-shoe-bad' : tone(it) === 'warn' ? 'shl-chg' : ''}>
                     <td data-label="SHEIN size"><b>{it.shein_size || '—'}</b>{it.shopify_size ? <span className="muted xs shl-block">our {it.shopify_size}</span> : null}</td>
-                    <td data-label="Seller SKU" className="shl-mono">{it.seller_sku || '—'}{it.link_to && <span className="xs shl-block">→ {it.link_to}</span>}</td>
+                    <td data-label="SKU" className="shl-mono">{it.seller_sku || '—'}{it.link_to && <span className="xs shl-block">→ {it.link_to}</span>}</td>
                     <td data-label="SHEIN stock" className="num">{fmt(it.before_qty)} → <b>{fmt(it.target_qty)}</b>{it.after_qty != null && it.after_qty !== it.target_qty && <span className="shl-bad-text xs shl-block">shows {fmt(it.after_qty)}</span>}</td>
-                    <td data-label="What happens" className="xs"><span className={`ebo-chip ${tone(it)}`}>{it.wrote === 'dry' ? 'would change' : RESULT[it.result] || it.result}</span> {it.action}{it.error && <span className="shl-bad-text shl-block">{it.error}</span>}</td>
+                    <td data-label="What happens" className="xs"><span className={`ebo-chip ${tone(it)}`}>{it.wrote === 'dry' ? 'would change' : RESULT[it.result] || it.result}</span> {plain(it.action)}{it.error && <span className="shl-bad-text shl-block">{it.error}</span>}</td>
                   </tr>
                 ))}
               </tbody>

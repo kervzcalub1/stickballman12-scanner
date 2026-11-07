@@ -1,4 +1,4 @@
-// SHEIN live sync + fix (docs/context/shein-live-fix.md). Three things, all through the API —
+// SHEIN automatic sync + fix (docs/context/shein-live-fix.md). Three things, all through the API —
 // no export files, so no window in which a sale elsewhere goes unseen:
 //   · SHEIN sales → Shopify: every pair SHEIN sells comes off Shopify within seconds;
 //   · Shopify → SHEIN: a Shopify stock change is pushed to the SHEIN sizes selling that SKU;
@@ -9,13 +9,15 @@ import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { downloadCSV } from '../lib/csv.js';
 import { PH_DATETIME, estToday } from '../lib/format.js';
+import { SheinAdvanced, HowItWorks } from '../components/SheinNav.jsx';
+import { TERMS, plain } from '../lib/sheinWords.js';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const when = (t) => (t ? `${PH_DATETIME.format(new Date(t))} EST` : '—');
 const MODES = [
-  ['dry', 'Dry run', 'Reads everything, decides everything, writes NOTHING. Start here.'],
+  ['dry', 'Preview (changes nothing)', 'Reads everything, decides everything, changes NOTHING. Start here.'],
   ['stock', 'Fix stock', 'Sets every SHEIN size to Shopify’s live stock (wrong links → 0). Instant, no SHEIN review.'],
-  ['full', 'Fix stock + seller SKUs', 'Also corrects seller SKUs the rules proved (swaps, same style + size, confirmed matches). SHEIN reviews those edits.'],
+  ['full', 'Fix stock + SKUs', 'Also corrects SKUs the rules proved (swaps, same style + size, confirmed matches). SHEIN reviews those edits.'],
 ];
 const VIEWS = [['changed', 'Changed'], ['person', 'Needs a person'], ['skipped', 'Not changed'], ['failed', 'Errors'], ['all', 'Every size']];
 const UNIT = { 1: 'pending', 2: 'to ship', 4: 'shipped', 5: 'delivered', 6: 'refunded', 7: 'to pick up', 8: 'lost', 9: 'rejected' };
@@ -59,7 +61,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
 
   async function load() {
     try { setD(await api.sheinLive()); setErr(''); }
-    catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
+    catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useLive(['shein_live_runs', 'shein_live_items', 'shein_order_units', 'app_settings'], load, { mount: false, every: d?.run?.status === 'running' ? 5_000 : 60_000 });
@@ -81,7 +83,7 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
       }
       await load();
     }
-    catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); }
+    catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); }
     finally { setBusy(''); }
   }
 
@@ -105,23 +107,40 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
     setBusy('csv'); setErr('');
     let rows;
     try { rows = (await api.sheinLiveAllItems(run.id)).items || []; }
-    catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); return; }
+    catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); return; }
     finally { setBusy(''); }
     const cols = ['spu', 'skc', 'shein_sku', 'product_name', 'shein_size', 'seller_sku', 'shopify_sku', 'shopify_size', 'shopify_qty', 'held', 'before_qty', 'target_qty', 'after_qty', 'reason', 'link_to', 'link_by', 'wrote', 'result', 'action', 'error'];
     const esc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     downloadCSV(`SHEIN live ${run?.mode || ''} run ${run?.id || ''} ${estToday()}.csv`, [cols.join(','), ...rows.map((it) => cols.map((k) => esc(it[k])).join(','))].join('\n'));
   }
 
-  if (!d) return <div className="card"><p className="muted sm">{err || 'Loading the live sync…'}</p></div>;
-  if (!d.connected) return null;   // the page header says why (not approved / not connected)
+  if (!d) return <div className="card"><p className="muted sm">{err || 'Loading automatic sync…'}</p></div>;
+  if (!d.connected) return null;   // the connection card above says why (not set up / not connected)
   const sync = d.sync || {};
   const uc = d.unitCounts || {};
   const pct = run?.total ? Math.round((100 * (run.done || 0)) / run.total) : 0;
 
+  const startLabel = MODES.find((m) => m[0] === mode)[1];
+  const switches = isAdmin && (
+    <div className="er-actions" data-sync-switches="">
+      {sync.orders === 'on'
+        ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => { if (window.confirm('Stop taking SHEIN sales off Shopify?')) act('orders_off'); }}>Turn off SHEIN sales → Shopify</button>
+        : <button type="button" className="btn primary sm" disabled={!!busy} onClick={() => setAskOrders(true)}>Turn on SHEIN sales → Shopify…</button>}
+      {sync.push === 'on'
+        ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => act('push_off')}>Turn off Shopify → SHEIN</button>
+        : <button type="button" className="btn sm" disabled={!!busy || sync.orders !== 'on' || !paused4seller} title={sync.orders !== 'on' ? 'Turn on SHEIN sales → Shopify first' : !paused4seller ? 'Tick “4seller is paused” below first' : ''} onClick={() => act('push_on')}>{busy === 'push_on' ? 'Registering with Shopify…' : 'Turn on Shopify → SHEIN'}</button>}
+      {sync.shopifyOrders === 'on'
+        ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => act('shopify_orders_off')}>Stop SHEIN orders in Shopify</button>
+        : <button type="button" className="btn sm" disabled={!!busy || !d.shopifyOrdersReady} title={d.shopifyOrdersReady ? 'From now on, each SHEIN order goes into Shopify when it ships' : 'The SHEIN orders app isn’t set up on this server'} onClick={() => act('shopify_orders_on')}>Turn on SHEIN orders in Shopify</button>}
+      {sync.shopifyOrders === 'on' && (sync.shopifyOrdersAtSale === 'on'
+        ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => act('shopify_orders_at_ship')}>Write orders when shipped instead</button>
+        : <button type="button" className="btn sm" disabled={!!busy} title="The order goes in at the sale and takes the pair off Shopify itself, as DPL’s eBay orders do" onClick={() => act('shopify_orders_at_sale')}>Write orders at the sale</button>)}
+    </div>
+  );
+
   return (
     <>
       <div className="card">
-        <h3>Live sync</h3>
         {!d.worker && <p className="notice xs">This server doesn’t run the sync (only production does — dev and prod share the SHEIN and Shopify accounts). Switches here still save.</p>}
         <div className="shc-tiles">
           <div className={`shc-tile ${sync.orders === 'on' ? 'ok' : 'bad'}`}>
@@ -133,27 +152,44 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
           <div className={`shc-tile ${sync.push === 'on' ? 'ok' : 'warn'}`}><b>{sync.push === 'on' ? 'ON' : 'OFF'}</b><span>Shopify stock → SHEIN</span></div>
           <div className={`shc-tile ${sync.shopifyOrders === 'on' ? 'ok' : 'warn'}`}><b>{sync.shopifyOrders === 'on' ? 'ON' : 'OFF'}</b><span>SHEIN orders in Shopify{sync.shopifyOrders === 'on' ? `, ${sync.shopifyOrdersAtSale === 'on' ? 'at the sale' : 'when shipped'} · since ${when(sync.shopifyOrdersAtSale === 'on' ? sync.shopifyOrdersAtSaleSince : sync.shopifyOrdersSince)}` : ''}</span></div>
         </div>
-        <p className="muted xs">{sync.orders === 'on'
-          ? <>SHEIN tells us the moment an order comes in; every minute we also check SHEIN for anything missed (last check {when(sync.polledAt)}). Each pair is taken off Shopify once — never twice — and put back only if SHEIN cancels it before it ships.</>
+        <p className="sm">{sync.orders === 'on'
+          ? <>Every pair SHEIN sells comes off Shopify within seconds. Last check {when(sync.polledAt)}.</>
           : <>Off: a SHEIN sale is NOT taken off Shopify, so eBay / StockX / Alias can sell the same pair. Turn it on before the first stock fix.</>}</p>
-        {isAdmin && (
-          <div className="er-actions">
-            {sync.orders === 'on'
-              ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => { if (window.confirm('Stop taking SHEIN sales off Shopify?')) act('orders_off'); }}>Turn off SHEIN sales → Shopify</button>
-              : <button type="button" className="btn primary sm" disabled={!!busy} onClick={() => setAskOrders(true)}>Turn on SHEIN sales → Shopify…</button>}
-            {sync.push === 'on'
-              ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => act('push_off')}>Turn off Shopify → SHEIN</button>
-              : <button type="button" className="btn sm" disabled={!!busy || sync.orders !== 'on' || !paused4seller} title={sync.orders !== 'on' ? 'Turn on SHEIN sales → Shopify first' : !paused4seller ? 'Tick “4seller is paused” below first' : ''} onClick={() => act('push_on')}>{busy === 'push_on' ? 'Registering with Shopify…' : 'Turn on Shopify → SHEIN'}</button>}
-            {Number(uc.failing) > 0 && <button type="button" className="btn sm" disabled={!!busy} onClick={() => act('retry')}>{busy === 'retry' ? 'Retrying…' : 'Retry the failed ones'}</button>}
-            {sync.shopifyOrders === 'on'
-              ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => act('shopify_orders_off')}>Stop SHEIN orders in Shopify</button>
-              : <button type="button" className="btn sm" disabled={!!busy || !d.shopifyOrdersReady} title={d.shopifyOrdersReady ? 'From now on, each SHEIN order goes into Shopify when it ships' : 'The SHEIN orders app isn’t set up on this server'} onClick={() => act('shopify_orders_on')}>Turn on SHEIN orders in Shopify</button>}
-            {sync.shopifyOrders === 'on' && (sync.shopifyOrdersAtSale === 'on'
-              ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => act('shopify_orders_at_ship')}>Write orders when shipped instead</button>
-              : <button type="button" className="btn sm" disabled={!!busy} title="The order goes in at the sale and takes the pair off Shopify itself, as DPL’s eBay orders do" onClick={() => act('shopify_orders_at_sale')}>Write orders at the sale</button>)}
-          </div>
-        )}
+        {isAdmin && Number(uc.failing) > 0 && <div className="er-actions"><button type="button" className="btn primary sm" disabled={!!busy} onClick={() => act('retry')}>{busy === 'retry' ? 'Retrying…' : 'Retry the failed ones'}</button></div>}
+        <HowItWorks>
+          <p className="muted xs">SHEIN tells us the moment an order comes in; every minute we also check SHEIN for anything missed. Each pair is taken off Shopify once, never twice, and put back only if SHEIN cancels it before it ships.</p>
+        </HowItWorks>
         {msg && <p className="sm mt">{msg}</p>}
+        {!!d.units?.length && (
+          <details className="mt">
+            <summary className="sm">Latest SHEIN sales ({fmt(d.units.length)})</summary>
+            <div className="ap-tablewrap">
+              <table className="table shc-table">
+                <thead><tr><th>Sold</th><th>Order</th><th>SKU</th><th>Shoe</th><th>SHEIN</th><th>Shopify</th><th>Shopify order</th></tr></thead>
+                <tbody>
+                  {d.units.map((u) => (
+                    <tr key={u.goods_id} className={u.error && !u.deducted_at && u.due ? 'bad' : ''}>
+                      <td className="xs">{when(u.order_time)}</td>
+                      <td className="ebl-sku">{u.order_no}</td>
+                      <td className="ebl-sku">{u.seller_sku || '—'}</td>
+                      <td className="xs">{u.title || '—'}</td>
+                      <td className="xs">{UNIT[u.unit_status] || u.unit_status}</td>
+                      <td className="xs">{u.deducted_at ? <span className="ebo-chip ok">off Shopify</span> : !u.due ? <span className="ebo-chip">before switch-on</span> : u.error ? <span className="ebo-chip bad">not yet</span> : <span className="ebo-chip">—</span>}
+                        {u.restocked_at && <span className="ebo-chip info">put back</span>}
+                        {(u.note || u.error) && <div className={u.error ? 'shc-bad' : 'muted'}>{plain(u.error || u.note)}</div>}</td>
+                      <td className="xs"><ShopifyOrderCell unit={u} row={orderRows.get(u.order_no)} store={d.shopifyStore} since={sync.shopifyOrdersSince} isAdmin={isAdmin} ready={d.shopifyOrdersReady} busy={busy} onAdd={(orderNo) => act('shopify_order', { orderNo })} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        )}
+      </div>
+
+      <SheinAdvanced param="liveadv" label={TERMS.advanced} hint="Sync switches and the full check" force={running || askOrders || sync.orders !== 'on'} className="card">
+        {isAdmin && <h4 className="shl-h4">Sync switches</h4>}
+        {switches}
         {askOrders && (
           <div className="notice mt">
             <p className="sm"><b>From now on, every pair SHEIN sells comes off Shopify within seconds.</b></p>
@@ -165,43 +201,18 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
             </div>
           </div>
         )}
-        {!!d.units?.length && (
-          <details className="mt">
-            <summary className="sm">Latest SHEIN sales ({fmt(d.units.length)})</summary>
-            <div className="ap-tablewrap">
-              <table className="table shc-table">
-                <thead><tr><th>Sold</th><th>Order</th><th>Seller SKU</th><th>Shoe</th><th>SHEIN</th><th>Shopify</th><th>Shopify order</th></tr></thead>
-                <tbody>
-                  {d.units.map((u) => (
-                    <tr key={u.goods_id} className={u.error && !u.deducted_at && u.due ? 'bad' : ''}>
-                      <td className="xs">{when(u.order_time)}</td>
-                      <td className="ebl-sku">{u.order_no}</td>
-                      <td className="ebl-sku">{u.seller_sku || '—'}</td>
-                      <td className="xs">{u.title || '—'}</td>
-                      <td className="xs">{UNIT[u.unit_status] || u.unit_status}</td>
-                      <td className="xs">{u.deducted_at ? <span className="ebo-chip ok">off Shopify</span> : !u.due ? <span className="ebo-chip">before switch-on</span> : u.error ? <span className="ebo-chip bad">not yet</span> : <span className="ebo-chip">—</span>}
-                        {u.restocked_at && <span className="ebo-chip info">put back</span>}
-                        {(u.note || u.error) && <div className={u.error ? 'shc-bad' : 'muted'}>{u.error || u.note}</div>}</td>
-                      <td className="xs"><ShopifyOrderCell unit={u} row={orderRows.get(u.order_no)} store={d.shopifyStore} since={sync.shopifyOrdersSince} isAdmin={isAdmin} ready={d.shopifyOrdersReady} busy={busy} onAdd={(orderNo) => act('shopify_order', { orderNo })} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </details>
-        )}
-      </div>
-
-      <div className="card">
-        <h3>Fix every SHEIN listing</h3>
-        <p className="muted sm">Goes through SHEIN <b>one product at a time</b>: reads that product’s Shopify stock <b>at that moment</b>, checks every size (seller SKU, size, age group, stock, duplicates), fixes it, reads SHEIN back, then moves to the next. The rules decide; the AI only suggests a link for a seller SKU Shopify no longer has, and only a link the rules verify is used.</p>
+        <h4 className="shl-h4 mt">Full check of every SHEIN listing</h4>
+        <p className="muted sm">Checks every SHEIN product, one at a time, against Shopify’s stock right now.</p>
+        <HowItWorks>
+          <p className="muted xs">For each product it reads the Shopify stock <b>at that moment</b>, checks every size (SKU, size, age group, stock, duplicates), fixes it, reads SHEIN back, then moves to the next. The rules decide; the AI only suggests a link for a SKU Shopify no longer has, and only a link the rules verify is used.</p>
+        </HowItWorks>
         <div className="seg sm">
           {MODES.map(([k, l, help]) => (
             <button key={k} type="button" className={`seg-btn${mode === k ? ' on' : ''}`} aria-pressed={mode === k} disabled={running} title={help} onClick={() => setMode(k)}>{l}</button>
           ))}
         </div>
         <p className="muted xs">{MODES.find((m) => m[0] === mode)[2]}</p>
-        <p className="sm"><label><input type="checkbox" checked={ai} disabled={running} onChange={(e) => setAi(e.target.checked)} /> Ask the AI about seller SKUs Shopify no longer has</label></p>
+        <p className="sm"><label><input type="checkbox" checked={ai} disabled={running} onChange={(e) => setAi(e.target.checked)} /> Ask the AI about SKUs Shopify no longer has</label></p>
         {mode !== 'dry' && (
           <p className="sm"><label><input type="checkbox" checked={paused4seller} onChange={(e) => setPaused4seller(e.target.checked)} /> <b>4seller’s SHEIN sync is paused</b> (otherwise it writes its numbers right back)</label></p>
         )}
@@ -210,23 +221,23 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
           {running
             ? <button type="button" className="btn" disabled={!!busy || run.stop_requested} onClick={() => act('stop')}>{run.stop_requested ? 'Stopping after this product…' : 'Stop'}</button>
             : <button type="button" className="btn primary" disabled={!!busy || (mode !== 'dry' && !paused4seller)}
-              onClick={() => { if (mode === 'dry' || window.confirm(`${MODES.find((m) => m[0] === mode)[1]} on EVERY SHEIN listing?`)) act('start', { mode, ai }); }}>
-              {busy === 'start' ? 'Starting…' : `Start: ${MODES.find((m) => m[0] === mode)[1]}`}</button>}
+              onClick={() => { if (mode === 'dry' || window.confirm(`${startLabel} on EVERY SHEIN listing? This changes the live SHEIN store.`)) act('start', { mode, ai }); }}>
+              {busy === 'start' ? 'Starting…' : `Start: ${startLabel}`}</button>}
           {!!d.items?.length && <button type="button" className="btn ghost sm" disabled={busy === 'csv'} onClick={csv}>{busy === 'csv' ? 'Preparing CSV…' : `⬇ This run (CSV${d.itemsTotal ? ` · ${fmt(d.itemsTotal)}` : ''})`}</button>}
         </div>
         {err && <div className="error mt">{err}</div>}
 
         {run && (
           <>
-            <p className="sm mt"><b>{MODES.find((m) => m[0] === run.mode)?.[1] || run.mode}</b> · {run.status}{run.phase ? ` — ${run.phase}` : ''} · started {when(run.started_at)}{run.started_by ? ` by ${run.started_by}` : ''}{run.finished_at ? ` · ended ${when(run.finished_at)}` : ''}</p>
+            <p className="sm mt"><b>{MODES.find((m) => m[0] === run.mode)?.[1] || run.mode}</b> · {run.status}{run.phase ? ` — ${plain(run.phase)}` : ''} · started {when(run.started_at)}{run.started_by ? ` by ${run.started_by}` : ''}{run.finished_at ? ` · ended ${when(run.finished_at)}` : ''}</p>
             {running && <div className="progress-bar" aria-label="progress"><span style={{ width: `${pct}%` }} /></div>}
             {running && <p className="muted xs">{fmt(run.done)} of {fmt(run.total)} products{run.current ? ` · now ${run.current}` : ''}</p>}
-            {run.error && <div className="error">{run.error}</div>}
+            {run.error && <div className="error">{plain(run.error)}</div>}
             <div className="shc-tiles mt">
               <div className="shc-tile ok"><b>{fmt(c.sizes)}</b><span>sizes checked ({fmt(c.products)} products)</span></div>
               <div className="shc-tile info"><b>{fmt(c.stock_changed)}</b><span>{run.mode === 'dry' ? 'stock would change' : 'stock fixed'}</span></div>
               <div className="shc-tile warn"><b>{fmt(c.zeroed)}</b><span>set to 0 (wrong / dead link)</span></div>
-              <div className="shc-tile info"><b>{fmt(c.links_changed)}</b><span>{run.mode === 'full' ? 'seller SKUs corrected' : 'seller SKUs to correct'}</span></div>
+              <div className="shc-tile info"><b>{fmt(c.links_changed)}</b><span>{run.mode === 'full' ? 'SKUs corrected' : 'SKUs to correct'}</span></div>
               <div className="shc-tile warn"><b>{fmt(c.needs_person)}</b><span>need a person</span></div>
               {(Number(c.errors || 0) + Number(c.products_failed || 0)) > 0 && <div className="shc-tile bad"><b>{fmt(Number(c.errors || 0) + Number(c.products_failed || 0))}</b><span>refused by SHEIN</span></div>}
               {Number(c.mismatch) > 0 && <div className="shc-tile bad"><b>{fmt(c.mismatch)}</b><span>SHEIN still shows the old stock</span></div>}
@@ -239,12 +250,13 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
             </div>
           </>
         )}
-      </div>
+      </SheinAdvanced>
 
       {!!d.items?.length && (
         <div className="card">
+          <h4 className="shl-h4">Last full check, size by size</h4>
           <div className="ebl-filters">
-            <input type="search" className="input" value={q} onChange={(e) => { setQ(e.target.value); setShown(80); }} placeholder="Search shoe, seller SKU, size…" aria-label="Search the run" />
+            <input type="search" className="input" value={q} onChange={(e) => { setQ(e.target.value); setShown(80); }} placeholder="Search shoe, SKU, size…" aria-label="Search the run" />
             <div className="seg sm">
               {VIEWS.map(([k, l]) => <button key={k} type="button" className={`seg-btn${view === k ? ' on' : ''}`} aria-pressed={view === k} onClick={() => { setView(k); setShown(80); }}>{l}</button>)}
             </div>
@@ -252,18 +264,18 @@ export function SheinLivePanel({ isAdmin, onSignOut }) {
           <p className="muted xs">{fmt(items.length)} size{items.length === 1 ? '' : 's'}.{d.itemsTotal > d.items.length ? ` Showing the first ${fmt(d.items.length)} of ${fmt(d.itemsTotal)} sizes in this run — the CSV has every one.` : ''}</p>
           <div className="ap-tablewrap">
             <table className="table shc-table">
-              <thead><tr><th>Shoe</th><th>SHEIN size</th><th>Seller SKU</th><th>Shopify size</th><th className="num">Shopify</th><th className="num">Held</th><th className="num">SHEIN</th><th>What happened</th></tr></thead>
+              <thead><tr><th>Shoe</th><th>SHEIN size</th><th>SKU</th><th>Shopify size</th><th className="num">Shopify</th><th className="num">Held</th><th className="num">SHEIN</th><th>What happened</th></tr></thead>
               <tbody>
                 {items.slice(0, shown).map((it) => (
                   <tr key={it.id} className={tone(it) === 'bad' ? 'bad' : tone(it) === 'warn' ? 'warn' : ''}>
-                    <td className="xs">{it.product_name || it.spu}<div className="muted">{it.spu}</div></td>
+                    <td className="xs">{it.product_name || it.spu}</td>
                     <td>{it.shein_size || '—'}</td>
                     <td className="ebl-sku">{it.seller_sku || '—'}{it.link_to && <div className="xs">→ {it.link_to} <span className="muted">({it.link_by})</span></div>}</td>
                     <td>{it.shopify_size || '—'}</td>
                     <td className="num">{it.shopify_qty == null ? '—' : fmt(it.shopify_qty)}</td>
                     <td className="num">{fmt(it.held)}</td>
                     <td className="num">{fmt(it.before_qty)} → <b>{fmt(it.target_qty)}</b>{it.after_qty != null && it.after_qty !== it.target_qty && <div className="shc-bad xs">shows {fmt(it.after_qty)}</div>}</td>
-                    <td className="xs"><span className={`ebo-chip ${tone(it)}`}>{it.result === 'ok' && it.reason === 'gone' ? 'shoe gone' : it.result === 'ok' && it.reason !== 'ok' ? 'needs a person' : it.result}</span> {it.action}{it.error && <div className="shc-bad">{it.error}</div>}</td>
+                    <td className="xs"><span className={`ebo-chip ${tone(it)}`}>{it.result === 'ok' && it.reason === 'gone' ? 'shoe gone' : it.result === 'ok' && it.reason !== 'ok' ? 'needs a person' : it.result}</span> {plain(it.action)}{it.error && <div className="shc-bad">{it.error}</div>}</td>
                   </tr>
                 ))}
               </tbody>

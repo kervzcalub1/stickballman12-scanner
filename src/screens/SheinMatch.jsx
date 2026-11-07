@@ -1,5 +1,5 @@
 // SHEIN match screen (docs/context/shein-fix.md → "Match screen"). Search a shoe — SHEIN
-// name, style code, seller SKU or SHEIN SKU — and see its SHEIN sizes next to the Shopify
+// name, style code, SKU or SHEIN SKU — and see its SHEIN sizes next to the Shopify
 // variants. For each SHEIN size, pick the Shopify SKU it should carry; only SAME-size
 // variants are offered (a size SHEIN writes in EUR/CN or leaves blank shows them all, marked).
 // The tool's own suggestions (swap / same style + size / AI) come pre-filled. Saved matches
@@ -8,6 +8,8 @@ import React, { useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { compareSize, parseSize } from '../lib/sheinCheck.js';
 import { addLabel } from '../lib/sheinFix.js';
+import { HowItWorks } from '../components/SheinNav.jsx';
+import { plain } from '../lib/sheinWords.js';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const NEEDS = new Set(['swap', 'wrong_size', 'no_shopify', 'no_size', 'other_system', 'duplicate', 'no_seller_sku', 'pending_change']);
@@ -59,9 +61,10 @@ export function SheinMatch({ fix, variants, links, sheinApi, onSaved, onSignOut 
   return (
     <div className="card">
       <h3 className="er-step-title">Match sizes</h3>
-      <p className="muted sm">Pick, for each SHEIN size, the Shopify SKU it should carry. Only the <b>same size</b> is offered. Matches are saved for the whole team; each one becomes a seller-SKU change to make on SHEIN, and the size sells Shopify’s stock again once SHEIN shows the new SKU.</p>
+      <p className="sm">For each SHEIN size, pick the Shopify SKU it should carry. Only the <b>same size</b> is offered.</p>
+      <HowItWorks><p className="muted xs">Matches are saved for the whole team. Each one becomes a SKU change to make on SHEIN, and the size sells Shopify’s stock again once SHEIN shows the new SKU.</p></HowItWorks>
       <div className="ebl-filters">
-        <input type="search" className="input" value={q} onChange={(e) => { setQ(e.target.value); setShown(PAGE); }} placeholder="Search shoe, style code, seller SKU, SHEIN SKU…" aria-label="Search SHEIN shoes to match" />
+        <input type="search" className="input" value={q} onChange={(e) => { setQ(e.target.value); setShown(PAGE); }} placeholder="Search shoe, style code, SKU…" aria-label="Search SHEIN shoes to match" />
         <div className="seg sm">
           {[['needs', 'Needs a match'], ['decided', 'Matched'], ['all', 'All']].map(([k, l]) => (
             <button key={k} type="button" className={`seg-btn${view === k ? ' on' : ''}`} aria-pressed={view === k} onClick={() => { setView(k); setShown(PAGE); }}>{l} <span className="seg-n">{fmt(counts[k])}</span></button>
@@ -74,7 +77,7 @@ export function SheinMatch({ fix, variants, links, sheinApi, onSaved, onSignOut 
             {g.image ? <img className="ebl-thumb" src={g.image} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <span className="ebl-thumb ebl-thumb-empty" aria-hidden="true" />}
             <span className="ebl-orphan-main">
               <span className="ebl-title">{g.name || '(no name)'}</span>
-              <span className="muted xs">{g.rows.length} SHEIN size{g.rows.length === 1 ? '' : 's'}{g.spu ? ` · SPU ${g.spu}` : ''}</span>
+              <span className="muted xs">{g.rows.length} SHEIN size{g.rows.length === 1 ? '' : 's'}{g.spu ? ` · Product ${g.spu}` : ''}</span>
               <span className="xs">{g.needs > 0 && <span className="ebo-chip bad">{g.needs} need a match</span>}{g.decided > 0 && <span className="ebo-chip ok">{g.decided} matched</span>}</span>
             </span>
             <span className="muted" aria-hidden="true">{openKey === g.key ? '▾' : '▸'}</span>
@@ -135,7 +138,7 @@ function MatchEditor({ group, products, variants, links, sheinApi, onSaved, onSi
       })));
       setMsg(`Saved ${changes.length} match${changes.length === 1 ? '' : 'es'}.`);
       onSaved();
-    } catch (e) { if (e.unauthorized) onSignOut(); else setMsg(e.message); }
+    } catch (e) { if (e.unauthorized) onSignOut(); else setMsg(plain(e.message)); }
     finally { setBusy(false); }
   }
 
@@ -153,7 +156,7 @@ function MatchEditor({ group, products, variants, links, sheinApi, onSaved, onSi
       </div>
       <div className="ap-tablewrap">
         <table className="table shc-table">
-          <thead><tr><th>SHEIN size</th><th>Seller SKU on SHEIN now</th><th>Should carry</th><th className="num">Shopify stock</th></tr></thead>
+          <thead><tr><th>SHEIN size</th><th>SKU on SHEIN now</th><th>Should carry</th><th className="num">Shopify stock</th></tr></thead>
           <tbody>
             {group.rows.map((r) => {
               const options = (product?.variants || []).filter((v) => !checkable(r.size) || sameSize(r.size, v.size));

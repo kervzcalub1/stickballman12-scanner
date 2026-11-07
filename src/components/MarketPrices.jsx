@@ -115,7 +115,7 @@ function Stat({ n, label, tone }) {
 }
 
 // The step card. `num` is its step number; `hint` replaces the default timing line.
-export function MarketPricesStep({ mp, num, hint, onCleared }) {
+export function MarketPricesStep({ mp, num, hint, lookups = 'style + size lookups', onCleared }) {
   const { state, tally, cached, total, done } = mp;
   const remaining = total - cached;
   const perJob = state.running && state.doneThisRun ? (Date.now() - state.startedAt) / state.doneThisRun : 0;
@@ -123,7 +123,7 @@ export function MarketPricesStep({ mp, num, hint, onCleared }) {
   return (
     <div className="card er-step">
       <h3 className="er-step-title"><span className="er-num">{num}</span> Market prices</h3>
-      <p className="muted sm">{fmt(total)} style + size lookups. Saved in this browser for today, so a reload picks up where it stopped. {hint || 'Keep this tab open while it runs.'}</p>
+      <p className="muted sm">{fmt(total)} {lookups}. Saved in this browser for today, so a reload picks up where it stopped. {hint || 'Keep this tab open while it runs.'}</p>
       <ProgressBar value={total ? cached / total : 0}
         label={`${fmt(cached)} of ${fmt(total)} priced${state.running && eta != null ? ` · about ${eta} min left` : ''}${state.pausedFor ? ` · server busy, pausing ${state.pausedFor}s` : ''}`} />
       <div className="er-stats mt">

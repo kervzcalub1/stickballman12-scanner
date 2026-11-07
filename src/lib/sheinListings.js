@@ -10,27 +10,19 @@
 //     shein_links.link_sku. NEVER the SPU/SKC supplier_code (the 4seller parent-SKU trap: that code
 //     is a borrowed size SKU) and never the title;
 //   · variantReadiness / productReadiness / rollup — what status each size and product is in;
-//   · listingHash — what counts as "Shopify changed" (stock excluded: the live sync owns stock).
+//   · listingHash — what counts as "Shopify changed" (stock excluded: automatic sync owns stock).
 // No I/O, no clock, no crypto import — it runs in the browser too.
 import { parseSize, compareSize } from './sheinCheck.js';
 import { PH_DATE } from './format.js';
+import { STATUS_WORDS } from './sheinWords.js';
 
 /* -------------------------------- statuses -------------------------------- */
 
 // Roll-up order = worst first (plan §4.1). `unknown` = a row that exists but was never
 // snapshotted; it is not a tile.
 export const STATUS_ORDER = ['blocked', 'error', 'out_of_date', 'not_on_shein', 'shein_only', 'in_review', 'synced', 'excluded'];
-export const STATUSES = {
-  blocked: { label: 'Blocked', chip: 'ebo-chip bad', meaning: 'Can’t be sent until something is fixed. The row says what and has the button.' },
-  error: { label: 'Error', chip: 'ebo-chip warn', meaning: 'We tried; SHEIN refused, rejected it in review, or didn’t answer. Shows SHEIN’s message.' },
-  out_of_date: { label: 'Needs update', chip: 'ebo-chip info', meaning: 'On SHEIN, but differs from Shopify (price, SHEIN has the wrong SKU, stopped size, our listing changed).' },
-  not_on_shein: { label: 'Not on SHEIN', chip: 'ebo-chip', meaning: 'Ready to list. Nothing is wrong.' },
-  shein_only: { label: 'Not in Shopify', chip: 'ebo-chip warn shl-outline', meaning: 'A SHEIN size whose seller SKU Shopify doesn’t have (the live fix holds it at 0).' },
-  in_review: { label: 'In review', chip: 'ebo-chip violet', meaning: 'Sent; SHEIN is reviewing it.' },
-  synced: { label: 'Synced', chip: 'ebo-chip ok', meaning: 'On SHEIN and approved; size, SKU and price match Shopify.' },
-  excluded: { label: 'Not listing', chip: 'ebo-chip shl-off', meaning: 'A Shopify draft, or marked “Don’t list on SHEIN” by a person. Not in the tile counts.' },
-  unknown: { label: 'Not checked yet', chip: 'ebo-chip', meaning: 'Never snapshotted.' },
-};
+const CHIP = { blocked: 'ebo-chip bad', error: 'ebo-chip warn', out_of_date: 'ebo-chip info', not_on_shein: 'ebo-chip', shein_only: 'ebo-chip warn shl-outline', in_review: 'ebo-chip violet', synced: 'ebo-chip ok', excluded: 'ebo-chip shl-off', unknown: 'ebo-chip' };
+export const STATUSES = Object.fromEntries(Object.entries(STATUS_WORDS).map(([k, w]) => [k, { ...w, chip: CHIP[k] }]));
 export const STATUS_CODES = [...STATUS_ORDER, 'unknown'];
 // The tiles (filters). `excluded` is the "Off (n)" link, not a tile.
 export const TILE_STATUSES = STATUS_ORDER.filter((s) => s !== 'excluded');
@@ -64,7 +56,7 @@ export const BLOCKERS = {
     title: (p) => `Size name not allowed${p?.text ? `: “${p.text}”` : ''}.`,
     fix: (p) => `${p?.why || 'Over 50 characters, full-width characters or emoji'} — fix the spelling on the Sizes tab.`,
     action: { kind: 'edit_size_map', label: 'Fix the spelling' } },
-  // 5–9 · seller SKUs and links
+  // 5–9 · SKUs and links
   no_seller_sku: { level: 'blocked', scope: 'variant', applies: ['always'],
     title: () => 'This size has no SKU on Shopify.', fix: () => 'Give the variant a SKU on Shopify.', action: shopifyLink },
   dup_seller_sku: { level: 'blocked', scope: 'variant', applies: ['always'],
@@ -72,10 +64,10 @@ export const BLOCKERS = {
   seller_sku_taken: { level: 'blocked', scope: 'variant', applies: ['publish', 'add_sizes'],
     title: (p) => `SKU ${p?.sku || ''} is already on another SHEIN product${p?.spu ? ` (${p.spu})` : ''}.`,
     fix: () => 'Fix that SHEIN product first (Match sizes), then add this size.',
-    action: { kind: 'open_match', label: 'Show the other product', href: '/ph/shein-check?tab=match' } },
+    action: { kind: 'open_match', label: 'Show the other product', href: '/ph/shein?section=check&chk=match' } },
   wrong_link: { level: 'blocked', scope: 'variant', applies: ['always'],
     title: (p) => `SHEIN ${p?.sheinSize || 'size'} carries this SKU${p?.size ? ` (Shopify size ${p.size})` : ''}.`,
-    fix: () => 'The live fix holds it at 0. Pick the SKU it should carry (Match sizes), then dry run this shoe.', action: { kind: 'open_match', label: 'Match sizes', here: true } },
+    fix: () => 'Automatic sync holds it at 0. Pick the SKU it should carry (Match sizes), then preview this shoe.', action: { kind: 'open_match', label: 'Match sizes', here: true } },
   spu_spans_products: { level: 'blocked', scope: 'variant', applies: ['always'],
     title: (p) => `SHEIN product ${p?.spu || ''} carries sizes of ${p?.count || 2} Shopify products.`,
     fix: () => 'Decide which Shopify product it belongs to on Match sizes.', action: { kind: 'open_match', label: 'Match sizes', here: true } },
@@ -85,7 +77,7 @@ export const BLOCKERS = {
     action: { kind: 'edit_size_map', label: 'Add foot length' } },
   missing_attr: { level: 'blocked', scope: 'product', applies: ['publish', 'edit', 'add_sizes'],
     title: (p) => `Missing SHEIN detail: ${p?.attribute || 'a required attribute'}.`,
-    fix: (p) => (p?.why === 'typed_per_shoe' ? 'It is typed per shoe — fill it in for this shoe in Seller Center, then dry run again.' : 'Set it once for the product type.'),
+    fix: (p) => (p?.why === 'typed_per_shoe' ? 'It is typed per shoe — fill it in for this shoe in Seller Center, then preview again.' : 'Set it once for the product type.'),
     action: { kind: 'set_attr', label: 'Set it' } },
   no_category: { level: 'blocked', scope: 'product', applies: ['publish'],
     title: (p) => `No SHEIN category picked.${p?.suggestion ? ` We suggest ${p.suggestion}.` : ''}`, fix: () => 'Choose the SHEIN category.', action: { kind: 'choose_category', label: 'Choose category' } },
@@ -111,12 +103,12 @@ export const BLOCKERS = {
   no_warehouse: { level: 'blocked', scope: 'store', applies: ['publish'],
     title: () => 'SHEIN shows no US default merchant warehouse for the store.', fix: () => 'Set one in Seller Center.', action: null },
   photos_need_priv: { level: 'note', scope: 'product', applies: ['publish'],
-    title: () => 'Photos weren’t converted for this dry run.', fix: () => 'Photos are converted when an admin or Connect integrations holder runs the dry run.', action: null },
+    title: () => 'Photos weren’t converted for this preview.', fix: () => 'Photos are converted when an admin, or someone with the Connect integrations privilege, runs the preview.', action: null },
   photo_cap_reached: { level: 'blocked', scope: 'store', applies: ['publish'],
     title: (p) => `Today’s photo-conversion limit is used up (${p?.used ?? '?'} of ${p?.cap ?? '?'} SHEIN conversions, EST day).`,
-    fix: () => 'Dry run again tomorrow (EST) — or an admin raises the daily limit (setting shein_transform_cap).', action: null },
+    fix: () => 'Preview again tomorrow (EST) — or an admin raises the daily limit (setting shein_transform_cap).', action: null },
   brand_list_unread: { level: 'note', scope: 'product', applies: ['publish'],
-    title: (p) => `SHEIN’s brand list couldn’t be read, so ${p?.brand || 'the brand'} isn’t confirmed as authorised.`, fix: () => 'Dry run again in a few minutes — nothing is sent until the list is read.', action: null },
+    title: (p) => `SHEIN’s brand list couldn’t be read, so ${p?.brand || 'the brand'} isn’t confirmed as authorised.`, fix: () => 'Preview again in a few minutes — nothing is sent until the list is read.', action: null },
   language_not_en: { level: 'blocked', scope: 'store', applies: ['publish'],
     title: (p) => `SHEIN’s default language for this category is “${p?.language || '?'}”, not English.`, fix: () => 'We only write English titles — check the store’s language in Seller Center before publishing.', action: null },
   brand_unset: { level: 'blocked', scope: 'product', applies: ['publish'],
@@ -146,14 +138,14 @@ export const BLOCKERS = {
   store_cannot_publish: { level: 'blocked', scope: 'store', applies: ['publish'],
     title: (p) => `SHEIN won’t take new listings: ${p?.reason || p?.sheinMessage || 'no reason given'}.`, fix: () => 'A person sorts it out in Seller Center.', action: null },
   publish_quota_used: { level: 'blocked', scope: 'store', applies: ['publish'],
-    title: () => 'This month’s SHEIN publish quota is used up.', fix: () => 'Wait for next month, or ask SHEIN for more.', action: null },
+    title: () => 'This month’s SHEIN monthly new-product limit is used up.', fix: () => 'Wait for next month, or ask SHEIN for more.', action: null },
   shelf_quota_full: { level: 'blocked', scope: 'store', applies: ['publish'],
     title: () => 'SHEIN’s shelf limit for the store is reached.', fix: () => 'Take something off the shelf, or ask SHEIN for more.', action: null },
   multi_skc_size: { level: 'blocked', scope: 'variant', applies: ['add_sizes'],
     title: () => 'Add this size to every colour of this SHEIN product.', fix: () => 'SHEIN needs the same sizes on every colour. Add to all, or skip.', action: { kind: 'skip', label: 'Skip' } },
   // 20–25 · what SHEIN answered
   size_field_retired: { level: 'error', scope: 'product', applies: ['add_sizes'],
-    title: () => 'SHEIN retired this product’s size field; sizes can’t be added.', fix: () => 'Re-list it as a new product (next phases).', action: null },
+    title: () => 'SHEIN retired this product’s size field; sizes can’t be added.', fix: () => 'It has to be listed again as a new product.', action: null },
   review_open: { level: 'review', scope: 'product', applies: ['edit', 'add_sizes'],
     title: (p) => `SHEIN is reviewing an earlier edit${p?.sentAt ? ` (sent ${p.sentAt} EST)` : ''}.`, fix: () => 'We retry after the review closes.', action: { kind: 'check_review', label: 'Check now' } },
   review_rejected: { level: 'error', scope: 'product', applies: ['publish', 'edit', 'add_sizes'],
@@ -165,46 +157,46 @@ export const BLOCKERS = {
   shelf_locked: { level: 'note', scope: 'variant', applies: ['edit'],
     title: () => 'In a SHEIN promotion: can’t come off the shelf.', fix: () => 'Wait for the promotion to end.', action: null },
   api_error: { level: 'error', scope: 'variant', applies: ['always'],
-    title: (p) => `Last call failed: ${p?.sheinMessage || p?.message || 'no answer'}${p?.traceId ? ` (trace ${p.traceId})` : ''}.`, fix: () => 'Retry.', action: { kind: 'retry', label: 'Retry' } },
+    title: (p) => `Last call failed: ${p?.sheinMessage || p?.message || 'no answer'}${p?.traceId ? ` (ref ${p.traceId})` : ''}.`, fix: () => 'Retry.', action: { kind: 'retry', label: 'Retry' } },
   // notes (not blockers)
   custom_size: { level: 'note', scope: 'variant', applies: ['publish', 'add_sizes'],
     title: (p) => `Will add ${p?.text || 'a custom size'} as a new size.`, fix: () => '', action: null },
   shopify_inactive: { level: 'note', scope: 'product', applies: ['always'],
     title: (p) => (!p?.status || p.status === 'DRAFT' ? 'Not listing — draft on Shopify.' : `Not listing — ${p.status[0]}${p.status.slice(1).toLowerCase()} on Shopify. Only active products are listed.`), fix: () => '', action: shopifyLink },
   // 2026-10-28 (user): a Shopify shoe with NO stock (0 pairs across its listed sizes) is never sent by
-  // the LISTING syncs (publish / add sizes / update prices & sizes) — the dry run skips it with this.
+  // the LISTING syncs (publish / add sizes / update prices & sizes) — the preview skips it with this.
   // The STOCK sync is untouched: a shoe going to 0 still has SHEIN set to 0 (shein-live.js).
   no_shopify_stock: { level: 'blocked', scope: 'product', applies: ['publish', 'edit', 'add_sizes'],
     title: () => 'No Shopify stock — not sent to SHEIN.',
-    fix: () => 'Nothing to do: the listing syncs skip a shoe with 0 pairs on Shopify. Once it has stock, dry run it again. (The stock sync still keeps SHEIN at 0.)', action: null },
+    fix: () => 'Nothing to do: the listing syncs skip a shoe with 0 pairs on Shopify. Once it has stock, preview it again. (The stock sync still keeps SHEIN at 0.)', action: null },
   // Added in the build (docs/shein-listings-plan.md → Build log).
   size_unchecked: { level: 'note', scope: 'variant', applies: ['publish', 'add_sizes'],
     title: (p) => (p?.reason === 'no_category' ? 'No SHEIN category yet, so this size can’t be checked against SHEIN’s list.' : `SHEIN’s size list for ${cat(p)} hasn’t been read yet.`),
-    fix: (p) => (p?.reason === 'no_category' ? 'Comes with publishing new products (a later phase).' : 'Run “Re-read Shopify + SHEIN” (or Ask SHEIN).'), action: null },
+    fix: (p) => (p?.reason === 'no_category' ? 'Choose a category when you publish this shoe.' : 'Run “Refresh from SHEIN” (or Ask SHEIN).'), action: null },
   dup_on_shein: { level: 'note', scope: 'variant', applies: ['always'],
-    title: (p) => `Another SHEIN size${p?.sheinSize ? ` (${p.sheinSize})` : ''} carries the same seller SKU.`, fix: () => 'The live fix sells it from one of them only.', action: null },
+    title: (p) => `Another SHEIN size${p?.sheinSize ? ` (${p.sheinSize})` : ''} carries the same SKU.`, fix: () => 'Automatic sync sells it from one of them only.', action: null },
   excluded_by_person: { level: 'note', scope: 'variant', applies: ['always'],
     title: (p) => `Not listing — ${p?.by || 'a person'} chose not to list it on SHEIN${p?.at && !Number.isNaN(new Date(p.at).getTime()) ? ` (${PH_DATE.format(new Date(p.at))} EST)` : ''}.`, fix: () => '', action: { kind: 'include', label: 'List on SHEIN again' } },
   // Added in Phase 2 (add sizes — docs/shein-listings-plan.md → Build log).
   size_already_on_shein: { level: 'blocked', scope: 'variant', applies: ['add_sizes'],
-    title: (p) => `SHEIN already has ${p?.sheinSize || 'this size'}${p?.sellerSku ? ` (seller SKU ${p.sellerSku})` : ''}.`,
+    title: (p) => `SHEIN already has ${p?.sheinSize || 'this size'}${p?.sellerSku ? ` (SKU ${p.sellerSku})` : ''}.`,
     fix: () => 'Change the SKU on that SHEIN size to this one (Match sizes) instead of adding a second one.', action: { kind: 'open_match', label: 'Match sizes', here: true } },
   not_on_shein_product: { level: 'note', scope: 'product', applies: ['add_sizes'],
-    title: () => 'This shoe isn’t on SHEIN yet, so there is no SHEIN product to add sizes to.', fix: () => 'Publishing new shoes comes in a later phase.', action: null },
+    title: () => 'This shoe isn’t on SHEIN yet, so there is no SHEIN product to add sizes to.', fix: () => 'Use “Publish new products” for this shoe.', action: null },
   nothing_to_add: { level: 'note', scope: 'product', applies: ['add_sizes'],
     title: () => 'No size to add: every Shopify size is on SHEIN, not listing, or blocked.', fix: () => '', action: null },
   custom_unconfirmed: { level: 'blocked', scope: 'variant', applies: ['add_sizes', 'publish'],
     title: (p) => `The spelling “${p?.text || ''}” for ${sz(p)} wasn’t confirmed by a person.`,
     fix: () => 'Confirm the spelling on the Sizes tab (a custom size is store-wide and permanent).', action: { kind: 'edit_size_map', label: 'Confirm the spelling' } },
   shopify_changed: { level: 'note', scope: 'product', applies: ['add_sizes', 'edit', 'publish'],
-    title: () => 'Shopify (or SHEIN) changed since the dry run — nothing was sent.', fix: () => 'Dry run again, check it, then run.', action: { kind: 'dry_run', label: 'Dry run again' } },
+    title: () => 'Shopify (or SHEIN) changed since the preview — nothing was sent.', fix: () => 'Preview again, check it, then run.', action: { kind: 'dry_run', label: 'Preview again' } },
   size_field_unclear: { level: 'blocked', scope: 'product', applies: ['add_sizes'],
     title: (p) => (p?.why === 'two_attrs' ? 'This SHEIN product’s sizes carry more than one sale attribute (e.g. size + width), so a size can’t be added safely.'
       : 'We can’t tell which SHEIN field is this product’s size, so a size can’t be added safely.'),
     fix: () => 'Add it in Seller Center by hand, or ask us to support this product shape.', action: null },
   size_table_not_yet: { level: 'blocked', scope: 'product', applies: ['add_sizes'],
     title: () => 'This SHEIN product has a size chart — adding sizes to it isn’t supported yet.',
-    fix: () => 'SHEIN needs the whole chart re-sent with every new size; that comes after the pilot. Add it in Seller Center for now.', action: null },
+    fix: () => 'SHEIN needs the whole chart re-sent with every new size; that isn’t supported yet. Add it in Seller Center for now.', action: null },
   skc_field_uncopyable: { level: 'blocked', scope: 'product', applies: ['add_sizes'],
     title: (p) => (p?.why === 'fill_unread' ? 'We couldn’t read SHEIN’s listing rules for this category, so we can’t tell what an edit would clear.'
       : p?.field === 'competing_product_link' ? 'SHEIN wants a reference link on this store’s SKUs, which we can’t read back — sending would clear it.'
@@ -218,9 +210,9 @@ export const BLOCKERS = {
     fix: () => 'SHEIN needs the original price above the special price — end the special price in Seller Center first.', action: null },
   special_live: { level: 'note', scope: 'variant', applies: ['edit'],
     title: (p) => `SHEIN special $${p?.special ?? '?'} is live (original $${p?.base ?? '?'}) — the target is $${p?.to ?? '?'}.`,
-    fix: () => 'We don’t change a price under a live special by ourselves. Change it in Seller Center, or dry run with “end the special”.', action: null },
+    fix: () => 'We don’t change a price under a live special by ourselves. Change it in Seller Center, or preview with “end the special”.', action: null },
   price_lock_unread: { level: 'blocked', scope: 'variant', applies: ['edit'],
-    title: () => 'We couldn’t read SHEIN’s promotion locks, so no price goes UP for this product.', fix: () => 'Dry run again later (price cuts still go).', action: null },
+    title: () => 'We couldn’t read SHEIN’s promotion locks, so no price goes UP for this product.', fix: () => 'Preview again later (price cuts still go).', action: null },
   price_lock_warn: { level: 'note', scope: 'variant', applies: ['edit'],
     title: () => 'In a SHEIN promotion that only warns about price changes — changing it may affect the promotion.', fix: () => '', action: null },
   price_review_stuck: { level: 'error', scope: 'variant', applies: ['edit'],
@@ -229,9 +221,9 @@ export const BLOCKERS = {
     title: (p) => `SHEIN’s title is ${p?.length ?? '?'} characters; SHEIN now allows ${p?.max ?? '?'}.`,
     fix: () => 'SHEIN re-checks the whole product on every edit — shorten the title in Seller Center first.', action: null },
   auto_capped: { level: 'note', scope: 'variant', applies: ['edit'],
-    title: () => 'Automatic re-sync: cut limited to 15 % a day and never below the Shopify price.', fix: () => '', action: null },
+    title: () => 'Automatic price update: cut limited to 15 % a day and never below the Shopify price.', fix: () => '', action: null },
   shelf_wait: { level: 'note', scope: 'variant', applies: ['edit'],
-    title: () => 'This shoe was put on / taken off SHEIN’s shelf less than 20 minutes ago.', fix: () => 'SHEIN refuses a second change within 20 minutes — dry run again later.', action: null },
+    title: () => 'This shoe was put on / taken off SHEIN’s shelf less than 20 minutes ago.', fix: () => 'SHEIN refuses a second change within 20 minutes — preview again later.', action: null },
   nothing_to_edit: { level: 'note', scope: 'product', applies: ['edit'],
     title: () => 'Nothing to change on SHEIN for this product.', fix: () => '', action: null },
   title_not_ours: { level: 'note', scope: 'product', applies: ['edit'],
@@ -240,7 +232,7 @@ export const BLOCKERS = {
     title: (p) => `Also sends SHEIN details it now requires: ${(p?.attributes || []).join(', ') || 'a required detail'} (from Setup → SHEIN details).`,
     fix: () => 'SHEIN refuses any edit of this shoe without them. A product-level change: SHEIN reviews every colour of it.', action: null },
   images_later: { level: 'note', scope: 'product', applies: ['edit'],
-    title: () => 'Photo changes go up with publishing (a later phase).', fix: () => '', action: null },
+    title: () => 'Photo changes aren’t sent here.', fix: () => '', action: null },
   too_many_prices: { level: 'blocked', scope: 'product', applies: ['edit'],
     title: () => 'More than 100 prices on one product.', fix: () => 'SHEIN takes 100 a call — change it in Seller Center.', action: null },
   already_sent: { level: 'note', scope: 'product', applies: ['add_sizes'],
@@ -434,7 +426,7 @@ export function normalizeWebhookProduct(p) {
 }
 
 // What the listing is made of, WITHOUT stock (a stock change must never flip a size to Out of
-// date — the live sync owns stock) and without photos/weight (a REST payload and the GraphQL read
+// date — automatic sync owns stock) and without photos/weight (a REST payload and the GraphQL read
 // describe those differently; photos only matter for products we publish, a later phase).
 export function variantFields(v) {
   return { sku: trim(v?.sku), size: trim(v?.size), price: money(v?.price), compareAt: money(v?.compareAt), barcode: trim(v?.barcode) || null };
@@ -469,7 +461,7 @@ export const variantHash = (v) => hashString(stableJson(variantFields(v)));
 //   byVariant: Map(variantId → { row, match: 'sku'|'link' }),
 //   sheinOnly: [{ row, why }]  — SHEIN sizes no Shopify variant has (or a second SHEIN size on one SKU),
 //   skuCount: Map(sku → number of Shopify variants carrying it), spuOwner, spuProducts }
-// A SHEIN size is matched to a Shopify variant ONLY by its own seller SKU (supplierSku) — or, when a
+// A SHEIN size is matched to a Shopify variant ONLY by its own SKU (supplierSku) — or, when a
 // person / the rules relinked it (shein_links) and SHEIN doesn't show the new SKU yet, by that
 // link_sku. The SPU's / SKC's supplierCode is never read: 4seller filled it with a borrowed size SKU.
 export function matchStore({ products = [], sheinRows = [], links = [] }) {
@@ -574,7 +566,7 @@ export function variantReadiness(v) {
       if (special != null) {
         notes.push(blocker('special_live', { special, base, to: Number(v.targetPrice.price) }));
         diffs.push({ field: 'shein_special', from: money(pays), to: money(v.targetPrice.price), special: money(special), base: money(base), source: v.targetPrice.from,
-          why: `SHEIN special ${money(special)} is live — only a dry run that ends the special changes it` });
+          why: `SHEIN special ${money(special)} is live — only a preview that ends the special changes it` });
       }
       else diffs.push({ field: 'shein_price', from: money(pays), to: money(v.targetPrice.price), source: v.targetPrice.from, why: v.targetPrice.from === 'market' ? 'market + 15 %, rounded up' : 'the Shopify price (no recent market price)' });
     }
@@ -656,7 +648,7 @@ export const SHEIN_READ_PATHS = new Set([
   '/open-api/goods/image-category-suggestion', '/open-api/goods-compliance-requirements/list',
 ]);
 // Image conversion makes a SHEIN-hosted URL and changes NO product: an "asset" call, not a write
-// (the dry-run proof stays "0 SHEIN writes · n photos converted").
+// (the preview proof stays "0 SHEIN writes · n photos converted").
 export const SHEIN_ASSET_PATHS = new Set(['/open-api/goods/transform-pic', '/open-api/goods/upload-pic']);
 const pathOf = (path) => String(path || '').split('?')[0];
 export const isSheinAsset = (path) => SHEIN_ASSET_PATHS.has(pathOf(path));
@@ -796,7 +788,7 @@ export function computeListings({ products = [], spus = [], links = [], maps = [
         inflight: inflight.get(v.variantId) || null, publishBlockers: !onShein && pub ? pub.productBlockers : null,
         targetPrice: row ? sheinNewSizePrice({ marketCents: market.get(v.variantId) ?? null, shopifyPrice: v.price }) : null,
       });
-      // A size we added (Phase 2) stays 'published' once SHEIN shows it under its own seller SKU —
+      // A size we added (Phase 2) stays 'published' once SHEIN shows it under its own SKU —
       // sheinLastWalkFacts() reads those rows so the live stock push reaches it before the next walk.
       const match = hit?.match === 'sku' && before.match === 'published' && before.shein_sku === row?.sheinSku ? 'published' : hit?.match || 'none';
       vrows.push({
@@ -868,8 +860,8 @@ export function computeListings({ products = [], spus = [], links = [], maps = [
 /* ------------------------ Phase 2: add sizes to a SHEIN shoe ------------------------ */
 // docs/shein-listings-plan.md §3 Phase 2, Appendix A.1/A.2; docs/shein-listing-api-reference.md
 // (partialEdit, doc 3002047). ONE partialEdit per SHEIN product carries every size we add AND the
-// seller-SKU relinks pending for it (one SHEIN review per product). The dry run and the run build
-// the body with this same function from fresh reads, so "what the dry run showed" and "what is
+// SKU relinks pending for it (one SHEIN review per product). The preview and the run build
+// the body with this same function from fresh reads, so "what the preview showed" and "what is
 // sent" can be compared by hash.
 
 export const PARTIAL_EDIT_PATH = '/open-api/goods/product/partialEdit';
@@ -919,7 +911,7 @@ const imageOf = (s) => {
 //   maps       shein_size_map rows · sizes: { attributeId, values, status } (SHEIN's template for the
 //              product type) · permission 1|0|null · customValues (store-wide custom texts)
 //   sortSupported  query-publish-fill-in-standard.support_sale_attribute_sort === true
-//   taken      Set of seller SKUs check-supplierSku-repeated says exist anywhere in the store
+//   taken      Set of SKUs check-supplierSku-repeated says exist anywhere in the store
 //   fill       query-publish-fill-in-standard answer (skc_title / reference_product_link rules)
 //   market     Map(variantId → market cents) · warehouse { code, name, count } (merchant warehouses;
 //              `code` = the US default type-1 warehouseCode → stock_info_list.supplier_warehouse_id)
@@ -1070,7 +1062,7 @@ export function planAddSizes({ spu, product, stored = [], maps = [], sizes = nul
 }
 /* ------------------- Phase 3: re-sync Needs update (price · sizes on · SKUs · title) ------------------- */
 // docs/shein-listings-plan.md §3 Phase 3. Two kinds of item per product: `price` (product/price/save —
-// never publishOrEdit) and `edit` (ONE partialEdit: stopped sizes back on, seller-SKU relinks, and
+// never publishOrEdit) and `edit` (ONE partialEdit: stopped sizes back on, SKU relinks, and
 // the title ONLY on a product we published — products.synced_hash; never a 4seller product, D11).
 
 export const PRICE_SAVE_PATH = '/open-api/openapi-business-backend/product/price/save';
@@ -1131,7 +1123,7 @@ export function planPrice({ spu, stored = [], targets = new Map(), locks = new M
 
 // ONE partialEdit for one product's edits. In: spu (raw), product (Shopify LIVE), stored rows, productRow
 // (shein_listing_products: synced_hash = we published it), fill / fillUnread (fill-in-standard), taken
-// (seller SKUs already in the store), recentShelf (SKCs whose shelf changed < 20 min ago).
+// (SKUs already in the store), recentShelf (SKCs whose shelf changed < 20 min ago).
 // Out: { body | null, plan: { op:'edit', mallOn, relinks, title, skipped, blockers, notes } }.
 //   names: the SPU name in EVERY language SHEIN keeps (spu-info read with fill-in-standard's
 //   language_title_max_length_list) — an object[] is replaced whole (doc 3002047 rule 3), so without
@@ -1216,8 +1208,8 @@ function withAttrs(body, plan, attrs) {
 // The plan as stored (no raw SHEIN objects).
 function tidy(plan) { return { ...plan, sizes: plan.sizes.map(({ raw, ...z }) => z) }; }
 
-// One line for a person (the dry-run sheet, the job item list):
-// "Will add 2 sizes: US14.5W (custom, new), US15 (SHEIN size) · relink 1 seller SKU: OLD10 → A10 · 1 skipped: 3.5C (…)".
+// One line for a person (the preview sheet, the job item list):
+// "Will add 2 sizes: US14.5W (custom, new), US15 (SHEIN size) · relink 1 SKU: OLD10 → A10 · 1 skipped: 3.5C (…)".
 const usd = (n) => `$${Number(n).toFixed(2).replace(/\.00$/, '')}`;
 export function summarizePlan(plan) {
   if (!plan) return '';
@@ -1231,7 +1223,7 @@ export function summarizePlan(plan) {
     if (hard.length) return `Can’t publish yet: ${renderBlocker(hard[0]).title.replace(/\.$/, '')}${hard.length > 1 ? ` (+${hard.length - 1} more)` : ''}`;
     if (!sz.length) return lead([...(plan.blockers || []), ...(plan.notes || [])]) || 'Nothing to publish.';
     return [`Will publish “${plan.title?.text || ''}” with ${sz.length} size${sz.length === 1 ? '' : 's'}: ${sz.map((z) => `${z.sheinSize}${z.kind === 'custom' ? ' (custom)' : ''} ${usd(z.price)}`).join(', ')}`,
-      `${(plan.images || []).length} photo${(plan.images || []).length === 1 ? '' : 's'}`, plan.quota?.controlled ? `uses ${plan.quota.uses} of ${plan.quota.available} publish quota` : ''].filter(Boolean).join(' · ');
+      `${(plan.images || []).length} photo${(plan.images || []).length === 1 ? '' : 's'}`, plan.quota?.controlled ? `uses ${plan.quota.uses} of ${plan.quota.available} monthly new-product limit` : ''].filter(Boolean).join(' · ');
   }
   if (plan.op === 'price') {
     const pr = plan.prices || [];
@@ -1262,8 +1254,8 @@ export function summarizePlan(plan) {
   return parts.filter(Boolean).join(' · ');
 }
 
-// What a person reads for one item of a dry run / a send (the review sheet, the job card, the
-// drawer's history). The same status means different things in the two kinds: a dry-run item
+// What a person reads for one item of a preview / a send (the review sheet, the job card, the
+// drawer's history). The same status means different things in the two kinds: a preview item
 // that is `done` is ready to send; a sent item that is `done` is on SHEIN, approved.
 export const ITEM_STATUSES = {
   preview: {
@@ -1277,18 +1269,18 @@ export const ITEM_STATUSES = {
     sending: { label: 'Sending', chip: 'ebo-chip info', tone: 'info' },
     sent: { label: 'Sent', chip: 'ebo-chip info', tone: 'info' },
     in_review: { label: 'In review', chip: 'ebo-chip violet', tone: 'violet', say: 'Sent. SHEIN is reviewing it — the new sizes show as In review until SHEIN approves.' },
-    done: { label: 'Done', chip: 'ebo-chip ok', tone: 'ok', say: 'SHEIN approved it. The live sync now keeps its stock in step.' },
+    done: { label: 'Done', chip: 'ebo-chip ok', tone: 'ok', say: 'SHEIN approved it. Automatic sync now keeps its stock in step.' },
     deferred: { label: 'Waiting', chip: 'ebo-chip warn', tone: 'warn', say: 'Not sent yet — it goes by itself at the next try.' },
-    changed: { label: 'Not sent', chip: 'ebo-chip warn', tone: 'warn', say: 'Shopify changed since the dry run — dry run again. Nothing was sent.' },
+    changed: { label: 'Not sent', chip: 'ebo-chip warn', tone: 'warn', say: 'Shopify changed since the preview — preview again. Nothing was sent.' },
     skipped: { label: 'Skipped', chip: 'ebo-chip', tone: 'muted' },
-    failed: { label: 'Error', chip: 'ebo-chip bad', tone: 'bad', say: 'SHEIN refused it. Fix what it says, then dry run again.' },
+    failed: { label: 'Error', chip: 'ebo-chip bad', tone: 'bad', say: 'SHEIN refused it. Fix what it says, then preview again.' },
   },
 };
 export const itemStatus = (kind, status) => (ITEM_STATUSES[kind === 'run' ? 'run' : 'preview'][status]) || { label: status, chip: 'ebo-chip', tone: 'muted' };
-// Phase 3 — what each op of a dry run / send is (the sheet's tag), and the run words that differ by op.
+// Phase 3 — what each op of a preview / send is (the sheet's tag), and the run words that differ by op.
 export const OP_LABEL = { add_sku: 'Add sizes', price: 'Prices', edit: 'Sizes & SKUs', publish: 'Publish' };
 export const isUpdateOps = (ops) => (ops || []).some((o) => o === 'price' || o === 'edit');
-// Phase 4 — a dry run / send of brand-new products (op 'publish', never mixed with the others).
+// Phase 4 — a preview / send of brand-new products (op 'publish', never mixed with the others).
 export const isPublishOps = (ops) => (ops || []).includes('publish');
 // A publish item's chip word where it reads better than the shared one (the sheet / job card).
 export const PUBLISH_WORD = {
@@ -1306,8 +1298,8 @@ export const OP_SAY = {
   },
   publish: {
     in_review: 'Sent. SHEIN is reviewing the new product (hours to days) — it shows In review until SHEIN approves it. It went up at stock 0.',
-    done: 'SHEIN approved it — the product is live on SHEIN and the live sync now sets its stock.',
-    failed: 'SHEIN refused it. Fix what it says, then dry run again.',
+    done: 'SHEIN approved it — the product is live on SHEIN and automatic sync now sets its stock.',
+    failed: 'SHEIN refused it. Fix what it says, then preview again.',
   },
 };
 // price/save's answer per size (item.sku_codes[].status): 1 applied · 2 SHEIN's price review · 3 refused in review · 0 refused.
@@ -1323,7 +1315,7 @@ export const PRICE_FROM = {
   shopify: 'Shopify price (no recent market price)',
 };
 // A failed run item a person may send again now (no answer from SHEIN), vs one SHEIN refused
-// (fix it, then dry run again) — the server's retry action applies the same rule.
+// (fix it, then preview again) — the server's retry action applies the same rule.
 export const ITEM_NO_ANSWER = 'SHEIN didn’t answer. Retry sends it again — it is looked up on SHEIN first, so it is never sent twice.';
 export const itemRetryable = (it) => it?.status === 'deferred' || (it?.status === 'failed' && (it.blockers || []).some((b) => b.code === 'api_error'));
 // Phase 4 (review F1): a publish SHEIN didn't confirm is NEVER resent by itself — a person Looks again

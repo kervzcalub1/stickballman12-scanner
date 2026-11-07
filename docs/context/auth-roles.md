@@ -92,7 +92,7 @@ becoming an admin — its role, and so its dashboard, stays its own:
 - **`connect_integrations`** "Connect integrations" → Connect / Disconnect **SHEIN** and **eBay**
   (`api/shein/connect`, `api/ebay/connect` via `requirePrivilege`), the SHEIN live-sync switches
   (`api/shein/live`), and every "Connect eBay again" button. The eBay **Sales report** stays
-  admin-only. Opens `/shein-check` + `/ebay` on the warehouse side too.
+  admin-only. Opens `/shein` (only Fix problems + Automatic sync) + `/ebay` on the warehouse side too. **Known gap:** `api/shein/status`, `live`, `links` and `shopify-listings/variants` answer only PH + admin, so a warehouse holder sees those sections but the server refuses their data, and the Automatic sync section says so.
   **SHEIN Listings** (`docs/context/shein-listings.md` → "Security gates"): PH + admin read and dry-run;
   every SHEIN write (run, retry, probe, webhooks, auto price, publish again, send again, box sizes, re-reading
   SHEIN's rules) **and stopping / resuming a run job** need an admin or this privilege (403). A PH publish dry

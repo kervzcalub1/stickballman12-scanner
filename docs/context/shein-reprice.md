@@ -1,4 +1,4 @@
-# SHEIN Reprice (PH) — `/ph/shein-reprice`
+# SHEIN Reprice — section **Prices** of the SHEIN page: `/ph/shein?section=reprice` · `/shein?section=reprice` (old `/ph/shein-reprice` lands here; admins can open it too, `api/ebay-reprice/prices` allows them)
 
 Cut every SHEIN listing priced above today's market down to market + markup. **Never
 raises a price.** Same job as eBay Reprice (`ebay-reprice.md`), different files: SHEIN

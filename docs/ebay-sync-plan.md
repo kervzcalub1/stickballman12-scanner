@@ -144,7 +144,7 @@ Sizes never repriced: 704 equal Shopify, 29 differ.
 No `write_orders`, `read_customers` or `read_locations`. eBay token approved 2026-10-13, valid to 2028-04, has `sell.inventory`, `sell.fulfillment.readonly`.
 
 ## Build contract
-**Trading budget:** counter per EST... per eBay day (reset 08:00 UTC) in `app_settings`; the sync stops reads at 3,000 and writes at 4,500, leaving room for the existing tools.
+**Trading budget:** counter per eBay day (reset 08:00 UTC) in `app_settings`; the sync stops reads at 3,000 and writes at 4,500, leaving room for the existing tools.
 - Reconcile (full listing read + Shopify variants): every 30 min = ~6 calls × 48 = under 300 a day.
 - Content check: rolling, up to 40 `GetItem` per pass (under 2,000 a day).
 - Verify new listings: up to 10 per pass, only when the product changed or 24 h have passed.

@@ -7016,3 +7016,114 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .myscans-num b { font-size: 24px; line-height: 1; font-variant-numeric: tabular-nums; }
 .myscans .mono { font-family: ui-monospace, Menlo, monospace; }
 @media (max-width: 768px) { .myscans-dl { margin-left: 0; } }
+
+/* eBay Sync (docs/ebay-sync-plan.md) */
+.esy .xs { font-size: 12px; }
+.esy-tabs { flex-wrap: wrap; margin-bottom: 12px; }
+.esy-tabs .seg-btn { flex: 0 0 auto; padding: 8px 12px; font-size: 13px; }
+.esy-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; }
+.esy-sub { flex-wrap: wrap; }
+.esy-search { flex: 1 1 220px; min-width: 0; }
+.esy-select { flex: 0 1 220px; min-width: 0; }
+.esy-parts { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; margin-top: 8px; }
+.esy-part { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.esy-part.shadow { border-color: rgba(224,176,95,0.5); background: rgba(224,176,95,0.07); }
+.esy-part.live { border-color: rgba(95,197,138,0.55); background: rgba(95,197,138,0.08); }
+.esy-part-name { font-weight: 600; }
+.esy-part-state { margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }
+.esy-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.esy-list li { overflow-wrap: anywhere; }
+.esy-run { margin-left: 8px; }
+.esy-bar { height: 6px; border-radius: 4px; background: rgba(255,255,255,0.08); margin-top: 6px; max-width: 320px; }
+.esy-bar i { display: block; height: 100%; border-radius: 4px; background: var(--primary); }
+.esy-counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 8px; }
+.esy-counts > div { display: flex; flex-direction: column; }
+.esy-counts b { font-size: 20px; }
+.esy-facts { display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 4px 14px; margin: 8px 0 0; }
+.esy-facts dt { color: var(--muted); }
+.esy-facts dd { margin: 0; overflow-wrap: anywhere; }
+.esy-issues { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.esy-fix { font-size: 13px; }
+.esy-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.esy-st.synced { color: #5fc58a; }
+.esy-st.not_synced { color: #e0b05f; }
+.esy-st.cancelled { color: var(--muted); }
+.esy-table td { vertical-align: top; }
+.esy-ba { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.esy-cards { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.esy-rc { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.esy-rc-main { min-width: 0; overflow-wrap: anywhere; }
+.esy-rc-row { display: flex; gap: 10px; justify-content: space-between; font-size: 13px; }
+.esy-rc-k { color: var(--muted); flex: 0 0 38%; }
+.esy-rc-v { flex: 1; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+.esy-rc .ebl-title { max-width: none; }
+.esy-prof { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 8px; }
+.esy-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 13px; }
+.esy-field textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.esy-limits { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.esy-switch { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; padding: 10px 0; border-top: 1px solid var(--border); }
+.esy-switch-name { min-width: 0; flex: 1 1 220px; }
+.esy-seg .seg-btn { padding: 8px 16px; font-size: 13px; }
+.esy-kill { border-color: rgba(224,106,106,0.6); }
+.esy-kill.on { background: rgba(224,106,106,0.1); }
+.btn.danger.esy-killbtn { background: #c0392b; border-color: #c0392b; color: #fff; font-weight: 700; padding: 12px 18px; }
+.esy-killbanner { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(224,106,106,0.7); background: rgba(224,106,106,0.14); font-weight: 600; margin-bottom: 10px; }
+@media (max-width: 767px) {
+  .esy-search, .esy-select { flex: 1 1 100%; }
+}
+
+/* ── eBay page spacing + touch pass (EbayListings.jsx and every tab). Scoped to .ebay-page and the
+   page's own classes so no other screen moves. ───────────────────────────────────────────────── */
+/* The tab bar sat flush on the card under it (it had a top margin only); the card above already gives 16. */
+.ebl-tabs.seg { margin: 0 0 16px; }
+/* A banner straight above a card needs the same 12px the cards use under themselves. */
+.ebay-page > .error, .ebay-page > .notice, .ebay-page .esy > .error, .ebay-page .esy > .notice { margin-bottom: 12px; }
+.ebay-page .er-verify { margin-bottom: 16px; }
+/* The sticky select/End bar used var(--card), which isn't defined, so it painted a third grey on the panel. */
+.ebl-endbar { background: var(--panel); padding: 8px 0; margin: 12px 0 8px; }
+/* The Reprice filter card is ~430px tall: sticky it ate half of every screen while scrolling the list. */
+.sl-toolbar.ebr-toolbar { position: static; }
+.sl-list.ebr-list { padding: 16px; }
+.ebr-list > .ebr-bulk { margin-bottom: 12px; }
+.ebr-list .ebr-listing:first-of-type { margin-top: 12px; }
+.ebr-toolbar .sl-filters { margin-top: 2px; }
+/* Tables: the wrapper scrolls; the table no longer crushes its title column to 80px on a phone. */
+.ebl-table th, .ebl-table td.num { white-space: nowrap; }
+.ebl-listings { min-width: 760px; }
+.ebl-listings td:nth-child(2) { min-width: 240px; }
+.ebo-table .ebl-link.ebl-sku { white-space: nowrap; }
+/* A long verdict ("Re-created in Shopify — new one is on eBay too") pushed the page 69px sideways at 390. */
+.ebl-orphan-main .ebl-note { white-space: normal; }
+.ebl-orphan-main .ebl-note + .ebl-note { margin-top: 2px; }
+.ebc-body .input.mt { width: 100%; }
+.ebc-body { padding-top: 2px; }
+.ebc-actions { margin-bottom: 4px; }
+
+/* Sync — same rhythm as the other tabs */
+.esy-tabs { margin: 0 0 16px; }
+.esy-head { display: flex; align-items: center; gap: 10px; }
+.esy > .card + .card, .esy > .esy-tabs + .card { margin-top: 0; }
+.esy-sub { margin-bottom: 8px; }
+.esy-run { margin-left: 10px; }
+.esy-list li[data-pass] { line-height: 1.5; }
+.seg.esy-seg .seg-btn { padding: 8px 16px; font-size: 13px; min-height: 40px; }
+.esy-limits { grid-template-columns: repeat(auto-fit, minmax(240px, 360px)); }
+.esy-rc-top { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.esy-rc-thumb { flex: 0 0 auto; }
+.esy-rc-top .esy-rc-main { flex: 1 1 auto; }
+.esy-rc { padding: 12px; gap: 8px; }
+.esy-switch-name .muted { margin-top: 2px; }
+.esy-part-name .muted { display: inline; }
+
+@media (max-width: 767px) {
+  /* 44px tap targets for every control on the eBay page */
+  .ebay-page .btn:not(.xs):not(.icon), .ebay-page .seg-btn, .seg.esy-seg .seg-btn { min-height: 44px; }
+  .ebay-page .seg.sm .seg-btn { padding: 8px 12px; font-size: 13px; }
+  .ebay-page label.er-dry, .ebay-page .ebl-check { min-height: 44px; }
+  .ebay-page .ebl-tabs .seg-btn { padding: 8px 12px; }
+  .ebay-page .esy-tabs .seg-btn { padding: 8px 12px; }
+  .ebay-page .ebr-lock { min-width: 44px; }
+  .esy-run { margin: 6px 0 0 0; }
+  .ebay-page .card { padding: 14px; }
+  .sl-list.ebr-list { padding: 12px; }
+}

@@ -13,6 +13,7 @@ import { EbayApiReprice } from './EbayApiReprice.jsx';
 import { EbayCoupons } from './EbayCoupons.jsx';
 import { EbayOrders } from './EbayOrders.jsx';
 import { EbaySalesReport } from './EbaySalesReport.jsx';
+import { EbaySync } from './EbaySync.jsx';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const when = (iso) => (iso ? `${PH_DATETIME.format(new Date(iso))} EST` : '—');
@@ -134,7 +135,7 @@ export function EbayListings({ user, onHome, onSignOut }) {
   const running = pullState?.state === 'running';
 
   return (
-    <div className="app">
+    <div className="app ebay-page">
       <TopBar title="eBay" onHome={onHome} onSignOut={onSignOut} />
       {err && <div className="error mt">{err}</div>}
       {notice && <div className="notice mt">{notice}</div>}
@@ -189,12 +190,14 @@ export function EbayListings({ user, onHome, onSignOut }) {
           {isAdmin && <button type="button" className={`seg-btn${tab === 'sales' ? ' on' : ''}`} onClick={() => setTab('sales')}>Sales report</button>}
           <button type="button" className={`seg-btn${tab === 'reprice' ? ' on' : ''}`} onClick={() => setTab('reprice')}>Reprice</button>
           <button type="button" className={`seg-btn${tab === 'coupons' ? ' on' : ''}`} onClick={() => setTab('coupons')}>Coupons</button>
+          <button type="button" className={`seg-btn${tab === 'sync' ? ' on' : ''}`} onClick={() => setTab('sync')}>Sync</button>
           <button type="button" className={`seg-btn${tab === 'orphans' ? ' on' : ''}`} onClick={() => setTab('orphans')}>Not in Shopify — end <span className="seg-n">{fmt(orphanListings.length)}</span></button>
           <button type="button" className={`seg-btn${tab === 'ended' ? ' on' : ''}`} onClick={() => setTab('ended')}>Ended</button>
         </div>
       )}
       {tab === 'orphans' && rows && <OrphansTab orphans={orphanListings} checked={rows.some((r) => r.in_shopify != null)} isAdmin={canConnect}
         onSignOut={onSignOut} onEnded={load} onConnect={connect} />}
+      {tab === 'sync' && st?.connected && <EbaySync user={user} onTab={setTab} onSignOut={onSignOut} />}
       {tab === 'ended' && <EndedTab onSignOut={onSignOut} />}
       {tab === 'orders' && st?.connected && <EbayOrders isAdmin={canConnect} onSignOut={onSignOut} onConnect={connect} />}
       {tab === 'sales' && st?.connected && <EbaySalesReport isAdmin={isAdmin} onSignOut={onSignOut} onConnect={connect} />}
@@ -214,7 +217,7 @@ export function EbayListings({ user, onHome, onSignOut }) {
           </div>
           <p className="muted xs">{fmt(listings.length)} listings · {fmt(rows.length)} sizes · as eBay reported them at the last pull. Tap a listing for its sizes.</p>
           <div className="ap-tablewrap">
-            <table className="table ebl-table">
+            <table className="table ebl-table ebl-listings">
               <thead><tr><th aria-label="Photo" /><th>Listing</th><th>Style</th><th>Custom label (SKU)</th><th>Price</th><th className="num">Avail.</th><th className="num">Sold</th><th className="num" title="Watchers">👁</th></tr></thead>
               <tbody>
                 {shown.slice(0, more ? shown.length : SHOW).map((g) => {

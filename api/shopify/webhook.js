@@ -11,21 +11,34 @@ import { applySecurity, rateLimit, send } from '../_lib/util.js';
 import { shopifyWebhookValid, shopifySkuForInventoryItem } from '../_lib/shopify.js';
 import { queuePush } from '../_lib/shein-live.js';
 import { listingProductChanged, listingProductDeleted } from '../_lib/shein-listing.js';
+import { ebaySyncEnqueue } from '../_lib/db.js';
 
 // What each topic calls — swappable in tests (e2e/shein-listings.spec.js proves the inventory path
 // is exactly what it was: the SKU of the inventory item → queuePush, nothing else).
-export const HOOK = { shopifySkuForInventoryItem, queuePush, listingProductChanged, listingProductDeleted };
+export const HOOK = { shopifySkuForInventoryItem, queuePush, listingProductChanged, listingProductDeleted, ebaySyncQueue: ebaySyncEnqueue };
+
+// eBay Sync (docs/context/ebay-sync.md) hears the same topics, BESIDE SHEIN's path: it only inserts into
+// ebay_sync_queue, and an error here never reaches SHEIN's handling.
+const toEbayQueue = (hook, items) => {
+  try { Promise.resolve(hook.ebaySyncQueue?.(items)).catch((e) => console.error('[ebay-sync] queue', e.message)); } catch (e) { console.error('[ebay-sync] queue', e.message); }
+};
 
 export async function routeShopifyWebhook(topic, body, hook = HOOK) {
   if (topic === 'inventory_levels/update') {
     const itemId = body?.inventory_item_id;
     if (!itemId) return { ignored: true };
     const sku = await hook.shopifySkuForInventoryItem(itemId);
-    if (sku) hook.queuePush([sku]);
+    if (sku) { hook.queuePush([sku]); toEbayQueue(hook, [{ kind: 'sku', key: sku }]); }
     return { pushed: sku || null };
   }
-  if (topic === 'products/create' || topic === 'products/update') { hook.listingProductChanged(body); return { listing: 'queued' }; }
-  if (topic === 'products/delete') { await hook.listingProductDeleted(body); return { listing: 'deleted' }; }
+  if (topic === 'products/create' || topic === 'products/update') {
+    if (body?.id) toEbayQueue(hook, [{ kind: 'product', key: `gid://shopify/Product/${body.id}` }]);
+    hook.listingProductChanged(body); return { listing: 'queued' };
+  }
+  if (topic === 'products/delete') {
+    if (body?.id) toEbayQueue(hook, [{ kind: 'product_delete', key: `gid://shopify/Product/${body.id}` }]);
+    await hook.listingProductDeleted(body); return { listing: 'deleted' };
+  }
   return { ignored: true };
 }
 

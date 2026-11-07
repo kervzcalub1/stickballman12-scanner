@@ -13407,3 +13407,328 @@ export async function listStockScanUsers() {
     SELECT username, max(user_name) AS user_name, count(*)::int AS scans, max(created_at) AS last_at
       FROM stock_check_scans GROUP BY username ORDER BY max(created_at) DESC`;
 }
+
+/* ------------------------------ eBay Sync (docs/context/ebay-sync.md) ------------------------------ */
+// A jsonb "patch" updates only the keys present, so one function serves every combination without
+// composing sql fragments. A key set to null clears the column.
+export async function ebaySyncProfiles() {
+  return await db()`SELECT id, name, is_default, config, updated_by, updated_at FROM ebay_sync_profiles ORDER BY is_default DESC, name`;
+}
+export async function ebaySyncDefaultProfile() {
+  const [r] = await db()`SELECT id, name, is_default, config FROM ebay_sync_profiles ORDER BY is_default DESC, id LIMIT 1`;
+  return r || null;
+}
+export async function ebaySyncSaveProfile({ id = null, name, isDefault = false, config }, by) {
+  const cfg = JSON.stringify(config || {});
+  let row;
+  if (id) {
+    [row] = await db()`UPDATE ebay_sync_profiles SET name = ${name}, config = ${cfg}::jsonb, updated_by = ${by || null}, updated_at = now() WHERE id = ${id} RETURNING *`;
+  } else {
+    [row] = await db()`INSERT INTO ebay_sync_profiles (name, config, updated_by) VALUES (${name}, ${cfg}::jsonb, ${by || null})
+                       ON CONFLICT (name) DO UPDATE SET config = EXCLUDED.config, updated_by = EXCLUDED.updated_by, updated_at = now() RETURNING *`;
+  }
+  if (row && isDefault) {
+    await db()`UPDATE ebay_sync_profiles SET is_default = (id = ${row.id})`;
+    row.is_default = true;
+  }
+  return row || null;
+}
+
+export async function ebaySyncLogAdd({ domain, action, mode, itemId = null, sku = null, before = null, after = null, ok = true, error = null, by = null }) {
+  await db()`INSERT INTO ebay_sync_log (domain, action, mode, item_id, sku, before, after, ok, error, by)
+             VALUES (${domain}, ${action}, ${mode}, ${itemId}, ${sku}, ${before == null ? null : JSON.stringify(before)}::jsonb,
+                     ${after == null ? null : JSON.stringify(after)}::jsonb, ${ok}, ${error}, ${by})`;
+}
+export async function ebaySyncLogList({ domain = '', mode = '', offset = 0, limit = 100 } = {}) {
+  const rows = await db()`
+    SELECT id, at, domain, action, mode, item_id, sku, before, after, ok, error, by, count(*) OVER()::int AS total
+      FROM ebay_sync_log
+     WHERE (${domain} = '' OR domain = ${domain}) AND (${mode} = '' OR mode = ${mode})
+     ORDER BY at DESC, id DESC OFFSET ${offset} LIMIT ${limit}`;
+  return { rows: rows.map(({ total, ...r }) => r), total: rows[0]?.total ?? 0 };
+}
+export async function ebaySyncLogPrune() {
+  await db()`DELETE FROM ebay_sync_log WHERE at < now() - interval '60 days' OR (mode = 'shadow' AND at < now() - interval '14 days')`;
+}
+export async function ebaySyncLoggedRecently(domain, action, itemId, hours = 24) {
+  const [r] = await db()`SELECT 1 AS x FROM ebay_sync_log WHERE domain = ${domain} AND action = ${action} AND item_id IS NOT DISTINCT FROM ${itemId}
+                          AND at > now() - make_interval(hours => ${hours}) LIMIT 1`;
+  return !!r;
+}
+export async function ebaySyncLiveDone(domain, action) {
+  const [r] = await db()`SELECT count(*)::int AS n FROM ebay_sync_log WHERE domain = ${domain} AND action = ${action} AND mode = 'live' AND ok`;
+  return r?.n || 0;
+}
+export async function ebaySyncLiveToday(domain, action) {
+  const [r] = await db()`SELECT count(*)::int AS n FROM ebay_sync_log WHERE domain = ${domain} AND action = ${action} AND mode = 'live' AND ok
+                         AND (at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date`;
+  return r?.n || 0;
+}
+export async function ebaySyncFirstLogAt() {
+  const [r] = await db()`SELECT min(at) AS at FROM ebay_sync_log WHERE mode = 'shadow' OR domain <> 'settings'`;
+  return r?.at || null;
+}
+
+// The webhook queue: coalesced by (kind, key); the queue pass takes what is waiting.
+export async function ebaySyncEnqueue(items) {
+  const list = [...new Map((items || []).filter((i) => i?.kind && i?.key).map((i) => [`${i.kind}|${i.key}`, { kind: i.kind, key: String(i.key) }])).values()];
+  if (!list.length) return;
+  await db()`INSERT INTO ebay_sync_queue (kind, key) SELECT x.kind, x.key FROM jsonb_to_recordset(${JSON.stringify(list)}::jsonb) AS x(kind text, key text)
+             ON CONFLICT (kind, key) DO UPDATE SET queued_at = now(), claimed_at = NULL`;
+}
+export async function ebaySyncClaimQueue(limit = 200) {
+  return await db()`
+    UPDATE ebay_sync_queue SET claimed_at = now()
+     WHERE id IN (SELECT id FROM ebay_sync_queue WHERE claimed_at IS NULL OR claimed_at < now() - interval '10 minutes' ORDER BY id LIMIT ${limit})
+    RETURNING id, kind, key`;
+}
+export async function ebaySyncQueueDone(ids) {
+  if (ids?.length) await db()`DELETE FROM ebay_sync_queue WHERE id = ANY(${ids}::bigint[]) AND claimed_at IS NOT NULL`;
+}
+export async function ebaySyncQueueCount() {
+  const [r] = await db()`SELECT count(*)::int AS n FROM ebay_sync_queue`;
+  return r?.n || 0;
+}
+
+// Links.
+export async function ebaySyncLinkPrev() {
+  return await db()`SELECT link_key, qty_drift_since, price_drift_since, ebay_price, shopify_price, price_rule FROM ebay_sync_links`;
+}
+export async function ebaySyncReplaceLinks(rows, passAt) {
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = JSON.stringify(rows.slice(i, i + 500));
+    await db()`
+      INSERT INTO ebay_sync_links (link_key, sku, item_id, variation_key, shopify_product_id, shopify_variant_id, title, size, view_url,
+        ebay_qty, shopify_qty, ebay_price, shopify_price, price_rule, state, duplicate, qty_drift_since, price_drift_since, seen_at)
+      SELECT x.link_key, x.sku, x.item_id, x.variation_key, x.shopify_product_id, x.shopify_variant_id, x.title, x.size, x.view_url,
+        x.ebay_qty, x.shopify_qty, x.ebay_price, x.shopify_price, x.price_rule, x.state, coalesce(x.duplicate, false), x.qty_drift_since, x.price_drift_since, ${passAt}::timestamptz
+        FROM jsonb_to_recordset(${chunk}::jsonb) AS x(link_key text, sku text, item_id text, variation_key text, shopify_product_id text, shopify_variant_id text,
+          title text, size text, view_url text, ebay_qty int, shopify_qty int, ebay_price numeric, shopify_price numeric, price_rule text, state text,
+          duplicate boolean, qty_drift_since timestamptz, price_drift_since timestamptz)
+      ON CONFLICT (link_key) DO UPDATE SET sku = EXCLUDED.sku, item_id = EXCLUDED.item_id, variation_key = EXCLUDED.variation_key,
+        shopify_product_id = coalesce(EXCLUDED.shopify_product_id, ebay_sync_links.shopify_product_id),
+        shopify_variant_id = EXCLUDED.shopify_variant_id, title = EXCLUDED.title, size = EXCLUDED.size, view_url = EXCLUDED.view_url,
+        ebay_qty = EXCLUDED.ebay_qty, shopify_qty = EXCLUDED.shopify_qty, ebay_price = EXCLUDED.ebay_price, shopify_price = EXCLUDED.shopify_price,
+        price_rule = EXCLUDED.price_rule, state = EXCLUDED.state, duplicate = EXCLUDED.duplicate,
+        qty_drift_since = EXCLUDED.qty_drift_since, price_drift_since = EXCLUDED.price_drift_since, seen_at = EXCLUDED.seen_at`;
+  }
+  await db()`DELETE FROM ebay_sync_links WHERE seen_at < ${passAt}::timestamptz`;
+}
+export async function ebaySyncLinksBySku(sku) {
+  return await db()`SELECT * FROM ebay_sync_links WHERE sku = ${sku} AND item_id <> '' AND NOT duplicate`;
+}
+export async function ebaySyncSetLinkQty(linkKey, qty) {
+  await db()`UPDATE ebay_sync_links SET ebay_qty = ${qty}, qty_drift_since = NULL, state = CASE WHEN state = 'qty_drift' THEN 'ok' ELSE state END WHERE link_key = ${linkKey}`;
+}
+export async function ebaySyncLinkCount() {
+  const [r] = await db()`SELECT count(*)::int AS n FROM ebay_sync_links WHERE item_id <> ''`;
+  return r?.n || 0;
+}
+export async function ebaySyncListings({ filter = 'all', q = '', offset = 0, limit = 100 } = {}) {
+  const term = `%${String(q).trim().replace(/[%_]/g, '\\$&')}%`;
+  const rows = await db()`
+    SELECT item_id, title, view_url, sku, size, ebay_qty, shopify_qty, ebay_price, shopify_price, price_rule, state,
+           least(qty_drift_since, price_drift_since) AS drift_since, count(*) OVER()::int AS total
+      FROM ebay_sync_links
+     WHERE item_id <> ''
+       AND (${filter} = 'all'
+         OR (${filter} = 'qty_drift' AND state = 'qty_drift')
+         OR (${filter} = 'price_drift' AND state = 'price_drift')
+         OR (${filter} = 'price_kept' AND price_rule IN ('kept_lock', 'kept_repriced', 'kept_manual'))
+         OR (${filter} = 'no_shopify' AND state = 'no_shopify'))
+       AND (${q} = '' OR title ILIKE ${term} OR sku ILIKE ${term} OR item_id ILIKE ${term})
+     ORDER BY title, item_id, size OFFSET ${offset} LIMIT ${limit}`;
+  return { rows: rows.map(({ total, ...r }) => r), total: rows[0]?.total ?? 0 };
+}
+export async function ebaySyncListingTabs() {
+  const [r] = await db()`
+    SELECT count(*)::int AS "all",
+           count(*) FILTER (WHERE state = 'qty_drift')::int AS qty_drift,
+           count(*) FILTER (WHERE price_rule IN ('kept_lock', 'kept_repriced', 'kept_manual'))::int AS price_kept,
+           count(*) FILTER (WHERE state = 'price_drift')::int AS price_drift,
+           count(*) FILTER (WHERE state = 'no_shopify')::int AS no_shopify
+      FROM ebay_sync_links WHERE item_id <> ''`;
+  return r;
+}
+export async function ebaySyncInventory({ q = '', offset = 0, limit = 100 } = {}) {
+  const term = `%${String(q).trim().replace(/[%_]/g, '\\$&')}%`;
+  const rows = await db()`
+    SELECT sku, min(title) AS title, max(shopify_qty)::int AS stock,
+           count(DISTINCT item_id) FILTER (WHERE item_id <> '')::int AS listing_count,
+           (bool_or(duplicate) OR count(DISTINCT item_id) FILTER (WHERE item_id <> '') > 1) AS duplicate,
+           count(*) OVER()::int AS total
+      FROM ebay_sync_links WHERE sku IS NOT NULL AND (${q} = '' OR sku ILIKE ${term} OR title ILIKE ${term})
+     GROUP BY sku ORDER BY 5 DESC, sku OFFSET ${offset} LIMIT ${limit}`;
+  return { rows: rows.map(({ total, ...r }) => r), total: rows[0]?.total ?? 0 };
+}
+
+// Products.
+export async function ebaySyncProductPrev() {
+  return await db()`SELECT shopify_product_id, item_id, status, ended_by_stock, last_prices, not_on_ebay_since, issues, verify_key, verify_ok, verified_at, content_checked_at FROM ebay_sync_products`;
+}
+export async function ebaySyncUpsertProducts(rows, passAt) {
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = JSON.stringify(rows.slice(i, i + 500));
+    await db()`
+      INSERT INTO ebay_sync_products (shopify_product_id, title, style, handle, vendor, shopify_status, image, sizes, qty, eligible, status, item_id, view_url,
+        shopify_key, not_on_ebay_since, last_prices, ended_by_stock, checked_at)
+      SELECT x.id, x.title, x.style, x.handle, x.vendor, x.shopify_status, x.image, coalesce(x.sizes, 0), coalesce(x.qty, 0), coalesce(x.eligible, false),
+        CASE WHEN x.uploaded THEN 'uploaded' ELSE 'not_uploaded' END, x.item_id, x.view_url, x.shopify_key,
+        CASE WHEN x.uploaded THEN NULL ELSE now() END, x.last_prices, coalesce(x.ended_by_stock, false), ${passAt}::timestamptz
+        FROM jsonb_to_recordset(${chunk}::jsonb) AS x(id text, title text, style text, handle text, vendor text, shopify_status text, image text, sizes int, qty int,
+          eligible boolean, uploaded boolean, item_id text, view_url text, shopify_key text, last_prices jsonb, ended_by_stock boolean)
+      ON CONFLICT (shopify_product_id) DO UPDATE SET title = EXCLUDED.title, style = EXCLUDED.style, handle = EXCLUDED.handle, vendor = EXCLUDED.vendor,
+        shopify_status = EXCLUDED.shopify_status, image = EXCLUDED.image, sizes = EXCLUDED.sizes, qty = EXCLUDED.qty, eligible = EXCLUDED.eligible,
+        item_id = coalesce(EXCLUDED.item_id, ebay_sync_products.item_id), view_url = coalesce(EXCLUDED.view_url, ebay_sync_products.view_url),
+        shopify_key = EXCLUDED.shopify_key, checked_at = EXCLUDED.checked_at,
+        last_prices = CASE WHEN EXCLUDED.status = 'uploaded' THEN EXCLUDED.last_prices ELSE coalesce(ebay_sync_products.last_prices, EXCLUDED.last_prices) END,
+        ended_by_stock = CASE WHEN EXCLUDED.status = 'uploaded' THEN false ELSE (ebay_sync_products.ended_by_stock OR EXCLUDED.ended_by_stock) END,
+        not_on_ebay_since = CASE WHEN EXCLUDED.status = 'uploaded' THEN NULL ELSE coalesce(ebay_sync_products.not_on_ebay_since, now()) END,
+        issues = CASE WHEN EXCLUDED.status = 'uploaded' THEN '[]'::jsonb ELSE ebay_sync_products.issues END,
+        status = CASE WHEN EXCLUDED.status = 'uploaded' THEN 'uploaded'
+                      WHEN jsonb_array_length(ebay_sync_products.issues) > 0 THEN 'needs_attention' ELSE 'not_uploaded' END`;
+  }
+  await db()`DELETE FROM ebay_sync_products WHERE checked_at < ${passAt}::timestamptz`;
+}
+
+export async function ebaySyncPatchProduct(id, patch) {
+  await db()`
+    UPDATE ebay_sync_products t SET
+      status = CASE WHEN p ? 'status' THEN p->>'status' ELSE t.status END,
+      item_id = CASE WHEN p ? 'item_id' THEN p->>'item_id' ELSE t.item_id END,
+      view_url = CASE WHEN p ? 'view_url' THEN p->>'view_url' ELSE t.view_url END,
+      issues = CASE WHEN p ? 'issues' THEN coalesce(p->'issues', '[]'::jsonb) ELSE t.issues END,
+      drift = CASE WHEN p ? 'drift' THEN (CASE WHEN jsonb_typeof(p->'drift') = 'null' THEN NULL ELSE p->'drift' END) ELSE t.drift END,
+      verify_key = CASE WHEN p ? 'verify_key' THEN p->>'verify_key' ELSE t.verify_key END,
+      verify_ok = CASE WHEN p ? 'verify_ok' THEN (p->>'verify_ok')::boolean ELSE t.verify_ok END,
+      verified_at = CASE WHEN p ? 'verified_at' THEN (p->>'verified_at')::timestamptz ELSE t.verified_at END,
+      content_checked_at = CASE WHEN p ? 'content_checked_at' THEN (p->>'content_checked_at')::timestamptz ELSE t.content_checked_at END,
+      content_key = CASE WHEN p ? 'content_key' THEN p->>'content_key' ELSE t.content_key END,
+      ended_by_stock = CASE WHEN p ? 'ended_by_stock' THEN (p->>'ended_by_stock')::boolean ELSE t.ended_by_stock END
+    FROM (SELECT ${JSON.stringify(patch)}::jsonb AS p) q
+    WHERE t.shopify_product_id = ${id}`;
+}
+
+export async function ebaySyncProduct(id) {
+  const [r] = await db()`SELECT * FROM ebay_sync_products WHERE shopify_product_id = ${id}`;
+  return r || null;
+}
+export async function ebaySyncProducts({ tab = 'uploaded', q = '', offset = 0, limit = 100 } = {}) {
+  const term = `%${String(q).trim().replace(/[%_]/g, '\\$&')}%`;
+  const rows = await db()`
+    SELECT shopify_product_id, title, style, status, item_id, view_url, image, sizes, qty, issues, checked_at, count(*) OVER()::int AS total
+      FROM ebay_sync_products
+     WHERE status = ${tab} AND (${q} = '' OR title ILIKE ${term} OR style ILIKE ${term} OR item_id ILIKE ${term})
+     ORDER BY title OFFSET ${offset} LIMIT ${limit}`;
+  return { rows: rows.map(({ total, ...r }) => r), total: rows[0]?.total ?? 0 };
+}
+export async function ebaySyncProductTabs() {
+  const [r] = await db()`
+    SELECT count(*) FILTER (WHERE status = 'uploaded')::int AS uploaded,
+           count(*) FILTER (WHERE status = 'not_uploaded')::int AS not_uploaded,
+           count(*) FILTER (WHERE status = 'needs_attention')::int AS needs_attention FROM ebay_sync_products`;
+  return r;
+}
+// Eligible and not on eBay, longest unverified first (verify only when the product changed or 24 h passed).
+export async function ebaySyncProductsToVerify(limit = 10) {
+  return await db()`
+    SELECT * FROM ebay_sync_products
+     WHERE eligible AND status <> 'uploaded'
+       AND (verify_key IS DISTINCT FROM shopify_key OR verified_at IS NULL OR verified_at < now() - interval '24 hours')
+     ORDER BY verified_at NULLS FIRST LIMIT ${limit}`;
+}
+export async function ebaySyncProductsToAdd(limit = 25) {
+  // A product that has been on eBay before is only relisted when the sync SAW eBay end it for being out of stock.
+  return await db()`
+    SELECT * FROM ebay_sync_products
+     WHERE eligible AND status <> 'uploaded' AND verify_ok AND verify_key = shopify_key AND verified_at > now() - interval '24 hours'
+       AND not_on_ebay_since < now() - interval '60 minutes' AND (item_id IS NULL OR ended_by_stock)
+     ORDER BY not_on_ebay_since LIMIT ${limit}`;
+}
+
+// Changed since the last check (or never checked) first; then a slow sweep of the oldest, at most `sweep` of them.
+export async function ebaySyncProductsToCheck(limit = 40, sweep = 0) {
+  return await db()`
+    SELECT * FROM (
+      (SELECT *, 0 AS pri FROM ebay_sync_products WHERE status = 'uploaded' AND item_id IS NOT NULL
+         AND (content_key IS DISTINCT FROM shopify_key OR content_checked_at IS NULL) ORDER BY content_checked_at NULLS FIRST LIMIT ${limit})
+      UNION ALL
+      (SELECT *, 1 AS pri FROM ebay_sync_products WHERE status = 'uploaded' AND item_id IS NOT NULL AND content_key = shopify_key
+         AND content_checked_at < now() - interval '7 days' ORDER BY content_checked_at LIMIT ${sweep})
+    ) t ORDER BY pri, content_checked_at NULLS FIRST LIMIT ${limit}`;
+}
+
+export async function ebaySyncFacts() {
+  const [r] = await db()`
+    SELECT (SELECT count(*) FROM ebay_sync_links WHERE state = 'qty_drift' AND qty_drift_since < now() - interval '10 minutes')::int AS qty_drift,
+           (SELECT count(*) FROM ebay_sync_links WHERE state = 'price_drift' AND price_drift_since < now() - interval '10 minutes')::int AS price_drift,
+           (SELECT count(*) FROM ebay_sync_links WHERE duplicate)::int AS duplicates,
+           (SELECT count(*) FROM ebay_sync_links WHERE state = 'no_shopify')::int AS no_shopify,
+           (SELECT count(*) FROM ebay_sync_links WHERE item_id <> '')::int AS linked,
+           (SELECT count(*) FROM ebay_sync_products WHERE status = 'needs_attention')::int AS needs_attention`;
+  return r;
+}
+// Sizes our own reprice tool sent successfully: the eBay Sync never overwrites those prices.
+export async function ebaySyncRepricedKeys() {
+  const rows = await db()`SELECT DISTINCT item_id, variation_key FROM ebay_price_edits WHERE ok`;
+  return new Set(rows.map((r) => `${r.item_id}|${r.variation_key}`));
+}
+export async function ebaySyncLinksByItem(itemId) {
+  return await db()`SELECT * FROM ebay_sync_links WHERE item_id = ${String(itemId)}`;
+}
+export async function ebaySyncItemsOfProducts(productIds) {
+  if (!productIds?.length) return [];
+  const rows = await db()`SELECT DISTINCT item_id FROM ebay_sync_links WHERE item_id <> '' AND shopify_product_id = ANY(${productIds}::text[])`;
+  return rows.map((r) => r.item_id);
+}
+export async function ebaySyncEbaySkus() {
+  const rows = await db()`SELECT DISTINCT sku FROM ebay_sync_links WHERE item_id <> '' AND sku IS NOT NULL`;
+  return new Set(rows.map((r) => r.sku));
+}
+
+// ---- eBay Sync, second batch (review fixes) ----
+// Pass state + the Trading counter: a table that is NOT in LIVE_TABLES, so writing it wakes no screen.
+export async function ebaySyncStateGet(key) {
+  const [r] = await db()`SELECT value FROM ebay_sync_state WHERE key = ${key}`;
+  return r?.value ?? null;
+}
+export async function ebaySyncStateSet(key, value) {
+  await db()`INSERT INTO ebay_sync_state (key, value, updated_at) VALUES (${key}, ${String(value)}, now())
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`;
+}
+// Merge a settings patch into the stored JSON in ONE statement (nested switches merged), so two people
+// saving at once - or a kill switch and a switch change - never overwrite each other.
+export async function ebaySyncPatchSettings(patch, by) {
+  const p = JSON.stringify(patch || {});
+  await db()`
+    INSERT INTO app_settings (key, value, updated_by, updated_at) VALUES ('ebay_sync', ${p}, ${by || null}, now())
+    ON CONFLICT (key) DO UPDATE SET updated_by = EXCLUDED.updated_by, updated_at = now(), value = (
+      jsonb_set(coalesce(nullif(app_settings.value, '')::jsonb, '{}'::jsonb) || (EXCLUDED.value::jsonb - 'switches'), '{switches}',
+        coalesce(nullif(app_settings.value, '')::jsonb -> 'switches', '{}'::jsonb) || coalesce(EXCLUDED.value::jsonb -> 'switches', '{}'::jsonb)))::text`;
+}
+// Live rows in the last N minutes for a domain/action: the blast limit's sliding window.
+export async function ebaySyncLiveCount(domain, action, minutes = 60) {
+  const [r] = await db()`SELECT count(*)::int AS n FROM ebay_sync_log WHERE domain = ${domain} AND action = ${action} AND mode = 'live' AND ok
+                         AND at > now() - make_interval(mins => ${minutes})`;
+  return r?.n || 0;
+}
+export async function ebaySyncListingCount() {
+  const [r] = await db()`SELECT count(DISTINCT item_id)::int AS n FROM ebay_sync_links WHERE item_id <> ''`;
+  return r?.n || 0;
+}
+// A relisted item has a NEW id: the locks and our reprice history follow it.
+export async function ebaySyncMoveItemId(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return;
+  await db()`UPDATE ebay_price_locks SET item_id = ${String(newId)} WHERE item_id = ${String(oldId)}`;
+  await db()`UPDATE ebay_price_edits SET item_id = ${String(newId)} WHERE item_id = ${String(oldId)}`;
+}
+// Which of these listings were ended through the app (api/ebay/end.js or this sync).
+export async function ebaySyncEndedByApp(itemIds) {
+  const ids = [...new Set((itemIds || []).map(String))];
+  if (!ids.length) return new Set();
+  const rows = await db()`SELECT DISTINCT item_id FROM ebay_listing_ends WHERE item_id = ANY(${ids}::text[])`;
+  return new Set(rows.map((r) => r.item_id));
+}
+export async function ebaySyncDropListing(itemId) {
+  await db()`DELETE FROM ebay_listings WHERE item_id = ${String(itemId)}`;
+}

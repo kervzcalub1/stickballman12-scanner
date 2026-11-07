@@ -192,7 +192,7 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
 
   return (
     <>
-      <div className="card sl-toolbar">
+      <div className="card sl-toolbar ebr-toolbar">
         <p className="muted sm">Sends <b>market + markup</b> straight to eBay for the sizes you pick — price only, quantities aren’t touched. Market = today’s Alias price (the same lookup as eBay Reprice and Shopify Listings). The file-based <b>eBay Reprice</b> tool is still there for CSV runs.</p>
         <div className="sl-search-row">
           <input type="search" className="sl-search" value={q} onChange={(e) => { setQ(e.target.value); setShown(PAGE); }}
@@ -265,7 +265,7 @@ export function EbayApiReprice({ listings, isAdmin, onSignOut, onConnect, onChan
         </div>
       )}
 
-      <div className="card sl-list">
+      <div className="card sl-list ebr-list">
         {(() => {
           const unlockedInView = filtered.filter((g) => !g.locked);
           const lockedInView = filtered.filter((g) => g.locked);

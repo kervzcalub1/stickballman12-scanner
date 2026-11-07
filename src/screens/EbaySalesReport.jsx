@@ -133,7 +133,7 @@ export function EbaySalesReport({ isAdmin, onSignOut, onConnect }) {
 
           {Object.keys(sum.months).length > 0 && (
             <div className="card">
-              <h4>By month</h4>
+              <h4 className="er-step-title">By month</h4>
               <div className="ap-tablewrap">
                 <table className="table ebl-table">
                   <thead><tr><th>Month</th><th className="num">Orders</th><th className="num">Gross</th><th className="num">Fees</th><th className="num">Refunds</th><th className="num">Other</th><th className="num">Net</th></tr></thead>
@@ -149,7 +149,7 @@ export function EbaySalesReport({ isAdmin, onSignOut, onConnect }) {
           )}
 
           <div className="card">
-            <h4>By type</h4>
+            <h4 className="er-step-title">By type</h4>
             <div className="ap-tablewrap">
               <table className="table ebl-table">
                 <thead><tr><th>Type</th><th className="num">Count</th><th className="num">Ours</th>{es && <th className="num">eBay’s total</th>}</tr></thead>

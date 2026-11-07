@@ -173,6 +173,8 @@ function SearchBox({ value, onChange, placeholder }) {
 const sizesText = (s) => (Array.isArray(s) ? s.join(', ') : s == null ? '' : String(s));
 
 // ---------- Overview ----------
+const COUNT_WORDS = { no_shopify: 'Not in Shopify', linked: 'Sizes linked', queue: 'Waiting to send' };
+
 function Overview({ st, canEdit, onRun, busy }) {
   const sw = st.settings?.switches || {};
   const passes = st.passes || {};
@@ -233,7 +235,7 @@ function Overview({ st, canEdit, onRun, busy }) {
             return (
               <li key={k} data-pass={k}>
                 <b>{label}</b>{' '}
-                {!r || !r.at ? <span className="muted">has not run yet</span>
+                {!r || !r.at ? <span className="muted">{k === 'queue' ? 'nothing waiting' : 'has not run yet'}</span>
                   : <>{r.ok === false ? <span className="error">failed</span> : <span className="ebl-ok">ok</span>} <span className="muted">{when(r.at)}</span>{r.note ? <span className={r.ok === false ? 'error' : 'muted'}> · {r.note}</span> : ''}</>}
                 {canEdit && <button type="button" className="btn ghost sm esy-run" disabled={!!busy} onClick={() => onRun(k)}>{busy === k ? 'Starting…' : 'Run now'}</button>}
               </li>
@@ -245,7 +247,7 @@ function Overview({ st, canEdit, onRun, busy }) {
       {counts.length > 0 && (
         <div className="card">
           <h3 className="er-step-title">Counts</h3>
-          <div className="esy-counts">{counts.map(([k, v]) => <div key={k}><b>{fmt(v)}</b><span className="muted xs">{human(k)}</span></div>)}</div>
+          <div className="esy-counts">{counts.map(([k, v]) => <div key={k}><b>{fmt(v)}</b><span className="muted xs">{COUNT_WORDS[k] || human(k)}</span></div>)}</div>
         </div>
       )}
 
@@ -366,9 +368,9 @@ function ListingsTab({ narrow, onSignOut, onTab }) {
         <SubTabs items={[['all', 'All'], ['qty_drift', 'Stock differs'], ['price_kept', 'Price kept'], ['price_drift', 'Price differs'], ['no_shopify', 'Not in Shopify']]} value={f} onChange={setF} counts={tabs} />
         <SearchBox value={q} onChange={setQ} placeholder="Search title, SKU or item #" />
       </div>
-      {f === 'no_shopify' && <p className="sm" data-link-note="end">Ending these is done on the eBay page, in <a className="ebl-link" href={`${ebayPage}?tab=orphans`} onClick={jump('orphans')}>Not in Shopify — end</a>.</p>}
-      {f === 'price_kept' && <p className="sm" data-link-note="reprice">Repricing is done on the eBay page, in <a className="ebl-link" href={`${ebayPage}?tab=reprice`} onClick={jump('reprice')}>Reprice</a>.</p>}
-      <p className="muted sm">Each row is one size. “Kept: repriced” means a price lock or our own reprice holds it; “Follows Shopify” means the Shopify price goes to eBay once Price is live.</p>
+      {f === 'no_shopify' && <p className="sm" data-link-note="end">Ending these is done in the <a className="ebl-link" href={`${ebayPage}?tab=orphans`} onClick={jump('orphans')}>Not in Shopify — end</a> tab.</p>}
+      {f === 'price_kept' && <p className="sm" data-link-note="reprice">Repricing is done in the <a className="ebl-link" href={`${ebayPage}?tab=reprice`} onClick={jump('reprice')}>Reprice</a> tab.</p>}
+      <p className="muted sm">Each row is one size. “Kept” means a lock, a reprice or a price set on eBay holds it; “Follows Shopify” means the Shopify price goes to eBay once Price is live.</p>
       <Body st={list} empty="No eBay sizes match.">
         <DataList rows={list.rows} cols={cols} rowKey={(r) => `${r.item_id}|${r.sku}|${r.size}`} narrow={narrow} label="eBay sizes" />
       </Body>

@@ -104,3 +104,78 @@ going back is one setting. **Removing DPL or its profile is never done automatic
 - eBay price after hand-over: reprice tools and locks own it; new listings start at Shopify price + a
   profile uplift. Shopify price changes stop overwriting eBay.
 - eBay Trading API, because the listings are Trading-model (`ebay-listings.md`).
+
+## Phase 0 results (measured live, 2026-11-08, read-only)
+**Listings (20 sampled by `GetItem`), DPL's actual output:**
+- Category `15709` (Men's Athletic Shoes), `ConditionID 1000`, `FixedPriceItem`, `GTC`, `DispatchTimeMax 1`,
+  Location `Manheim, Pennsylvania`, postal `17545`, Site US, USD. No best offer. Listing-level SKU empty.
+- Business policies: shipping `325744987021`, return `325744597021`, payment `325744328021`.
+- Package: 16 × 12 × 6 in, 4 lb 0 oz (`ShippingPackage PackageThickEnvelope`). Variant weight in Shopify is also 4 lb.
+- Item specifics, fixed: Brand = Shopify vendor (`Adidas` capitalised), Color=Multicolor, Department=Unisex Adults,
+  Style=Sneaker, Upper Material=Leather, Type=Sneaker, Style Code = style from the title.
+- Variation: specific name `Size`, value = Shopify option value; `SKU` = Shopify SKU; `UPC` = Shopify barcode (equals the SKU).
+- Title and description are the Shopify product's, verbatim. Title differs on only 11 of 2,330 rows.
+- Pictures: Shopify's media, 7 or 1; no variation pictures.
+
+**Orders (428 DPL orders vs 459 in `ebay_orders`):**
+- Shopify order: `name` = eBay order id, `processedAt` = sale time, `sourceName` `eBay`, `sourceIdentifier` = order id, tags
+  `<order id>, ebay, ebay integration & importer`, `paymentGatewayNames ["EBAY"]`, PAID, tax as `Sales Tax` line with rate,
+  shipping line title = eBay's service, `taxesIncluded false`. Shipped → fulfilled + closed.
+- Totals equal eBay's on **185 of 185** matched orders in the last 120 days.
+- Lag from sale to Shopify order: normally 2 to 5 min. **September outage: 27 orders over an hour, worst 8 days.** Nothing else above an hour since May.
+- Of 25 eBay orders with no Shopify order, **21 were cancelled** and **4 shipped** with no Shopify order
+  (`12-15269-07645`, `06-15204-51988`, `12-15184-99765`, `18-15169-44929`). So the real Not Synced gap is 4, not 21-30.
+- **Tracking flows eBay → Shopify:** all 120 compared have the same number, and Shopify's fulfilment comes seconds to minutes after
+  eBay's. So no `sell.fulfillment` write scope is needed: no re-connect.
+
+**Stock:** live eBay vs live Shopify: **2,326 of 2,330 equal**. 4 differ, 2 of them offering a pair Shopify has at 0 or less.
+DPL's stock sync is good, so ours must match that bar. 1,371 zero-stock Shopify sizes are absent from eBay (DPL removes them), 46 rows
+stay at qty 0 (eBay keeps a variation with sales), 1 in-stock size missing.
+
+**Price: DPL's overwrite is confirmed.** Of the latest reprice per size still on eBay (1,597), 787 still hold our price and
+**810 changed, every one of them to exactly the Shopify price**, mostly within days. So half of eBay Reprice's work has been undone.
+Sizes never repriced: 704 equal Shopify, 29 differ.
+
+**Coverage:** 1,014 active in-stock Shopify products, 23 not on eBay. 992 eBay listings, 2,330 rows. 4 duplicate Shopify SKUs, 32 variants with no SKU, 1 SKU on two listings.
+
+**Limits:** Trading API **5,000 calls a day across all calls for our app**, reset 08:00 UTC. Must be budgeted (see below).
+
+**Shopify main app scopes:** has `read_orders read_all_orders read_products write_products read_inventory write_inventory`.
+No `write_orders`, `read_customers` or `read_locations`. eBay token approved 2026-10-13, valid to 2028-04, has `sell.inventory`, `sell.fulfillment.readonly`.
+
+## Build contract
+**Trading budget:** counter per EST... per eBay day (reset 08:00 UTC) in `app_settings`; the sync stops reads at 3,000 and writes at 4,500, leaving room for the existing tools.
+- Reconcile (full listing read + Shopify variants): every 30 min = ~6 calls × 48 = under 300 a day.
+- Content check: rolling, up to 40 `GetItem` per pass (under 2,000 a day).
+- Verify new listings: up to 10 per pass, only when the product changed or 24 h have passed.
+
+**Passes (`api/_lib/ebay-sync-worker.js`, production only, `EBAY_SYNC_WORKER=on|off` overrides):**
+| Pass | Every | Does |
+|---|---|---|
+| `orders` | 2 min | eBay orders changed since last run → match by tag in Shopify → state, lag, parity with DPL's order; live: write, fulfil, cancel |
+| `queue` | 30 s | Coalesced SKUs/products from the Shopify webhook → stock, end (live only; shadow leaves it to reconcile) |
+| `reconcile` | 30 min | Full live read both sides → `ebay_sync_links`, drift, blast check, stock/price decisions |
+| `content` | 30 min | Rolling content compare |
+| `create` | 30 min | Eligible products not on eBay → precheck + `VerifyAddFixedPriceItem` → status/issues; live: `AddFixedPriceItem`, capped per day |
+
+**Decisions in `src/lib/ebaySync.js` (pure):**
+- Stock: eBay qty = max(0, Shopify available) when the Shopify read is complete. A size on eBay with no Shopify variant is reported, never zeroed by itself.
+- Price: a size with a `ebay_price_locks` lock or a successful `ebay_price_edits` row is **kept**. Otherwise it follows Shopify price × profile uplift.
+- New size in stock → `ReviseFixedPriceItem` with every variation + the new one. Never delete a variation; 0 is enough.
+- Listing with all sizes at 0 ended by eBay + stock returns → `RelistFixedPriceItem` by the stored item id.
+- Blast limit: stop a pass if it would change more than `blastPct` (default 10 %) of links, or if the Shopify read shrank by over 10 %.
+
+**Endpoints (all under `/api/ebay-sync/`, `requireRole ph_team`; writes marked ★ need admin or `connect_integrations`):**
+| Route | Shape |
+|---|---|
+| `GET status` | `{ ok, settings:{switches:{orders,stock,price,content,create,end},kill,blastPct,orderBackstopMin}, counts:{...}, passes:{orders:{at,ok,note},...}, budget:{used,limit,resetAt}, ordersAppConfigured, ebay:{connected,user}, facts:{...}, handover:[{key,label,ok,detail}] }` |
+| `POST settings` ★ | `{ switches?, kill?, blastPct?, orderBackstopMin? }` → `{ ok, settings }`, logged |
+| `POST run` ★ | `{ pass }` → `{ ok, started }`, runs a pass now in the background |
+| `GET products?tab=uploaded\|not_uploaded\|needs_attention&q=&offset=` | `{ ok, rows:[{shopify_product_id,title,style,status,item_id,view_url,image,sizes,qty,issues:[{code,message,fix}],checked_at}], total, tabs:{uploaded,not_uploaded,needs_attention} }` |
+| `POST products` ★ | `{ productId, action:'verify'\|'list'\|'relist' }` |
+| `GET listings?filter=all\|qty_drift\|price_kept\|price_drift\|no_shopify&q=&offset=` | `{ ok, rows:[{item_id,title,view_url,sku,size,ebay_qty,shopify_qty,ebay_price,shopify_price,price_rule,state,drift_since}], total, tabs }` |
+| `GET orders?tab=all\|synced\|not_synced\|cancelled&q=&offset=` | `{ ok, rows:[{order_id,created_at,total_cents,state,written_by,shopify_name,lag_min,reason,parity:[...],skus,buyer}], total, tabs }` |
+| `POST orders` ★ | `{ orderId, action:'retry' }` |
+| `GET inventory?q=&offset=` | SKU → stock, listings sharing it, duplicates |
+| `GET profiles` / `POST profiles` ★ | `{ ok, profiles:[{id,name,is_default,config}] }` |
+| `GET log?domain=&mode=&offset=` | `{ ok, rows:[{id,at,domain,action,mode,item_id,sku,before,after,ok,error,by}], total }` |

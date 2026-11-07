@@ -11390,18 +11390,25 @@ export async function upsertSheinUnits(units) {
   if (!units.length) return;
   const chunk = JSON.stringify(units);
   await db()`
-    INSERT INTO shein_order_units (goods_id, order_no, order_status, unit_status, exchange_tag, stock_mode, seller_sku, shein_sku, title, price, order_time, due, shipped_seen, updated_at)
-    SELECT x.goods_id, x.order_no, x.order_status, x.unit_status, x.exchange_tag, x.stock_mode, x.seller_sku, x.shein_sku, x.title, x.price, x.order_time, x.due, x.shipped_seen, now()
+    INSERT INTO shein_order_units (goods_id, order_no, order_status, unit_status, exchange_tag, stock_mode, seller_sku, shein_sku, title, price, order_time, buyer_order_time, due, shipped_seen, updated_at)
+    SELECT x.goods_id, x.order_no, x.order_status, x.unit_status, x.exchange_tag, x.stock_mode, x.seller_sku, x.shein_sku, x.title, x.price, x.order_time, x.buyer_order_time, x.due, x.shipped_seen, now()
       FROM jsonb_to_recordset(${chunk}::jsonb) AS x(goods_id text, order_no text, order_status int, unit_status int, exchange_tag int, stock_mode int,
-           seller_sku text, shein_sku text, title text, price numeric, order_time timestamptz, due boolean, shipped_seen boolean)
+           seller_sku text, shein_sku text, title text, price numeric, order_time timestamptz, buyer_order_time timestamptz, due boolean, shipped_seen boolean)
     ON CONFLICT (goods_id) DO UPDATE SET order_status = EXCLUDED.order_status, unit_status = EXCLUDED.unit_status,
       exchange_tag = EXCLUDED.exchange_tag, stock_mode = EXCLUDED.stock_mode, seller_sku = EXCLUDED.seller_sku, shein_sku = EXCLUDED.shein_sku,
+      buyer_order_time = COALESCE(shein_order_units.buyer_order_time, EXCLUDED.buyer_order_time),
       shipped_seen = shein_order_units.shipped_seen OR EXCLUDED.shipped_seen, updated_at = now()`;
 }
 export async function sheinUnitsKnown(goodsIds) {
   if (!goodsIds.length) return new Set();
   const rows = await db()`SELECT goods_id FROM shein_order_units WHERE goods_id = ANY(${goodsIds}::text[])`;
   return new Set(rows.map((r) => r.goods_id));
+}
+// Which of these SHEIN orders we already have a pair of (the 10-second check only wants new ones).
+export async function sheinOrdersKnown(orderNos) {
+  if (!orderNos.length) return new Set();
+  const rows = await db()`SELECT DISTINCT order_no FROM shein_order_units WHERE order_no = ANY(${orderNos}::text[])`;
+  return new Set(rows.map((r) => r.order_no));
 }
 // Units that need Shopify touched: a sale to take off, or a cancelled-before-shipping sale to put back.
 // The minute poll gives up on a unit after 8 failed tries (a SKU Shopify doesn't have fails

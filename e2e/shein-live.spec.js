@@ -13,7 +13,7 @@
 import { test, expect } from '@playwright/test';
 import crypto from 'node:crypto';
 import { rowsFromSpu, planProduct, ownersFrom, indexRows, unitsFromOrders, unitAction, pickLocation, toSheinTime, fromSheinTime, AI_WRITE_MIN, shelfFrom, shelfPlan, sheinOrderState, sheinLinePrice, shopifyOrderInput } from '../src/lib/sheinLive.js';
-import { addOrderToShopify, actOnUnits, releaseClaimedOrder, fulfilShippedOrders } from '../api/_lib/shein-orders.js';
+import { addOrderToShopify, actOnUnits, releaseClaimedOrder, fulfilShippedOrders, checkNewOrders, NEW_ORDER_LOOKBACK_MS } from '../api/_lib/shein-orders.js';
 
 /* ------------------------------ fixtures ------------------------------ */
 
@@ -354,6 +354,47 @@ test.describe('SHEIN sales → Shopify', () => {
     expect(unitsFromOrders([after], { since, known: new Set(['3']) })[0].due).toBe(false);
   });
 
+  test('the buyer’s own order time is kept apart from when SHEIN released the order', () => {
+    const [u] = unitsFromOrders([order([g('1', '10091348', 1)], { orderTime: '2026-10-16 21:58:00', orderAllocateTime: '2026-10-16 22:00:00' })]);
+    expect(u.buyer_order_time).toBe('2026-10-16T13:58:00.000Z');
+    expect(u.order_time).toBe('2026-10-16T14:00:00.000Z');
+    expect(unitsFromOrders([order([g('1', '10091348', 1)], { orderTime: undefined })])[0].buyer_order_time).toBe(null);
+  });
+
+  test('the 10-second check sends only orders it has never seen, and nothing else when there are none', async () => {
+    const now = Date.parse('2026-11-07T20:00:00Z');
+    const processed = [];
+    const windows = [];
+    const io = (changed, known = []) => ({
+      changed: async (from, to) => { windows.push([from.getTime(), to.getTime()]); return changed; },
+      known: async () => new Set(known),
+      process: async (nos) => { processed.push(nos); return { units: nos.length, deducted: nos.length, restocked: 0, failed: 0 }; },
+    });
+    // Nothing changed, or only orders we hold: nothing runs, so failing pairs don't lose tries.
+    expect(await checkNewOrders(io([]), now)).toBe(null);
+    expect(await checkNewOrders(io(['GSU1'], ['GSU1']), now)).toBe(null);
+    expect(processed).toEqual([]);
+    // One new among known: only the new one.
+    expect(await checkNewOrders(io(['GSU1', 'GSU2'], ['GSU1']), now)).toMatchObject({ orders: 1, deducted: 1 });
+    expect(processed).toEqual([['GSU2']]);
+    expect(windows[0]).toEqual([now - NEW_ORDER_LOOKBACK_MS, now]);
+  });
+
+  test('a new order the check and the webhook both see still comes off once', async () => {
+    const unit = { goods_id: '1', order_no: 'GSU1', due: true, stock_mode: 3, exchange_tag: 1, unit_status: 1, deducted_at: null, restocked_at: null, shipped_seen: false, seller_sku: 'A', attempts: 0 };
+    const writes = [];
+    const io = {
+      shopifyConfigured: () => true,
+      sheinUnitsToAct: async () => (unit.deducted_at ? [] : [unit]),
+      shopifyStockForSku: async () => ({ inventoryItemId: 'I', variantId: 'V', levels: [{ locationId: 'L', location: 'L', available: 3 }] }),
+      shopifyAdjustAvailable: async (w) => { writes.push(w); return { ok: true, after: w.from + w.delta }; },
+      markSheinUnit: async (_id, m) => { if (m.deducted) unit.deducted_at = 'now'; },
+    };
+    await Promise.all([actOnUnits(io), actOnUnits(io)]);
+    expect(writes).toHaveLength(1);
+    expect(writes[0].delta).toBe(-1);
+  });
+
   test('what Shopify must do: deduct once; put back only a cancel before shipping', () => {
     const base = { due: true, stock_mode: 3, exchange_tag: 1, unit_status: 2, deducted_at: null, restocked_at: null, shipped_seen: false };
     expect(unitAction(base)).toBe('deduct');
@@ -444,6 +485,12 @@ test.describe('SHEIN sales → Shopify', () => {
 /* ---------------------------------- webhooks ---------------------------------- */
 
 test.describe('SHEIN live — the worker', () => {
+  test('the 10-second check is on unless switched off', async () => {
+    const { fastCheckEnabled } = await import('../api/_lib/shein-worker.js');
+    expect(fastCheckEnabled({})).toBe(true);
+    expect(fastCheckEnabled({ SHEIN_FAST_ORDER_CHECK: 'OFF ' })).toBe(false);
+  });
+
   test('the stock walk: every 3 h, and at once after a restart cut one off (only once in a row)', async () => {
     const { walkDue, AFTER_RESTART } = await import('../api/_lib/shein-worker.js');
     const now = Date.parse('2026-10-25T15:00:00Z');

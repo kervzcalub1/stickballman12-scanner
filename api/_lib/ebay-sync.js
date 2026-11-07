@@ -600,7 +600,7 @@ export async function createPass(ctx) {
       }
     }
   }
-  return { note: `${verified} verified, ${added} listed${liveCreate ? '' : ' (shadow: none)'}.` };
+  return { note: `${verified} verified, ${added} listed${liveCreate ? '' : ' (test mode: none)'}.` };
 }
 
 /* --------------------------------------- runner --------------------------------------- */

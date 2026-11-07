@@ -38,7 +38,7 @@ Plus one **kill switch** that stops every eBay write from this feature at once.
 | Stock from all Shopify locations to eBay | `inventory_levels/update` webhook → queue → `ReviseInventoryStatus` (4 sizes a call) |
 | Product draft, archived or deleted → listing ends | `products/update|delete` webhook, then a **live re-read** before ending (the guard in `api/ebay/end.js`) |
 | Needs Attention with eBay's error | Per-product status, eBay's error, and **the fix in plain words** (for example "title is 87 characters, eBay's limit is 80") |
-| Screens | New **eBay Sync** page: Overview · Shopify Products · eBay Products · Linked Inventory · Profiles · Settings + Log |
+| Screens | One **Sync** tab on the existing eBay page (owner: no new pages or dashboard cards), with sub-tabs: Overview · Shopify Products · eBay Products · Linked Inventory · Profiles · Settings + Log |
 
 **Better than DPL, on purpose:** per-listing price rules that respect `ebay_price_locks` and the
 reprice tools (the open DPL problem); plain-word errors; a one-click photo fix path; a full audit
@@ -52,7 +52,7 @@ log of every write.
 - `api/_lib/ebay-sync.js` + `ebay-sync-worker.js`: the server job (standing rule: a closed tab or
   restart never stops it). Queue in the DB, so a deploy replays it.
 - `api/shopify/webhook.js`: add routes **beside** SHEIN's, whose path stays exactly as pinned by its tests.
-- `api/ebay-sync/*`: page endpoints. `src/screens/EbaySync.jsx`: the page, phone-first.
+- `api/ebay-sync/*`: tab endpoints. `src/screens/EbaySync.jsx`: the Sync tab inside `EbayListings.jsx`, phone-first.
 - Tables: `ebay_sync_links`, `ebay_sync_products`, `ebay_sync_profiles`,
   `ebay_sync_queue`, `ebay_sync_log` (added to `LIVE_TABLES` where a screen reads them).
 

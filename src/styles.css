@@ -874,6 +874,10 @@ body {
 /* Provenance above the PH grid's History: where the pairs came from, before what
    happened to them. Separated by a rule so it reads as context, not as the first event. */
 .batch-po { margin-top: 4px; }
+/* Unlinked batch → link it to its order (the forgotten step-1 pick). */
+.batch-po-link { margin-top: 8px; }
+.batch-po-hint { margin: 0 0 6px; color: #e0a458; }
+.batch-po-link-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 /* Inside the batch's header card now, so it sits with the batch it describes rather
    than below eleven box rows. Ruled off above so it reads as its own offer. */
 .batch-report { display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -3909,6 +3913,8 @@ button.box-existing-size:hover { border-color: var(--primary); }
 .po-link-batch.on { border-color: var(--primary); background: rgba(79,124,255,0.1); }
 .po-link-batch-code { font-weight: 700; }
 .po-link-already { color: #7bc99a; font-weight: 600; }
+/* Batch page → order: the order that carries this shipment's tracking number. */
+.po-link-match { color: var(--accent, #7aa2ff); font-weight: 600; }
 .po-link-rows { display: flex; flex-direction: column; gap: 8px; }
 .po-link-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .po-link-box { display: flex; flex-direction: column; }
@@ -4006,6 +4012,9 @@ button.box-existing-size:hover { border-color: var(--primary); }
 .rcn-bd-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 3px 0; font-size: 13px; }
 .rcn-bd-name { font-weight: 600; }
 .rcn-bd-clean { margin-top: 10px; }
+/* Labels taken off the order — one line each, so a gap in the box numbers is explained. */
+.rcn-bd-removed { margin-top: 10px; }
+.rcn-bd-removed p { margin: 2px 0; }
 
 /* PO report format picker (PDF | CSV) — sits with the download buttons it governs. */
 .mf-fmt { flex: none; }

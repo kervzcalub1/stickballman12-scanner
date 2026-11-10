@@ -5,8 +5,9 @@
 import { send, applySecurity, requireRole } from '../_lib/util.js';
 import {
   getPoReconcileState, getPoResolution, listPoComments, resolutionView,
-  stepsFor, getPoReceivedBoxes, getPoBoxDiffs, dbConfigured,
+  stepsFor, getPoReceivedBoxes, getPoBoxDiffs, getPoLabelChangeNotes, dbConfigured,
 } from '../_lib/db.js';
+import { parseRemovedBoxes } from '../../src/lib/poRemovedBoxes.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -30,11 +31,14 @@ export default async function handler(req, res) {
     // `box_diffs` = the same comparison per LABEL, so a shortage says which box to open
     // rather than only which shoe. Empty on a whole-order manifest, which has no per-box
     // expectation to compare against.
-    const [resolution, comments, receivedBoxes, boxDiffs] = await Promise.all([
+    // `removed_boxes` = labels taken off the order (or moved to another one) and who
+    // did it, so a gap in the box numbers isn't read as a lost box.
+    const [resolution, comments, receivedBoxes, boxDiffs, labelNotes] = await Promise.all([
       getPoResolution(poId),
       listPoComments(poId, { limit: 50 }),
       getPoReceivedBoxes(poId),
       getPoBoxDiffs(poId),
+      getPoLabelChangeNotes(poId),
     ]);
     return send(res, 200, {
       ok: true, ...data,
@@ -44,6 +48,7 @@ export default async function handler(req, res) {
       comments,
       received_boxes: receivedBoxes,
       box_diffs: boxDiffs,
+      removed_boxes: parseRemovedBoxes(labelNotes.notes, labelNotes.liveNumbers),
     });
   } catch (e) {
     console.error('[po/reconciliation]', e.message);

@@ -623,9 +623,16 @@ export async function buildManifestPdf({ po, boxes = [], lines = [], stores = []
       doc.text(doc.splitTextToSize(`Checked and correct: box ${clean.map((b) => b.box_number).join(', ')}.`, PAGE_W - MARGIN * 2 - 6), MARGIN + 3, y);
       y += 6;
     }
-    if (pending.length) {
-      // Not a shortage: an undelivered box has nothing to be short of yet.
-      doc.text(doc.splitTextToSize(`Still to arrive, not counted as short: box ${pending.map((b) => b.box_number).join(', ')}.`, PAGE_W - MARGIN * 2 - 6), MARGIN + 3, y);
+    // Not a shortage: a box we haven't counted has nothing to be short of yet. One the
+    // carrier shows DELIVERED is said separately — "still to arrive" was wrong for it.
+    const here = pending.filter((b) => b.label_status === 'delivered');
+    const out = pending.filter((b) => b.label_status !== 'delivered');
+    if (here.length) {
+      doc.text(doc.splitTextToSize(`Delivered, not yet counted, not counted as short: box ${here.map((b) => b.box_number).join(', ')}.`, PAGE_W - MARGIN * 2 - 6), MARGIN + 3, y);
+      y += 6;
+    }
+    if (out.length) {
+      doc.text(doc.splitTextToSize(`Still to arrive, not counted as short: box ${out.map((b) => b.box_number).join(', ')}.`, PAGE_W - MARGIN * 2 - 6), MARGIN + 3, y);
       y += 6;
     }
   } else if (mode === 'received') {

@@ -10,6 +10,7 @@ import { Icon } from '../components/NavIcons.jsx';
 import { PreSellChip } from '../components/PreSellChip.jsx';
 import { SizeEditModal } from '../components/SizeEdit.jsx';
 import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
+import { BatchLinkPoModal } from '../components/PoLinkBatch.jsx';
 import { batchMatchesSearch } from '../lib/postatus.js';
 import { estTime } from '../lib/format.js';
 import { issueTypeLabel } from '../lib/constants.js';
@@ -44,7 +45,9 @@ function AuditChip({ b }) {
     : <span className="audit-chip" title="Received without a manifest — somebody has to confirm everything expected arrived">No manifest · audit pending</span>;
 }
 
-export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenPo = null, onHome, onSignOut, readOnly = false, canAudit = !readOnly }) {
+// `canLinkPo`: linking a shipment to its order is open to PH as well as the warehouse
+// (po/link-batch allows both), so it is NOT tied to `readOnly`.
+export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenPo = null, onHome, onSignOut, readOnly = false, canAudit = !readOnly, canLinkPo = true }) {
   const [open, setOpen] = useState(null);     // open batches
   const [recent, setRecent] = useState(null); // { batches, total, page, pageSize }
   // WHICH BATCH IS OPEN LIVES IN THE URL (?b=), and opening one PUSHES a history entry.
@@ -108,6 +111,10 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   const [auditing, setAuditing] = useState(null);
   const [auditBusy, setAuditBusy] = useState(false);
   const [trackedPo, setTrackedPo] = useState(null);
+  // Orders whose labels carry this (unlinked) batch's tracking numbers — "you probably
+  // forgot to pick the order" (PO-100107). Loaded only for an unlinked batch.
+  const [poMatches, setPoMatches] = useState([]);
+  const [linking, setLinking] = useState(null);   // { initialPoId } while the link dialog is up
   const [found, setFound] = useState(null);    // server search results (null = not searching)
   const [searching, setSearching] = useState(false);
   const [openPageRaw, setOpenPageRaw] = useQueryParam('op');
@@ -219,7 +226,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   // audited or closed, a pair sold off it — the lists and the open batch re-read with the
   // page's current filters, swapping only what changed. The open box stays open (it is
   // keyed by id). Held while any dialog or write of this person's is up.
-  const dialogUp = busy || deleting || !!renumber || !!reopenBox || !!sizeEdit || !!auditing || auditBusy || !!reopenId;
+  const dialogUp = busy || deleting || !!renumber || !!reopenBox || !!sizeEdit || !!auditing || auditBusy || !!reopenId || !!linking;
   const BATCH_TABLES = ['batches', 'batch_boxes', 'items', 'shipment_issues', 'purchase_orders'];
   useLive(BATCH_TABLES, async () => {
     const seq = ++listSeq.current;
@@ -258,6 +265,20 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
       .catch(() => { /* no pointer — the text falls back to "confirm with the supplier" */ });
     return () => { cancelled = true; };
   }, [detail?.batch?.id, detail?.batch?.audited_at]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // An unlinked batch whose tracking number sits on an order's label was almost certainly
+  // received without picking that order. Ask once per batch (and again after a link or
+  // unlink changes po_id) so the page can say so and offer the one-tap fix.
+  useEffect(() => {
+    const b = detail?.batch;
+    setPoMatches([]);
+    if (!b || b.po_id || !canLinkPo) return;
+    let cancelled = false;
+    api.batchPoCandidates(b.id)
+      .then((r) => { if (!cancelled) setPoMatches((r.orders || []).filter((o) => o.matched_labels?.length)); })
+      .catch(() => { /* no hint — the plain "Link to a purchase order" button still works */ });
+    return () => { cancelled = true; };
+  }, [detail?.batch?.id, detail?.batch?.po_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Put the number on the row back in step with the label on the carton. Boxes that
   // arrive out of order get whatever "+ Add box" had left (max+1) — box 6 of 9 landing a
@@ -369,6 +390,29 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
                   </>
                 : <span className="prov-none">Not received against a purchase order</span>}
             </div>
+            {/* The forgotten link, fixed where it's noticed. A tracking match names the
+                order outright; otherwise the button opens the list (same supplier). */}
+            {!b.po_id && canLinkPo && (
+              <div className="batch-po-link">
+                {poMatches.length > 0 && (
+                  <p className="batch-po-hint sm">
+                    {poMatches.map((o, i) => (
+                      <React.Fragment key={o.id}>{i ? '; ' : ''}Tracking matches label{o.matched_labels.length === 1 ? '' : 's'} #{o.matched_labels.join(', #')} on <b>{o.po_code}</b></React.Fragment>
+                    ))} — this shipment was probably received without picking the order.
+                  </p>
+                )}
+                <div className="batch-po-link-btns">
+                  {poMatches.length === 1 ? (
+                    <button className="btn primary sm" onClick={() => setLinking({ initialPoId: poMatches[0].id })}>
+                      <Icon name="box" /> Link to {poMatches[0].po_code}
+                    </button>
+                  ) : null}
+                  <button className={`btn ${poMatches.length === 1 ? 'ghost' : 'primary'} sm`} onClick={() => setLinking({ initialPoId: null })}>
+                    {poMatches.length === 1 ? 'Another order…' : 'Link to a purchase order'}
+                  </button>
+                </div>
+              </div>
+            )}
             </div>
             <div className="batch-progress">
               {/* A batch that was never split into boxes gets its item count instead —
@@ -639,6 +683,12 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
             <button className="btn primary" disabled={busy} onClick={confirmReopenBox}>Reopen & edit</button>
             <button className="btn ghost" disabled={busy} onClick={() => setReopenBox(null)}>Cancel</button>
           </Modal>
+        )}
+        {linking && (
+          <BatchLinkPoModal batch={b} initialPoId={linking.initialPoId}
+            onClose={() => setLinking(null)}
+            onLinked={async () => { setLinking(null); await Promise.all([loadDetail(Number(b.id)), loadLists()]); }}
+            onSignOut={onSignOut} />
         )}
         {auditing && (
           <Modal type="warn" title={`Audit ${b.batch_code} — everything expected arrived?`}

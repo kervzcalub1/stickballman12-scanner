@@ -34,6 +34,7 @@ test.afterAll(async () => {
     await q("DELETE FROM items WHERE vin LIKE $1", [`SBM-BOXDIFF-${stamp}%`]);
     await q('DELETE FROM batch_boxes WHERE batch_id IN (SELECT id FROM batches WHERE po_id = $1)', [poId]);
     await q('DELETE FROM batches WHERE po_id = $1', [poId]);
+    await q('DELETE FROM po_comments WHERE po_id = $1', [poId]);
     await q('DELETE FROM po_lines WHERE po_id = $1', [poId]);
     await q('DELETE FROM po_boxes WHERE po_id = $1', [poId]);
     await q('DELETE FROM purchase_orders WHERE id = $1', [poId]);
@@ -87,4 +88,31 @@ test('box_diffs names the box, ignores notation, and never calls an unshipped la
   // Box 3 hasn't arrived: outstanding, not short.
   expect(byBox[3].received).toBe(false);
   expect(byBox[3].expected_units).toBe(0);   // its lines live on labels 1-2 in this fixture
+});
+
+// PO-100107: box 6 sat as "Still to arrive" two days after UPS delivered it, and the
+// gap at box 14 (the supplier deleted that label) read as a lost box. The label's carrier
+// status rides along, and a removed label comes back with who removed it and when.
+test('box_diffs carries the carrier status; removed_boxes names the removed label and who removed it', async ({ request, baseURL }) => {
+  expect(poId).not.toBeNull();
+  await q("UPDATE po_boxes SET status = 'delivered' WHERE po_id = $1 AND box_number = 3", [poId]);
+  const note = (body, at) => q(
+    "INSERT INTO po_comments (po_id, kind, audience, body, author_name, author_role, created_at) VALUES ($1,'system','internal',$2,'E2E Supplier','supplier',$3)",
+    [poId, body, at]);
+  await note(`Label 4 (BOXDIFF${stamp}D) removed, with the 3 line(s) declared for it.`, '2026-10-29T23:10:53Z');
+  await note('Label 5 (no tracking #) removed.', '2026-10-29T23:11:00Z');            // a draft tidy-up — not shown
+  await note(`Label 2 (BOXDIFF${stamp}X) removed.`, '2026-10-29T23:12:00Z');          // number in use again — not shown
+
+  const res = await request.get(`${baseURL}/api/po/reconciliation?poId=${poId}`, { headers: auth });
+  expect(res.status()).toBe(200);
+  const body = await res.json();
+  const box3 = (body.box_diffs || []).find((b) => b.box_number === 3);
+  expect(box3.received).toBe(false);
+  expect(box3.label_status).toBe('delivered');
+  expect(box3.tracking_number).toBe(TRK.c);
+
+  expect(body.removed_boxes).toEqual([{
+    box_number: 4, tracking: `BOXDIFF${stamp}D`, kind: 'removed', lines: 3,
+    to_po: null, to_box: null, by: 'E2E Supplier', by_role: 'supplier', at: '2026-10-29T23:10:53.000Z',
+  }]);
 });

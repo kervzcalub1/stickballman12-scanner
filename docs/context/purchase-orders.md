@@ -466,6 +466,19 @@ Pick the batch from the candidates, confirm which received box is which label
 (pre-matched by tracking #), and link. The open order then shows a **"Received into"**
 panel with an **Unlink** per batch, and — while nothing is linked — **"Delete this
 purchase order"**.
+**From the batch (warehouse + PH, `/batches?b=` and `/ph/batches?b=`):** an unlinked batch
+shows **"Link to a purchase order"** under "Not received against a purchase order". When
+one of its tracking numbers sits on an open order's label it says so outright ("Tracking
+matches label #6 on PO-100107 — this shipment was probably received without picking the
+order") with a one-tap **Link to PO-…** (`BatchLinkPoModal`, same file: pick the order —
+a single tracking match is pre-picked — then the SAME box↔label step `LinkBoxesSteps` and
+the same `po/link-batch`). Built after PO-100107: 28 boxes scanned in one by one with no
+order picked, so the order sat at `shipped` and never reached Reconciliation.
+`GET /api/batches/po-candidates?batchId=` (warehouse/ph_team, `listBatchPoCandidates`):
+open orders (not reconciled/closed) carrying one of the batch's tracking numbers first,
+with `matched_labels`, then same-supplier orders from the last 120 days. `canLinkPo` on
+`BatchPage` is independent of `readOnly` (PH's view). e2e: `po-link-batch.spec.js`
+"Batch page → link to its purchase order".
 - Endpoints: `po/link-candidates` (GET, list + per-batch preview), `po/link-batch`,
   `po/unlink-batch` (all warehouse/ph_team) and `po/delete` (ph_team/admin; **supplier** on
   their portal — **Delete order** — only for an order THEY raised, still `draft`, no label
@@ -1025,6 +1038,18 @@ difference between a message to the supplier and someone walking to a shelf.
 - **A label that hasn't been received is NOT listed as a pile of missing pairs** — it's
   shown as "still to arrive, not counted as short". Reading an undelivered box as a
   shortage is how a half-delivered order gets chased as a loss.
+  **Split by the carrier's word** (each diff carries `label_status` + `tracking_number`):
+  a label UPS shows `delivered` reads "Delivered by the carrier, not received against this
+  order yet … find the box, or link its shipment"; only the rest say "Still to arrive"
+  (same split on the PDF). PO-100107 box 6 sat as "still to arrive" two days after UPS
+  delivered it — it had been scanned in as its own shipment without the order picked.
+- **Removed / moved labels** (`removed_boxes` on the same response): read back from the
+  order's own `po/label-remove` / `po/label-move` system notes by
+  `src/lib/poRemovedBoxes.js` (`getPoLabelChangeNotes` — its own query, the thread the
+  screen loads stops at 50). Shown at the foot of the By box card: "Box 14 (1Z…) removed
+  from the order, with its 6 declared lines by Esteban Gonzalez (supplier) · 10/29, 7:10 PM
+  EST — not counted as short." Skipped: a draft tidy-up (no tracking #, no lines) and a
+  number that a live label uses again. A gap in the box numbers otherwise reads as a lost box.
 - Only the boxes that DIFFER are listed; the clean ones collapse to one line ("Matching
   exactly: box 1, 2, 4…"). On PO-100005 that's 7 boxes to look at instead of 18.
 - **Per-box manifests only.** A whole-order list has no per-box expectation, and

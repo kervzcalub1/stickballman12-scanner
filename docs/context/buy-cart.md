@@ -1291,6 +1291,40 @@ the shop is the one person who can still decide not to pick it up, and suppliers
 already ask the advisor the same question (`SUPPLIER_TOOLS`). It is Shopify's belief
 plus our own records and the panel says so out loud: **not a physical count**.
 
+## The gift card merchant (2026-11-10)
+Owner's ask: buyers say which merchant's gift cards they need, so the desk hands over a
+card the till will actually take. `buy_carts.gc_merchant` holds a **key** from
+`src/lib/giftCardMerchants.js`:
+
+| key | label (what everyone sees) |
+|---|---|
+| `nike` | Nike |
+| `footlocker` | Foot Locker / Champs Sports (one card, both banners) |
+| `adidas` | Adidas |
+| `finishline` | Finish Line / JD Sports (one card, both banners) |
+| `dicks` | Dick's Sporting Goods |
+
+- **Picked from a fixed list** on New request (`FormModal` select, above "Which store?").
+  `cart/create` refuses a missing or unknown key (400). Nothing typed is ever stored.
+  `retailer` stays as the store location.
+- **Older requests** (opened before this) have `gc_merchant` NULL. Their request page shows
+  an amber "Gift cards for:" row with a picker, and `cart/submit` won't close the list until
+  one is picked. That check is skipped once cards are on it (an old request re-closed after
+  a top-up): the merchant is locked then, so asking would block the buyer for good.
+- **Changing it**: `POST /api/cart/merchant { cartId, merchant }`. Allowed for the buyer (own
+  request), approvers and the gift card desk, **only while `gc_total` is 0** and the status is
+  draft/submitted/approved/denied (`merchantEditable`; the same guard is in the UPDATE, so a
+  card recorded mid-request wins). Logged as `merchant_set` ("Gift card merchant: A → B").
+- **Where it shows**: the queue (a "Gift cards" column; "Nike cards ·" on phone cards); the
+  request header; the desk's section heading ("Nike gift cards", with a warning if none is
+  picked); a "Gift cards: Nike" line above "Store:" on every Telegram card and on the desk's
+  "waiting for gift cards" DM; and the buyer's "cards released" alert ("$200 in Nike gift
+  cards"). Webhook payloads carry `request.gc_merchant` (the label).
+- A card recorded with no retailer typed is filed under the merchant's label (then the store,
+  for old requests): `cart/gift-card`.
+- To add a merchant, add a row to `GIFT_CARD_MERCHANTS`. No migration: the column is free
+  TEXT, and the list is the check. Rewording a label touches no rows.
+
 ## Gift cards — the only bearer instruments in this app
 `api/_lib/secrets.js`: AES-256-GCM under **`BUY_GC_KEY`** (32 bytes, hex or base64),
 stored `v1:<iv>:<tag>:<ct>` so a key rotation stays possible.

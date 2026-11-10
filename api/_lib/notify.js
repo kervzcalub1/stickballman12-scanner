@@ -28,6 +28,12 @@ import { compareSizes } from '../../src/lib/codes.js';
 import { stockxConfigured, stockxProductBySku } from './stockx.js';
 import { salesSentence } from './marketSales.js';
 import { notHereSummary, notHereLines } from '../../src/lib/notHere.js';
+import { merchantLabel } from '../../src/lib/giftCardMerchants.js';
+
+// "Gift cards: Nike", above the Store line on every card about a request, so the desk and
+// the approver see which merchant's cards it needs. Dropped on a request opened before the
+// merchant list existed, the same way an empty Store line is.
+const merchantLine = (cart) => (merchantLabel(cart?.gc_merchant) ? [`Gift cards: ${merchantLabel(cart.gc_merchant)}`] : []);
 
 // Where the card's SKU line links: the shoe's own StockX page when StockX's catalogue has that
 // exact style code (`urlKey`, cached 12 h — the pricing read already warmed it), else a StockX
@@ -307,6 +313,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
       `Supplier: ${cart.buyer_name}`,
       // Dropped rather than printed empty: "Store: —" reads like a missing field the
       // approver should chase, and a request cannot be sent without a store anyway.
+      ...merchantLine(cart),
       ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
     ].join('\n');
 
@@ -319,6 +326,7 @@ export async function notifyLineAsked(cartId, lineId, extra = {}) {
         code: cart.cart_code,
         buyer: cart.buyer_name,
         retailer: cart.retailer || null,
+        gc_merchant: merchantLabel(cart.gc_merchant),
         purpose: cart.purpose || null,
         status: cart.status,
       },
@@ -502,6 +510,7 @@ export async function notifyGroupAsked(cartId, lineIds, extra = {}) {
       '',
       cart.cart_code,
       `Supplier: ${cart.buyer_name}`,
+      ...merchantLine(cart),
       ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
       '',
       // The example uses THIS card's sizes (and the count in store, when there is one) —
@@ -556,6 +565,7 @@ export async function notifyLineSkipped(cartId, line, actor, { undo = false } = 
         ? `↩️ ${cart.cart_code} — ${who} IS buying ${pair} after all`
         : `✕ ${cart.cart_code} — ${who} is NOT buying ${pair} (it was approved)`,
       `To fund now: ${fundingWords(cart)} · ${Number(cart.approved_count) || 0} size${Number(cart.approved_count) === 1 ? '' : 's'} approved`,
+      ...merchantLine(cart),
       ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
     ].join('\n');
     // Said where the pair's card is: a premium pair's in the buyer's premium group.
@@ -612,6 +622,7 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
         : n(cart.gc_total) > 0
           ? `Cards issued so far: ${dollars(cart.gc_total)} — a top-up may be needed once the new lines are approved.`
           : 'No cards issued yet.',
+      ...merchantLine(cart),
       ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
     ].join('\n');
 
@@ -624,6 +635,7 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
         code: cart.cart_code,
         buyer: cart.buyer_name,
         retailer: cart.retailer || null,
+        gc_merchant: merchantLabel(cart.gc_merchant),
         purpose: cart.purpose || null,
         status: cart.status,
         line_count: n(cart.line_count),
@@ -699,6 +711,7 @@ export async function notifyIssuersIfReady(cartId) {
       issued > 0
         ? `${dollars(issued)} is already on cards; ${fundingWords(cart)} in all (${n} pair${n === 1 ? '' : 's'}).`
         : `${n} pair${n === 1 ? '' : 's'} approved: ${fundingWords(cart)}.`,
+      ...merchantLine(cart),
       ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
     ].join('\n');
     const { sentTo } = await alertUsers('buy.cards_needed', {

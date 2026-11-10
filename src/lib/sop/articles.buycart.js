@@ -35,7 +35,7 @@ export const BUYCART_ARTICLES = [
     when: 'Read this once before you touch any part of the buying process.',
     steps: [
       { do: 'A BUYER opens a request and asks about pairs as they find them — SKU, size and the shelf price. Each pair goes to the approvers (and the Telegram group) the moment it is added; the desk prices it and says Buy, Watch or Pass.' },
-      { do: 'When they have nothing more to add they CLOSE the request. It will not close without saying what is being bought and which store, and the gift cards wait for it.' },
+      { do: 'When they have nothing more to add they CLOSE the request. It will not close without the gift card merchant and the store, and the gift cards wait for it.' },
       { do: 'WAREHOUSE, PH or ADMIN approves line by line, or all at once. Turning a line down takes a reason.' },
       { do: 'The GIFT CARD DESK records the cards issued and releases them. The cards must cover the approved total first.' },
       { do: 'The buyer goes shopping, and uploads the receipt. Every time — the receipt is not optional.' },
@@ -64,7 +64,7 @@ export const BUYCART_ARTICLES = [
     summary: 'Open a request, ask about each pair as you find it, close the request when you are done — then spend the cards and send the receipt.',
     when: 'Before a store trip, and again the moment you have paid.',
     steps: [
-      { do: 'Home → Buying Requests → New request. Say what you are buying and which store.', note: 'Be specific. "Restocking Panda Dunks for GOAT" gets approved; "just buying stuff" does not, and the app will not send it either. No Buying Requests card on your home? Buying is switched on per account — an admin ticks "Raise buying requests" for you on Check Access.' },
+      { do: 'Home → Buying Requests → New request. Pick which gift cards you need (Nike, Foot Locker / Champs Sports, Adidas, Finish Line / JD Sports or Dick’s Sporting Goods), then type the store.', note: 'Be specific. "Restocking Panda Dunks for GOAT" gets approved; "just buying stuff" does not, and the app will not send it either. No Buying Requests card on your home? Buying is switched on per account — an admin ticks "Raise buying requests" for you on Check Access.' },
       { do: 'Type a SKU and press Look up, or press Scan and point the camera at the barcode on the box.', note: 'A barcode is a UPC — it names one size, so the app prices that size straight away without you tapping one.' },
       { do: 'Tap the size you are holding.' },
       { do: 'Type the price on the shelf and how many pairs.', warn: 'The shelf price is what the gift cards get sized against. Type the sticker, not what you think it will ring up at.' },

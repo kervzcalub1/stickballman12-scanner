@@ -24,6 +24,7 @@ import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_li
 import { getBuyCart, closeBuyCartList, reopenBuyCartList, dbConfigured, skusWithoutPhotos } from '../_lib/db.js';
 import { cartVisibleTo, redactCartForViewer, requireBuyerAccess } from '../_lib/buycart.js';
 import { buyerCanClose, buyerCanReopen, reopenRefusedBecause } from '../../src/lib/buycartRules.js';
+import { merchantEditable } from '../../src/lib/giftCardMerchants.js';
 import { notifyRequestEvent, notifyIssuersIfReady } from '../_lib/notify.js';
 import { alertListReopened, alertListReclosed } from '../_lib/alerts.js';
 
@@ -65,6 +66,12 @@ export default async function handler(req, res) {
       return send(res, 400, { ok: false, error: 'Add at least one pair before closing the request.' });
     if (!String(cart.retailer || '').trim())
       return send(res, 400, { ok: false, error: 'Say which store this is for — the gift cards have to be for the right retailer.' });
+    // Requests opened before the merchant list have none; the buyer picks one on the
+    // request page (cart/merchant) before closing the list, so the desk knows which cards.
+    // Not asked once cards are already on it (an old request re-closed after a top-up):
+    // the merchant is locked then, and the cards in hand already answer the question.
+    if (!cart.gc_merchant && merchantEditable(cart))
+      return send(res, 400, { ok: false, error: 'Pick which merchant the gift cards are for (Nike, Foot Locker / Champs, Adidas, Finish Line / JD, Dick\'s) before closing the request.' });
 
     // EVERY SHOE NEEDS A PHOTO. The approver is deciding on something they cannot see,
     // in a shop they are not standing in, off a style code that is four digits away from

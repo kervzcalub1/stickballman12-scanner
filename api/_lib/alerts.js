@@ -20,6 +20,7 @@ import { listPoDropoffReceipts, alertCandidates, logAlert, setTelegramBroken, al
   getBuyCart, cartListChangesSince } from './db.js';
 import { fundingTarget } from './buycart.js';
 import { fundingWords } from '../../src/lib/buycartRules.js';
+import { merchantLabel } from '../../src/lib/giftCardMerchants.js';
 import { issueHeadline, outcomeLabel, ageFlags, ago, STALE_DAYS } from '../../src/lib/inboundIssues.js';
 
 const isAdminRole = (role) => role === 'admin' || role === 'superadmin';
@@ -384,7 +385,8 @@ export function alertCardsReleased(cart, actor) {
     actorUid: actor?.uid,
     ref: `cart:${cart.id}`,
     code: cart.cart_code,
-    body: `${actor?.name || 'The gift card desk'} released ${money(cart.gc_total)} in gift cards`
+    body: `${actor?.name || 'The gift card desk'} released ${money(cart.gc_total)} in`
+      + `${merchantLabel(cart.gc_merchant) ? ` ${merchantLabel(cart.gc_merchant)}` : ''} gift cards`
       + `${cart.retailer ? ` for ${cart.retailer}` : ''} — you can go ahead and buy.`,
     path: at('buying', `request=${Number(cart.id)}`),
   }));

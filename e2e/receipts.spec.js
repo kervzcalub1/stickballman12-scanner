@@ -49,7 +49,7 @@ test.beforeAll(async () => {
       [u.name, u.username, hashPassword('e2e-not-used'), u.role, u.privileges]);
     people[k] = { ...u, uid: Number(rows[0].id) };
   }
-  cartId = Number((await db.query(`INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status) VALUES ($1,$2,'Foot Locker','e2e','funded') RETURNING id`,
+  cartId = Number((await db.query(`INSERT INTO buy_carts (gc_merchant, buyer_user_id, buyer_name, retailer, purpose, status) VALUES ('nike', $1,$2,'Foot Locker','e2e','funded') RETURNING id`,
     [people.joey.uid, people.joey.name])).rows[0].id);
   await db.query(`INSERT INTO buy_cart_files (cart_id, kind, r2_key, name) VALUES ($1,'receipt','e2e/none',$2)`, [cartId, `Email receipt ${ORDER}.txt`]);
 });

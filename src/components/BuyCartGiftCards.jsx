@@ -14,6 +14,7 @@ import React, { useState } from 'react';
 import { api } from '../api.js';
 import { PriceInput, CopyText, ImageZoomModal, FormModal } from './common.jsx';
 import { cardsIssuable, cardsRefusedBecause, cardsAfterPurchase, fundingBreakdown, cardTailFromFileName } from '../lib/buycartRules.js';
+import { merchantLabel } from '../lib/giftCardMerchants.js';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -343,7 +344,11 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
 
   return (
     <section className="card bc-cards">
-      <h3 className="bc-h">Gift cards</h3>
+      {/* The merchant in the heading: the desk reads this before picking up a card. */}
+      <h3 className="bc-h">{merchantLabel(cart.gc_merchant) ? `${merchantLabel(cart.gc_merchant)} gift cards` : 'Gift cards'}</h3>
+      {!cart.gc_merchant && canIssue && Number(total) === 0 && (
+        <p className="bc-till-warn">The buyer hasn’t picked a merchant yet. Check which store’s cards they need before recording any.</p>
+      )}
 
       <div className="bc-fund">
         <div className="bc-fund-nums">

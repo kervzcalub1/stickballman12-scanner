@@ -7913,15 +7913,30 @@ export async function lastCartEvent(cartId, kind) {
   return rows[0] || null;
 }
 
-export async function createBuyCart({ buyerUserId, buyerName, retailer, purpose, restrictions, presetId, costStack, actor }) {
+export async function createBuyCart({ buyerUserId, buyerName, retailer, gcMerchant = null, purpose, restrictions, presetId, costStack, actor }) {
   const sql = db();
   const rows = await sql`
-    INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, restrictions, preset_id, cost_stack)
-    VALUES (${buyerUserId}, ${buyerName}, ${retailer || null}, ${purpose || null},
+    INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, gc_merchant, purpose, restrictions, preset_id, cost_stack)
+    VALUES (${buyerUserId}, ${buyerName}, ${retailer || null}, ${gcMerchant || null}, ${purpose || null},
             ${restrictions || null}, ${presetId || null}, ${costStack ? JSON.stringify(costStack) : null})
     RETURNING *`;
   await logCartEvent({ cartId: rows[0].id, kind: 'created', actor });
   return cartOut(rows[0]);
+}
+
+// Change which merchant's gift cards a request needs (cart/merchant.js). The guard is in
+// the UPDATE as well as in the handler: if a card is recorded between the handler's read
+// and this write, nothing changes and null comes back.
+export async function setBuyCartMerchant(cartId, gcMerchant, note, actor) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET gc_merchant = ${gcMerchant}, updated_at = now()
+     WHERE id = ${cartId} AND coalesce(gc_total, 0) = 0
+       AND status IN ('draft','submitted','approved','denied')
+    RETURNING id`;
+  if (!rows.length) return null;
+  await logCartEvent({ cartId, kind: 'merchant_set', body: note, actor });
+  return getBuyCartFull(cartId);
 }
 
 export async function getBuyCart(id) {

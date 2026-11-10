@@ -151,8 +151,8 @@ async function newRequest(request, { lines = [], submit = true, linesBy = 'appro
   };
   const buyer = people[who];
   const cartId = Number((await pool.query(
-    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status, cost_stack)
-     VALUES ($1,$2,'E2E Store','E2E: restocking for listings','draft',$3) RETURNING id`,
+    `INSERT INTO buy_carts (gc_merchant, buyer_user_id, buyer_name, retailer, purpose, status, cost_stack)
+     VALUES ('nike', $1,$2,'E2E Store','E2E: restocking for listings','draft',$3) RETURNING id`,
     [buyer.uid, buyer.name, JSON.stringify(stack)])).rows[0].id);
   for (const l of lines) await call(request, linesBy, 'cart/line', { cartId, line: l });
   await shoePhotos(cartId, lines.map((l) => l.sku));
@@ -635,8 +635,8 @@ test('a draft offers no approve controls, and says which kind of "not now" it is
   // environment switch to turn it off — one that could be turned off would be off
   // somewhere it mattered.
   const { rows: cr } = await pool.query(
-    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status)
-     VALUES ($1, $2, 'E2E Store', 'E2E: draft with nothing to approve', 'draft') RETURNING id`,
+    `INSERT INTO buy_carts (gc_merchant, buyer_user_id, buyer_name, retailer, purpose, status)
+     VALUES ('nike', $1, $2, 'E2E Store', 'E2E: draft with nothing to approve', 'draft') RETURNING id`,
     [people.buyer.uid, people.buyer.name],
   );
   const cartId = Number(cr[0].id);
@@ -673,8 +673,8 @@ test('the queue filters by buyer, and a buyer cannot use it to widen their own s
   // rate limit — one more creation here pushed an unrelated test at the end of the run
   // into a 429. The limit is a real control and the fix is not to spend it here.
   const { rows } = await pool.query(
-    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status)
-     VALUES ($1, $2, 'E2E Store', 'E2E: filter fixture', 'submitted') RETURNING id`,
+    `INSERT INTO buy_carts (gc_merchant, buyer_user_id, buyer_name, retailer, purpose, status)
+     VALUES ('nike', $1, $2, 'E2E Store', 'E2E: filter fixture', 'submitted') RETURNING id`,
     [people.buyer2.uid, people.buyer2.name],
   );
   const theirs = Number(rows[0].id);
@@ -843,8 +843,8 @@ test('a receipt line with no SKU is refused, not quietly dropped', async ({ requ
   // Seeded straight at `funded`, which is all this test needs to reach the receipt — and
   // it spends none of `cart/create`'s 30-a-minute budget, which this suite sits on.
   const cartId = Number((await pool.query(
-    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status, approved_amount, gc_total)
-     VALUES ($1,$2,'E2E Store','E2E: a receipt with a nameless row','funded',100,200) RETURNING id`,
+    `INSERT INTO buy_carts (gc_merchant, buyer_user_id, buyer_name, retailer, purpose, status, approved_amount, gc_total)
+     VALUES ('nike', $1,$2,'E2E Store','E2E: a receipt with a nameless row','funded',100,200) RETURNING id`,
     [people.buyer.uid, people.buyer.name])).rows[0].id);
   const saved = await call(request, 'approver', 'cart/receipt', {
     cartId, receiptTotal: 126.04,
@@ -918,8 +918,8 @@ test('the buyer builds a request, sees no call on it, and the desk sees both', a
 
 test('every row a reader produced has to be ticked by a person before the lines save', async ({ page }) => {
   const cartId = Number((await pool.query(
-    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status, approved_amount, gc_total)
-     VALUES ($1,$2,'E2E Store','E2E: ticking the receipt rows','funded',100,400) RETURNING id`,
+    `INSERT INTO buy_carts (gc_merchant, buyer_user_id, buyer_name, retailer, purpose, status, approved_amount, gc_total)
+     VALUES ('nike', $1,$2,'E2E Store','E2E: ticking the receipt rows','funded',100,400) RETURNING id`,
     [people.buyer.uid, people.buyer.name])).rows[0].id);
   // The desk that funded it states what the receipt says (an approver's say is over
   // once the request is funded).
@@ -972,8 +972,8 @@ test('a request can be deleted by whoever can reach it — until cards are issue
   // `list_closed_at` is stamped because the carded case issues a card, and the desk
   // records nothing against a list the buyer has not closed.
   const seed = async (purpose, status = 'submitted') => Number((await pool.query(
-    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status, approved_amount, gc_total, list_closed_at)
-     VALUES ($1,$2,'E2E Store',$3,$4,100,0,now()) RETURNING id`,
+    `INSERT INTO buy_carts (gc_merchant, buyer_user_id, buyer_name, retailer, purpose, status, approved_amount, gc_total, list_closed_at)
+     VALUES ('nike', $1,$2,'E2E Store',$3,$4,100,0,now()) RETURNING id`,
     [people.buyer.uid, people.buyer.name, purpose, status])).rows[0].id);
 
   // No money on it: the buyer deletes their own, and a tombstone is left.
@@ -1021,7 +1021,7 @@ test('a request can be deleted by whoever can reach it — until cards are issue
 });
 
 test('a request needs a store before it can be closed, but no written purpose', async ({ request }) => {
-  const { body } = await call(request, 'buyer', 'cart/create', {});
+  const { body } = await call(request, 'buyer', 'cart/create', { merchant: 'nike' });
   const cartId = Number(body.cart.id);
   await call(request, 'approver', 'cart/line', { cartId, line: LINE });
   const r = await call(request, 'buyer', 'cart/submit', { cartId });
@@ -1066,32 +1066,77 @@ test('the funding target carries the declared tax, the supplier sees it, and onl
   expect(released.checks.find((c) => c.key === 'cards_recorded').ok).toBe(true);
 });
 
-// Opening a request asks ONE question: which store. "What are you buying, and why?" was
-// asked here and is gone — a buyer works that out standing in the shop, so before the
-// trip it was answered with a guess or not at all, and the lines say it better.
-test('a request is started in one modal that asks only for the store', async ({ page }) => {
+// Opening a request asks two things the buyer knows before the trip: which merchant's
+// gift cards (a fixed list) and which store. "What are you buying, and why?" was asked
+// here and is gone — a buyer works that out standing in the shop, so before the trip it
+// was answered with a guess or not at all, and the lines say it better.
+test('a request is started in one modal that asks for the gift card merchant and the store', async ({ page }) => {
   await as(page, 'buyer');
   await page.goto('/buying');
   await page.getByRole('button', { name: 'New request' }).click();
 
   const modal = page.locator('.modal.form-modal');
   await expect(modal).toBeVisible();
-  // One field, and it is the store — no purpose textarea to fill in before the trip.
+  // One text box (the store) and one pick list (the merchant). No purpose textarea.
   await expect(modal.getByRole('textbox')).toHaveCount(1);
   await expect(modal).not.toContainText(/what are you buying/i);
+  const merchant = modal.getByRole('combobox');
+  await expect(merchant.locator('option')).toHaveText([
+    'Pick a merchant…', 'Nike', 'Foot Locker / Champs Sports', 'Adidas', 'Finish Line / JD Sports', "Dick's Sporting Goods",
+  ]);
 
-  // The store is still required, and blank is refused in the modal, not by the server
-  // after the fact.
+  // Both are required, and blank is refused in the modal, not by the server after the fact.
   await modal.getByRole('button', { name: 'Start the request' }).click();
-  await expect(modal.locator('.error')).toContainText(/needed/i);
+  await expect(modal.locator('.error')).toContainText(/gift cards for is needed/i);
+  await merchant.selectOption('footlocker');
+  await modal.getByRole('button', { name: 'Start the request' }).click();
+  await expect(modal.locator('.error')).toContainText(/which store\? is needed/i);
   await expect(modal).toBeVisible();
 
   await modal.getByRole('textbox').first().fill('E2E Modal Store');
   await modal.getByRole('button', { name: 'Start the request' }).click();
 
-  // It lands on the new request, opened and ready for lines.
+  // It lands on the new request, opened and ready for lines, naming the merchant.
   await expect(page.locator('.bc-lines')).toBeVisible();
   await expect(page.locator('.app')).toContainText('E2E Modal Store');
+  await expect(page.locator('.bc-merchant select')).toHaveValue('footlocker');
+});
+
+// The merchant is a key off a fixed list, checked by the server. An older request (opened
+// before the list) has none: it can't close its list until one is picked, and the pick is
+// locked once the desk records a card.
+test('gift card merchant: required on create, picked on an older request, locked once cards are on it', async ({ request }) => {
+  const none = await call(request, 'buyer', 'cart/create', { retailer: 'E2E Store' });
+  expect(none.status).toBe(400);
+  expect(none.body.error).toMatch(/which merchant/i);
+  const typo = await call(request, 'buyer', 'cart/create', { merchant: 'Footlocker #22', retailer: 'E2E Store' });
+  expect(typo.status).toBe(400);
+
+  // An older request: no merchant on the row.
+  const cartId = await newRequest(request, { lines: [LINE], submit: false });
+  await pool.query('UPDATE buy_carts SET gc_merchant = NULL WHERE id = $1', [cartId]);
+  const refused = await call(request, 'buyer', 'cart/submit', { cartId });
+  expect(refused.status).toBe(400);
+  expect(refused.body.error).toMatch(/which merchant/i);
+
+  // Somebody with no part in the cards can't set it; the buyer can.
+  expect((await call(request, 'shipper', 'cart/merchant', { cartId, merchant: 'nike' })).status).toBe(403);
+  expect((await call(request, 'buyer', 'cart/merchant', { cartId, merchant: 'not-a-store' })).status).toBe(400);
+  const set = await call(request, 'buyer', 'cart/merchant', { cartId, merchant: 'finishline' });
+  expect(set.status).toBe(200);
+  expect(set.body.cart.gc_merchant).toBe('finishline');
+  const ev = (await pool.query(`SELECT body FROM buy_cart_events WHERE cart_id = $1 AND kind = 'merchant_set'`, [cartId])).rows;
+  expect(ev.map((e) => e.body)).toEqual(['Gift card merchant: Finish Line / JD Sports']);
+  expect((await call(request, 'buyer', 'cart/submit', { cartId })).status).toBe(200);
+
+  // Cards recorded → the merchant is locked, and a card with no retailer typed is filed under it.
+  await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+  expect((await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '7272727272727272', balance: 50 } })).status).toBe(200);
+  const card = (await pool.query('SELECT retailer FROM buy_cart_gift_cards WHERE cart_id = $1', [cartId])).rows[0];
+  expect(card.retailer).toBe('Finish Line / JD Sports');
+  const locked = await call(request, 'buyer', 'cart/merchant', { cartId, merchant: 'nike' });
+  expect(locked.status).toBe(409);
+  expect((await pool.query('SELECT gc_merchant FROM buy_carts WHERE id = $1', [cartId])).rows[0].gc_merchant).toBe('finishline');
 });
 
 // ---------------------------------------------------------------------------
@@ -1234,7 +1279,7 @@ test('the desk can correct a shelf price after submission, until the cards are o
 // is a form you then have to re-read before you can trust you only changed the one.
 test('a cost chip is the field: tap it, type, Enter', async ({ page, request }) => {
   const purpose = `E2E: chip edit ${Date.now()}`;
-  const { body } = await call(request, 'buyer', 'cart/create', { retailer: 'E2E Store', purpose });
+  const { body } = await call(request, 'buyer', 'cart/create', { merchant: 'nike', retailer: 'E2E Store', purpose });
   const cartId = Number(body.cart.id);
   await call(request, 'approver', 'cart/line', { cartId, line: LINE });
   await shoePhotos(cartId, [LINE.sku]);
@@ -1280,7 +1325,7 @@ test('a cost chip is the field: tap it, type, Enter', async ({ page, request }) 
 // shop who can read the tax off the register.
 test('the supplier portal shows no cost card at all', async ({ page, request }) => {
   const purpose = `E2E: chip buyer ${Date.now()}`;
-  const { body } = await call(request, 'buyer', 'cart/create', { retailer: 'E2E Store', purpose });
+  const { body } = await call(request, 'buyer', 'cart/create', { merchant: 'nike', retailer: 'E2E Store', purpose });
   const cartId = Number(body.cart.id);
   await call(request, 'approver', 'cart/line', { cartId, line: LINE });
 
@@ -1300,7 +1345,7 @@ test('the supplier portal shows no cost card at all', async ({ page, request }) 
 // are drawn as plain text rather than as buttons that answer 403.
 test('staff with neither privilege see the costs and cannot tap them', async ({ page, request }) => {
   const purpose = `E2E: chip readonly ${Date.now()}`;
-  const { body } = await call(request, 'buyer', 'cart/create', { retailer: 'E2E Store', purpose });
+  const { body } = await call(request, 'buyer', 'cart/create', { merchant: 'nike', retailer: 'E2E Store', purpose });
   await call(request, 'approver', 'cart/line', { cartId: Number(body.cart.id), line: LINE });
   await shoePhotos(Number(body.cart.id), [LINE.sku]);
   await call(request, 'buyer', 'cart/submit', { cartId: Number(body.cart.id) });
@@ -1325,7 +1370,7 @@ test('staff with neither privilege see the costs and cannot tap them', async ({ 
 
 test('a line with no market price says why, and can be priced', async ({ page, request }) => {
   const purpose = `E2E: price it ${Date.now()}`;
-  const { body } = await call(request, 'buyer', 'cart/create', { retailer: 'E2E Store', purpose });
+  const { body } = await call(request, 'buyer', 'cart/create', { merchant: 'nike', retailer: 'E2E Store', purpose });
   const cartId = Number(body.cart.id);
   // No verdict and no market prices — exactly what a timed-out quote leaves behind.
   await call(request, 'approver', 'cart/line', { cartId, line: { sku: 'CW2288-111', size: '9', qty: 1, shelfPrice: 50 } });
@@ -1717,8 +1762,8 @@ test.describe('what we already hold', () => {
         [`SBM-HOLD-${HELD_SKU}-${tag}`, heldBatchId, HELD_SKU, size, status, listed]);
     }
     heldCartId = Number((await pool.query(
-      `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status, cost_stack)
-       VALUES ($1,$2,'E2E Store','E2E: what do we already hold','draft',$3) RETURNING id`,
+      `INSERT INTO buy_carts (gc_merchant, buyer_user_id, buyer_name, retailer, purpose, status, cost_stack)
+       VALUES ('nike', $1,$2,'E2E Store','E2E: what do we already hold','draft',$3) RETURNING id`,
       [people.buyer.uid, people.buyer.name,
        JSON.stringify({ taxPct: 8.25, tipAmt: 5, giftPct: 8, shippingAmt: 8.25 })])).rows[0].id);
     sizedLineId = Number((await call(request, 'approver', 'cart/line', {
@@ -1816,8 +1861,8 @@ test.describe('the buy call is the approver’s', () => {
     // Seeded rather than posted — `cart/create` is capped at 30 a minute per IP and
     // route, and this suite already spends it (see the note on newRequest).
     callCartId = Number((await pool.query(
-      `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status, cost_stack)
-       VALUES ($1,$2,'E2E Store','E2E: who may see the call','draft',$3) RETURNING id`,
+      `INSERT INTO buy_carts (gc_merchant, buyer_user_id, buyer_name, retailer, purpose, status, cost_stack)
+       VALUES ('nike', $1,$2,'E2E Store','E2E: who may see the call','draft',$3) RETURNING id`,
       [people.buyer.uid, people.buyer.name,
        JSON.stringify({ taxPct: 8.25, tipAmt: 5, giftPct: 8, shippingAmt: 8.25 })])).rows[0].id);
 
@@ -3205,7 +3250,7 @@ test.describe('one price for the run, and the sizes that break it', () => {
 // nobody decided may spend company money. The gate is a privilege, read fresh, so it
 // closes on the next call — and it is the only privilege a supplier can hold.
 test('a supplier not switched on for buying sees no card, and every cart call is refused', async ({ page, request }) => {
-  const { status, body } = await call(request, 'shipper', 'cart/create', { retailer: 'E2E Store', purpose: 'E2E: should never open' });
+  const { status, body } = await call(request, 'shipper', 'cart/create', { merchant: 'nike', retailer: 'E2E Store', purpose: 'E2E: should never open' });
   expect(status).toBe(403);
   expect(body.error).toMatch(/raise buying requests/i);
   expect((await read_(request, 'shipper', 'cart/list')).status).toBe(403);
@@ -4719,13 +4764,13 @@ test.describe('the cost stack never reaches a supplier’s browser', () => {
   });
 
   test('cart/create: the new request a buyer gets back has no stack; staff opening one for them do', async ({ request }) => {
-    const mine = await call(request, 'buyer', 'cart/create', { retailer: 'E2E Leak Store' });
+    const mine = await call(request, 'buyer', 'cart/create', { merchant: 'nike', retailer: 'E2E Leak Store' });
     expect(mine.status).toBe(200);
     noStack(mine.body);
     expect(mine.body.cart.cost_stack).toBeNull();
     expect(mine.body.cart.funding_tax_pct).toBe(8.25);   // the preset's rate, kept for the cards
 
-    const staff = await call(request, 'approver', 'cart/create', { retailer: 'E2E Leak Store', buyerUserId: people.buyer.uid });
+    const staff = await call(request, 'approver', 'cart/create', { merchant: 'nike', retailer: 'E2E Leak Store', buyerUserId: people.buyer.uid });
     expect(staff.status).toBe(200);
     expect(staff.body.cart.cost_stack.shippingAmt).toBe(8.25);
   });

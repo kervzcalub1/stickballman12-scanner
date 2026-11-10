@@ -103,8 +103,8 @@ async function inProcess(fn) {
 
 async function newCart(lines) {
   const cartId = Number((await pool.query(
-    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, purpose, status, submitted_at, list_closed_at)
-     VALUES ($1,$2,'E2E Al2 Store','E2E alerts','submitted', now(), now()) RETURNING id`,
+    `INSERT INTO buy_carts (gc_merchant, buyer_user_id, buyer_name, retailer, purpose, status, submitted_at, list_closed_at)
+     VALUES ('nike', $1,$2,'E2E Al2 Store','E2E alerts','submitted', now(), now()) RETURNING id`,
     [people.buyer.uid, people.buyer.name])).rows[0].id);
   made.carts.push(cartId);
   const ids = [];

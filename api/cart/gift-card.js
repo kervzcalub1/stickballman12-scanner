@@ -30,6 +30,10 @@ import { encryptSecret, maskTail, secretsConfigured } from '../_lib/secrets.js';
 import { requirePrivilege, fundingTarget, redactCartForViewer } from '../_lib/buycart.js';
 import { cardsIssuable, cardsRefusedBecause, fundingWords } from '../../src/lib/buycartRules.js';
 import { alertCardsReleased } from '../_lib/alerts.js';
+// A card with no retailer typed on it is filed under the request's merchant (Nike, Foot
+// Locker / Champs Sports, …): that's whose card it is. The store location is the fallback
+// for requests opened before the merchant list.
+import { merchantLabel } from '../../src/lib/giftCardMerchants.js';
 
 const money = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null; };
 
@@ -107,7 +111,7 @@ export default async function handler(req, res) {
             codeLast4: maskTail(r.code),
             pinEnc: r.pin ? encryptSecret(r.pin) : null,
             balance: r.balance,
-            retailer: String(r.retailer ?? cart.retailer ?? '').trim().slice(0, 120) || null,
+            retailer: String(r.retailer || merchantLabel(cart.gc_merchant) || cart.retailer || '').trim().slice(0, 120) || null,
             label: String(r.label ?? '').trim().slice(0, 120) || null,
             actor: user,
           });
@@ -133,7 +137,7 @@ export default async function handler(req, res) {
       codeLast4: maskTail(code),
       pinEnc: pin ? encryptSecret(pin) : null,
       balance,
-      retailer: String(c.retailer ?? cart.retailer ?? '').trim().slice(0, 120) || null,
+      retailer: String(c.retailer || merchantLabel(cart.gc_merchant) || cart.retailer || '').trim().slice(0, 120) || null,
       label: String(c.label ?? '').trim().slice(0, 120) || null,
       actor: user,
     });

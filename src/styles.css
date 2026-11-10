@@ -4725,6 +4725,13 @@ body.keypad-open .keypad-fab, body.keypad-open .advisor-fab { display: none; }
 .bc-code { margin: 0; font-size: 20px; letter-spacing: 0.02em; }
 .bc-purpose { margin: 10px 0 4px; padding: 8px 10px; border-radius: 8px;
   background: var(--accent-tint); border: 1px solid var(--accent-edge); }
+/* Which merchant's gift cards: the desk reads it before handing a card over. Amber
+   (data-accent="attention") when an older request has none picked yet. The select is
+   15px+ so iOS doesn't zoom the page when it's tapped. */
+.bc-merchant { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  margin: 10px 0 4px; padding: 8px 10px; border-radius: 8px; font-size: 14px;
+  background: var(--accent-tint); border: 1px solid var(--accent-edge); }
+.bc-merchant select.input { width: auto; flex: 0 1 auto; min-width: 0; min-height: 40px; font-size: 15px; }
 /* The four numbers that decide everything downstream, on one line and monospaced so
    they line up when they're read side by side rather than one at a time. */
 .bc-money { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px;

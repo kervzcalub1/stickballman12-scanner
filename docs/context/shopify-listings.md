@@ -27,8 +27,38 @@ mints one with the new scopes (or restart the server to drop the old one).
 | `api/_lib/shopify.js` | `shopifyAllVariants`, `shopifyListingState`, `shopifyUpdateVariants`, `shopifyUpdateProduct` |
 | `e2e/shopify-listings.spec.js` | rules + the page with EVERY endpoint mocked + save guards |
 
+## Kept fresh by the server (owner, 2026-11-10)
+"Check the listings all the time, not only when I open the page — a new product or a stock change
+should update the record." The page no longer reads Shopify on open; it reads the server's COPY.
+- **`shopify_listing_variants`** (one row per variant, the `shopifyAllVariants` shape) — written by
+  `api/_lib/listings-watch.js`:
+  - **Full re-read every 30 min** (`api/_lib/listings-watch-worker.js`, `LISTINGS_WATCH_MIN`), paced.
+    Saves only rows that changed (no write → no live notice), prunes variants Shopify no longer has —
+    never on a truncated read, and never when Shopify suddenly returns under half of what we hold
+    (a hiccup, not a mass delete → `failed`, copy kept). State: `app_settings.shopify_listings_check`
+    (`running` / `done` / `failed` + `lastGood`).
+  - **Shopify webhooks** (`api/shopify/webhook.js`, beside SHEIN's and eBay Sync's paths — an error
+    here never reaches them): products/create|update → that product re-read live
+    (`shopifyProductListingVariants`); inventory_levels/update → its product
+    (`shopifyProductForInventoryItem`) re-read; products/delete → its rows dropped. Coalesced 2 s, one
+    product at a time, in memory (a restart drops what's pending; the next full re-read catches it).
+  - **A save from this page** queues its products for a re-read too (webhooks can be late).
+- **`listing_market_prices`** (style code + size → Alias answer): after each full re-read,
+  `marketPass` looks up every IN-STOCK ACTIVE size whose answer is missing or older than
+  `LISTINGS_MARKET_HOURS` (default 6), oldest first, ≤ 600 per pass, 4 at a time (the same
+  `priceStyleSize` the browser used). An `error` is never stored — asked again next pass.
+  State: `app_settings.shopify_listings_market`.
+- **Production only by default** (dev shares the store and the eBay account): `LISTINGS_WATCH=on|off`.
+- `GET /api/shopify-listings/variants` → the copy + `market` + `check` (`source: 'stored'`). Until the
+  first full re-read has EVER finished it reads Shopify live as before (`source: 'live'`) and starts one.
+  `POST` = **Check now** (a full re-read + market pass in the background; 409 while one runs).
+- The page: a line under the search says when the server last checked; the market prices come with the
+  list (server answers win over this browser's own cache); it re-reads the copy live
+  (`useLive` on the two tables + `app_settings`, ≥ 30 s apart) — **never while there are unsaved edits**.
+
 ## The page
-- **Loads on open** (`productVariants` paged 250 at a time — ~3,900 variants, ~14 s).
+- **Opens on the server's copy** (above). Before: `productVariants` paged 250 at a time live on every
+  open (~3,900 variants, ~14 s), market prices fetched from the browser.
   Style = `styleFromTitle(product title)` (the sales feed's parser); the variant `sku` is
   an internal number here. One row per product (thumbnail, title, style code or "no style
   code", status, sizes · pairs, price range, ↓/↑ chips once priced, ↗ Shopify admin).

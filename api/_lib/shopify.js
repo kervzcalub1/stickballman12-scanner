@@ -438,6 +438,52 @@ const VARIANTS_QUERY = `query Variants($after: String) {
   }
 }`;
 
+// One variant as Shopify Listings uses it (shared by the full read and the one-product read).
+function listingVariantRow(v, product) {
+  const size = (v.selectedOptions || []).find((o) => /size/i.test(o.name))?.value ?? v.title;
+  const skuStyle = /[A-Z]/i.test(v.sku || '') && /\d/.test(v.sku || '') && String(v.sku).length >= 5 ? String(v.sku).toUpperCase() : null;
+  return {
+    variantId: v.id, productId: product?.id || null, productTitle: product?.title || '',
+    status: product?.status || null, handle: product?.handle || null,
+    image: product?.featuredMedia?.preview?.image?.url || null,
+    sku: v.sku || '', size: String(size ?? '').trim(),
+    price: v.price, compareAt: v.compareAtPrice ?? null,
+    qty: v.inventoryQuantity == null ? null : Number(v.inventoryQuantity),
+    style: styleFromTitle(product?.title) || skuStyle,
+  };
+}
+
+/**
+ * ONE product's variants as Shopify has them now (a webhook said it changed) → { variants } ·
+ * { gone: true } when Shopify no longer has it · { error } when the read failed.
+ */
+export async function shopifyProductListingVariants(productId) {
+  if (!shopifyConfigured()) return { error: 'Shopify is not configured on the server.', code: 'config' };
+  const id = String(productId).startsWith('gid://') ? String(productId) : `gid://shopify/Product/${productId}`;
+  const out = [];
+  let after = null;
+  for (let page = 0; page < 10; page++) {
+    const r = await gql(`query($id: ID!, $after: String) { product(id: $id) {
+      id title status handle featuredMedia { preview { image { url(transform: { maxWidth: 96 }) } } }
+      variants(first: 100, after: $after) { pageInfo { hasNextPage endCursor }
+        edges { node { id sku title price compareAtPrice inventoryQuantity selectedOptions { name value } } } } } }`, { id, after });
+    if (!r.ok) return failure(r, 'read');
+    const p = r.data?.product;
+    if (!p) return { gone: true, productId: id };
+    for (const { node } of p.variants?.edges || []) out.push(listingVariantRow(node, p));
+    if (!p.variants?.pageInfo?.hasNextPage) return { productId: id, variants: out };
+    after = p.variants.pageInfo.endCursor;
+  }
+  return { productId: id, variants: out };
+}
+/** The product an inventory item belongs to (an inventory_levels/update webhook names only the item). */
+export async function shopifyProductForInventoryItem(inventoryItemId) {
+  const id = String(inventoryItemId).startsWith('gid://') ? String(inventoryItemId) : `gid://shopify/InventoryItem/${inventoryItemId}`;
+  const r = await gql(`query($id: ID!) { inventoryItem(id: $id) { variant { product { id } } } }`, { id });
+  if (!r.ok) return null;
+  return r.data?.inventoryItem?.variant?.product?.id || null;
+}
+
 // The store's handle for admin links: "gqmnaa-ks.myshopify.com" → "gqmnaa-ks".
 export const shopifyAdminStore = () => domain().replace(/\.myshopify\.com$/, '');
 
@@ -453,19 +499,7 @@ export async function shopifyAllVariants({ paced = false } = {}) {
     if (!r.ok) return failure(r, 'read');
     const conn = r.data?.productVariants;
     if (paced && !conn) return { error: 'Shopify answered without a variant list.', code: 'empty' };
-    for (const { node: v } of conn?.edges || []) {
-      const size = (v.selectedOptions || []).find((o) => /size/i.test(o.name))?.value ?? v.title;
-      const skuStyle = /[A-Z]/i.test(v.sku || '') && /\d/.test(v.sku || '') && String(v.sku).length >= 5 ? String(v.sku).toUpperCase() : null;
-      out.push({
-        variantId: v.id, productId: v.product?.id || null, productTitle: v.product?.title || '',
-        status: v.product?.status || null, handle: v.product?.handle || null,
-        image: v.product?.featuredMedia?.preview?.image?.url || null,
-        sku: v.sku || '', size: String(size ?? '').trim(),
-        price: v.price, compareAt: v.compareAtPrice ?? null,
-        qty: v.inventoryQuantity == null ? null : Number(v.inventoryQuantity),
-        style: styleFromTitle(v.product?.title) || skuStyle,
-      });
-    }
+    for (const { node: v } of conn?.edges || []) out.push(listingVariantRow(v, v.product));
     if (!conn?.pageInfo?.hasNextPage) return { variants: out };
     after = conn.pageInfo.endCursor;
   }

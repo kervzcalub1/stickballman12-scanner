@@ -10,7 +10,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, Modal, ProgressBar, ShoeThumb } from '../components/common.jsx';
 import { useMarketPrices } from '../components/MarketPrices.jsx';
-import { useUnsavedGuard } from '../hooks.js';
+import { useUnsavedGuard, useLive } from '../hooks.js';
 import { PH_DATETIME } from '../lib/format.js';
 import { parseMarkup, multiplierLabel, priceCents } from '../lib/ebayReprice.js';
 import {
@@ -113,6 +113,27 @@ function ProductPanel({ p, drafts, setDrafts, cache, pctH, errors, onPrice, pric
   );
 }
 
+const when = (t) => (t ? `${PH_DATETIME.format(new Date(t))} EST` : '');
+// What the server last did: the page no longer waits for anyone to open it.
+function CheckLine({ check, source, marketInfo, checking, onCheck }) {
+  const running = check?.state === 'running';
+  const lastGood = check?.state === 'done' ? check.at : check?.lastGood || check?.prev?.at || null;
+  return (
+    <div className="sl-check muted xs" role="status">
+      {source === 'live'
+        ? <span>Read live from Shopify. The server is making its own copy now — from then on it keeps it up to date by itself.</span>
+        : <span>
+            Kept up to date by the server: every change in Shopify (new product, edit, stock) within seconds, and a full check every 30 min.
+            {lastGood && <> Last full check <b>{when(lastGood)}</b>.</>}
+            {marketInfo?.at && <> Market prices checked {when(marketInfo.at)}.</>}
+          </span>}
+      {running && <span> · Checking Shopify now…</span>}
+      {check?.state === 'failed' && <span className="error"> · The last check failed ({check.error}) — showing the copy from {when(lastGood) || 'before'}.</span>}
+      {' '}<button type="button" className="btn xs ghost" disabled={running || checking} onClick={onCheck}>{running ? 'Checking…' : 'Check now'}</button>
+    </div>
+  );
+}
+
 function RecentEdits({ stamp, onSignOut }) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState(null);
@@ -158,6 +179,13 @@ export function ShopifyListings({ onHome, onSignOut }) {
   const [adminStore, setAdminStore] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  // The server's copy (docs/context/shopify-listings.md "Kept fresh by the server"): when it was
+  // last checked, and the market prices it already looked up ("STYLE|size" → answer).
+  const [check, setCheck] = useState(null);
+  const [source, setSource] = useState('');
+  const [serverMarket, setServerMarket] = useState({});
+  const [marketInfo, setMarketInfo] = useState(null);
+  const [checking, setChecking] = useState(false);
   const [q, setQ] = useState('');
   const [statusF, setStatusF] = useState('ACTIVE');
   const [stockOnly, setStockOnly] = useState(true);
@@ -176,16 +204,29 @@ export function ShopifyListings({ onHome, onSignOut }) {
   const dirty = Object.keys(drafts.variants).length + Object.keys(drafts.products).length > 0;
   useUnsavedGuard(dirty || !!saving);
 
-  async function load() {
-    setLoading(true); setLoadError('');
+  async function load(quiet = false) {
+    if (!quiet) { setLoading(true); setLoadError(''); }
     try {
       const r = await api.shopifyListingsVariants();
       setVariants(r.variants || []);
       setAdminStore(r.adminStore || '');
+      setCheck(r.check || null); setSource(r.source || ''); setMarketInfo(r.marketPass || null);
+      setServerMarket(Object.fromEntries((r.market || []).map((m) => [`${m.sku}|${m.size}`, { status: m.status, valueCents: m.valueCents, label: m.label, name: m.name }])));
       if (r.truncated) setLoadError('Shopify has more listings than one load reads (20,000) — the rest are not shown.');
-    } catch (err) { if (err.unauthorized) return onSignOut(); setLoadError(err.message); } finally { setLoading(false); }
+      else if (!quiet) setLoadError('');
+    } catch (err) { if (err.unauthorized) return onSignOut(); if (!quiet) setLoadError(err.message); } finally { if (!quiet) setLoading(false); }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // A webhook or the server's 30-min re-read changed the copy: take it — never under someone's edits.
+  useLive(['shopify_listing_variants', 'listing_market_prices', 'app_settings'], () => load(true), { mount: false, minGap: 30_000, paused: dirty || !!saving, every: 0 });
+  async function checkNow() {
+    setChecking(true); setLoadError('');
+    try { await api.shopifyListingsCheck(); setCheck((c) => ({ ...(c || {}), state: 'running', startedAt: new Date().toISOString() })); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setLoadError(err.message); } finally { setChecking(false); }
+  }
+  // Market prices: the server's (refreshed every few hours for every in-stock size), then any this
+  // browser looked up itself for a size the server hasn't got to yet.
+  const cache = useMemo(() => ({ ...mp.cache, ...serverMarket }), [mp.cache, serverMarket]);
 
   const products = useMemo(() => (variants ? groupProducts(variants) : []), [variants]);
   const variantsById = useMemo(() => new Map((variants || []).map((v) => [v.variantId, v])), [variants]);
@@ -197,21 +238,21 @@ export function ShopifyListings({ onHome, onSignOut }) {
     if (stockOnly && !p.variants.some(inStock)) return false;
     if (!productMatches(p, q)) return false;
     if (changesOnly) {
-      const any = sizesOf(p).some((v) => { const s = suggestion(v, mp.cache, pctH); return s.state === 'ok' && s.kind !== 'same'; });
+      const any = sizesOf(p).some((v) => { const s = suggestion(v, cache, pctH); return s.state === 'ok' && s.kind !== 'same'; });
       if (!any) return false;
     }
     return true;
-  }), [products, statusF, stockOnly, q, changesOnly, mp.cache, pctH]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [products, statusF, stockOnly, q, changesOnly, cache, pctH]); // eslint-disable-line react-hooks/exhaustive-deps
   const viewSizes = useMemo(() => filtered.flatMap(sizesOf), [filtered]); // eslint-disable-line react-hooks/exhaustive-deps
-  const viewJobs = useMemo(() => jobsFor(viewSizes).filter((j) => !mp.cache[`${j.sku}|${j.size}`]), [viewSizes, mp.cache]);
-  const viewUsable = useMemo(() => viewSizes.filter((v) => { const s = suggestion(v, mp.cache, pctH); return s.state === 'ok' && s.kind !== 'same' && !s.big; }), [viewSizes, mp.cache, pctH]);
+  const viewJobs = useMemo(() => jobsFor(viewSizes).filter((j) => !cache[`${j.sku}|${j.size}`]), [viewSizes, cache]);
+  const viewUsable = useMemo(() => viewSizes.filter((v) => { const s = suggestion(v, cache, pctH); return s.state === 'ok' && s.kind !== 'same' && !s.big; }), [viewSizes, cache, pctH]);
   const sum = useMemo(() => summarizeDrafts(drafts, variantsById), [drafts, variantsById]);
   const pricing = mp.state.running;
 
   function toggleOpen(p) {
     setOpen((cur) => { const n = new Set(cur); if (n.has(p.productId)) n.delete(p.productId); else n.add(p.productId); return n; });
     // Opening a product prices its sizes if they aren't known yet (cheap: a dozen lookups).
-    const need = jobsFor(sizesOf(p)).filter((j) => !mp.cache[`${j.sku}|${j.size}`]);
+    const need = jobsFor(sizesOf(p)).filter((j) => !cache[`${j.sku}|${j.size}`]);
     if (!open.has(p.productId) && need.length && !pricing) mp.run(need);
   }
 
@@ -271,8 +312,9 @@ export function ShopifyListings({ onHome, onSignOut }) {
         <div className="sl-search-row">
           <input type="search" className="sl-search" value={q} onChange={(e) => { setQ(e.target.value); setShown(PAGE); }}
             placeholder="Search title, style code or SKU…" aria-label="Search listings" />
-          <button type="button" className="btn ghost sm" onClick={load} disabled={loading || !!saving || dirty} title={dirty ? 'Save or discard your edits first' : 'Reload from Shopify'}>{loading ? 'Loading…' : '↻ Reload'}</button>
+          <button type="button" className="btn ghost sm" onClick={() => load()} disabled={loading || !!saving || dirty} title={dirty ? 'Save or discard your edits first' : 'Show the latest'}>{loading ? 'Loading…' : '↻ Reload'}</button>
         </div>
+        <CheckLine check={check} source={source} marketInfo={marketInfo} checking={checking} onCheck={checkNow} />
         <div className="sl-filters">
           <div className="seg sm" role="group" aria-label="Status">
             {[['ACTIVE', 'Active'], ['DRAFT', 'Draft'], ['ARCHIVED', 'Archived'], ['ALL', 'All']].map(([k, l]) => (
@@ -296,7 +338,7 @@ export function ShopifyListings({ onHome, onSignOut }) {
           ) : (
             <>
               {viewJobs.length > 0 && <button type="button" className="btn sm" onClick={() => mp.run(viewJobs)}>Get market prices for {fmt(viewJobs.length)} size{viewJobs.length === 1 ? '' : 's'}{viewJobs.length > 300 ? ` (~${Math.ceil(viewJobs.length / 110)} min)` : ''}</button>}
-              {viewUsable.length > 0 && <button type="button" className="btn sm primary" onClick={() => setDrafts((d) => draftSuggested(d, viewUsable, mp.cache, pctH).drafts)}>Use suggested for {fmt(viewUsable.length)} size{viewUsable.length === 1 ? '' : 's'}</button>}
+              {viewUsable.length > 0 && <button type="button" className="btn sm primary" onClick={() => setDrafts((d) => draftSuggested(d, viewUsable, cache, pctH).drafts)}>Use suggested for {fmt(viewUsable.length)} size{viewUsable.length === 1 ? '' : 's'}</button>}
             </>
           )}
         </div>
@@ -325,7 +367,7 @@ export function ShopifyListings({ onHome, onSignOut }) {
               const prices = sizes.map((v) => priceCents(drafts.variants[v.variantId]?.price ?? v.price)).filter((c) => c != null);
               const lo = Math.min(...prices);
               const hi = Math.max(...prices);
-              const sugs = sizes.map((v) => suggestion(v, mp.cache, pctH, drafts.variants[v.variantId]?.price ?? v.price)).filter((s) => s.state === 'ok');
+              const sugs = sizes.map((v) => suggestion(v, cache, pctH, drafts.variants[v.variantId]?.price ?? v.price)).filter((s) => s.state === 'ok');
               const down = sugs.filter((s) => s.kind === 'lower').length;
               const up = sugs.filter((s) => s.kind === 'raise').length;
               const edited = p.variants.some((v) => drafts.variants[v.variantId]) || !!drafts.products[p.productId];
@@ -352,7 +394,7 @@ export function ShopifyListings({ onHome, onSignOut }) {
                     {adminStore && <a className="sl-admin" href={`https://admin.shopify.com/store/${adminStore}/products/${numericId(p.productId)}`} target="_blank" rel="noreferrer"
                       title="Open in Shopify admin" aria-label={`Open ${p.title} in Shopify admin`}>↗</a>}
                   </div>
-                  {isOpen && <ProductPanel p={{ ...p, variants: sizes }} drafts={drafts} setDrafts={setDrafts} cache={mp.cache} pctH={pctH} errors={errors}
+                  {isOpen && <ProductPanel p={{ ...p, variants: sizes }} drafts={drafts} setDrafts={setDrafts} cache={cache} pctH={pctH} errors={errors}
                     pricing={pricing} onPrice={(vs) => mp.run(jobsFor(vs))} />}
                 </div>
               );

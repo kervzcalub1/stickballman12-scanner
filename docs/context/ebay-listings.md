@@ -66,6 +66,12 @@ starting page (`back`); the nonce remembers it and the callback returns there.
   comparison is a later job against Shopify, not `items`.
 - The listing-model check keeps eBay's error (`inventoryError`) instead of a silent blank.
 
+## Pulled every 30 min by the server (owner, 2026-11-10)
+The same pull as the button (`autoPull` in `api/ebay/pull.js`), from `api/_lib/listings-watch-worker.js`
+every 30 min (`LISTINGS_WATCH_MIN`), first 5 min after a start; skipped while a pull runs or eBay
+isn't connected. Production only by default (`LISTINGS_WATCH=on|off`). `by` = `auto (every 30 min)`.
+eBay has no webhook for listing changes we use, so 30 min is the freshness here; the button still works.
+
 ## Not in Shopify → end them (2026-10-10, owner)
 DPL syncs Shopify → eBay by SKU (our system makes the SKU; DPL copies it to eBay's Custom
 label). An eBay size whose Custom label no Shopify variant has is **orphaned**: a sale there

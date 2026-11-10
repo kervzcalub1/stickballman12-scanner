@@ -46,6 +46,21 @@ async function run(by) {
   }
 }
 
+/**
+ * The server's own pull, every 30 min (api/_lib/listings-watch-worker.js — owner, 2026-11-10: "check
+ * the listings all the time, not only when I open the page"). Same pull as the button; skipped
+ * while one is running or eBay isn't connected. -> { started } | { skipped: why }
+ */
+export async function autoPull(by = 'auto (every 30 min)') {
+  if (!ebayConfigured()) return { skipped: 'eBay is not set up on this server' };
+  let last = null;
+  try { last = JSON.parse((await getSetting(PULL_KEY)) || 'null'); } catch { /* none */ }
+  if (last?.state === 'running' && Date.now() - Date.parse(last.startedAt) < STALE_MS) return { skipped: 'a pull is running' };
+  try { await accessToken(); } catch (e) { return { skipped: e.message }; }
+  await run(by);
+  return { started: true };
+}
+
 export default async function handler(req, res) {
   applySecurity(req, res);
   const user = requireRole(req, res, ['ph_team']);   // admin/superadmin auto-allowed

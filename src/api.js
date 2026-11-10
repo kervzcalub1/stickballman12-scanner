@@ -328,6 +328,8 @@ export const api = {
   // eBay reprice: one batch (≤ 25) of style code + size → market price (api/ebay-reprice/prices.js).
   // Shopify Listings (PH): every variant / save edited fields live / recent edits.
   shopifyListingsVariants: () => get('/api/shopify-listings/variants'),
+  // "Check now": the server re-reads every Shopify variant (and the market) by itself.
+  shopifyListingsCheck: () => post('/api/shopify-listings/variants', {}),
   shopifyListingsSave: (body) => post('/api/shopify-listings/save', body),
   shopifyListingsHistory: () => get('/api/shopify-listings/history'),
   ebayRepricePrices: (jobs) => post('/api/ebay-reprice/prices', { jobs }),

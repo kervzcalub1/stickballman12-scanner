@@ -166,7 +166,7 @@ export function EbayListings({ user, onHome, onSignOut }) {
             <button type="button" className="btn primary" disabled={!!busy || running} onClick={pull}>
               {running ? (pullState.page === 'shopify' ? 'Checking against Shopify…' : `Pulling… page ${pullState.page || 0}${pullState.pages ? ` of ${pullState.pages}` : ''}`) : busy === 'pull' ? 'Starting…' : '↻ Pull listings from eBay'}</button>
             {pullState?.state === 'done' && (
-              <span className="muted sm">Last pulled {when(pullState.finishedAt)}{pullState.by ? ` by ${pullState.by}` : ''} — {fmt(pullState.listings)} listings, {fmt(pullState.rows)} sizes{pullState.removed ? `, ${fmt(pullState.removed)} ended since the pull before` : ''}.{pullState.orphans != null ? ` Shopify check: ${fmt(pullState.orphans)} size${pullState.orphans === 1 ? '' : 's'} not in Shopify.` : pullState.shopifyError ? ` Shopify check skipped: ${pullState.shopifyError}` : ''}</span>
+              <span className="muted sm">Last pulled {when(pullState.finishedAt)}{pullState.by ? ` by ${pullState.by}` : ''} — {fmt(pullState.listings)} listings, {fmt(pullState.rows)} sizes{pullState.removed ? `, ${fmt(pullState.removed)} ended since the pull before` : ''}.{pullState.orphans != null ? ` Shopify check: ${fmt(pullState.orphans)} size${pullState.orphans === 1 ? '' : 's'} not in Shopify.` : pullState.shopifyError ? ` Shopify check skipped: ${pullState.shopifyError}` : ''} The server pulls again by itself every 30 min.</span>
             )}
             {pullState?.state === 'failed' && <span className="error xs">Last pull failed {when(pullState.finishedAt)}: {pullState.error}</span>}
           </div>

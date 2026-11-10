@@ -364,7 +364,7 @@ in order (a scan fired the instant after tapping Count lands in the count).
 - **The same VIN twice, even fired at once** — counts once: partial unique index
   `stock_check_scans_vin_once (count_id, vin) WHERE counted AND NOT undone`.
 - **Someone else's count** — scan into / undo / finish / cancel / start-from-my-scan → 404.
-- **Non-admin reading others' history** — `my-scans` ignores `user` for non-admins.
+- **Reading others' history** — allowed for every staff role since 2026-11-11 (owner); suppliers are refused, and PH never gets the PH-excluded kinds.
 - **NOT closable — box barcodes:** every size-10 box carries the SAME UPC, so a barcode can't
   tell two boxes apart; one box scanned 3× counts 3. And a box scanned by barcode AND by
   VIN counts twice. → **"Count by VIN sticker only"** (`vin_only`) makes each pair count
@@ -389,8 +389,14 @@ shelf). A count line above ("42 pairs received · 3 batches · 12 different shoe
   (`user.name || user.username`), not a username. The endpoint matches every spelling it
   knows for that person: the username, `users.name`, and the name on their Stock Check scans.
   A rename later splits a person's history at the rename.
-- Non-admins only ever get their own. An admin opens on Everyone (each row says who) and
-  can pick any approved staff account (`listScanPeople`) or anyone who has scanned.
+- **Everyone can read everyone's (owner, 2026-11-11)** — warehouse, PH and admin can pick
+  Everyone, any approved staff account (`listScanPeople`) or anyone who has scanned;
+  **suppliers never** (`requireRole(['warehouse','ph_team'])`). Warehouse opens on Mine,
+  admin and PH on Everyone (titled "Scan History"; PH has no "Mine" — it receives nothing).
+- **PH reads it at `/ph/my-scans`** (PH home → Look Up → Scan History, same component, no
+  Stock Check button). For a PH account the Received list leaves out `PH_EXCLUDED_KINDS`
+  (in-store, existing stock, empty boxes — `listReceivedItems({ phSafe })`); Stock Check
+  scans and counts are shown as they are.
 - Live on `items` (already in LIVE_TABLES). No schema change.
 - The home card moved from Browse & Listings to **Receiving Shipment Orders**, next to Batches.
 
@@ -398,6 +404,6 @@ The Stock Check part (second and third tabs, as before):
 A person's **scan history** (user's call): every Stock Check scan, newest first, then a
 **Counts** tab — for a day / week / month (EST, `?dm/da/tab/user` in the URL), live
 (`stock_check_scans`, `stock_counts` in LIVE_TABLES). `GET /api/items/my-scans?from&to&user`.
-Non-admins see only their own; **an admin opens on Everyone** (titled "Scan History") and
-can pick one person (anyone who has scanned). **CSV + PDF** per tab (`src/lib/scanReport.js`,
+Anyone on staff can read anyone's (see above); **admin and PH open on Everyone** (titled
+"Scan History") and can pick one person (anyone who has scanned). **CSV + PDF** per tab (`src/lib/scanReport.js`,
 same rows for both; PDF via presell's `tablePdf`). Needs **`db:setup`** (two tables + index).

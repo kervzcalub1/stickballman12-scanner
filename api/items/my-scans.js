@@ -4,8 +4,12 @@
 //   received: the pairs this person SCANNED IN at receiving (the owner's meaning of "my
 //             scans", 2026-11-10), each with the shipment it came in on;
 //   scans / counts: what they scanned on Stock Check and the counts they ran.
-// Everyone sees their OWN; an admin can pick anyone, or everyone (`users`).
-import { send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
+// Any staff account — warehouse, PH, admin — can read ANYONE's, or everyone's (owner,
+// 2026-11-11: "allow all accounts to see everyone's scans, including PH seeing the
+// warehouse's"; `users` is the pick list). Suppliers never reach this (requireRole).
+// A PH account never gets the PH-excluded kinds on Received (in-store, existing stock,
+// empty boxes — PH_EXCLUDED_KINDS): those pairs must never touch the PH team.
+import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { dbConfigured, listStockScans, listStockCounts, listStockScanUsers, listReceivedItems, listScanPeople } from '../_lib/db.js';
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
@@ -22,15 +26,14 @@ export default async function handler(req, res) {
   const from = sp.get('from'); const to = sp.get('to');
   if (!YMD.test(from || '') || !YMD.test(to || '')) return send(res, 400, { ok: false, error: 'Pick a date range.' });
   const me = user.username || String(user.uid || '');
-  const admin = isPrivileged(user.role);
-  const asked = String(sp.get('user') || '').trim();
-  // Not an admin: always yourself, whatever was asked.
-  const who = admin ? (asked === 'all' ? null : (asked || me)) : me;
+  const asked = String(sp.get('user') || '').trim().slice(0, 100);
+  const who = asked === 'all' ? null : (asked || me);
+  const ph = user.role === 'ph_team';
 
   try {
     const [people, scanUsers] = await Promise.all([
       listScanPeople(),
-      admin ? listStockScanUsers() : Promise.resolve(undefined),
+      listStockScanUsers(),
     ]);
     // Receiving files a pair under the person's display NAME (user.name || user.username),
     // so a person's received pairs are matched on every spelling of them we know.
@@ -45,18 +48,15 @@ export default async function handler(req, res) {
       names = [...set];
     }
     const [received, scans, counts] = await Promise.all([
-      listReceivedItems({ names, from, to }),
+      listReceivedItems({ names, from, to, phSafe: ph }),
       listStockScans({ username: who, from, to }),
       listStockCounts({ username: who, from, to }),
     ]);
-    // The admin's pick list: every approved staff account, plus anyone who scanned on Stock
-    // Check without one (the env admin), one row per username.
-    let users;
-    if (admin) {
-      const byName = new Map(people.map((p) => [p.username, { username: p.username, user_name: p.name }]));
-      for (const u of scanUsers || []) if (!byName.has(u.username)) byName.set(u.username, { username: u.username, user_name: u.user_name });
-      users = [...byName.values()];
-    }
+    // The pick list: every approved staff account, plus anyone who scanned on Stock Check
+    // without one (the env admin), one row per username.
+    const byName = new Map(people.map((p) => [p.username, { username: p.username, user_name: p.name }]));
+    for (const u of scanUsers || []) if (!byName.has(u.username)) byName.set(u.username, { username: u.username, user_name: u.user_name });
+    const users = [...byName.values()];
     return send(res, 200, { ok: true, received, scans, counts, users, who: who || 'all' });
   } catch (e) {
     console.error('[items/my-scans]', e.message);

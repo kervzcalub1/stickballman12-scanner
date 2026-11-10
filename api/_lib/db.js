@@ -13544,9 +13544,12 @@ export async function listStockCounts({ username, from, to }) {
 // `items.created_by` holds the person's display NAME (receiving writes `user.name ||
 // user.username`), so `names` is every spelling of one person; null = everyone.
 // Hard-deleted pairs are gone from here (they live in deleted_items).
-export async function listReceivedItems({ names = null, from, to, limit = 5000 }) {
+// `phSafe` (a PH account reading it): never the PH_EXCLUDED_KINDS batches — in-store,
+// existing stock, empty boxes must never touch the PH team (CLAUDE.md).
+export async function listReceivedItems({ names = null, from, to, limit = 5000, phSafe = false }) {
   const lim = Math.min(20000, Math.max(1, Number(limit) || 5000));
   const list = names && names.length ? names : null;
+  const excluded = phSafe ? PH_EXCLUDED_KINDS : null;
   return await db()`
     SELECT i.id, i.vin, i.sku, i.size, i.name, i.status, i.location_code, i.created_by, i.created_at,
            i.with_box, i.pre_sell,
@@ -13558,6 +13561,7 @@ export async function listReceivedItems({ names = null, from, to, limit = 5000 }
       LEFT JOIN batch_boxes bx ON bx.id = i.box_id
       LEFT JOIN purchase_orders po ON po.id = b.po_id
      WHERE (${list}::text[] IS NULL OR i.created_by = ANY(${list}::text[]))
+       AND (${excluded}::text[] IS NULL OR b.kind IS NULL OR b.kind <> ALL(${excluded}::text[]))
        AND (i.created_at AT TIME ZONE 'America/New_York')::date BETWEEN ${from}::date AND ${to}::date
      ORDER BY i.created_at DESC, i.id DESC LIMIT ${lim}`;
 }

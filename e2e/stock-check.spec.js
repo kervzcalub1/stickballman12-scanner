@@ -199,14 +199,25 @@ test('bypass attempts: the count can only move by real scans of the right pair',
   const [mine] = await q("SELECT id FROM stock_check_scans WHERE username = 'e2e_wh' AND count_id IS NULL ORDER BY id DESC LIMIT 1");
   r = await call(request, PH, 'POST', '/api/items/stock-count', { action: 'start', scanId: Number(mine.id) });
   expect(r.status()).toBe(404);
-  // 7. My Scans: not an admin → always your own, whatever you ask for.
+  // 7. My Scans (owner, 2026-11-11): every staff account can read anyone's — PH reads the
+  // warehouse's scans...
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   r = await call(request, PH, 'GET', `/api/items/my-scans?from=${today}&to=${today}&user=e2e_wh`);
   const ph = await r.json();
-  expect(ph.who).toBe('e2e_ph');
-  expect(ph.scans.every((s) => s.username === 'e2e_ph')).toBe(true);
-  // ...and only the pairs YOU received: none of the warehouse's.
+  expect(ph.who).toBe('e2e_wh');
+  expect(ph.scans.length).toBeGreaterThan(0);
+  expect(ph.scans.every((s) => s.username === 'e2e_wh')).toBe(true);
+  expect(ph.users.some((u) => u.username === 'e2e_wh')).toBe(true);
+  // ...but never the PH-excluded kinds: these pairs came in as Existing stock.
   expect(ph.received.some((it) => VINS.includes(it.vin))).toBe(false);
+  // The warehouse sees the same pairs, and can read everyone's too.
+  r = await call(request, WH, 'GET', `/api/items/my-scans?from=${today}&to=${today}&user=all`);
+  const wh = await r.json();
+  expect(wh.who).toBe('all');
+  expect(wh.received.some((it) => VINS.includes(it.vin))).toBe(true);
+  // A supplier never reads it.
+  r = await call(request, { uid: 'e2e-sup', username: 'e2e_sup', name: 'E2E Supplier', role: 'supplier' }, 'GET', `/api/items/my-scans?from=${today}&to=${today}&user=all`);
+  expect(r.status()).toBe(403);
 
   r = await call(request, WH, 'POST', '/api/items/stock-count', { action: 'finish', id });
   const done = await r.json();
@@ -311,4 +322,29 @@ test('a sticker no pair wears says so', async ({ page }) => {
   const box = page.getByLabel('Scan or type a code');
   await box.fill('SBM-R-999999999'); await box.press('Enter');
   await expect(page.getByRole('region', { name: 'Answer' }).getByText(/Not in inventory —/)).toBeVisible({ timeout: 20_000 });
+});
+
+test('PH opens Scan History on everyone and sees the warehouse’s Stock Check scans', async ({ page }) => {
+  page.on('pageerror', (err) => { throw err; });
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph/my-scans');
+  await expect(page.getByLabel('Whose scans')).toHaveValue('all');
+  await expect(page.getByLabel('Whose scans').locator('option', { hasText: 'Mine' })).toHaveCount(0);
+  await page.getByRole('tab', { name: /Stock Check/ }).click();
+  const history = page.getByRole('list', { name: 'Scan history' });
+  await expect(history.getByText(VINS[0]).first()).toBeVisible({ timeout: 15_000 });
+  await expect(history.getByText(/E2E Warehouse/).first()).toBeVisible();
+  // Received leaves out the existing-stock pairs for PH.
+  await page.getByRole('tab', { name: /Received/ }).click();
+  await expect(page.getByText(VINS[0])).toHaveCount(0);
+});
+
+test('the warehouse can switch My Scans to everyone', async ({ page }) => {
+  page.on('pageerror', (err) => { throw err; });
+  await loginAs(page, 'warehouse');
+  await page.goto('/my-scans');
+  await expect(page.getByLabel('Whose scans')).toHaveValue('');                // opens on Mine
+  await page.getByLabel('Whose scans').selectOption('all');
+  const got = page.getByRole('list', { name: 'Pairs received' });
+  await expect(got.locator('li').filter({ hasText: VINS[0] })).toContainText('E2E Warehouse', { timeout: 15_000 });
 });

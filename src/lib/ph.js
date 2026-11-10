@@ -453,7 +453,7 @@ export function phListingStatus(g) {
 
 // PH pages are URL-routed under /ph/* (their own namespace, separate from the
 // warehouse/admin ROUTES) so a refresh restores the page and Back/Forward work.
-export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', expected: '/ph/expected', undelivered: '/ph/undelivered', duptracking: '/ph/duplicate-tracking', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', shein: '/ph/shein', ebaylistings: '/ph/ebay-listings', stockxlistings: '/ph/stockx-listings', shopifylistings: '/ph/shopify-listings', cancellations: '/ph/cancellations', inboundissues: '/ph/inbound-issues', access: '/ph/access' };
+export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', expected: '/ph/expected', undelivered: '/ph/undelivered', duptracking: '/ph/duplicate-tracking', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', shein: '/ph/shein', ebaylistings: '/ph/ebay-listings', stockxlistings: '/ph/stockx-listings', shopifylistings: '/ph/shopify-listings', cancellations: '/ph/cancellations', inboundissues: '/ph/inbound-issues', myscans: '/ph/my-scans', access: '/ph/access' };
 export const phPathForPage = (page) => (page && PH_PATHS[page]) || '/';
 export const phPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';
@@ -513,6 +513,7 @@ export const PH_HOME_SECTIONS = [
     { key: 'inquiry', icon: 'inquiry', title: 'Price Inquiry', sub: 'Live Alias prices for any SKU' },
     { key: 'payout', icon: 'payout', title: 'Payout Calculator', sub: 'Cost vs. Alias/StockX payout — is this pair a buy?' },
     { key: 'batches', icon: 'batches', title: 'Batches', sub: 'Find a shipment by any box’s tracking number' },
+    { key: 'myscans', icon: 'receiving', title: 'Scan History', sub: 'What each warehouse person scanned in, with the shipment — plus their Stock Check scans and counts. CSV and PDF' },
     { key: 'deleted', icon: 'deleted', title: 'Deleted', sub: 'Pairs removed from inventory, with history kept' },
   ] },
   // Drawn only for an account holding the privilege (`privKey`) — "Manage user access".

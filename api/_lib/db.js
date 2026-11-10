@@ -3295,6 +3295,60 @@ export async function listItemCostsByCode(code) {
   `;
 }
 
+// ---- Cost lookup (Costs page → Cost lookup tab) ---------------------------------------
+// Every PURCHASE line for a shoe — supplier PO lines and online order lines — so "what
+// did this cost us?" has one answer page (api/items/cost-lookup.js, src/lib/costLookup.js).
+// Matching: SKU contains the code with spaces/dashes ignored, or the name contains the
+// text as typed. A blank search returns the newest lines. Dates are EST civil days.
+
+// PO lines, one row per PO + store + SKU + size + price (a shoe spread over three labels
+// is one row with the three quantities summed). Shoes orders only — an empty-box order's
+// "cost ea" is a carton, not a pair.
+export async function listPoCostLines(q = '', limit = 500) {
+  const term = String(q || '').trim();
+  const bare = term.toUpperCase().replace(/[\s-]/g, '');
+  const skuLike = bare ? `%${bare}%` : null;
+  const nameLike = term ? `%${term.toUpperCase()}%` : null;
+  return db()`
+    SELECT o.id AS po_id, o.po_code, o.supplier_name, o.status, s.name AS store_name,
+           coalesce(o.date_of_purchase, (o.created_at AT TIME ZONE 'America/New_York')::date)::text AS bought_on,
+           max(l.sku) AS sku, max(l.name) AS name, l.size, max(l.gender) AS gender,
+           sum(coalesce(l.qty_expected, 0))::int AS qty, l.unit_cost, max(l.tip) AS tip
+      FROM po_lines l
+      JOIN purchase_orders o ON o.id = l.po_id
+      LEFT JOIN po_stores s ON s.id = l.po_store_id
+     WHERE o.order_kind = 'shoes'
+       AND coalesce(l.qty_expected, 0) > 0
+       AND (${nameLike}::text IS NULL
+            OR (${skuLike}::text IS NOT NULL AND upper(replace(replace(coalesce(l.sku, ''), ' ', ''), '-', '')) LIKE ${skuLike})
+            OR upper(coalesce(l.name, '')) LIKE ${nameLike})
+     GROUP BY o.id, o.po_code, o.supplier_name, o.status, s.name, o.date_of_purchase, o.created_at,
+              upper(replace(replace(coalesce(l.sku, ''), ' ', ''), '-', '')), l.size, l.unit_cost
+     ORDER BY bought_on DESC, o.id DESC, max(l.sku), l.size
+     LIMIT ${limit}`;
+}
+
+// Online orders that carry a matching line, WITH every line (the coupon, tax and shipping
+// are split across the whole order, so the cost of one pair needs all of them).
+export async function listOnlineOrdersForCost(q = '', limit = 300) {
+  const term = String(q || '').trim();
+  const bare = term.toUpperCase().replace(/[\s-]/g, '');
+  const skuLike = bare ? `%${bare}%` : null;
+  const nameLike = term ? `%${term.toUpperCase()}%` : null;
+  return db()`
+    SELECT o.id, o.store, o.order_number, o.coupon, o.tax, o.shipping, o.gc_pct, o.cashback_pct,
+           o.tracking_number, o.received_at,
+           coalesce(o.ordered_on, (o.created_at AT TIME ZONE 'America/New_York')::date)::text AS bought_on,
+           coalesce((SELECT json_agg(l ORDER BY l.id) FROM online_order_lines l WHERE l.order_id = o.id), '[]'::json) AS lines
+      FROM online_orders o
+     WHERE ${nameLike}::text IS NULL
+        OR EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id
+                    AND ((${skuLike}::text IS NOT NULL AND upper(replace(replace(coalesce(l.sku, ''), ' ', ''), '-', '')) LIKE ${skuLike})
+                         OR upper(coalesce(l.name, '')) LIKE ${nameLike}))
+     ORDER BY bought_on DESC, o.id DESC
+     LIMIT ${limit}`;
+}
+
 // Set (or clear) the cost on a set of units. Blank writes NULL, never 0 — "I don't
 // know what this cost" is not the same claim as "this was free", the same rule the
 // PO lines follow (purchase-orders.md). Terminal units are editable on purpose: a

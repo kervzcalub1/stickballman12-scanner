@@ -60,7 +60,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | Shopify: the all-channel sales + inventory feed (`api/_lib/shopify.js`) | `docs/context/shopify.md` |
 | Existing Stock: counting old stock in shelf-by-shelf (kind='existing', PH-excluded) | `docs/context/existing-stock.md` |
 | Inventory browse, SKU-merge, bulk status, labels, **My Scans = each person's received pairs (Received tab, default) + Stock Check scans/counts**, **removing pairs + Deleted archive**, **🛍 Check Shopify (live: what Shopify holds per size)**, **Stock Check** (`/stock-check`: scan a box → size + Shopify's for-sale count, scan a VIN → in inventory or not; count a size vs Shopify, **server-owned count**, VIN-only mode; every scan recorded); My Scans (`/my-scans`) admin sees everyone; CSV + PDF | `docs/context/inventory.md` |
-| Costs: **per-shoe cost at receiving** (typed → PO line → batch default), the Costs page backfill, Inventory ✎, blank-vs-$0 | `docs/context/costs.md` |
+| Costs: **per-shoe cost at receiving** (typed → PO line → batch default), the Costs page backfill, Inventory ✎, blank-vs-$0; **Cost lookup tab** (search a SKU → every supplier PO + online order line with the actual cost ea, by-size summary, CSV) | `docs/context/costs.md` |
 | PH report/grid, SKU-merge, edit locks, sync flags, badges | `docs/context/ph-report.md` |
 | Rescale: restock worklist + request/audit (reported vs actual) | `docs/context/rescale.md` |
 | Pre-sell: shipments sold before they landed (held out of listing, then released) | `docs/context/pre-sell.md` |

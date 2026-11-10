@@ -4,7 +4,7 @@
 //   { cartId, lineId, patch:{ qty?, availableQty?, shelfPrice?, size?, fullBox?, premium?, tipProposed? } }  -> edit
 //   { cartId, lineId, remove:true }                               -> remove
 //   { cartId, lineId, skip:true|false }                           -> not buying it / back on
-//   { cartId, lineId, more:n }                                    -> the buyer found n more
+//   { cartId, lineId, more:n, size?, shelfPrice? }                -> the buyer found n more (of this size, or another size of the shoe)
 //
 // The request's LIST is the buyer's to grow until they close it (`list_closed_at`) —
 // every add is its own question to the desk, and a request with cards already out can
@@ -15,7 +15,7 @@ import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_li
 import {
   getBuyCart, getBuyCartLine, addBuyCartLine, updateBuyCartLine, removeBuyCartLine,
   priceBuyCartLine, askBuyCart, cartHasShoePhoto, cartShoePhotos, dbConfigured,
-  setBuyCartLineSales, skipBuyCartLine,
+  setBuyCartLineSales, skipBuyCartLine, getBuyCartLinesForSku,
 } from '../_lib/db.js';
 import { notifyLineAsked, notifyGroupAsked, notifyLineSkipped, notifyIssuersIfReady } from '../_lib/notify.js';
 import { cartVisibleTo, hasCostPrivilege, canSeeBuyCall, redactLineForViewer, redactCartForViewer, shelfPricesEditable, repriceLine, requireBuyerAccess } from '../_lib/buycart.js';
@@ -139,18 +139,60 @@ export default async function handler(req, res) {
     // THE BUYER FOUND MORE of a pair they already sent. An unanswered pair's shelf count goes up.
     // An approved pair stays exactly as approved (the money may be out against it), so the extra
     // is a new question beside it. Either way the group gets a card and the approver decides.
+    //
+    // OF A DIFFERENT SIZE too (Andrew, 2026-11-10): `size` names another size of the same
+    // shoe. If that size is already on the request, it's handled exactly as if the buyer had
+    // tapped Found more on that size's own row. If it isn't, it's a new pending line, priced
+    // and carded like any ask, with the shoe's details (photo, premium, tip, full box) and the
+    // shelf price carried over unless `shelfPrice` says otherwise. Never the UPC, which is per size.
     if (body.more !== undefined) {
       if (!isOwnBuyer(user, cart))
         return send(res, 403, { ok: false, error: 'Only the buyer who sent this pair can add more of it.' });
       const more = Number(body.more);
       if (!Number.isInteger(more) || more < 1 || more > 999)
         return send(res, 400, { ok: false, error: 'Say how many more you found, from 1 to 999.' });
-      const lineId = Number(body.lineId);
-      let was = await getBuyCartLine(cartId, lineId);
-      if (!was) return send(res, 404, { ok: false, error: 'That pair is no longer on the request.' });
+      const source = await getBuyCartLine(cartId, Number(body.lineId));
+      if (!source) return send(res, 404, { ok: false, error: 'That pair is no longer on the request.' });
+      const sentSize = body.size == null ? '' : String(body.size).trim().slice(0, 20);
+      const otherSize = !!sentSize && sizeKey(sentSize) !== sizeKey(source.size);
+      if (otherSize && !isRealSize(sentSize)) return send(res, 400, { ok: false, error: NEEDS_SIZE });
       const who = user.name || user.username;
+      const photos = await cartShoePhotos(cartId, source.sku);
+
+      // The line the extra pairs are added to: this row, or the row already holding that size
+      // (an unanswered one first, else the latest approved, else whatever it last was).
+      let was = source;
+      if (otherSize) {
+        const same = (await getBuyCartLinesForSku(cartId, source.sku)).filter((l) => sizeKey(l.size) === sizeKey(sentSize));
+        was = same.find((l) => l.status === 'pending')
+          || [...same].reverse().find((l) => l.status === 'approved')
+          || same[same.length - 1] || null;
+      }
+
+      if (!was) {
+        // A size that isn't on the request yet: a fresh ask.
+        if (Number(cart.line_count) + 1 > MAX_LINES)
+          return send(res, 409, { ok: false, error: `A request holds at most ${MAX_LINES} lines.` });
+        if (!photos.length)
+          return send(res, 400, { ok: false, error: `Add a photo of ${source.sku} first — the desk decides on it and cannot see the shoe.` });
+        const p = prepareLine({
+          sku: source.sku, size: sentSize, availableQty: more,
+          shelfPrice: blank(body.shelfPrice) ? source.shelf_price : body.shelfPrice,
+          premium: !!source.premium, tipProposed: source.tip_proposed, fullBox: !!source.full_box,
+          name: source.name, colorway: source.colorway, gender: source.gender, basis: source.basis,
+        }, user, cart);
+        if (p.error) return send(res, 400, { ok: false, error: p.error });
+        const line = await addBuyCartLine(cartId, p.row, user);
+        priceInBackground(cartId, Number(line.id), { ...p.market }, cart.cost_stack || {}, {
+          notify: true, photos,
+          edited: `➕ FOUND MORE, ${who}: a new size of this shoe, size ${p.row.size} (${more} in the shop).`,
+        });
+        const asked = await askBuyCart(cartId, user);
+        return send(res, 200, { ok: true, line: redactLineForViewer(line, user), ...(asked ? { cart: redactCartForViewer(asked, user) } : {}) });
+      }
+
+      const lineId = Number(was.id);
       const pair = `${was.sku}${was.size ? ` size ${was.size}` : ''}`;
-      const photos = await cartShoePhotos(cartId, was.sku);
       if (was.status === 'pending') {
         const count = Math.min((Number(was.available_qty) || 0) + more, 999);
         const change = `in store ${was.available_qty ?? 'not counted'} → ${count}`;
@@ -158,7 +200,7 @@ export default async function handler(req, res) {
           `${pair} — found ${more} more, ${change}`, { onlyIfPending: true });
         if (line) {
           notifyLineAsked(cartId, lineId, { photoFileId: photos[0] ?? null, photoCount: photos.length,
-            edited: `➕ FOUND MORE, ${who}: ${change}` });
+            edited: `➕ FOUND MORE, ${who}: ${otherSize ? `size ${was.size}, ` : ''}${change}` });
           return send(res, 200, { ok: true, line: redactLineForViewer(line, user) });
         }
         // The desk answered it in the same second, so it is read again and handled as answered.

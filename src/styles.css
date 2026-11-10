@@ -5365,7 +5365,20 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
   }
   .bc-lines .bc-table tr.bc-line-detail > td { display: block; padding: 8px 0; }
   .bc-lines .bc-table .muted.xs { max-width: none; }
+  .bc-lines .bc-table tr.bc-group-row > td { display: block; padding: 10px 0 4px; }
 }
+
+/* The group headings once the buyer has closed the list: Approved / Waiting on an answer /
+   Turned down or not buying. Each is one full-width button that shows or hides its rows;
+   44px tall so it is an easy thumb target on a phone. */
+.bc-lines .bc-table tr.bc-group-row > td { padding: 12px 0 4px; border-bottom: 1px solid var(--border); background: transparent; }
+.bc-group-toggle { display: flex; align-items: baseline; gap: 8px; width: 100%; min-height: 44px; padding: 8px 4px;
+  background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.bc-group-toggle:hover b { text-decoration: underline; }
+.bc-group-caret { width: 1em; color: var(--muted); }
+.bc-group-hint { margin-left: auto; }
+.bc-group-row.approved b { color: var(--ok, inherit); }
+.bc-group-row.out b { color: var(--muted); }
 
 /* Payout Calculator — best platform by size. One row per size; the winning platform's
    cell is tinted so the column of answers reads at a glance down a size run. */

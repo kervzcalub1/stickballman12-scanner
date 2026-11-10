@@ -113,6 +113,17 @@ export function decisionsClosedBecause(status) {
 // Statuses on which the buyer may still be adding, or may re-open to add.
 export const LIST_ADDABLE = ['draft', 'submitted', 'approved', 'denied', 'funded'];
 
+// The order the lines are SHOWN in on the request page (Andrew, 2026-11-10: "approved stuff
+// on top and the rejected stuff on the bottom"). What to buy first, then what's still waiting
+// on an answer, then what's turned down or not being bought. The sort is stable, so inside
+// each group the server's order holds (a shoe's sizes together, small to large, in the order
+// the shoes were found). Display only: nothing downstream reads this order.
+const DECISION_RANK = { approved: 0, pending: 1, rejected: 2, skipped: 3 };
+export const linesByDecision = (lines) =>
+  (lines || []).map((l, i) => [l, i])
+    .sort(([a, i], [b, j]) => ((DECISION_RANK[a.status] ?? 1) - (DECISION_RANK[b.status] ?? 1)) || i - j)
+    .map(([l]) => l);
+
 export const listOpen = (cart) => !!cart && !cart.list_closed_at;
 
 /** May the buyer add a pair right now? Open list, and the request has not moved past funding. */

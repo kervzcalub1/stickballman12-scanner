@@ -26,6 +26,7 @@ import {
 import { clearQuery, useQueryParam, writeParam } from '../lib/urlstate.js';
 import { NoBoxReport } from './NoBoxReport.jsx';
 import { ItemCosts } from './ItemCosts.jsx';
+import { MyScans } from './MyScans.jsx';
 import { RescaleRequestsReport } from './RescaleRequests.jsx';
 import { ImageFinder } from './ImageFinder.jsx';
 import { PriceInquiry } from './PriceInquiry.jsx';
@@ -132,6 +133,10 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     // warehouse-only server-side). The list and detail are filtered for PH_EXCLUDED_KINDS
     // on the server, not here.
     if (page === 'batches') return <BatchPage readOnly canAudit onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    // The warehouse's My Scans, same component (owner, 2026-11-11: PH sees the warehouse's
+    // scans). Opens on Everyone; the server leaves out the PH-excluded kinds. No Stock
+    // Check button: counting is warehouse work.
+    if (page === 'myscans') return <MyScans user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page) return <PHGrid user={user} kind={page} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     return null;
   }

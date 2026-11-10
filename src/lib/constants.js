@@ -149,7 +149,7 @@ export const HOME_SECTIONS = [
     { key: 'online-orders', icon: '🛍️', title: 'Online Orders', sub: 'Shoes the PH team bought online — what is on its way, and count each parcel in when it lands' },
     { key: 'vin-stock', icon: '🏷️', title: '1ID Stickers', sub: 'Print blank 1ID stickers in bulk so intake never waits on a printer' },
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
-    { key: 'my-scans', icon: '🧾', title: 'My Scans', sub: 'Every pair you received, with the shipment it came in on. Your Stock Check scans and counts too. CSV and PDF reports' },
+    { key: 'my-scans', icon: '🧾', title: 'My Scans', sub: 'Every pair you received, with the shipment it came in on — or anyone else’s. Stock Check scans and counts too. CSV and PDF reports' },
     { key: 'presell', icon: '🔖', title: 'Pre-sell', sub: 'Shipments sold before they landed — say how many each order covers, then free the rest for listing' },
     { key: 'reconcile', icon: '✅', title: 'PO Reconciliation', sub: 'Received vs. supplier manifest — flag & report discrepancies' },
     // A problem recorded at receiving is a CASE the PH team owns until it's resolved

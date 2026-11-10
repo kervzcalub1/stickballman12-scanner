@@ -2,8 +2,10 @@
 // FIRST, and the point of the page (owner, 2026-11-10): RECEIVED, the pairs this person
 // scanned in at receiving, so the warehouse can keep track of what each of them inbounded.
 // Then their Stock Check scans and the counts they ran. All for a day / week / month (EST),
-// with CSV and PDF of each tab. Everyone sees their own; an admin can pick anyone, or
-// everyone. Read-only: every row was recorded by the server when it happened.
+// with CSV and PDF of each tab. Every staff account (warehouse, PH, admin) can pick anyone,
+// or everyone (owner, 2026-11-11); suppliers never reach it. Warehouse opens on their own,
+// admin and PH on everyone (PH receives nothing itself; it reads this at /ph/my-scans,
+// without the PH-excluded kinds). Read-only: every row was recorded by the server.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, DateRangeBar } from '../components/common.jsx';
@@ -14,11 +16,14 @@ import { scanRows, countRows, countTotals, receivedRows, receivedTotals } from '
 
 export function MyScans({ user, onHome, onSignOut, onStockCheck }) {
   const admin = user?.role === 'admin' || user?.role === 'superadmin';
+  const ph = user?.role === 'ph_team';
+  // PH never scans pairs in, so "Mine" would always be empty for them.
+  const everyoneFirst = admin || ph;
   const [dr, setDr] = useQueryDateRange('day');
   const [tab, setTab] = useQueryParam('tab', 'received');
-  // An admin opens on EVERYONE's history (the user's call, 2026-11-04); anyone else only
-  // ever gets their own — the server enforces that, not this default.
-  const [who, setWho] = useQueryParam('user', admin ? 'all' : '');
+  // Admin and PH open on EVERYONE's history (the user's calls, 2026-11-04 / 11-11); the
+  // warehouse opens on their own and can switch to anyone.
+  const [who, setWho] = useQueryParam('user', everyoneFirst ? 'all' : '');
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
@@ -66,7 +71,7 @@ export function MyScans({ user, onHome, onSignOut, onStockCheck }) {
 
   return (
     <div className="app">
-      <TopBar title={admin ? 'Scan History' : 'My Scans'} onHome={onHome} onSignOut={onSignOut}
+      <TopBar title={everyoneFirst ? 'Scan History' : 'My Scans'} onHome={onHome} onSignOut={onSignOut}
         right={onStockCheck ? <button type="button" className="btn ghost sm" onClick={onStockCheck}>Stock Check</button> : null} />
       <div className="wrap-narrow myscans">
         <DateRangeBar mode={dr.mode} anchor={dr.anchor} onChange={(mode, anchor) => setDr({ mode, anchor })} />
@@ -76,17 +81,15 @@ export function MyScans({ user, onHome, onSignOut, onStockCheck }) {
             <button type="button" role="tab" aria-selected={tab === 'scans'} className={`seg-btn ${tab === 'scans' ? 'on' : ''}`} onClick={() => setTab('scans')}>Stock Check ({scans.length})</button>
             <button type="button" role="tab" aria-selected={tab === 'counts'} className={`seg-btn ${tab === 'counts' ? 'on' : ''}`} onClick={() => setTab('counts')}>Counts ({counts.length})</button>
           </div>
-          {admin && (
-            <label className="myscans-who"><span className="muted xs">Whose</span>
+          <label className="myscans-who"><span className="muted xs">Whose</span>
               <select value={who} onChange={(e) => setWho(e.target.value)} aria-label="Whose scans">
                 <option value="all">Everyone</option>
-                <option value="">Mine</option>
+                {!ph && <option value="">Mine</option>}
                 {(data?.users || []).filter((u) => u.username !== (user?.username || '')).map((u) => (
                   <option key={u.username} value={u.username}>{u.user_name || u.username}</option>
                 ))}
               </select>
             </label>
-          )}
           <div className="myscans-dl">
             <button type="button" className="btn ghost sm" disabled={!!busy || !data} onClick={() => download('csv')}>{busy === 'csv' ? 'Building…' : '⬇ CSV'}</button>
             <button type="button" className="btn ghost sm" disabled={!!busy || !data} onClick={() => download('pdf')}>{busy === 'pdf' ? 'Building…' : '⬇ PDF'}</button>
@@ -96,7 +99,7 @@ export function MyScans({ user, onHome, onSignOut, onStockCheck }) {
 
         {data == null ? <p className="muted">Loading…</p> : tab === 'received' ? (
           rr.length === 0 ? (
-            <div className="card empty-state">Nothing received in this period. Pairs {data.who === 'all' ? 'anyone scans' : 'you scan'} in on <b>Receiving</b> show up here.</div>
+            <div className="card empty-state">Nothing received in this period. Pairs {data.who === 'all' ? 'anyone scans' : data.who === user?.username ? 'you scan' : 'they scan'} in on <b>Receiving</b> show up here.</div>
           ) : (
             <>
               <p className="muted sm"><b>{rt.pairs}</b> pair{rt.pairs === 1 ? '' : 's'} received · {rt.shipments} batch{rt.shipments === 1 ? '' : 'es'} · {rt.shoes} different shoe{rt.shoes === 1 ? '' : 's'}</p>

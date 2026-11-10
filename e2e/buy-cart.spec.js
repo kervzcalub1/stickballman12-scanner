@@ -2808,6 +2808,8 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
   });
 
   test('the buyer finds more: a pending count goes up, an approved pair stays and a new question goes out', async ({ request }) => {
+    // The card waits on the background market read (Alias can take 20 s+ locally).
+    test.setTimeout(90_000);
     const cartId = await newRequest(request, { lines: [LINE], submit: false });
     await pool.query(`UPDATE buy_carts SET status = 'submitted' WHERE id = $1`, [cartId]);
     const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];
@@ -2847,6 +2849,49 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     const closed = await more('buyer', 1);
     expect(closed.status).toBe(409);
     expect(closed.body.error).toMatch(/re-open/);
+  });
+
+  // Andrew, 2026-11-10: Found more of a DIFFERENT size of the same shoe.
+  test('the buyer finds more of another size: a new size is a new ask, a size already there is that size’s Found more', async ({ request }) => {
+    // The card waits on the background market read (Alias can take 20 s+ locally).
+    test.setTimeout(90_000);
+    const cartId = await newRequest(request, { lines: [{ ...LINE, upc: '000000000009' }], submit: false });
+    await pool.query(`UPDATE buy_carts SET status = 'submitted' WHERE id = $1`, [cartId]);
+    const nine = Number((await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0].id);
+    const more = (n, extra = {}, id = nine) => call(request, 'buyer', 'cart/line', { cartId, lineId: id, more: n, ...extra });
+    const cardSaying = (t0, text) => since(t0).find((c) => ['sendMessage', 'sendPhoto'].includes(c.method) && String(c.body.text || c.body.caption || '').includes(text));
+    const bySize = async (size) => (await pool.query('SELECT * FROM buy_cart_lines WHERE cart_id = $1 AND size = $2 ORDER BY id', [cartId, size])).rows;
+
+    expect((await more(1, { size: 'n/a' })).status).toBe(400);
+
+    // A size not on the request: a new pending line, the shoe's price carried over (or the
+    // one typed), never the other size's UPC, and its own card saying it's a new size.
+    let t0 = calls.length;
+    const fresh = await more(2, { size: '10' });
+    expect(fresh.status).toBe(200);
+    expect(fresh.body.line).toMatchObject({ sku: LINE.sku, size: '10', status: 'pending', available_qty: 2, qty: null });
+    expect((await bySize('10'))[0]).toMatchObject({ shelf_price: '50.00', upc: null });
+    await expect.poll(() => !!cardSaying(t0, 'a new size of this shoe, size 10'), { timeout: 60_000 }).toBe(true);
+    expect((await more(1, { size: '11', shelfPrice: 64 })).status).toBe(200);
+    expect((await bySize('11'))[0].shelf_price).toBe('64.00');
+
+    // That size is already there and unanswered: its count goes up, no second line.
+    t0 = calls.length;
+    expect((await more(3, { size: '10' })).body.line.available_qty).toBe(5);
+    expect(await bySize('10')).toHaveLength(1);
+    await expect.poll(() => !!cardSaying(t0, 'size 10, in store 2 → 5')).toBe(true);
+
+    // Turned down: nothing to add to, from any row. A turned-down row can still find another size.
+    const tenId = Number((await bySize('10'))[0].id);
+    await call(request, 'approver', 'cart/decide', { cartId, lineIds: [tenId], action: 'reject', reason: 'E2E: no' });
+    const refused = await more(1, { size: '10' });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/turned down/);
+    expect((await more(1, { size: '12' }, tenId)).status).toBe(200);
+    expect((await bySize('12'))[0]).toMatchObject({ status: 'pending', available_qty: 1 });
+    // Its card goes out after a background market read. Wait for it (and size 11's) here, or
+    // it lands in the next test's capture and that test reads the wrong card.
+    await expect.poll(() => !!cardSaying(t0, 'size 12 (1 in the shop)') && !!cardSaying(0, 'size 11 (1 in the shop)'), { timeout: 60_000 }).toBe(true);
   });
 
   test('a typed reply to a ONE-size card is read too, not dropped', async ({ request }) => {
@@ -4501,12 +4546,57 @@ test.describe('floor feedback, November', () => {
     await expect(page.locator('.bc-lines')).toBeVisible();
     await expect(page.locator('.bc-not-here')).toHaveCount(0);
     await page.getByRole('button', { name: /Found more of CW2288-111 size 9/ }).first().click();
-    await expect(page.getByText('Approved ×1 already, and that stays as it is.')).toBeVisible();
-    await page.getByLabel('How many more did you find?').fill('2');
+    await expect(page.getByText('Size 9 is approved ×1, and that stays.')).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Size', exact: true })).toHaveValue('9');
+    await page.getByLabel('How many did you find?').fill('2');
     await page.getByRole('button', { name: 'Send to the desk' }).click();
     await expect(page.getByText('2 in store', { exact: true })).toBeVisible();
     const rows = (await pool.query('SELECT status, qty, available_qty FROM buy_cart_lines WHERE cart_id = $1 ORDER BY id', [cartId])).rows;
     expect(rows).toEqual([expect.objectContaining({ status: 'approved', qty: 1 }), expect.objectContaining({ status: 'pending', qty: null, available_qty: 2 })]);
+
+    // Andrew: Found more of a DIFFERENT size, from the same button.
+    await page.getByRole('button', { name: /Found more of CW2288-111 size 9/ }).first().click();
+    await page.getByRole('textbox', { name: 'Size', exact: true }).fill('10.5');
+    await page.getByLabel('How many did you find?').fill('3');
+    await page.getByRole('button', { name: 'Send to the desk' }).click();
+    await expect(page.locator('tr.bc-line').filter({ hasText: '10.5' })).toBeVisible();
+    const ten = (await pool.query(`SELECT status, qty, available_qty, shelf_price FROM buy_cart_lines WHERE cart_id = $1 AND size = '10.5'`, [cartId])).rows;
+    expect(ten).toEqual([expect.objectContaining({ status: 'pending', qty: null, available_qty: 3, shelf_price: '50.00' })]);
+  });
+
+  // Andrew: "the approved stuff on top and the rejected stuff on the bottom". Approved, then
+  // waiting on an answer, then turned down / not buying; a shoe's sizes stay in order inside each.
+  test('on screen: lines are listed approved first, then pending, then turned down and not buying', async ({ page, request }) => {
+    const sizes = ['8', '9', '10', '11', '12'];
+    const cartId = await newRequest(request, { lines: sizes.map((size) => ({ ...LINE, size })) });
+    const ids = Object.fromEntries((await pool.query('SELECT id, size FROM buy_cart_lines WHERE cart_id = $1', [cartId])).rows.map((r) => [r.size, Number(r.id)]));
+    await call(request, 'approver', 'cart/decide', { cartId, lineIds: [ids['8']], action: 'reject', reason: 'E2E: too close to retail' });
+    await call(request, 'approver', 'cart/decide', { cartId, lineIds: [ids['11'], ids['10']], action: 'approve', qty: { [ids['11']]: 1, [ids['10']]: 1 } });
+    await call(request, 'approver', 'cart/decide', { cartId, lineIds: [ids['12']], action: 'approve', qty: { [ids['12']]: 1 } });
+    await call(request, 'buyer', 'cart/line', { cartId, lineId: ids['12'], skip: true });
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    const order = page.locator('tr.bc-line td[data-label="Size"]');
+
+    // The list is closed, so the lines sit under three headings and the turned-down /
+    // not-buying group starts shut (owner, 2026-11-10). A tap shows it, at the bottom.
+    const heads = page.locator('tr.bc-group-row');
+    await expect(heads).toHaveCount(3);
+    await expect(heads.nth(0)).toContainText('Approved');
+    await expect(heads.nth(1)).toContainText('Waiting on an answer');
+    await expect(heads.nth(2)).toContainText('Turned down or not buying');
+    await expect(heads.nth(2)).toContainText('1 turned down · 1 not buying');
+    await expect(order).toHaveText(['10', '11', '9']);
+    await heads.nth(2).getByRole('button').click();
+    await expect(order).toHaveText(['10', '11', '9', '8', '12']);
+    await heads.nth(0).getByRole('button').click();          // and any group can be hidden
+    await expect(order).toHaveText(['9', '8', '12']);
+
+    // While the buyer is still adding, it's one plain list in the same order, no headings.
+    await pool.query('UPDATE buy_carts SET list_closed_at = NULL WHERE id = $1', [cartId]);
+    await page.reload();
+    await expect(order).toHaveText(['10', '11', '9', '8', '12']);
+    await expect(heads).toHaveCount(0);
   });
 
   test('on screen: the approver has Change on a decided pair, the buyer ✕ Not buying', async ({ page, request }) => {

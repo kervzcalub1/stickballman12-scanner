@@ -8103,6 +8103,13 @@ export async function getBuyCartLine(cartId, lineId) {
   return lineOut(rows[0] || null);
 }
 
+// Every line of one shoe on a request, oldest first. "Found more" of a different size reads
+// it to see whether that size is already on the request (cart/line.js).
+export async function getBuyCartLinesForSku(cartId, sku) {
+  const rows = await db()`SELECT * FROM buy_cart_lines WHERE cart_id = ${cartId} AND sku = ${sku} ORDER BY id`;
+  return rows.map(lineOut);
+}
+
 // Edit one line. `call` is the re-derived landed cost and buy call (api/_lib/buycart.js
 // repriceLine) when the shelf price moved -- passing null leaves the snapshot alone,
 // which is what a pure size or quantity correction should do. `note` is the before/after

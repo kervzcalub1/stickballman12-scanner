@@ -279,6 +279,20 @@ The PH team uploads card files, and some are bad. The supplier sees none of it.
   card is re-posted. An approved pair is left alone, because the money may be out against it. The extra pairs become a
   new pending line with a new card headed `➕ FOUND MORE`, so one size can have two lines. A turned-down or X'd-out pair
   refuses. Receipts compare by summing SKU + size, so two lines of a size add up.
+- **＋ Found more of another size** (Andrew, 2026-11-10): the same modal has a **Size** box, defaulting to the row's
+  size; `cart/line` `{ more, size, shelfPrice? }`. A size already on the request is handled exactly like Found more on
+  that size's own row (its pending count goes up, or a new line beside an approved one, or refused if it was turned
+  down / X'd out). A size not on the request is a new pending line with the shoe's photo, premium, tip and full box
+  carried over, and the row's shelf price unless the buyer typed another. Never the UPC, which is per size. Its card is
+  headed `➕ FOUND MORE, <buyer>: a new size of this shoe, size N`. The button now shows on every row while the list is
+  open, so a turned-down size can still lead to another one.
+- **Line order on the request page** (Andrew, 2026-11-10): approved first, then waiting on an answer, then turned down,
+  then not buying (`linesByDecision` in `src/lib/buycartRules.js`). The sort is stable, so the server's shoe/size order
+  holds inside each group. Display only.
+- **Groups once the list is closed** (owner, same day): the lines sit under three headings (Approved · Waiting on an
+  answer · Turned down or not buying), and each one opens and shuts on a tap. Turned down / not buying starts shut;
+  the other two start open, because somebody still acts on them. ✕ Not buying opens that group so the pair and its
+  Undo stay in view. While the list is open it's one plain list. The open/shut state is per page view, not saved.
 
 ## Cards and notes the auditor adds (2026-11-06)
 The Andrew case: he bought his own 10 pairs with his own gift cards, and the cashier rang everything up together.

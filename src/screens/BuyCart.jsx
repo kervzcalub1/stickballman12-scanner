@@ -25,7 +25,7 @@ import { estDate, estTime, PH_DATE, estClock } from '../lib/format.js';
 import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
 import { notHereLines } from '../lib/notHere.js';
-import { auditTarget, fundingBreakdown, LIST_ADDABLE, decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep } from '../lib/buycartRules.js';
+import { auditTarget, fundingBreakdown, LIST_ADDABLE, decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep, linesByDecision } from '../lib/buycartRules.js';
 import { NudgeButton } from '../components/NudgeButton.jsx';
 import { GIFT_CARD_MERCHANTS, merchantLabel, merchantEditable } from '../lib/giftCardMerchants.js';
 
@@ -65,6 +65,32 @@ function ListChip({ cart }) {
   return listOpen(cart)
     ? <span className="po-chip warn bc-list-chip" title="The buyer can still add pairs. Cards wait until they close it.">Buyer still adding</span>
     : <span className="po-chip muted bc-list-chip" title={`Closed by ${cart.list_closed_by || 'the buyer'} ${estDate(cart.list_closed_at)} EST`}>List closed</span>;
+}
+
+// The three groups the lines fall into once the list is closed, and the heading row above
+// each one. The heading is a button spanning the table: tap to show or hide that group.
+const lineGroup = (l) => (l.status === 'approved' ? 'approved' : l.status === 'pending' ? 'pending' : 'out');
+const GROUP_LABEL = { approved: 'Approved', pending: 'Waiting on an answer', out: 'Turned down or not buying' };
+function GroupRow({ group, lines, cols, shut, onToggle }) {
+  const these = lines.filter((l) => lineGroup(l) === group);
+  const n = these.length;
+  // "2 turned down · 1 not buying": the out group holds two different endings.
+  const detail = group === 'out'
+    ? [[these.filter((l) => l.status === 'rejected').length, 'turned down'], [these.filter((l) => l.status === 'skipped').length, 'not buying']]
+      .filter(([c]) => c > 0).map(([c, w]) => `${c} ${w}`).join(' · ')
+    : null;
+  return (
+    <tr className={`bc-group-row ${group}`}>
+      <td colSpan={cols}>
+        <button type="button" className="bc-group-toggle" aria-expanded={!shut} onClick={onToggle}>
+          <span className="bc-group-caret" aria-hidden="true">{shut ? '▸' : '▾'}</span>
+          <b>{GROUP_LABEL[group]}</b>
+          <span className="muted sm">{n} line{n === 1 ? '' : 's'}{detail && detail !== `${n} turned down` && detail !== `${n} not buying` ? ` · ${detail}` : ''}</span>
+          <span className="muted xs bc-group-hint">{shut ? 'Show' : 'Hide'}</span>
+        </button>
+      </td>
+    </tr>
+  );
 }
 
 // Which merchant's gift cards the request needs. Picked when the request is opened. A
@@ -462,8 +488,18 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
     return l?.available_qty != null && Number.isFinite(want) && want > l.available_qty;
   };
   const setQtyFor = (id, v) => setQty((q) => ({ ...q, [id]: v }));
-  const lines = cart.lines || [];
+  // Approved on top, then pending, then turned down / not buying (`linesByDecision`).
+  const lines = linesByDecision(cart.lines);
   const pending = lines.filter((l) => l.status === 'pending');
+  // ONCE THE BUYER CLOSES THE LIST the lines split into three groups under headings, each
+  // one opens and shuts on a tap (owner, 2026-11-10). What's turned down or not being
+  // bought starts SHUT: the list is final and those rows are just noise by then. Approved
+  // and still-waiting start open, because those are what somebody still acts on (the
+  // buyer buys the approved ones, the approver answers the waiting ones). While the list
+  // is open it stays one plain list, because the buyer is still adding to it.
+  const grouped = !!cart.list_closed_at && lines.length > 0;
+  const [shut, setShut] = useState({ approved: false, pending: false, out: true });
+  const toggleGroup = (g) => setShut((s) => ({ ...s, [g]: !s[g] }));
   // The buyer's ✎ only ever made sense on a draft — after the first add the pair is in
   // front of the desk with its price written into a Telegram card, and a price that is
   // wrong after asking is a remove-and-re-add, not an edit.
@@ -484,8 +520,11 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
   // CHANGE A DECISION already made — until the cards go out (`decisionsPendingOnly` from
   // `funded`). A skipped pair is the buyer's call, not ours, so it has no Change.
   const canChange = (l) => canDecide && !decisionsPendingOnly(cart.status) && ['approved', 'rejected'].includes(l.status);
-  // FOUND MORE after sending it: an open list, and a pair that is unanswered or approved.
-  const canAddMore = (l) => isBuyer && buyerCanAdd(cart) && ['pending', 'approved'].includes(l.status);
+  // FOUND MORE after sending it, while the list is open: more of this size (an unanswered or
+  // approved pair), or ANOTHER size of the same shoe from any row (Andrew, 2026-11-10), so a
+  // turned-down or X'd-out row offers it too, with the size box left for them to fill.
+  const canAddMore = (l) => isBuyer && buyerCanAdd(cart);
+  const sameSizeOk = (l) => ['pending', 'approved'].includes(l.status);
   const canFix = editable || canEditLines || lines.some(canRemove) || lines.some(buyerEdit)
     || lines.some(canSkip) || lines.some(canUnskip) || lines.some(canAddMore);
   // Kept in one place: the detail row has to span exactly the header, and a colSpan that
@@ -622,7 +661,9 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
 
   async function skip(l, on) {
     setBusy(`sk${l.id}`); setErr('');
-    try { await api.cartSkipLine(cart.id, l.id, on); onChanged(); }
+    // X-ing a pair out moves it into the "Turned down or not buying" group, so that group is
+    // opened: the pair, and its Undo, must not disappear from under the buyer's thumb.
+    try { await api.cartSkipLine(cart.id, l.id, on); if (on) setShut((s) => ({ ...s, out: false })); onChanged(); }
     catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
     finally { setBusy(''); }
   }
@@ -651,14 +692,29 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
       )}
       {addingMore && (
         <FormModal
-          title={`More of ${addingMore.sku}${addingMore.size ? ` size ${addingMore.size}` : ''}`}
-          message={addingMore.status === 'approved'
-            ? `Approved ×${addingMore.qty} already, and that stays as it is. The desk gets a new card for the extra pairs.`
-            : 'The desk gets a new card with the higher count.'}
+          title={`Found more of ${addingMore.sku}`}
+          message={sameSizeOk(addingMore)
+            ? (addingMore.status === 'approved'
+              ? `Size ${addingMore.size} is approved ×${addingMore.qty}, and that stays. Change the size if you found a different one. The desk gets a new card either way.`
+              : 'Keep the size to raise this pair’s count, or change it if you found a different size. The desk gets a new card.')
+            : `Size ${addingMore.size} was ${addingMore.status === 'skipped' ? 'marked as not buying' : 'turned down'}. Enter the other size you found. The desk gets a new card.`}
           submitLabel="Send to the desk"
           onClose={() => setAddingMore(null)}
-          onSubmit={({ more }) => api.cartMoreOfLine(cart.id, addingMore.id, Number(more)).then(() => { setAddingMore(null); onChanged(); })}
-          fields={[{ name: 'more', label: 'How many more did you find?', type: 'number', min: 1, max: 999, required: true }]} />
+          onSubmit={({ size, more, shelfPrice }) => {
+            const s = String(size ?? '').trim();
+            const other = s && s.toUpperCase().replace(/\s+/g, '') !== String(addingMore.size ?? '').toUpperCase().replace(/\s+/g, '');
+            return api.cartMoreOfLine(cart.id, addingMore.id, Number(more), other
+              ? { size: s, ...(String(shelfPrice ?? '').trim() !== '' && Number(shelfPrice) !== Number(addingMore.shelf_price) ? { shelfPrice: Number(shelfPrice) } : {}) }
+              : {}).then(() => { setAddingMore(null); onChanged(); });
+          }}
+          fields={[
+            { name: 'size', label: 'Size', required: true, maxLength: 20,
+              value: sameSizeOk(addingMore) ? (addingMore.size || '') : '', placeholder: 'e.g. 10.5' },
+            { name: 'more', label: 'How many did you find?', type: 'number', min: 1, max: 999, required: true },
+            { name: 'shelfPrice', label: 'Price on the shelf', type: 'number', step: '0.01', min: 0,
+              value: addingMore.shelf_price == null ? '' : String(addingMore.shelf_price),
+              hint: 'Only used for a size that isn’t on the request yet. Change it if that size is priced differently.' },
+          ]} />
       )}
       {tipping && (
         <FormModal
@@ -752,11 +808,17 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
               </tr>
             </thead>
             <tbody>
-              {lines.map((l) => {
+              {lines.map((l, i) => {
                 const id = Number(l.id);
                 const shown = open === id;
+                const g = lineGroup(l);
+                const head = grouped && (i === 0 || lineGroup(lines[i - 1]) !== g);
+                if (grouped && shut[g]) {
+                  return head ? <GroupRow key={`g-${g}`} group={g} lines={lines} cols={cols} shut onToggle={() => toggleGroup(g)} /> : null;
+                }
                 return (
                 <React.Fragment key={l.id}>
+                {head && <GroupRow group={g} lines={lines} cols={cols} shut={false} onToggle={() => toggleGroup(g)} />}
                 <tr className={`bc-line ${l.status}${shown ? ' open' : ''}`}
                   onClick={() => canExpand(id) && setOpen(shown ? null : id)}
                   tabIndex={canExpand(id) ? 0 : -1}
@@ -906,7 +968,7 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                       {canAddMore(l) && (
                         <button type="button" className="btn sm ghost" onClick={() => setAddingMore(l)}
                           aria-label={`Found more of ${l.sku}${l.size ? ` size ${l.size}` : ''}`}
-                          title="Found more of this in the shop — asks the desk about the extra pairs">＋ Found more</button>
+                          title="Found more of this shoe in the shop, in this size or another one. Asks the desk about the extra pairs">＋ Found more</button>
                       )}
                       {canSkip(l) && (
                         <button type="button" className="btn sm ghost bc-skip" disabled={busy === `sk${l.id}`}

@@ -13,6 +13,7 @@ import http from 'node:http';
 import pg from 'pg';
 import sharp from 'sharp';
 import { signToken, hashPassword } from '../api/_lib/util.js';
+import { ordersFromText } from '../src/lib/cancellations.js';
 import { loadEnv, loginAs } from './helpers/auth.js';
 
 loadEnv();
@@ -21,7 +22,8 @@ const TG_WH = 7710001; const TG_STRANGER = 7710002;
 let pool; let tgFake; let aiFake; let JPEG;
 const sent = [];          // sendMessage bodies
 const docs = [];          // sendDocument multipart bodies
-let nextRead = null;      // what the fake reader answers next: object | 'fail'
+let nextRead = null;      // what the fake reader answers next: object | 'fail' | 'quota'
+const pictures = new Map(); // file_id → the picture the fake Telegram serves (default: a blank JPEG)
 const prompts = [];       // the text half of every request the reader got
 const WH = { name: 'E2E Cx Warehouse', username: 'e2e_cx_wh', role: 'warehouse' };
 let whUid;
@@ -45,7 +47,10 @@ test.beforeAll(async () => {
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
-      if (req.url.includes('/file/bot')) { res.setHeader('content-type', 'image/jpeg'); return res.end(JPEG); }
+      if (req.url.includes('/file/bot')) {
+        const id = decodeURIComponent(req.url.split('/').pop()).replace(/\.jpg$/, '');
+        res.setHeader('content-type', 'image/jpeg'); return res.end(pictures.get(id) || JPEG);
+      }
       const method = req.url.split('/').pop();
       const raw = Buffer.concat(chunks).toString();
       let body = {};
@@ -68,6 +73,10 @@ test.beforeAll(async () => {
       prompts.push(prompt);
       const k = prompt.includes('ONE CHARACTER AT A TIME') ? 1 : 0;
       const answer = Array.isArray(nextRead) ? nextRead[k] : nextRead;
+      if (answer === 'quota') {   // what OpenAI says when the account has no credit left
+        res.statusCode = 429;
+        return res.end(JSON.stringify({ error: { message: 'You have no credits remaining.', type: 'insufficient_quota', code: 'credit_balance_exhausted' } }));
+      }
       if (answer === 'fail' || !answer) { res.statusCode = 500; return res.end(JSON.stringify({ error: { message: 'fake failure' } })); }
       return res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(answer) } }] }));
     });
@@ -166,6 +175,79 @@ test('two reads that disagree flag the row and say what the second read saw', as
   // clears the reader's doubt once a person has edited the row.
   const fixed = await request.post('/api/cancellations/save', { headers: auth('ph_team'), data: { id: row.id, platform: 'alias', order_number: a, note: '' } });
   expect((await fixed.json()).row.flags).toEqual([]);
+});
+
+// ── Read WITHOUT AI (owner, 2026-11-10): tesseract on our server first ──────────────────
+test('the no-AI rules pick the order number out of read text, and never a tracking number or a phone', () => {
+  // An Alias packing label as tesseract reads it: the small captions are lost, the big lines read.
+  expect(ordersFromText('N 5 Air Max 90 Anthracite\n176889923\nDQ4071 001\nB14\nUSM 9.5', 'alias'))
+    .toEqual([{ order_number: '176889923', platform: 'alias', why: 'label', sku: 'DQ4071-001', size: 'US M 9.5' }]);
+  // A lone 9-digit line is NOT taken from a picture that isn't a packing label.
+  expect(ordersFromText('Call us\n176889923\nThanks')).toEqual([]);
+  // A StockX screen: its shape, even with a stray space and an O for a 0.
+  expect(ordersFromText('Order Details\nOrder number: 1234567O - 87654321\nShips via UPS 1Z3YY4081218923258')
+    .map((o) => [o.order_number, o.platform])).toEqual([['12345670-87654321', 'stockx']]);
+  // "Order #" on its own line, the number on the next.
+  expect(ordersFromText('ORDER #\nPO-211-0098765\nTotal $120.00').map((o) => o.order_number)).toEqual(['PO-211-0098765']);
+  // A FedEx label for an eBay sale prints no order number: phone, REF and TRK# are not one.
+  expect(ordersFromText('FROM (717) 368-3333\n19173877468\nREF: 8173017869\nTRK# 8787 7611 2569\n9632 0019 6')).toEqual([]);
+  // Two orders → no style code / size pinned on either.
+  const two = ordersFromText('12-34567-89012\n98-76543-21098\nDD1391 100\nUS 9');
+  expect(two.map((o) => [o.order_number, o.platform, o.sku])).toEqual([['12-34567-89012', 'ebay', null], ['98-76543-21098', 'ebay', null]]);
+});
+
+test('a printed label is read on our own server — the AI is never asked', async ({ page, request }) => {
+  sent.length = 0; prompts.length = 0;
+  const num = `9911${String(Date.now()).slice(-5)}`;
+  // A label like Alias's, drawn in the browser so the test needs no fonts on the server.
+  await page.setViewportSize({ width: 600, height: 900 });
+  await page.setContent(`<body style="margin:0;background:#ddd;font-family:Arial,Helvetica,sans-serif">
+    <div style="margin:40px;padding:40px;background:#fff;width:440px">
+      <div style="font-size:11px">ITEM</div><div style="font-size:18px">Nike Air Max 90 Anthracite Team Red</div>
+      <div style="font-size:11px;margin-top:14px">TRACKING</div><div style="font-size:18px">UPS 1Z3YY4081218923258</div>
+      <div style="font-size:11px;margin-top:30px">ORDER #</div><div style="font-size:34px">${num}</div>
+      <div style="font-size:11px;margin-top:30px">SKU</div><div style="font-size:34px">DQ4071 001</div>
+      <div style="font-size:11px;margin-top:30px">SIZE</div><div style="font-size:34px">US M 9.5</div>
+    </div></body>`);
+  const fileId = `cx-ocr-${num}`;
+  pictures.set(fileId, await sharp(await page.screenshot()).jpeg({ quality: 85 }).toBuffer());
+  nextRead = 'fail';   // were the AI asked, the row would come out unreadable
+  await hook(request, photo(TG_WH, fileId, '/alias customer asked'));
+  expect(await lastSaid(TG_WH)).toContain(`Alias · ${num} · DQ4071-001 US M 9.5`);
+  const row = (await list(request)).rows.find((r) => r.order_number === num);
+  expect(row).toMatchObject({ platform: 'alias', sku: 'DQ4071-001', size: 'US M 9.5', reason: 'customer asked', flags: [] });
+  expect(prompts).toHaveLength(0);
+  const [raw] = await q('SELECT ai_raw FROM cancellations WHERE id = $1', [row.id]);
+  expect(raw.ai_raw).toMatchObject({ by: 'ocr', agreed: true });
+  expect(raw.ai_raw.text).toContain(num);
+  // "/alias" is remembered for this chat for 10 minutes; the next tests start without it.
+  await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
+});
+
+test('an order only the second read found is filed too, flagged; "second read said" names the right number', async ({ request }) => {
+  sent.length = 0;
+  const a = `9911${String(Date.now()).slice(-6)}`; const b = `9912${a.slice(4)}`; const b2 = `9912${a.slice(4, -1)}${(Number(a.at(-1)) + 3) % 10}`;
+  const c = `9913${a.slice(4)}`;
+  // First read: A and B'. Second read: A, B and C (the first missed C entirely).
+  nextRead = [{ what: '', orders: [order({ platform: 'alias', order_number: a }), order({ platform: 'alias', order_number: b2 })] },
+    { what: '', orders: [order({ platform: 'alias', order_number: a }), order({ platform: 'alias', order_number: b }), order({ platform: 'alias', order_number: c })] }];
+  await hook(request, photo(TG_WH, `cx-2nd-${a}`));
+  expect(await lastSaid(TG_WH)).toMatch(/Logged 3 for review/);
+  const rows = (await list(request)).rows;
+  expect(rows.find((r) => r.order_number === a).flags).toEqual([]);
+  expect(rows.find((r) => r.order_number === b2).note).toBe(`Second read said ${b}`);
+  const onlyC = rows.find((r) => r.order_number === c);
+  expect(onlyC.flags).toContain('reads_disagree');
+  expect(onlyC.note).toBe('Only one of the two reads found this number');
+  await q(`DELETE FROM cancellations WHERE order_number = ANY($1)`, [[a, b2, c]]);
+});
+
+test('an AI account with no credit left is said plainly, not "busy"', async ({ request }) => {
+  sent.length = 0;
+  nextRead = 'quota';
+  await hook(request, photo(TG_WH, `cx-quota-${Date.now()}`));
+  expect(await lastSaid(TG_WH)).toMatch(/out of credit \(OpenAI billing\) — tell an admin/);
+  nextRead = null;
 });
 
 test('an unreadable photo still files a row with the photo; the reviewer types the number and verifies', async ({ request }) => {

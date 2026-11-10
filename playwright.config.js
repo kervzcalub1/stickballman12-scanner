@@ -112,7 +112,7 @@ export default defineConfig({
       // Order cancellations read photos with a model: the suite points the reader at a FAKE
       // on localhost (e2e/cancellations.spec.js) and keeps the pictures in the database, so
       // a run never spends OpenAI money or writes into the real R2 bucket.
-      CANCEL_AI_URL: 'http://127.0.0.1:5196/v1/chat/completions', CANCEL_PHOTOS_IN_DB: '1',
+      CANCEL_AI: 'on', CANCEL_AI_URL: 'http://127.0.0.1:5196/v1/chat/completions', CANCEL_PHOTOS_IN_DB: '1',
       // Receipt reading (buying requests + store orders) the same way: a fake on localhost,
       // so no test can spend OpenAI money on a receipt (api/_lib/receipt-ai.js).
       RECEIPT_AI_URL: 'http://127.0.0.1:5195/v1/chat/completions',

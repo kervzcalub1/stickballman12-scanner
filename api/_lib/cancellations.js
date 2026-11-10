@@ -16,6 +16,7 @@ import {
   createCancellationPhoto, setCancellationPhotoRead, createCancellation, findLiveCancellation, listCancellationsForDay,
 } from './db.js';
 import { estToday } from '../../src/lib/format.js';
+import { readCancellationLocally, canOpenImage } from './cancelOcr.js';
 import { cancelMessage, cancelMessageAll, dayCounts, cancellationsCsv } from '../../src/lib/cancellations.js';
 import { PLATFORMS, cleanSku, cleanOrderNo, orderKey, flagsFor, platformFromNumber, platformLabel, FLAGS, BLOCKING } from '../../src/lib/cancellations.js';
 
@@ -32,13 +33,16 @@ export const HOW_TO = 'To log an order to cancel: send the platform, then the ph
   + "End of shift (today, EST): /msg — pick a platform for its cancel message · /msgall — every platform · /report — a CSV file. "
   + 'Another day: add the date, e.g. /msgall yesterday or /report 2026-10-19';
 
+const env = (k) => String(process.env[k] || '').trim();
 const OPENAI_URL = () => process.env.CANCEL_AI_URL || 'https://api.openai.com/v1/chat/completions';
 const MODEL = () => process.env.CANCEL_AI_MODEL || process.env.RECEIPT_AI_MODEL || 'gpt-5.4-mini';
-export const cancelAiConfigured = () => !!(process.env.OPENAI_API_KEY || process.env.CANCEL_AI_URL);
+// NO AI by default (owner, 2026-11-10: "deploy it, keep the AI off"): tesseract on our own
+// server reads every photo; a photo it can't read is filed for a person to type in. The AI
+// fallback exists but runs only with CANCEL_AI=on (the e2e suite turns it on for its fake).
+export const cancelAiConfigured = () => env('CANCEL_AI').toLowerCase() === 'on' && !!(process.env.OPENAI_API_KEY || process.env.CANCEL_AI_URL);
 // An order number is short text; 1600px on the long edge reads any label or screenshot,
 // and every extra pixel is billed.
 const MAX_EDGE = 1600;
-const env = (k) => String(process.env[k] || '').trim();
 // Tests keep the pictures in the database even where R2 is configured from .env, so a
 // run never writes into the real bucket.
 const useR2 = () => r2Configured() && env('CANCEL_PHOTOS_IN_DB') !== '1';
@@ -112,6 +116,11 @@ export async function readCancellationImage(jpeg, { second = false, platform = n
   const data = await r.json().catch(() => null);
   if (!r.ok) {
     console.error('[cancellations] reader', r.status, JSON.stringify(data?.error || data).slice(0, 300));
+    // OpenAI answers an EMPTY ACCOUNT with 429 too (insufficient_quota) — that is not "busy",
+    // and waiting won't fix it: say so, so an admin tops it up.
+    const code = `${data?.error?.code || ''} ${data?.error?.type || ''}`;
+    if (/insufficient_quota|credit_balance|billing/i.test(code)) throw new Error('the AI reader is out of credit (OpenAI billing) — tell an admin');
+    if (r.status === 401) throw new Error('the AI reader key is not valid — tell an admin');
     throw new Error(r.status === 429 ? 'the reader is busy (rate-limited)' : `the reader did not answer (HTTP ${r.status})`);
   }
   let out;
@@ -141,15 +150,25 @@ export async function readTwice(jpeg, platform = null) {
   }
   if (b.status === 'rejected') return { ...a.value, orders: a.value.orders.map((o) => ({ ...o, agreed: null })) };
   const keys = new Set(b.value.orders.map((o) => orderKey(o.order_number)).filter(Boolean));
-  const seconds = b.value.orders.map((o) => cleanOrderNo(o.order_number)).filter(Boolean);
-  return {
-    ...a.value,
-    orders: a.value.orders.map((o) => {
-      const k = orderKey(o.order_number);
-      const agreed = !!k && keys.has(k);
-      return { ...o, agreed, other: agreed ? null : seconds.find((x) => orderKey(x) !== k) || null };
-    }),
-  };
+  const firstKeys = new Set(a.value.orders.map((o) => orderKey(o.order_number)).filter(Boolean));
+  // The second read's numbers the first read did NOT have: the candidates for "Second read
+  // said …" — never a number that belongs to another order on the same photo.
+  const unmatched = b.value.orders.filter((o) => { const k = orderKey(o.order_number); return k && !firstKeys.has(k); });
+  const used = new Set();
+  const firstOrders = a.value.orders.map((o) => {
+    const k = orderKey(o.order_number);
+    const agreed = !!k && keys.has(k);
+    if (agreed) return { ...o, agreed, other: null };
+    // The closest in length is most likely the same number read differently.
+    const near = unmatched.filter((x) => !used.has(x))
+      .sort((x, y) => Math.abs(orderKey(x.order_number).length - (k || '').length) - Math.abs(orderKey(y.order_number).length - (k || '').length))[0];
+    if (near) used.add(near);
+    return { ...o, agreed, other: near ? cleanOrderNo(near.order_number) : null };
+  });
+  // An order ONLY the second read found (the first missed it, not misread it) is filed too,
+  // flagged — a photo of three orders must never quietly become two.
+  const extra = unmatched.filter((x) => !used.has(x)).map((o) => ({ ...o, agreed: false, onlySecond: true }));
+  return { ...a.value, orders: [...firstOrders, ...extra] };
 }
 
 async function storePhoto(photoId, jpeg) {
@@ -175,13 +194,29 @@ export async function fileCancellationPhoto(buf, { who, caption = null, platform
   const reason = caption ? String(caption).trim().slice(0, 300) || null : null;
   const photoId = await createCancellationPhoto({ caption: reason, tgChatId, tgMessageId, sentByUserId: who.id, sentBy: who.name });
   if (photoId == null) return { already: true };   // Telegram re-sent a message we have
-  const jpeg = await shrinkImage(buf);
+  // A picture we can't even open (an iPhone HEIC sent "as a file"): keep it, file the row,
+  // and say how to send it so it can be read.
+  const opens = await canOpenImage(buf);
+  const jpeg = opens ? await shrinkImage(buf) : buf;
   await storePhoto(photoId, jpeg);
 
   let read = null; let error = null;
-  if (!cancelAiConfigured()) error = 'reading photos is not set up on this server';
+  if (!opens) error = "this picture's format can't be opened — send it as a photo (not as a file)";
   else {
-    try { read = await readTwice(jpeg, platform); } catch (e) { error = e.message; }
+    // 1. Our own server, no AI: tesseract on the ORIGINAL picture (more pixels than the copy we keep).
+    const hint = platform || (resolvePlatform ? await resolvePlatform().catch(() => null) : null);
+    let local = null;
+    try {
+      local = await readCancellationLocally(buf, hint);
+      if (local.orders.length) read = { ...local, by: 'ocr' };
+    } catch (e) {
+      console.warn('[cancellations] local read failed:', e.message);
+    }
+    // 2. Only when that found no order number: the AI, if it is switched on.
+    if (!read && cancelAiConfigured()) {
+      try { read = { ...(await readTwice(jpeg, hint)), by: 'ai' }; } catch (e) { error = e.message; }
+    }
+    if (!read && !error) read = { orders: [], what: '', by: 'ocr', text: local?.text || '' };
   }
   const named = platform || (resolvePlatform ? await resolvePlatform().catch(() => null) : null);
   await setCancellationPhotoRead(photoId, { status: error ? 'failed' : read.orders.length ? 'read' : 'nothing', error });
@@ -190,18 +225,26 @@ export async function fileCancellationPhoto(buf, { who, caption = null, platform
   // Nothing usable: still one row with the photo, so the request reaches a person.
   if (error || !read.orders.length) {
     const flags = ['unreadable', 'no_number', ...(named ? [] : ['no_platform'])];
-    const { row } = await createCancellation({ ...base, platform: named, flags, ai_raw: read || { error },
+    const { row } = await createCancellation({ ...base, platform: named, flags,
+      ai_raw: read ? { by: read.by, what: read.what, ...(read.text ? { text: read.text } : {}) } : { error },
       note: error ? `Could not read the photo: ${error}` : (read.what ? `Reader: ${read.what}` : null) });
     return { filed: row ? [row] : [], dupes: [], unreadable: true, error, what: read?.what || '' };
   }
-  const filed = []; const dupes = [];
+  const filed = []; const dupes = []; const seen = new Set();
   for (const o of read.orders) {
     const order_number = o.order_number ? cleanOrderNo(o.order_number) : null;
     const key = orderKey(order_number);
+    // The same number twice on one picture is one order, not "already logged by you".
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
     const row = { platform: named || o.platform || platformFromNumber(order_number), order_number, sku: cleanSku(o.sku), size: o.size, product: o.product };
     const flags = flagsFor(row, o);
-    const note = o.agreed === false ? (o.other ? `Second read said ${o.other}` : 'The second read did not find this number') : null;
-    const out = await createCancellation({ ...base, ...row, order_key: key, flags, note, ai_confidence: o.confidence, ai_raw: o });
+    const note = o.agreed !== false ? null
+      : o.onlySecond ? 'Only one of the two reads found this number'
+        : o.other ? `Second read said ${o.other}` : 'The second read did not find this number';
+    // What read it, and (no AI) the text it read — so a miss can be turned into a new rule.
+    const raw = { ...o, by: read.by, ...(read.by === 'ocr' && read.text ? { text: read.text } : {}) };
+    const out = await createCancellation({ ...base, ...row, order_key: key, flags, note, ai_confidence: o.confidence, ai_raw: raw });
     if (out.duplicate) dupes.push({ order_number, existing: out.duplicate });
     else filed.push(out.row);
   }

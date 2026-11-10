@@ -57,20 +57,54 @@ All by ONE **EST day** — the day the rows were SENT (`created_at AT TIME ZONE
   what the warehouse asks the platform for, whether or not PH has verified it yet.
 - `npm run telegram:webhook -- commands` puts `/msg /msgall /report` in the "/" menu.
 
-## Reading (`api/_lib/cancellations.js`)
+## Reading (`api/_lib/cancelOcr.js` first, `api/_lib/cancellations.js` fallback)
 Webhook (`api/telegram/webhook.js` → `handleCancellation`) answers Telegram first and does
 the work after (`setImmediate`): `getFile` → download → `shrinkImage` (sharp, 1600 px JPEG)
-→ stored (R2 `cancellations/<photo id>.jpg`, else bytes in `cancellation_photos.bytes`) →
-**read TWICE** with `gpt-5.4-mini` (`CANCEL_AI_MODEL` / `RECEIPT_AI_MODEL`; strict JSON
-schema): the second read is told to go character by character (`readTwice`).
+→ stored (R2 `cancellations/<photo id>.jpg`, else bytes in `cancellation_photos.bytes`) → read.
+
+**1. No AI, on our own server (owner, 2026-11-10: "read it without the AI").** tesseract
+(`tesseract.js` + the checked-in `eng.traineddata`, same as the gift cards) reads the
+ORIGINAL picture TWICE, prepared two ways (3600 px sharpened as scattered text; 2400 px plain
+grey as a page — black-and-white lost a label with a shadow across it). `ordersFromText`
+(`src/lib/cancellations.js`, pure, tested) picks the numbers out of each text:
+- the platform's own shape (StockX `12345678-12345678`, eBay `12-34567-89012`), even with a
+  stray space or an OCR O/I/S/B inside the digits (a letter PREFIX like `PO-` is kept);
+- a number after "Order #" / "Order No." / "Order number" / "Order ID" (same line or the next);
+- **an Alias packing label**: the order number is a 9-10 digit line of its own (the small
+  "ORDER #" caption above it doesn't read). Taken only on a packing label: a style code on it,
+  "alias"/"goat" in it, or the sender said `/alias`.
+- never a tracking number (1Z…, 92-95… USPS, any "TRK#"/"TRACKING"/"UPS" line), phone or ZIP.
+- style code + size only when the picture shows ONE order; "US M 95" → 9.5 (OCR drops the point).
+A number both reads found = checked (no flag). Found by one read only = still filed, flagged
+`reads_disagree` ("Only one of the two reads found this number"). One photo at a time, 25 s
+cap (a noisy photo of a dusty screen runs longer → falls to step 2). The text it read is kept
+on the row (`ai_raw.text`, `ai_raw.by = 'ocr'`), so a miss can become a new rule — that is how
+it "learns": add the rule + a line to the e2e rules test, no model training.
+Measured on the real Alias labels of 2026-10-20 (WhatsApp copies, 471 px): order #, SKU and
+size right on both reads, ~1 s each. On the eBay FedEx labels it correctly finds nothing —
+**a FedEx label for an eBay sale prints no order number at all** (only the tracking number),
+for the AI too.
+
+**2. AI — OFF on prod (owner, 2026-11-10: "keep the AI off").** Runs only with `CANCEL_AI=on`,
+and then only when step 1 found no order number (the e2e suite turns it on for its fake reader). With it off, a photo
+tesseract can't read is filed `unreadable` with the photo for a person to type the number: `gpt-5.4-mini`
+(`CANCEL_AI_MODEL` / `RECEIPT_AI_MODEL`; strict JSON schema), read TWICE, the second told to go
+character by character (`readTwice`).
 - **Why twice**: on a blurred test photo the reader returned a WRONG digit at 0.88
   confidence with nothing "unclear". Its own confidence is not a check; two independent
-  reads that disagree are. Disagreement → `reads_disagree` + note "Second read said …".
-  One read failed → `unchecked`.
+  reads that disagree are. Disagreement → `reads_disagree` + note "Second read said …" (the
+  second read's number that matched nothing else — never another order's number). An order
+  ONLY the second read found is filed too, flagged. One read failed → `unchecked`.
+- An OpenAI account with no credit answers 429 `insufficient_quota`: said as "the AI reader is
+  out of credit (OpenAI billing) — tell an admin", not "busy". (The local `.env` key had no
+  credit on 2026-11-10.)
 - The prompt excludes tracking numbers (1Z…, 9400…), SKUs, phones and prices — verified
   on a packing slip that also shows a UPS tracking number.
 - **Unreadable / no order / reader down → still ONE row with the photo**, flagged
   `unreadable`, so a reviewer types the number off the picture. A request is never lost.
+- A picture sharp can't open (an iPhone HEIC sent "as a file") → that row + "send it as a
+  photo (not as a file)".
+- The same number twice on one picture is filed once (not "already logged by you").
 - Telegram re-sends an update it didn't get a 200 for: `cancellation_photos` is unique on
   (tg_chat_id, tg_message_id), so a re-send files nothing.
 - Each new batch alerts **`cancel.logged`** (PH + admin, opt-out in 🔔 Alerts).

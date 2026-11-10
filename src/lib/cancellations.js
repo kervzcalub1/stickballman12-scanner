@@ -99,6 +99,90 @@ export function cleanSku(v) {
   return (m ? `${m[1]}-${m[2]}` : s).slice(0, 40);
 }
 
+// ── Reading a photo WITHOUT AI (owner, 2026-11-10) ───────────────────────────────────
+// tesseract (api/_lib/cancelOcr.js) turns the picture into lines of text; these rules pick
+// the order number(s) out of that text. Same rule as the AI: a READER, never a decider —
+// every row is still compared with the photo by a person before anything is cancelled.
+// What counts as an order number, strongest first:
+//   1. the platform's own shape where we know it (StockX 12345678-12345678, eBay 12-34567-89012);
+//   2. a number after "Order #", "Order No.", "Order number", "Order ID" (same line or the next);
+//   3. an Alias packing label: the order number is printed large on a line of its OWN, 9-10
+//      digits, while the "ORDER #" caption above it is too small to read. Taken only when the
+//      picture is a packing label (a style code on it, "alias"/"goat" in it, or /alias sent).
+// Never a tracking number (1Z…, 92/93/94… USPS, a "TRK#" or "TRACKING" line), a phone or a ZIP.
+const ORDER_WORD = /\b(?:order|ord)\s*(?:#|no\.?|number|num|id)?\s*[:#]?\s*/i;
+const TRACKING_LINE = /\b(?:trk|tracking|track(?:ing)?\s*#|ups|usps|fedex)\b/i;
+const looksLikeTracking = (k) => /^1Z[0-9A-Z]{14,16}$/.test(k) || /^9[2-5]\d{18,24}$/.test(k) || /^\d{20,}$/.test(k);
+// OCR's usual misreads INSIDE a number: O→0, I/l/|→1, S→5, B→8 — applied only to a token
+// that is already mostly digits, so a word never turns into a number.
+function fixDigits(tok) {
+  const t = String(tok || '').replace(/[‐-―]/g, '-');
+  const digits = (t.match(/\d/g) || []).length;
+  if (digits < Math.max(4, t.replace(/-/g, '').length - 2)) return t;
+  // A letter prefix ("PO-211-…", "GSH…") is part of the number: only what follows is fixed.
+  const pre = /^[A-Za-z]+-?/.exec(t)?.[0] || '';
+  return pre + t.slice(pre.length).replace(/[Oo]/g, '0').replace(/[Il|]/g, '1').replace(/S/g, '5').replace(/B/g, '8');
+}
+const STYLE_CODE = /\b([A-Z]{1,3}\d{3,5})[\s-]?(\d{3})\b/;
+const SIZE_RE = /\bUS\s*([MW])?\s*(\d{1,3}(?:[.,]5)?)\s*([MWY])?\b/i;
+// OCR drops the point in "9.5" often; no shoe is a size 95, so 95 → 9.5 and 105 → 10.5.
+const fixSize = (v) => {
+  const t = String(v).replace(',', '.');
+  return !t.includes('.') && Number(t) > 22 && t.endsWith('5') ? `${t.slice(0, -1)}.5` : t;
+};
+// Every token that is mostly digits, fixed (fixDigits) — the words around it left alone.
+const fixLine = (line) => line.split(' ').map(fixDigits).join(' ');
+
+/**
+ * OCR text → [{ platform, order_number, sku, size, why }]. `hint` = the platform the sender
+ * named. Pure, so the rules are tested without a picture (e2e/cancellations.spec.js).
+ */
+export function ordersFromText(text, hint = null) {
+  const lines = String(text || '').split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const all = lines.join('\n');
+  const found = new Map();   // key → { order_number, platform, why }
+  const add = (num, platform, why) => {
+    const n = cleanOrderNo(num);
+    const k = orderKey(n);
+    if (!k || (k.match(/\d/g) || []).length < 6 || looksLikeTracking(k)) return;
+    if (!found.has(k)) found.set(k, { order_number: n, platform, why });
+  };
+  for (const p of PLATFORMS.filter((x) => x.pattern)) {
+    const loose = new RegExp(p.pattern.source.replace(/^\^|\$$/g, '').replace(/-/g, '\\s?-\\s?'), 'g');
+    for (const line of lines) {
+      if (TRACKING_LINE.test(line)) continue;
+      for (const m of fixLine(line).matchAll(loose)) add(m[0].replace(/\s/g, ''), p.key, 'shape');
+    }
+  }
+  lines.forEach((line, i) => {
+    const m = ORDER_WORD.exec(line);
+    if (!m || TRACKING_LINE.test(line)) return;
+    const after = line.slice(m.index + m[0].length).trim();
+    const tok = (after || lines[i + 1] || '').split(' ')[0];
+    const n = fixDigits(tok).replace(/[^A-Za-z0-9-]/g, '');
+    // Already found whole by its shape ("12345678-12345678" with a space in it): not a second order.
+    const k = orderKey(n);
+    if (k && ![...found.keys()].some((f) => f.includes(k))) add(n, null, 'order #');
+  });
+  const packingLabel = hint === 'alias' || STYLE_CODE.test(all) || /\b(alias|goat)\b/i.test(all);
+  if (packingLabel) {
+    for (const line of lines) {
+      const t = fixDigits(line.replace(/[|.,;:'"`]+$/g, '').replace(/^[|.,;:'"`]+/g, '').trim()).replace(/\s/g, '');
+      if (/^\d{9,10}$/.test(t)) add(t, null, 'label');
+    }
+  }
+  const orders = [...found.values()].map((o) => ({ ...o, platform: hint || o.platform || null }));
+  // A style code and a size belong to the order only when the picture shows ONE order.
+  let sku = null; let size = null;
+  if (orders.length === 1) {
+    const s = STYLE_CODE.exec(all.toUpperCase());
+    sku = s ? cleanSku(`${s[1]}-${s[2]}`) : null;
+    const z = SIZE_RE.exec(all);
+    size = z ? `US ${z[1] ? `${z[1].toUpperCase()} ` : ''}${fixSize(z[2])}${z[3] ? z[3].toUpperCase() : ''}` : null;
+  }
+  return orders.map((o) => ({ ...o, sku, size }));
+}
+
 /** Guess the platform from the number's shape alone — for a number typed to the bot. */
 export function platformFromNumber(v) {
   const n = cleanOrderNo(v);

@@ -1586,6 +1586,10 @@ await sql(`ALTER TABLE buy_carts ADD CONSTRAINT buy_carts_status_check CHECK (st
 // still the right thing for a foreign key and for joining to a name.
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS approved_by_key TEXT`);
 await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS audited_by_key TEXT`);
+// Which merchant's gift cards the buyer needs: a KEY from src/lib/giftCardMerchants.js
+// ('nike', 'footlocker', …), checked by the server and picked from a fixed list on the
+// screen. NULL on requests opened before 2026-11-10. `retailer` stays as the store location.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS gc_merchant TEXT`);
 await sql(`CREATE INDEX IF NOT EXISTS buy_carts_buyer_idx ON buy_carts (buyer_user_id, created_at DESC)`);
 await sql(`CREATE INDEX IF NOT EXISTS buy_carts_status_idx ON buy_carts (status, created_at DESC)`);
 await sql(`CREATE INDEX IF NOT EXISTS buy_carts_po_idx ON buy_carts (po_id) WHERE po_id IS NOT NULL`);

@@ -442,6 +442,7 @@ export const api = {
   // The cost stack an approver or an auditor states when the buyer's preset never had
   // one. Saving re-prices every line server-side and writes the diff into the trail.
   cartSetCosts: (cartId, stack) => post('/api/cart/costs', { cartId, stack }),
+  cartSetMerchant: (cartId, merchant) => post('/api/cart/merchant', { cartId, merchant }),
   // Re-read the market for one requested pair and write the call that follows. Explicit
   // and named — never automatic, because it replaces the snapshot an approver judges on.
   cartPriceLine: (cartId, lineId) => post('/api/cart/price-line', { cartId, lineId }),

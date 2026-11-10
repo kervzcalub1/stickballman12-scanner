@@ -15,6 +15,7 @@ import { estDate } from '../lib/format.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { useLive } from '../hooks.js';
 import { hasPriv } from '../lib/constants.js';
+import { GIFT_CARD_MERCHANTS, merchantLabel } from '../lib/giftCardMerchants.js';
 import { BuyCart } from './BuyCart.jsx';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
@@ -111,13 +112,14 @@ export function BuyCarts({ user, onHome, onSignOut }) {
     setCarts(c); setCounts(n); if (b) setBuyers(b);
   }, { paused: !!asking || !!open, mount: false });
 
-  // Opening a request asks ONE thing: which store. What is being bought is not known
-  // yet — a buyer often works that out standing in the shop — and a field that has to be
-  // filled before the trip starts gets filled with a guess. The lines themselves are the
-  // answer: a SKU, a photo and a count per pair, added as they are found.
-  async function newRequest({ retailer }) {
+  // Opening a request asks two things the buyer knows before the trip: which merchant's
+  // gift cards they need (a fixed list, so the desk hands over a card the till will take)
+  // and which store. What is being bought is not known yet. A buyer often works that out
+  // standing in the shop, and a field that has to be filled before the trip gets filled
+  // with a guess. The lines are the answer: a SKU, a photo and a count per pair.
+  async function newRequest({ merchant, retailer }) {
     try {
-      const { cart } = await api.cartCreate({ retailer: retailer.trim() });
+      const { cart } = await api.cartCreate({ merchant, retailer: retailer.trim() });
       setAsking(false);
       setOpen(cart.id);
     } catch (e) { if (e.unauthorized) return onSignOut(); throw e; }
@@ -141,11 +143,15 @@ export function BuyCarts({ user, onHome, onSignOut }) {
       {asking && (
         <FormModal
           title="New buying request"
-          message="Just the store to start. Add each pair as you find it — that is what the approver sees."
+          message="Pick the gift cards you need and the store. Add each pair as you find it — that is what the approver sees."
           submitLabel="Start the request"
           onClose={() => setAsking(false)}
           onSubmit={newRequest}
           fields={[
+            { name: 'merchant', label: 'Gift cards for', type: 'select', required: true,
+              hint: 'Foot Locker cards also work at Champs, and Finish Line cards at JD Sports.',
+              options: [{ value: '', label: 'Pick a merchant…' },
+                ...GIFT_CARD_MERCHANTS.map((m) => ({ value: m.key, label: m.label }))] },
             { name: 'retailer', label: 'Which store?', required: true, maxLength: 80,
               placeholder: 'e.g. Nike Outlet — Orlando' },
           ]} />
@@ -249,6 +255,7 @@ export function BuyCarts({ user, onHome, onSignOut }) {
                     {Number(c.line_count) ? `${c.line_count} pair${Number(c.line_count) === 1 ? '' : 's'} so far` : 'No pairs added yet'}
                   </i>}</span>
                   <span className="bc-card-meta">
+                    {merchantLabel(c.gc_merchant) && <span>{merchantLabel(c.gc_merchant)} cards ·</span>}
                     <span>{c.retailer || '—'}</span>
                     {!isBuyer && c.buyer_name && <span>· {c.buyer_name}</span>}
                     <span>· {estDate(c.created_at)}</span>
@@ -271,7 +278,7 @@ export function BuyCarts({ user, onHome, onSignOut }) {
           <table className="table">
             <thead>
               <tr>
-                <th>Request</th><th>Status</th>{!isBuyer && <th>Buyer</th>}<th>Store</th><th className="bc-purpose-cell">Buying</th>
+                <th>Request</th><th>Status</th>{!isBuyer && <th>Buyer</th>}<th>Gift cards</th><th>Store</th><th className="bc-purpose-cell">Buying</th>
                 <th className="num">Approved</th><th className="num" title="Shelf price + sales tax — what the gift cards must cover">Needed</th><th className="num">Cards</th><th>Order</th><th>Opened</th>
               </tr>
             </thead>
@@ -289,6 +296,7 @@ export function BuyCarts({ user, onHome, onSignOut }) {
                       {stillAdding(c) && <span className="po-chip warn bc-list-chip">Still adding</span>}
                     </td>
                     {!isBuyer && <td>{c.buyer_name}</td>}
+                    <td>{merchantLabel(c.gc_merchant) || <span className="muted">Not picked</span>}</td>
                     <td>{c.retailer || '—'}</td>
                     {/* No purpose is asked for any more, so on every new request this column
                         was a dash. The pairs are the answer to "what is being bought". */}

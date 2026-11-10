@@ -27,6 +27,7 @@ import { hasPriv } from '../lib/constants.js';
 import { notHereLines } from '../lib/notHere.js';
 import { auditTarget, fundingBreakdown, LIST_ADDABLE, decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep } from '../lib/buycartRules.js';
 import { NudgeButton } from '../components/NudgeButton.jsx';
+import { GIFT_CARD_MERCHANTS, merchantLabel, merchantEditable } from '../lib/giftCardMerchants.js';
 
 const money = (n) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`);
 // `best_platform` stores the KEY ('alias'), and printing it raw read "92.7% ROI via
@@ -64,6 +65,28 @@ function ListChip({ cart }) {
   return listOpen(cart)
     ? <span className="po-chip warn bc-list-chip" title="The buyer can still add pairs. Cards wait until they close it.">Buyer still adding</span>
     : <span className="po-chip muted bc-list-chip" title={`Closed by ${cart.list_closed_by || 'the buyer'} ${estDate(cart.list_closed_at)} EST`}>List closed</span>;
+}
+
+// Which merchant's gift cards the request needs. Picked when the request is opened. A
+// request opened before the list existed has none, so the row turns amber and asks for
+// one: the list can't be closed until it's picked (cart/submit). It can be changed until
+// the desk records a card, and after that it's locked (merchantEditable).
+function MerchantRow({ cart, canChange, busy, onPick }) {
+  const label = merchantLabel(cart.gc_merchant);
+  if (!label && !canChange) return null;
+  return (
+    <div className="bc-merchant" data-accent={label ? undefined : 'attention'}>
+      <b>Gift cards for:</b>
+      {canChange ? (
+        <select className="input" value={cart.gc_merchant || ''} disabled={busy}
+          aria-label="Gift cards for" onChange={(e) => e.target.value && onPick(e.target.value)}>
+          {!label && <option value="">Pick a merchant…</option>}
+          {GIFT_CARD_MERCHANTS.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+        </select>
+      ) : <span>{label}</span>}
+      {!label && <span className="muted sm">Pick one so the desk sends the right cards.</span>}
+    </div>
+  );
 }
 
 // The closing checklist. Rendered whatever the state, because the useful question on
@@ -1283,6 +1306,9 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
         </div>
         {/* Where it is, as a row of dots. The status chip above says the column value;
             this says the STOP on the route, including the half that lives on the order. */}
+        <MerchantRow cart={cart} busy={busy === 'merchant'}
+          canChange={(isBuyer || mayDecide || canIssue) && merchantEditable(cart)}
+          onPick={(m) => act(() => api.cartSetMerchant(cart.id, m), 'merchant')} />
         <BuyCartProgress cart={cart} />
         <NextStep step={nextStep(cart, { isBuyer, canDecide, canIssue, canAudit })} />
         {!settled && (

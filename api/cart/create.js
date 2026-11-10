@@ -1,4 +1,7 @@
-// POST /api/cart/create  { retailer?, purpose?, restrictions? }  -> { ok, cart }
+// POST /api/cart/create  { merchant, retailer?, purpose?, restrictions? }  -> { ok, cart }
+//
+// `merchant` is required: a key from src/lib/giftCardMerchants.js ('nike', 'footlocker',
+// 'adidas', 'finishline', 'dicks'). `retailer` is the store location.
 //
 // A buyer opens a request. The account comes off the TOKEN, never the body — a posted
 // buyer id would let one buyer open a request that spends against another's name.
@@ -9,6 +12,7 @@
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { requireBuyerAccess, redactCartForViewer } from '../_lib/buycart.js';
 import { createBuyCart, listPayoutPresets, listSupplierUsers, dbConfigured } from '../_lib/db.js';
+import { merchantKey } from '../../src/lib/giftCardMerchants.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -22,6 +26,12 @@ export default async function handler(req, res) {
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
 
   const body = await getJsonBody(req);
+  // Which merchant's gift cards: picked from a fixed list (src/lib/giftCardMerchants.js),
+  // so the desk hands over a card the till will take. Anything not on the list is refused,
+  // never stored as typed.
+  const gcMerchant = merchantKey(body.merchant);
+  if (!gcMerchant)
+    return send(res, 400, { ok: false, error: 'Pick which merchant the gift cards are for.' });
   const byBuyer = user.role === 'supplier' && !isPrivileged(user.role);
   const buyerUserId = byBuyer
     ? Number(user.uid)
@@ -60,6 +70,7 @@ export default async function handler(req, res) {
         ? String(user.name || user.username || '').slice(0, 120)
         : String(body.buyerName ?? '').trim().slice(0, 120) || `Buyer #${buyerUserId}`,
       retailer: String(body.retailer ?? '').trim().slice(0, 120) || null,
+      gcMerchant,
       purpose: String(body.purpose ?? '').trim().slice(0, 2000) || null,
       restrictions: String(body.restrictions ?? '').trim().slice(0, 2000) || null,
       presetId: p ? p.id : null,

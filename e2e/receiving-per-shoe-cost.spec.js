@@ -237,8 +237,8 @@ test('a pair from a buying request lands at the request’s costs, with shipping
     `INSERT INTO users (name, username, pass_hash, role, status) VALUES ('E2E Request Buyer', $1, 'x', 'supplier', 'approved') RETURNING id`,
     [`e2e_cost_req_${stamp}`]))[0].id);
   const cart = (await q(
-    `INSERT INTO buy_carts (buyer_user_id, buyer_name, retailer, status, po_id, cost_stack)
-     VALUES ($1, 'E2E', 'E2E Store', 'receipted', $2, $3) RETURNING id, cart_code`,
+    `INSERT INTO buy_carts (gc_merchant, buyer_user_id, buyer_name, retailer, status, po_id, cost_stack)
+     VALUES ('nike', $1, 'E2E', 'E2E Store', 'receipted', $2, $3) RETURNING id, cart_code`,
     [requestBuyerId, requestPoId, JSON.stringify({ taxPct: 8.25, tipAmt: 5, giftPct: 8, shippingAmt: 8.25 })]))[0];
   requestCartId = Number(cart.id);
   await q(`INSERT INTO buy_cart_lines (cart_id, sku, size, qty, shelf_price, status) VALUES ($1, $2, '9', 30, 100, 'approved')`, [requestCartId, SKU_R]);

@@ -377,7 +377,24 @@ in order (a scan fired the instant after tapping Count lands in the count).
   counting) lets the same code fire again once it has left the view; a box held still keeps
   decoding and does not re-fire (a flickering decode could, so each scan is listed + Undo).
 
-### My Scans (`/my-scans`) — scan history
+### My Scans (`/my-scans`) — what each person received, then their Stock Check scans
+**Received is the first tab and the default (owner, 2026-11-10: "my scans" = the warehouse
+person's own inbounds).** Every pair they scanned in at receiving (`items` rows they created,
+any intake: shipment, in-store, existing stock, rescale, empty boxes), newest first, for the
+day / week / month (EST, on `items.created_at`). Each row: shoe, SKU, size, VIN, time; the
+batch and box it came in, the supplier or store, the PO; and where the pair is now (status,
+shelf). A count line above ("42 pairs received · 3 batches · 12 different shoes"). CSV + PDF
+(`receivedCsv` / `receivedPdf` in `src/lib/scanReport.js`; the CSV adds tracking and shelf).
+- **Matched on `items.created_by`**, which receiving fills with the person's display NAME
+  (`user.name || user.username`), not a username. The endpoint matches every spelling it
+  knows for that person: the username, `users.name`, and the name on their Stock Check scans.
+  A rename later splits a person's history at the rename.
+- Non-admins only ever get their own. An admin opens on Everyone (each row says who) and
+  can pick any approved staff account (`listScanPeople`) or anyone who has scanned.
+- Live on `items` (already in LIVE_TABLES). No schema change.
+- The home card moved from Browse & Listings to **Receiving Shipment Orders**, next to Batches.
+
+The Stock Check part (second and third tabs, as before):
 A person's **scan history** (user's call): every Stock Check scan, newest first, then a
 **Counts** tab — for a day / week / month (EST, `?dm/da/tab/user` in the URL), live
 (`stock_check_scans`, `stock_counts` in LIVE_TABLES). `GET /api/items/my-scans?from&to&user`.

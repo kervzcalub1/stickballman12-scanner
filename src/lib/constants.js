@@ -149,6 +149,7 @@ export const HOME_SECTIONS = [
     { key: 'online-orders', icon: '🛍️', title: 'Online Orders', sub: 'Shoes the PH team bought online — what is on its way, and count each parcel in when it lands' },
     { key: 'vin-stock', icon: '🏷️', title: '1ID Stickers', sub: 'Print blank 1ID stickers in bulk so intake never waits on a printer' },
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
+    { key: 'my-scans', icon: '🧾', title: 'My Scans', sub: 'Every pair you received, with the shipment it came in on. Your Stock Check scans and counts too. CSV and PDF reports' },
     { key: 'presell', icon: '🔖', title: 'Pre-sell', sub: 'Shipments sold before they landed — say how many each order covers, then free the rest for listing' },
     { key: 'reconcile', icon: '✅', title: 'PO Reconciliation', sub: 'Received vs. supplier manifest — flag & report discrepancies' },
     // A problem recorded at receiving is a CASE the PH team owns until it's resolved
@@ -196,7 +197,6 @@ export const HOME_SECTIONS = [
     { key: 'inventory', icon: '🔎', title: 'Inventory', sub: 'Search, scan & print labels' },
     // Scan anything, get one answer — and count a size against Shopify (inventory.md).
     { key: 'stock-check', icon: '🔢', title: 'Stock Check', sub: 'Scan a box: how many Shopify has in that size. Scan a VIN: is this pair still in inventory. Then count a size' },
-    { key: 'my-scans', icon: '🧾', title: 'My Scans', sub: 'Your scan history — every shoe you scanned on Stock Check, and your counts. CSV and PDF reports' },
     { key: 'locations', icon: '🗺️', title: 'Locate Shoe', sub: 'Find which shelf a shoe is on' },
     { key: 'report', icon: '📊', title: 'Listings & Sync', sub: 'Store listings & sync status' },
     { key: 'deleted', icon: '🗑️', title: 'Deleted', sub: 'Pairs removed from inventory — search by SKU, history kept' },

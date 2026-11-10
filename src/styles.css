@@ -7042,6 +7042,8 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .myscans-result { margin-top: 2px; font-weight: 600; }
 .myscans-num { flex: none; display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
 .myscans-num b { font-size: 24px; line-height: 1; font-variant-numeric: tabular-nums; }
+/* Received tab: where the pair is now (status, then its shelf) on the right of the row. */
+.myscans-status { max-width: 40%; gap: 2px; }
 .myscans .mono { font-family: ui-monospace, Menlo, monospace; }
 @media (max-width: 768px) { .myscans-dl { margin-left: 0; } }
 

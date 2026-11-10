@@ -664,7 +664,7 @@ export const WAREHOUSE_ARTICLES = [
       { do: 'To audit a size, tap Count this size, then scan every pair of it you can find. Each scan of that shoe and size adds one.', note: 'Turn on VIN sticker only when box barcodes could be scanned twice: two boxes of one size share the same barcode.' },
       { do: 'Scanned the wrong one? Tap Undo. The scan stays on the record, marked undone.' },
       { do: 'Tap Finish. Shopify is read again, and the screen shows matched, short or extra.' },
-      { do: 'Open My Scans for your scan history and your counts, as CSV or PDF.' },
+      { do: 'Open My Scans for your Stock Check scans and counts (second and third tabs), as CSV or PDF. Its first tab, Received, lists every pair you scanned in at receiving.' },
     ],
     rules: [
       'Count after the day\'s orders have shipped. A pair sold today but not shipped is on the shelf and no longer in Shopify\'s number.',

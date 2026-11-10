@@ -12,6 +12,7 @@
 // never overwritten blind. A price marked `source: 'market'` must equal
 // round_half_up(market × markup), recomputed here, so the audit's "market" claim is true.
 // Every confirmed field change is logged to shopify_listing_edits.
+import { queueShopifyListingProduct } from '../_lib/listings-watch.js';
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { shopifyConfigured, shopifyListingState, shopifyUpdateVariants, shopifyUpdateProduct } from '../_lib/shopify.js';
 import { insertShopifyListingEdits } from '../_lib/db.js';
@@ -149,6 +150,9 @@ export default async function handler(req, res) {
     }
 
     if (audit.length) await insertShopifyListingEdits(audit, user.name || user.username || null);
+    // The server's copy (api/_lib/listings-watch.js) re-reads every product just saved, so the next
+    // open shows it even if Shopify's webhook is late or never comes.
+    for (const id of new Set([...byProduct.keys(), ...outP.filter((x) => x.status === 'updated').map((x) => x.productId)])) queueShopifyListingProduct(id);
     return send(res, 200, { ok: true, variants: outV, products: outP, code });
   } catch (e) {
     console.error('[shopify-listings/save]', e.message);

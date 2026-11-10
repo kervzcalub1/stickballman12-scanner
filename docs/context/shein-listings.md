@@ -69,7 +69,7 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
 | File | What |
 |---|---|
 | `src/lib/sheinListings.js` | The pure engine, shared by server + page: `STATUSES`/`STATUS_ORDER`/`TILE_STATUSES`, `BLOCKERS` + `renderBlocker`, `sizeKey`, `resolveSize`, `validateCustomText`, `suggestCustomSpelling`, `matchStore`, `variantReadiness`, `productReadiness`, `rollup`, `listingHash`/`variantHash`, `normalizeWebhookProduct`, `spuPayload`, `templateSizes`, `computeListings`, `SHEIN_READ_PATHS`/`isSheinWrite` |
-| `api/_lib/shein-listing.js` | The jobs (snapshot, probe), the runner (lease + heartbeat), the Shopify-webhook recheck, `listingTick` (nightly) |
+| `api/_lib/shein-listing.js` | The jobs (snapshot, probe), the runner (lease + heartbeat), the Shopify-webhook recheck, `listingTick` (re-read every 30 min) |
 | `api/_lib/shein.js` | `sheinCall(path, body, { log })` hook → `shein_api_log`; read helpers `sheinAllSpusLogged`, `sheinSearchProducts`, `sheinSpuInfoLogged`, `sheinDocStates`, `sheinCustomPermissions`, `sheinAttributeTemplates` |
 | `api/_lib/shopify.js` | `shopifyListingCatalogue()` (every product + variants, normalized), `shopifyListingProduct(id)`, `shopifyEnsureWebhooks(uri, topics)` (the old `shopifyEnsureInventoryWebhook` is untouched) |
 | `api/shopify/webhook.js` | Branches on `x-shopify-topic`: `inventory_levels/update` → `queuePush` exactly as before; `products/create|update` → `listingProductChanged`; `products/delete` → `listingProductDeleted` (`routeShopifyWebhook`, `HOOK`) |
@@ -142,12 +142,16 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
 - **Probe (Phase 0):** `searchProduct` over the store (categoryId per SPU) → `spu-info` on one product per
   category (+ an optional SPU a person names) → `get-custom-attribute-permission-config` →
   `query-attribute-template` → cache `probe/last`. Reads only.
-- **Nightly** 03:00–03:59 EST, once per EST day, from `sheinTick` → production only / `SHEIN_SYNC_WATCH`
-  (started_by `auto (nightly 03:00 EST)`; an interrupted nightly is resumed instead).
+- **Every 30 min** (owner, 2026-11-10; was nightly): `snapshotDue` — the newest snapshot (anyone's; a
+  person's Re-read counts) is not queued/running and FINISHED ≥ `SHEIN_LISTING_EVERY_MIN` (default 30)
+  minutes ago, so two never overlap however long one takes. From `sheinTick` → production only /
+  `SHEIN_SYNC_WATCH`; started_by `auto (every 30 min)`; an interrupted auto run is resumed instead.
+  Watch the SHEIN API budget (`shein_api_log`); `SHEIN_LISTING_EVERY_MIN=120` slows it,
+  `=0` goes back to the **nightly** 03:00–03:59 EST (`nightlyDue`, started_by `auto (nightly 03:00 EST)`).
 - **Shopify webhooks** products/create|update: 1.5 s coalesce → `listingHash` (no stock) vs stored →
   re-read that product live → recompute from STORED SHEIN rows (no SHEIN call). Nothing before the first
   snapshot. products/delete → Not listing at once. In-memory queue (a restart drops a pending recheck; the
-  nightly catches it). Registered by the admin action `webhooks` (same URL + HMAC as the stock webhook).
+  next re-read catches it). Registered by the admin action `webhooks` (same URL + HMAC as the stock webhook).
 
 ## Endpoints (gates: applySecurity → requireRole(['ph_team']) (admin auto) → privilege read fresh → rateLimit → getJsonBody)
 - `GET /api/shein/listings?status=&blocker=&q=&brand=&page=&pageSize=50&sort=worst|title|updated|coverage`

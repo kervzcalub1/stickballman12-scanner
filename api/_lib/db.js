@@ -13815,3 +13815,79 @@ export async function ebaySyncEndedByApp(itemIds) {
 export async function ebaySyncDropListing(itemId) {
   await db()`DELETE FROM ebay_listings WHERE item_id = ${String(itemId)}`;
 }
+
+// ── Shopify Listings, kept by the server (docs/context/shopify-listings.md "Kept fresh") ──
+// The page reads THIS copy; api/_lib/listings-watch.js writes it (a full re-read every 30 min,
+// one product at a time from Shopify's webhooks). An unchanged row is not rewritten, so a
+// re-read that finds nothing new wakes no screen.
+export async function upsertShopifyListingVariants(rows) {
+  let changed = 0;
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = JSON.stringify(rows.slice(i, i + 500).map((v) => ({
+      variant_id: v.variantId, product_id: v.productId, product_title: v.productTitle || '', status: v.status, handle: v.handle,
+      image: v.image, sku: v.sku || '', size: v.size || '', price: v.price == null ? null : String(v.price),
+      compare_at: v.compareAt == null ? null : String(v.compareAt), qty: v.qty == null ? null : Number(v.qty), style: v.style || null,
+    })));
+    const out = await db()`
+      INSERT INTO shopify_listing_variants (variant_id, product_id, product_title, status, handle, image, sku, size, price, compare_at, qty, style)
+      SELECT x.variant_id, x.product_id, x.product_title, x.status, x.handle, x.image, x.sku, x.size, x.price, x.compare_at, x.qty, x.style
+        FROM jsonb_to_recordset(${chunk}::jsonb) AS x(variant_id text, product_id text, product_title text, status text, handle text, image text,
+             sku text, size text, price text, compare_at text, qty int, style text)
+      ON CONFLICT (variant_id) DO UPDATE SET
+        product_id = EXCLUDED.product_id, product_title = EXCLUDED.product_title, status = EXCLUDED.status, handle = EXCLUDED.handle,
+        image = EXCLUDED.image, sku = EXCLUDED.sku, size = EXCLUDED.size, price = EXCLUDED.price, compare_at = EXCLUDED.compare_at,
+        qty = EXCLUDED.qty, style = EXCLUDED.style, updated_at = now()
+      WHERE (shopify_listing_variants.product_id, shopify_listing_variants.product_title, shopify_listing_variants.status,
+             shopify_listing_variants.handle, shopify_listing_variants.image, shopify_listing_variants.sku, shopify_listing_variants.size,
+             shopify_listing_variants.price, shopify_listing_variants.compare_at, shopify_listing_variants.qty, shopify_listing_variants.style)
+        IS DISTINCT FROM (EXCLUDED.product_id, EXCLUDED.product_title, EXCLUDED.status, EXCLUDED.handle, EXCLUDED.image, EXCLUDED.sku,
+             EXCLUDED.size, EXCLUDED.price, EXCLUDED.compare_at, EXCLUDED.qty, EXCLUDED.style)
+      RETURNING variant_id`;
+    changed += out.length;
+  }
+  return changed;
+}
+/** Drop every stored variant NOT in `keepIds` (a full re-read: they are gone from Shopify). */
+export async function pruneShopifyListingVariants(keepIds) {
+  const rows = await db()`DELETE FROM shopify_listing_variants WHERE NOT (variant_id = ANY(${keepIds}::text[])) RETURNING variant_id`;
+  return rows.length;
+}
+/** One product, as Shopify has it now: its variants saved, any it no longer has dropped. */
+export async function replaceShopifyListingProduct(productId, rows) {
+  const changed = rows.length ? await upsertShopifyListingVariants(rows) : 0;
+  const keep = rows.map((v) => v.variantId);
+  const gone = await db()`DELETE FROM shopify_listing_variants WHERE product_id = ${productId}
+                            AND NOT (variant_id = ANY(${keep}::text[])) RETURNING variant_id`;
+  return { changed, removed: gone.length };
+}
+export async function countShopifyListingVariants() {
+  const [r] = await db()`SELECT count(*)::int AS n FROM shopify_listing_variants`;
+  return r.n;
+}
+/** The page's list, in the shape shopifyAllVariants returns. */
+export async function listShopifyListingVariants() {
+  const rows = await db()`SELECT variant_id, product_id, product_title, status, handle, image, sku, size, price, compare_at, qty, style
+                            FROM shopify_listing_variants`;
+  return rows.map((r) => ({
+    variantId: r.variant_id, productId: r.product_id, productTitle: r.product_title, status: r.status, handle: r.handle,
+    image: r.image, sku: r.sku, size: r.size, price: r.price, compareAt: r.compare_at, qty: r.qty == null ? null : Number(r.qty), style: r.style,
+  }));
+}
+export async function listMarketPrices() {
+  return db()`SELECT sku, size, status, value_cents, label, name, checked_at FROM listing_market_prices`;
+}
+export async function saveMarketPrices(results) {
+  const ok = results.filter((r) => r && r.status && r.status !== 'error');
+  for (let i = 0; i < ok.length; i += 500) {
+    const chunk = JSON.stringify(ok.slice(i, i + 500).map((r) => ({
+      sku: r.sku, size: r.size, status: r.status, value_cents: r.valueCents ?? null, label: r.label || null, name: r.name || null,
+    })));
+    await db()`
+      INSERT INTO listing_market_prices (sku, size, status, value_cents, label, name, checked_at)
+      SELECT x.sku, x.size, x.status, x.value_cents, x.label, x.name, now()
+        FROM jsonb_to_recordset(${chunk}::jsonb) AS x(sku text, size text, status text, value_cents int, label text, name text)
+      ON CONFLICT (sku, size) DO UPDATE SET status = EXCLUDED.status, value_cents = EXCLUDED.value_cents,
+        label = EXCLUDED.label, name = EXCLUDED.name, checked_at = now()`;
+  }
+  return ok.length;
+}

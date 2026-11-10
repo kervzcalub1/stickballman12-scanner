@@ -3541,7 +3541,43 @@ await sql(`
     UNIQUE (kind, key)
   )`);
 
+// ── Listings kept fresh by the server (owner, 2026-11-10; docs/context/shopify-listings.md) ──
+// Shopify Listings used to read every Shopify variant LIVE each time the page opened, and price
+// the market in the browser. Now the server keeps a copy: a full re-read every 30 min, and each
+// Shopify webhook (new / changed / deleted product, a stock change) re-reads that one product.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shopify_listing_variants (
+    variant_id    TEXT PRIMARY KEY,
+    product_id    TEXT,
+    product_title TEXT NOT NULL DEFAULT '',
+    status        TEXT,
+    handle        TEXT,
+    image         TEXT,
+    sku           TEXT NOT NULL DEFAULT '',
+    size          TEXT NOT NULL DEFAULT '',
+    price         TEXT,
+    compare_at    TEXT,
+    qty           INT,
+    style         TEXT,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS shopify_listing_variants_product_idx ON shopify_listing_variants (product_id)`);
+// Market price per style code + size (Alias, api/_lib/ebay-reprice.js priceStyleSize), checked by
+// the server for every IN-STOCK active size. Only real answers are stored — an error is retried.
+await sql(`
+  CREATE TABLE IF NOT EXISTS listing_market_prices (
+    sku          TEXT NOT NULL,
+    size         TEXT NOT NULL,
+    status       TEXT NOT NULL,       -- ok | null_price | not_listed | bad_size
+    value_cents  INT,
+    label        TEXT,
+    name         TEXT,
+    checked_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (sku, size)
+  )`);
+
 const LIVE_TABLES = [
+  'shopify_listing_variants', 'listing_market_prices',
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
   'shein_category_map', 'shein_brand_map',

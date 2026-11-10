@@ -49,6 +49,11 @@ import { estDate, PH_DATETIME } from '../../src/lib/format.js';
 
 export const PROC_ID = `${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
 export const NIGHTLY = 'auto (nightly 03:00 EST)';
+// Owner, 2026-11-10: keep the listings fresh all day, not once a night. A re-read starts this
+// many minutes after the last one FINISHED (so two never overlap, however long one takes).
+// SHEIN_LISTING_EVERY_MIN=0 goes back to the nightly only.
+export const everyMin = () => { const n = Number(process.env.SHEIN_LISTING_EVERY_MIN ?? 30); return Number.isFinite(n) && n >= 0 ? n : 30; };
+export const AUTO_EVERY = () => `auto (every ${everyMin()} min)`;
 const DAY_MS = 24 * 3600_000;
 const BATCH = 10;   // searchProduct / query-document-state take 10 SPUs a call
 
@@ -1361,15 +1366,29 @@ export function nightlyDue(last, now = new Date()) {
   if (!last) return true;
   return estDate(last.created_at) !== estDate(now);
 }
-// From sheinTick() (production only, SHEIN_SYNC_WATCH): leases, the nightly, Phase 2's review
-// follow-up + deferred retries, the 90-day log prune.
+/**
+ * Every N minutes: due when the newest snapshot (anyone's — a person's Re-read counts) is neither
+ * queued nor running and finished (or started, if it never finished) at least N minutes ago.
+ */
+export function snapshotDue(last, now = new Date(), every = everyMin()) {
+  if (!every) return false;
+  if (!last) return true;
+  if (['queued', 'running'].includes(last.status)) return false;
+  const at = new Date(last.finished_at || last.created_at).getTime();
+  return now.getTime() - at >= every * 60_000;
+}
+const isAuto = (by) => String(by || '').startsWith('auto (');
+// From sheinTick() (production only, SHEIN_SYNC_WATCH): leases, the re-read every 30 min (or the
+// nightly), Phase 2's review follow-up + deferred retries, the 90-day log prune.
 export async function listingTick({ now = new Date(), io = IO } = {}) {
   await markStaleListingJobs();
-  const last = await latestListingJobBy('snapshot', NIGHTLY);
-  if (nightlyDue(last, now) && !(await activeListingJob())) {
-    const cut = await latestListingJob('snapshot');
-    if (cut && cut.status === 'interrupted' && cut.started_by === NIGHTLY) await resumeListingJob(cut.id, NIGHTLY).catch((e) => console.error('[shein-listing] nightly resume', e.message));
-    else await startListingJob({ kind: 'snapshot', by: NIGHTLY, io }).catch((e) => console.error('[shein-listing] nightly', e.message));
+  const every = everyMin();
+  const latest = await latestListingJob('snapshot');
+  const due = every ? snapshotDue(latest, now, every) : nightlyDue(await latestListingJobBy('snapshot', NIGHTLY), now);
+  if (due && !(await activeListingJob())) {
+    const by = every ? AUTO_EVERY() : NIGHTLY;
+    if (latest && latest.status === 'interrupted' && isAuto(latest.started_by)) await resumeListingJob(latest.id, latest.started_by).catch((e) => console.error('[shein-listing] auto resume', e.message));
+    else await startListingJob({ kind: 'snapshot', by, io }).catch((e) => console.error('[shein-listing] auto re-read', e.message));
   }
   await listingFollowUp({ io }).catch((e) => console.error('[shein-listing] follow-up', e.message));
   await autoPriceTick({ io, now }).catch((e) => console.error('[shein-listing] auto price', e.message));

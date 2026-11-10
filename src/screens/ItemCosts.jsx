@@ -1,4 +1,5 @@
 // Costs — fill in what a pair cost when the supplier didn't.
+// (Third tab, "Cost lookup": every PO + online order line for a SKU — CostLookup.jsx.)
 //
 // `items.cost` is written once, at intake, and suppliers routinely leave cost off a
 // PO manifest. Before this page a blank cost stayed blank forever. Two halves, both
@@ -10,6 +11,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, getUser } from '../api.js';
 import { CostBackfill } from '../components/CostBackfill.jsx';
+import { CostLookup } from '../components/CostLookup.jsx';
 import { TopBar, DateRangeBar, PriceInput } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useLive } from '../hooks.js';
@@ -37,7 +39,9 @@ export function ItemCosts({ onHome, onSignOut }) {
   // when we don't know that. Most are blanks skipped before toCost was fixed; a few
   // may be real. See the note the page prints when this tab is open.
   const [tabRaw, setTab] = useQueryParam('tab', 'blank');
-  const tab = tabRaw === 'zero' ? 'zero' : 'blank'; // the URL is a pointer, not a value to trust
+  // 'lookup' = the Cost lookup tab (src/components/CostLookup.jsx): every PO + online
+  // order line for a SKU with what a pair cost — read-only, its own search (?lq=).
+  const tab = tabRaw === 'zero' ? 'zero' : tabRaw === 'lookup' ? 'lookup' : 'blank'; // the URL is a pointer, not a value to trust
   const counts = usePendingCounts();
 
   async function loadWorklist(nextTab = tab) {
@@ -49,6 +53,7 @@ export function ItemCosts({ onHome, onSignOut }) {
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => {
+    if (tab === 'lookup') return;   // the lookup loads its own rows
     // Arrived with ?q= (Inventory's "Edit cost", or a refresh mid-search): run it
     // instead of loading the backlog the person didn't ask for.
     if (!searched && query.trim() && rows === null) { runSearch(); return; }
@@ -138,10 +143,39 @@ export function ItemCosts({ onHome, onSignOut }) {
       const next = [...r, ...cur.filter((x) => !have.has(x.vin) && keptVins.current.has(x.vin))];
       return JSON.stringify(cur) === JSON.stringify(next) ? cur : next;
     });
-  }, { mount: false, paused: rows == null || !!savingKey || Object.keys(drafts).length > 0 });
+  }, { mount: false, paused: tab === 'lookup' || rows == null || !!savingKey || Object.keys(drafts).length > 0 });
 
   const totalPairs = groups ? groups.reduce((n, g) => n + g.qty, 0) : 0;
   const totalMissing = groups ? groups.reduce((n, g) => n + g.missing, 0) : 0;
+
+  const tabs = (
+    <div className="seg cost-tabs" role="tablist">
+      <button type="button" role="tab" aria-selected={tab === 'blank'}
+        className={`seg-btn${tab === 'blank' ? ' on' : ''}`} onClick={() => setTab('blank')}>
+        No cost on file{counts?.missing_cost ? ` (${counts.missing_cost})` : ''}
+      </button>
+      <button type="button" role="tab" aria-selected={tab === 'zero'}
+        className={`seg-btn${tab === 'zero' ? ' on' : ''}`} onClick={() => setTab('zero')}>
+        $0 — check these{counts?.zero_cost ? ` (${counts.zero_cost})` : ''}
+      </button>
+      <button type="button" role="tab" aria-selected={tab === 'lookup'}
+        className={`seg-btn${tab === 'lookup' ? ' on' : ''}`} onClick={() => setTab('lookup')}>
+        <Icon name="search" /> Cost lookup
+      </button>
+    </div>
+  );
+
+  if (tab === 'lookup') {
+    return (
+      <div className="app">
+        <TopBar title="Costs" onHome={onHome} onSignOut={onSignOut} />
+        <div className="card">
+          {tabs}
+          <CostLookup onSignOut={onSignOut} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app">
@@ -171,16 +205,7 @@ export function ItemCosts({ onHome, onSignOut }) {
           </p>
         ) : (
           <>
-            <div className="seg cost-tabs" role="tablist">
-              <button type="button" role="tab" aria-selected={tab === 'blank'}
-                className={`seg-btn${tab === 'blank' ? ' on' : ''}`} onClick={() => setTab('blank')}>
-                No cost on file{counts?.missing_cost ? ` (${counts.missing_cost})` : ''}
-              </button>
-              <button type="button" role="tab" aria-selected={tab === 'zero'}
-                className={`seg-btn${tab === 'zero' ? ' on' : ''}`} onClick={() => setTab('zero')}>
-                $0 — check these{counts?.zero_cost ? ` (${counts.zero_cost})` : ''}
-              </button>
-            </div>
+            {tabs}
             {tab === 'zero' && (
               <p className="cost-zero-note sm">
                 These are recorded as costing <b>$0</b> — a real claim, not a gap, which is why

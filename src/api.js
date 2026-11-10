@@ -266,6 +266,7 @@ export const api = {
   // already there, and the save. Blank cost clears to unknown, never to $0.
   costsList: (from, to, mode) => get(`/api/items/costs?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(mode ? { mode } : {}) }).toString()}`),
   costsSearch: (q) => get(`/api/items/costs?q=${encodeURIComponent(q)}`),
+  costLookup: (q) => get(`/api/items/cost-lookup${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   setItemsCost: (vins, cost) => post('/api/items/set-cost', { vins, cost }),
   // Fill blank costs from the PO's shelf price (admin). Preview writes nothing.
   costBackfillPreview: () => get('/api/items/cost-backfill'),

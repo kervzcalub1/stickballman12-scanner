@@ -61,6 +61,36 @@ it back on every search, so a refresh keeps the shoe. Inventory also now prints
 Both list tabs are month-scoped by default (`DateRangeBar`) — a Day filter would read
 "all clear" while the home badge still shows dozens, the same reason No Box uses Month.
 
+## Cost lookup tab (2026-11-11) — "what did this shoe cost us?"
+Third tab on the Costs page (`?tab=lookup`, search in `?lq=`, source filter in `?src=`):
+`src/components/CostLookup.jsx` → `GET /api/items/cost-lookup?q=` (`api/items/cost-lookup.js`,
+same roles as the page: admin/warehouse/PH, never supplier). **Read-only** — a spreadsheet of
+every PURCHASE line for a SKU, from both ways we buy:
+- **Supplier PO lines** (`listPoCostLines`) — shoes orders only (an empty-box order's "cost"
+  is a carton). One row per PO + store + SKU + size + price, so a size spread over three
+  labels is one row with the quantities summed. **Actual cost ea** = the shelf price
+  (`po_lines.unit_cost`) through `presetForShipment(po, supplier)` + `landedFromShelf` —
+  the exact code receiving and the backfill use, so the three can't disagree. **No preset
+  → no cost**, never the shelf price (the rule above); the row says why.
+- **Online order lines** (`listOnlineOrdersForCost`) — the order's actual cost per pair from
+  `orderCosts` (coupon / tax / shipping / gift card % / cashback %), computed over ALL the
+  order's lines and then filtered to the matching ones (the split needs the whole order).
+  Cancelled and not-delivered lines are left out.
+- Match: SKU contains the search with spaces/dashes ignored (`codeMatches`, also in SQL), or
+  the name contains it. Blank search = the newest 200 PO lines + 100 online orders; a search
+  goes to 1000 / 400 and says "more matches than shown" past that.
+- Dates are the EST civil day: `date_of_purchase` / `ordered_on`, else the EST day the row
+  was created.
+- The screen adds a **Cost by size** summary (`sizeSummary`: latest cost + its date/source,
+  lowest–highest, average weighted by pairs, pairs with no cost counted apart — a blank is
+  never averaged in as $0), sortable columns (blank money sorts last both ways), the
+  All / Supplier POs / Online orders filter, tap a cost for its breakdown, and a **CSV** of
+  exactly what's on screen (`costLookupCsv`). Live on `po_lines`, `purchase_orders`,
+  `online_orders`, `online_order_lines`. Only the latest request may land (a search typed
+  while the opening list loads used to be overwritten by it — caught by the e2e).
+- Not in it (yet): in-store buys (`kind='instore'`) and the cost already on received pairs
+  (`items.cost`) — those are on the other two tabs' search. E2E: `e2e/cost-lookup.spec.js`.
+
 ## Granularity: batch + SKU + size
 `groupCostRows` makes one card per **batch + SKU**, with a row per size. One amount
 covers every pair of that size **in that shipment** — matching `po_lines.unit_cost`

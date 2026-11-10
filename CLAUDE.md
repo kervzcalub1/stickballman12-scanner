@@ -59,7 +59,7 @@ Admin login: username `admin`, password `ADMIN_PASSWORD` (.env).
 | The app-wide advisor: floating button, screen context, its nine read-only tools | `docs/context/advisor.md` |
 | Shopify: the all-channel sales + inventory feed (`api/_lib/shopify.js`) | `docs/context/shopify.md` |
 | Existing Stock: counting old stock in shelf-by-shelf (kind='existing', PH-excluded) | `docs/context/existing-stock.md` |
-| Inventory browse, SKU-merge, bulk status, labels, **removing pairs + Deleted archive**, **🛍 Check Shopify (live: what Shopify holds per size)**, **Stock Check** (`/stock-check`: scan a box → size + Shopify's for-sale count, scan a VIN → in inventory or not; count a size vs Shopify, **server-owned count**, VIN-only mode; every scan recorded) + **My Scans** (`/my-scans`: a user's scan history, admin sees everyone; CSV + PDF) | `docs/context/inventory.md` |
+| Inventory browse, SKU-merge, bulk status, labels, **My Scans = each person's received pairs (Received tab, default) + Stock Check scans/counts**, **removing pairs + Deleted archive**, **🛍 Check Shopify (live: what Shopify holds per size)**, **Stock Check** (`/stock-check`: scan a box → size + Shopify's for-sale count, scan a VIN → in inventory or not; count a size vs Shopify, **server-owned count**, VIN-only mode; every scan recorded); My Scans (`/my-scans`) admin sees everyone; CSV + PDF | `docs/context/inventory.md` |
 | Costs: **per-shoe cost at receiving** (typed → PO line → batch default), the Costs page backfill, Inventory ✎, blank-vs-$0 | `docs/context/costs.md` |
 | PH report/grid, SKU-merge, edit locks, sync flags, badges | `docs/context/ph-report.md` |
 | Rescale: restock worklist + request/audit (reported vs actual) | `docs/context/rescale.md` |

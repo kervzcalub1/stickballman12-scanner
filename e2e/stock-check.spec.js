@@ -205,6 +205,8 @@ test('bypass attempts: the count can only move by real scans of the right pair',
   const ph = await r.json();
   expect(ph.who).toBe('e2e_ph');
   expect(ph.scans.every((s) => s.username === 'e2e_ph')).toBe(true);
+  // ...and only the pairs YOU received: none of the warehouse's.
+  expect(ph.received.some((it) => VINS.includes(it.vin))).toBe(false);
 
   r = await call(request, WH, 'POST', '/api/items/stock-count', { action: 'finish', id });
   const done = await r.json();
@@ -214,11 +216,34 @@ test('bypass attempts: the count can only move by real scans of the right pair',
   expect(r.status()).toBe(409);
 });
 
+// My Scans means the pairs a person RECEIVED (owner, 2026-11-10): that's what it opens on.
+test('My Scans opens on the pairs you received, with the shipment, and downloads CSV + PDF', async ({ page }) => {
+  page.on('pageerror', (err) => { throw err; });
+  await loginAs(page, 'warehouse');
+  await page.goto('/my-scans');
+  await expect(page.getByRole('tab', { name: /Received/ })).toHaveAttribute('aria-selected', 'true');
+  const got = page.getByRole('list', { name: 'Pairs received' });
+  for (const vin of VINS) await expect(got.getByText(vin)).toBeVisible({ timeout: 15_000 });
+  const row = got.locator('li').filter({ hasText: VINS[0] });
+  await expect(row).toContainText(SKU);
+  await expect(row).toContainText('E2E stock check');          // where it came from
+  await expect(row).toContainText('Existing stock');           // and what kind of intake
+  const [csv] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '⬇ CSV' }).click()]);
+  expect(csv.suggestedFilename()).toMatch(/^received_.*\.csv$/);
+  const text = fs.readFileSync(await csv.path(), 'utf8');
+  expect(text).toMatch(/^Date \(EST\),Time,Received by,VIN,SKU/);
+  for (const vin of VINS) expect(text).toContain(vin);
+  expect(text).toContain('E2E Warehouse');
+  const [pdf] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '⬇ PDF' }).click()]);
+  expect(pdf.suggestedFilename()).toMatch(/^received_.*\.pdf$/);
+  expect(fs.readFileSync(await pdf.path()).subarray(0, 4).toString()).toBe('%PDF');
+});
+
 test('My Scans lists the counts and scans, and downloads CSV + PDF', async ({ page }) => {
   page.on('pageerror', (err) => { throw err; });
   await loginAs(page, 'warehouse');
   await page.goto('/my-scans');
-  // Scan history is what the page opens on.
+  await page.getByRole('tab', { name: /Stock Check/ }).click();
   const history = page.getByRole('list', { name: 'Scan history' });
   await expect(history.getByText(VINS[0]).first()).toBeVisible({ timeout: 15_000 });
   const [csv2] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '⬇ CSV' }).click()]);
@@ -263,12 +288,20 @@ test('an admin sees every warehouse user’s scan history by default', async ({ 
   await loginAs(page, 'admin');
   await page.goto('/my-scans');
   await expect(page.getByLabel('Whose scans')).toHaveValue('all');
+  // Received, everyone's: the warehouse's pairs, under their name.
+  const got = page.getByRole('list', { name: 'Pairs received' });
+  await expect(got.locator('li').filter({ hasText: VINS[0] })).toContainText('E2E Warehouse', { timeout: 15_000 });
+  await page.getByRole('tab', { name: /Stock Check/ }).click();
   const history = page.getByRole('list', { name: 'Scan history' });
   await expect(history.getByText(VINS[0]).first()).toBeVisible({ timeout: 15_000 });
   await expect(history.getByText(/E2E Warehouse/).first()).toBeVisible();     // whose scan it was
   await expect(page.getByLabel('Whose scans').locator('option', { hasText: 'E2E Warehouse' })).toHaveCount(1);
   await page.getByLabel('Whose scans').selectOption('');                       // Mine: the admin scanned nothing
   await expect(history.getByText(VINS[0])).toHaveCount(0);
+  await page.getByRole('tab', { name: /Received/ }).click();                    // nor received anything
+  await expect(page.getByText(VINS[0])).toHaveCount(0);
+  await page.getByLabel('Whose scans').selectOption('e2e_wh');                 // one person: theirs
+  await expect(got.getByText(VINS[0])).toBeVisible({ timeout: 15_000 });
 });
 
 test('a sticker no pair wears says so', async ({ page }) => {

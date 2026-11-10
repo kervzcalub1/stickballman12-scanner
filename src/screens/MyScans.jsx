@@ -1,20 +1,21 @@
-// My Scans (/my-scans, docs/context/inventory.md "Stock Check" → My Scans).
-// A person's SCAN HISTORY (the user's call, 2026-11-04): every Stock Check scan they made,
-// newest first, and second the counts they ran — for a day / week / month (EST),
-// with CSV and PDF reports of either. Everyone sees their own; an admin can pick anyone,
-// or everyone. Read-only: the rows are recorded by the server as the scans happen.
+// My Scans (/my-scans, docs/context/inventory.md "My Scans").
+// FIRST, and the point of the page (owner, 2026-11-10): RECEIVED, the pairs this person
+// scanned in at receiving, so the warehouse can keep track of what each of them inbounded.
+// Then their Stock Check scans and the counts they ran. All for a day / week / month (EST),
+// with CSV and PDF of each tab. Everyone sees their own; an admin can pick anyone, or
+// everyone. Read-only: every row was recorded by the server when it happened.
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, DateRangeBar } from '../components/common.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryDateRange, useQueryParam } from '../lib/urlstate.js';
 import { rangeOf, estDate, estTime } from '../lib/format.js';
-import { scanRows, countRows, countTotals } from '../lib/scanReport.js';
+import { scanRows, countRows, countTotals, receivedRows, receivedTotals } from '../lib/scanReport.js';
 
 export function MyScans({ user, onHome, onSignOut, onStockCheck }) {
   const admin = user?.role === 'admin' || user?.role === 'superadmin';
   const [dr, setDr] = useQueryDateRange('day');
-  const [tab, setTab] = useQueryParam('tab', 'scans');
+  const [tab, setTab] = useQueryParam('tab', 'received');
   // An admin opens on EVERYONE's history (the user's call, 2026-11-04); anyone else only
   // ever gets their own — the server enforces that, not this default.
   const [who, setWho] = useQueryParam('user', admin ? 'all' : '');
@@ -29,8 +30,11 @@ export function MyScans({ user, onHome, onSignOut, onStockCheck }) {
   }
   useEffect(() => { setData(null); load(); }, [from, to, who]); // eslint-disable-line react-hooks/exhaustive-deps
   // LIVE (live-updates.md): a scan made on another phone shows here without a refresh.
-  useLive(['stock_check_scans', 'stock_counts'], load, { mount: false, paused: data == null });
+  useLive(['items', 'stock_check_scans', 'stock_counts'], load, { mount: false, paused: data == null });
 
+  const received = data?.received || [];
+  const rr = receivedRows(received);
+  const rt = receivedTotals(rr);
   const scans = data?.scans || [];
   const counts = data?.counts || [];
   const cr = countRows(counts);
@@ -43,12 +47,12 @@ export function MyScans({ user, onHome, onSignOut, onStockCheck }) {
     try {
       const rep = await import('../lib/scanReport.js');
       const now = new Date();
-      const name = `${tab === 'counts' ? 'stock_counts' : 'stock_scans'}_${from === to ? from : `${from}_to_${to}`}`;
+      const name = `${tab === 'counts' ? 'stock_counts' : tab === 'received' ? 'received' : 'stock_scans'}_${from === to ? from : `${from}_to_${to}`}`;
       let blob;
-      if (fmt === 'csv') blob = new Blob([tab === 'counts' ? rep.countsCsv(counts) : rep.scansCsv(scans)], { type: 'text/csv;charset=utf-8' });
+      if (fmt === 'csv') blob = new Blob([tab === 'counts' ? rep.countsCsv(counts) : tab === 'received' ? rep.receivedCsv(received) : rep.scansCsv(scans)], { type: 'text/csv;charset=utf-8' });
       else {
         const opts = { from, to, who: whoLabel, generatedAt: `Generated ${estDate(now)} ${estTime(now)} EST` };
-        blob = (await (tab === 'counts' ? rep.countsPdf(counts, opts) : rep.scansPdf(scans, opts))).output('blob');
+        blob = (await (tab === 'counts' ? rep.countsPdf(counts, opts) : tab === 'received' ? rep.receivedPdf(received, opts) : rep.scansPdf(scans, opts))).output('blob');
       }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -68,7 +72,8 @@ export function MyScans({ user, onHome, onSignOut, onStockCheck }) {
         <DateRangeBar mode={dr.mode} anchor={dr.anchor} onChange={(mode, anchor) => setDr({ mode, anchor })} />
         <div className="myscans-bar">
           <div className="seg" role="tablist" aria-label="Show">
-            <button type="button" role="tab" aria-selected={tab === 'scans'} className={`seg-btn ${tab === 'scans' ? 'on' : ''}`} onClick={() => setTab('scans')}>Scan history ({scans.length})</button>
+            <button type="button" role="tab" aria-selected={tab === 'received'} className={`seg-btn ${tab === 'received' ? 'on' : ''}`} onClick={() => setTab('received')}>Received ({received.length})</button>
+            <button type="button" role="tab" aria-selected={tab === 'scans'} className={`seg-btn ${tab === 'scans' ? 'on' : ''}`} onClick={() => setTab('scans')}>Stock Check ({scans.length})</button>
             <button type="button" role="tab" aria-selected={tab === 'counts'} className={`seg-btn ${tab === 'counts' ? 'on' : ''}`} onClick={() => setTab('counts')}>Counts ({counts.length})</button>
           </div>
           {admin && (
@@ -89,7 +94,30 @@ export function MyScans({ user, onHome, onSignOut, onStockCheck }) {
         </div>
         {error && <div className="error mt">{error}</div>}
 
-        {data == null ? <p className="muted">Loading…</p> : tab === 'counts' ? (
+        {data == null ? <p className="muted">Loading…</p> : tab === 'received' ? (
+          rr.length === 0 ? (
+            <div className="card empty-state">Nothing received in this period. Pairs {data.who === 'all' ? 'anyone scans' : 'you scan'} in on <b>Receiving</b> show up here.</div>
+          ) : (
+            <>
+              <p className="muted sm"><b>{rt.pairs}</b> pair{rt.pairs === 1 ? '' : 's'} received · {rt.shipments} batch{rt.shipments === 1 ? '' : 'es'} · {rt.shoes} different shoe{rt.shoes === 1 ? '' : 's'}</p>
+              <ul className="myscans-list" aria-label="Pairs received">
+                {rr.map((r, i) => (
+                  <li key={received[i].id} className="card myscans-row">
+                    <div className="myscans-main">
+                      <div className="myscans-shoe">{r.name || r.sku}</div>
+                      <div className="muted sm">{r.sku}{r.size ? <> · size <b>{r.size}</b></> : ''} · <span className="mono">{r.vin}</span> · {r.time} EST{data.who === 'all' && r.by ? ` · ${r.by}` : ''}</div>
+                      <div className="muted xs">{[r.batch && `${r.batch}${r.box ? ` ${r.box}` : ''}`, r.kind !== 'Shipment' && r.kind, r.from, r.po].filter(Boolean).join(' · ')}</div>
+                    </div>
+                    <div className="myscans-num myscans-status">
+                      <span className="sm">{r.status}</span>
+                      {r.location && <span className="muted xs mono">{r.location}</span>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )
+        ) : tab === 'counts' ? (
           cr.length === 0 ? (
             <div className="card empty-state">No counts in this period. Start one on <b>Stock Check</b>: scan a box, then <b>Count this size</b>.</div>
           ) : (

@@ -13485,6 +13485,36 @@ export async function listStockCounts({ username, from, to }) {
      WHERE (c.started_at AT TIME ZONE 'America/New_York')::date BETWEEN ${from}::date AND ${to}::date
      ORDER BY c.started_at DESC`;
 }
+// My Scans → Received (owner, 2026-11-10): the pairs a person SCANNED IN at receiving, i.e.
+// every `items` row they created, for an EST date range, with the shipment it came in on.
+// `items.created_by` holds the person's display NAME (receiving writes `user.name ||
+// user.username`), so `names` is every spelling of one person; null = everyone.
+// Hard-deleted pairs are gone from here (they live in deleted_items).
+export async function listReceivedItems({ names = null, from, to, limit = 5000 }) {
+  const lim = Math.min(20000, Math.max(1, Number(limit) || 5000));
+  const list = names && names.length ? names : null;
+  return await db()`
+    SELECT i.id, i.vin, i.sku, i.size, i.name, i.status, i.location_code, i.created_by, i.created_at,
+           i.with_box, i.pre_sell,
+           b.id AS batch_id, b.batch_code, b.kind AS batch_kind, b.supplier_name, b.origin, b.tracking_number AS batch_tracking,
+           bx.box_number, bx.tracking_number AS box_tracking,
+           po.id AS po_id, po.po_code
+      FROM items i
+      LEFT JOIN batches b ON b.id = i.batch_id
+      LEFT JOIN batch_boxes bx ON bx.id = i.box_id
+      LEFT JOIN purchase_orders po ON po.id = b.po_id
+     WHERE (${list}::text[] IS NULL OR i.created_by = ANY(${list}::text[]))
+       AND (i.created_at AT TIME ZONE 'America/New_York')::date BETWEEN ${from}::date AND ${to}::date
+     ORDER BY i.created_at DESC, i.id DESC LIMIT ${lim}`;
+}
+// The staff accounts an admin can pick on My Scans, with the name receiving files their pairs under.
+export async function listScanPeople() {
+  return await db()`
+    SELECT username, name FROM users
+     WHERE role IN ('warehouse', 'admin', 'ph_team') AND status = 'approved'
+     ORDER BY lower(coalesce(name, username))`;
+}
+
 export async function listStockScanUsers() {
   return await db()`
     SELECT username, max(user_name) AS user_name, count(*)::int AS scans, max(created_at) AS last_at

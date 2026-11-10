@@ -1,6 +1,6 @@
-// My Scans reports — CSV + PDF (docs/context/inventory.md "Stock Check" → My Scans).
-// Two reports, one per tab: COUNTS (each count: counted vs Shopify, how it was counted)
-// and SCANS (every Stock Check scan). CSV and PDF are built from the SAME rows, so the two
+// My Scans reports — CSV + PDF (docs/context/inventory.md "My Scans").
+// Three reports, one per tab: RECEIVED (each pair the person scanned in at receiving),
+// COUNTS (each count: counted vs Shopify, how it was counted) and SCANS (every Stock Check scan). CSV and PDF are built from the SAME rows, so the two
 // files can never disagree. PDF strings must be plain ASCII (tablePdf strips the rest).
 import { toCsv } from './manifestCsv.js';
 import { estDate, estClock } from './format.js';
@@ -79,6 +79,46 @@ export function countsCsv(counts) {
 }
 
 const rangeLabel = (from, to) => (from === to ? from : `${from} to ${to}`);
+
+// RECEIVED (owner, 2026-11-10): the pairs a person scanned in at receiving, one row a pair,
+// with the shipment it came in on and where the pair is now.
+const BATCH_KIND = { receiving: 'Shipment', instore: 'In-store buy', existing: 'Existing stock', rescale: 'Rescale', boxes: 'Empty boxes' };
+export function receivedRows(items) {
+  return (items || []).map((it) => ({
+    date: estDate(it.created_at), time: estClock(it.created_at), by: it.created_by || '',
+    vin: it.vin || '', sku: it.sku || '', size: it.size || '', name: it.name || '',
+    batch: it.batch_code || '', kind: BATCH_KIND[it.batch_kind] || it.batch_kind || '',
+    from: it.supplier_name || it.origin || '', po: it.po_code || '',
+    box: it.box_number != null ? `Box ${it.box_number}` : '',
+    tracking: it.box_tracking || it.batch_tracking || '',
+    status: it.status ? statusLabel(it.status) : '', location: it.location_code || '',
+  }));
+}
+// How many pairs, in how many shipments: the line above the list and the PDF's summary.
+export function receivedTotals(rows) {
+  return { pairs: rows.length, shipments: new Set(rows.map((r) => r.batch).filter(Boolean)).size, shoes: new Set(rows.map((r) => r.sku).filter(Boolean)).size };
+}
+export function receivedCsv(items) {
+  return toCsv([
+    ['date', 'Date (EST)'], ['time', 'Time'], ['by', 'Received by'], ['vin', 'VIN'], ['sku', 'SKU'], ['size', 'Size'], ['name', 'Name'],
+    ['batch', 'Batch'], ['kind', 'Type'], ['from', 'Supplier / store'], ['po', 'PO'], ['box', 'Box'], ['tracking', 'Tracking'],
+    ['status', 'Status now'], ['location', 'Shelf'],
+  ], receivedRows(items));
+}
+export async function receivedPdf(items, { from, to, who, generatedAt }) {
+  const rs = receivedRows(items);
+  const t = receivedTotals(rs);
+  return tablePdf({
+    title: 'Pairs received',
+    subtitle: `${rangeLabel(from, to)} (EST)  |  ${who}  |  ${generatedAt}`,
+    summary: [['Pairs', String(t.pairs)], ['Shipments', String(t.shipments)], ['Different shoes', String(t.shoes)]],
+    cols: [['Date', 26], ['By', 24], ['VIN', 32], ['SKU', 26], ['Name', 0], ['Size', 12], ['Batch', 18], ['Supplier / store', 30],
+      ['PO', 20], ['Status now', 26]],
+    cells: rs.map((r) => [`${r.date} ${r.time}`, r.by, r.vin, r.sku, r.name, r.size, `${r.batch}${r.box ? ` ${r.box}` : ''}`, r.from || '-',
+      r.po || '-', r.status]),
+    footer: 'Every pair scanned in at receiving, under the person who saved it. Tracking numbers and shelves are in the CSV.',
+  });
+}
 
 export async function countsPdf(counts, { from, to, who, generatedAt }) {
   const rs = countRows(counts);

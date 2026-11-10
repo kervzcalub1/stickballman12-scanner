@@ -5997,7 +5997,7 @@ export async function getPoBoxDiffs(poId) {
     SELECT l.po_box_id, l.sku, l.size, max(l.name) AS name, sum(l.qty_expected)::int AS qty
     FROM po_lines l WHERE l.po_id = ${poId} AND l.po_box_id IS NOT NULL
     GROUP BY l.po_box_id, l.sku, l.size`;
-  const labels = await sql`SELECT id, box_number, kind FROM po_boxes WHERE po_id = ${poId} ORDER BY box_number`;
+  const labels = await sql`SELECT id, box_number, kind, status, tracking_number FROM po_boxes WHERE po_id = ${poId} ORDER BY box_number`;
   const receivedBoxes = await getPoReceivedBoxes(poId);
 
   // One code-group map for the whole order, so the same shoe groups identically in
@@ -6043,6 +6043,10 @@ export async function getPoBoxDiffs(poId) {
       expected_units: [...exp.values()].reduce((n, x) => n + x.qty, 0),
       received_units: [...rec.values()].reduce((n, x) => n + x.qty, 0),
       received: recByNumber.has(Number(l.box_number)),
+      // The carrier's word on the label, so a box UPS delivered but nobody has received
+      // against this order isn't told apart from one still on a truck only by guesswork.
+      label_status: l.status || null,
+      tracking_number: l.tracking_number || null,
       diffs,
     };
   });
@@ -6627,6 +6631,22 @@ export async function listPoComments(poId, { limit = 50, before = null } = {}) {
   return rows.reverse(); // hand back oldest-first for rendering
 }
 
+// The raw material for "which box was removed, by whom" on Reconciliation: every
+// label-removed / label-moved system note on the order (src/lib/poRemovedBoxes.js reads
+// them), plus the box numbers it has NOW. Its own query because the thread the screen
+// loads is capped at 50 and a long order's removal note is often older than that.
+export async function getPoLabelChangeNotes(poId) {
+  const sql = db();
+  const [notes, live] = await Promise.all([
+    sql`SELECT body, author_name, author_role, created_at FROM po_comments
+        WHERE po_id = ${poId} AND kind = 'system' AND body LIKE 'Label %'
+          AND (body LIKE '%) removed%' OR body LIKE '%) moved to %')
+        ORDER BY created_at`,
+    sql`SELECT box_number FROM po_boxes WHERE po_id = ${poId}`,
+  ]);
+  return { notes, liveNumbers: live.map((r) => Number(r.box_number)) };
+}
+
 // Append one entry and keep the PO's denormalised counters in step, in the same request.
 export async function addPoComment({ poId, body, kind = 'note', audience = 'internal', author }) {
   const sql = db();
@@ -6794,6 +6814,47 @@ export async function listPoLinkCandidates(poId) {
       )
     ORDER BY b.created_at DESC
     LIMIT 25`;
+}
+
+// The other direction: which purchase orders could this already-received BATCH belong
+// to? Asked from the Batch page, where the forgotten link is noticed (PO-100107: 28
+// boxes scanned in one by one with no order picked, so the order never reached
+// Reconciliation). An order carrying one of the batch's tracking numbers on a label is
+// the near-certain answer and comes first, with the labels it matched; open orders from
+// the same supplier follow for a batch whose tracking was never typed in. Reconciled /
+// closed orders are left out — linking refuses them (frozen count).
+export async function listBatchPoCandidates(batchId) {
+  const sql = db();
+  const batch = (await sql`SELECT id, supplier_name, tracking_number, po_id FROM batches WHERE id = ${batchId}`)[0];
+  if (!batch) return null;
+  const boxT = await sql`SELECT tracking_number FROM batch_boxes WHERE batch_id = ${batchId} AND coalesce(tracking_number, '') <> ''`;
+  const trackings = [...new Set([batch.tracking_number, ...boxT.map((r) => r.tracking_number)]
+    .map((t) => String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '')).filter(Boolean))];
+  const supplier = String(batch.supplier_name || '').trim();
+  const rows = await sql`
+    SELECT p.id, p.po_code, p.status, p.supplier_name, p.created_at, p.manifest_scope, p.order_kind,
+           (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS label_count,
+           (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.status = 'delivered')::int AS delivered_count,
+           (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS expected_units,
+           (SELECT count(*) FROM batches x WHERE x.po_id = p.id)::int AS linked_batches,
+           coalesce((SELECT array_agg(b.box_number ORDER BY b.box_number) FROM po_boxes b
+                      WHERE b.po_id = p.id
+                        AND regexp_replace(upper(coalesce(b.tracking_number, '')), '[^A-Z0-9]', '', 'g') = ANY(${trackings})), '{}') AS matched_labels
+    FROM purchase_orders p
+    WHERE p.status NOT IN ('reconciled', 'closed')
+      AND (
+        EXISTS (SELECT 1 FROM po_boxes b WHERE b.po_id = p.id
+                  AND regexp_replace(upper(coalesce(b.tracking_number, '')), '[^A-Z0-9]', '', 'g') = ANY(${trackings}))
+        OR (${supplier} <> '' AND p.created_at > now() - interval '120 days'
+            AND (p.supplier_name ILIKE ${`%${supplier}%`} OR ${supplier} ILIKE ('%' || p.supplier_name || '%')))
+      )
+    ORDER BY matched_labels DESC, p.created_at DESC
+    LIMIT 25`;
+  // A non-empty matched_labels array sorts after '{}', so DESC puts tracking matches first.
+  return {
+    batch: { id: Number(batch.id), po_id: batch.po_id == null ? null : Number(batch.po_id) },
+    orders: rows.map((r) => ({ ...r, id: Number(r.id), matched_labels: (r.matched_labels || []).map(Number) })),
+  };
 }
 
 // The boxes of a candidate batch, each pre-matched to the PO label with the same

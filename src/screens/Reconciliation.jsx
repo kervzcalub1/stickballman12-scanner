@@ -8,6 +8,7 @@ import { api } from '../api.js';
 import { TrackingLink } from '../components/TrackingLink.jsx';
 import { useQueryParam } from '../lib/urlstate.js';
 import { useLive } from '../hooks.js';
+import { PH_DATETIME } from '../lib/format.js';
 import { poMatchesSearch, reconcileChipOf, expectsAtOrderLevel, hasOrderedList } from '../lib/postatus.js';
 import { TopBar, copyToClipboard } from '../components/common.jsx';
 import { PoKindChip } from '../components/PoKindChip.jsx';
@@ -197,6 +198,7 @@ export function Reconciliation({ canReconcile, showDropoff = false, onHome, onSi
           intakeDone: d.intake_done, awaitingBoxes: d.awaiting_boxes,
           resolution: d.resolution, steps: d.steps, comments: d.comments || [],
           receivedBoxes: d.received_boxes || [], boxDiffs: d.box_diffs || [],
+          removedBoxes: d.removed_boxes || [],
         };
         return same(cur, next) ? cur : next;
       });
@@ -230,6 +232,7 @@ export function Reconciliation({ canReconcile, showDropoff = false, onHome, onSi
           resolution: r.resolution, steps: r.steps, comments: r.comments || [],
           receivedBoxes: r.received_boxes || [],
           boxDiffs: r.box_diffs || [],
+          removedBoxes: r.removed_boxes || [],
         });
         setNote(r.po.reconcile_note || ''); setNoteSaved(r.po.reconcile_note || '');
       })
@@ -263,6 +266,7 @@ export function Reconciliation({ canReconcile, showDropoff = false, onHome, onSi
         resolution: r.resolution, steps: r.steps, comments: r.comments || [],
         receivedBoxes: r.received_boxes || d.receivedBoxes,
         boxDiffs: r.box_diffs || d.boxDiffs,
+        removedBoxes: r.removed_boxes || d.removedBoxes,
       }));
       loadList();
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
@@ -593,6 +597,8 @@ export function Reconciliation({ canReconcile, showDropoff = false, onHome, onSi
             {!blind && detail.boxDiffs?.length > 0 && (() => {
               const received = detail.boxDiffs.filter((b) => b.received);
               const pending = detail.boxDiffs.filter((b) => !b.received);
+              const pendingHere = pending.filter((b) => b.label_status === 'delivered');
+              const pendingOut = pending.filter((b) => b.label_status !== 'delivered');
               const dirty = received.filter((b) => b.diffs.length);
               const clean = received.filter((b) => !b.diffs.length);
               if (!received.length) return null;
@@ -624,8 +630,37 @@ export function Reconciliation({ canReconcile, showDropoff = false, onHome, onSi
                   {clean.length > 0 && dirty.length > 0 && (
                     <p className="muted xs rcn-bd-clean">Matching exactly: box {clean.map((b) => b.box_number).join(', ')}.</p>
                   )}
-                  {pending.length > 0 && (
-                    <p className="muted xs">Still to arrive: box {pending.map((b) => b.box_number).join(', ')} — not counted as short.</p>
+                  {/* "Still to arrive" was said of every unreceived label — including one UPS
+                      delivered days ago, which sent people waiting for a box that was on the
+                      floor (PO-100107 box 6). Delivered-but-not-received is its own line: the
+                      box is here, or it was scanned in without this order picked. */}
+                  {pendingHere.length > 0 && (
+                    <p className="muted xs">
+                      Delivered by the carrier, not received against this order yet: {pendingHere.map((b, i) => (
+                        <React.Fragment key={b.box_number}>{i ? ', ' : ''}box {b.box_number}{b.tracking_number ? <> (<TrackingLink number={b.tracking_number} />)</> : null}</React.Fragment>
+                      ))} — not counted as short. Find the box, or if it was already scanned in, link that shipment to this order (Purchase Orders → Link a received shipment).
+                    </p>
+                  )}
+                  {pendingOut.length > 0 && (
+                    <p className="muted xs">Still to arrive: box {pendingOut.map((b) => b.box_number).join(', ')} — not counted as short.</p>
+                  )}
+                  {/* A gap in the box numbers (13, 15 …) reads as a lost box. Say which
+                      label was taken off the order, by whom and when, from its own note. */}
+                  {detail.removedBoxes?.length > 0 && (
+                    <div className="rcn-bd-removed">
+                      {detail.removedBoxes.map((r, i) => (
+                        <p className="muted xs" key={`${r.box_number}-${i}`}>
+                          <b>Box {r.box_number}</b>
+                          {r.tracking ? <> ({r.tracking})</> : null}
+                          {r.kind === 'moved'
+                            ? <> moved to {r.to_po} (box {r.to_box})</>
+                            : <> removed from the order{r.lines ? `, with its ${r.lines} declared line${r.lines === 1 ? '' : 's'}` : ''}</>}
+                          {r.by ? <> by {r.by}{r.by_role === 'supplier' ? ' (supplier)' : ''}</> : null}
+                          {r.at ? <> · {PH_DATETIME.format(new Date(r.at))} EST</> : null}
+                          {r.kind === 'removed' ? ' — not counted as short.' : '.'}
+                        </p>
+                      ))}
+                    </div>
                   )}
                 </div>
               );

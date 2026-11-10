@@ -623,6 +623,8 @@ export const api = {
   poLinkCandidates: (poId, batchId) => get(`/api/po/link-candidates?poId=${encodeURIComponent(poId)}`
     + (batchId ? `&batchId=${encodeURIComponent(batchId)}` : '')),
   poLinkBatch: (payload) => post('/api/po/link-batch', payload),
+  // The same repair from the Batch page: which orders could this shipment belong to?
+  batchPoCandidates: (batchId) => get(`/api/batches/po-candidates?batchId=${encodeURIComponent(batchId)}`),
   poUnlinkBatch: (poId, batchId) => post('/api/po/unlink-batch', { poId, batchId }),
   poDelete: (poId, confirm, reason) => post('/api/po/delete', { poId, confirm, reason }),
   poDeletedList: () => get('/api/po/deleted'),

@@ -276,3 +276,49 @@ test('PH links the shipment, unlinks it, then deletes the order — all from the
   expect(kept.reason).toBe('e2e: linked in error');
   await q('DELETE FROM deleted_pos WHERE po_id = $1', [f.po.id]);
 });
+
+// The same repair from the SHIPMENT side. PO-100107: 28 boxes scanned in one by one with
+// no order picked, so the order never reached Reconciliation — and the person looking at
+// the batch, who is the one who notices, had no way to fix it there.
+test.describe('Batch page → link to its purchase order', () => {
+  test('po-candidates puts the order carrying the tracking number first, naming the label', async ({ request }) => {
+    const f = await fixture(request);
+    const r = await request.get(`/api/batches/po-candidates?batchId=${f.batchId}`, { headers: auth('warehouse') });
+    expect(r.ok(), await r.text()).toBeTruthy();
+    const body = await r.json();
+    expect(body.orders[0].id).toBe(Number(f.po.id));
+    expect(body.orders[0].matched_labels).toEqual([1]);
+    // A supplier has no business asking.
+    const s = await request.get(`/api/batches/po-candidates?batchId=${f.batchId}`, { headers: auth('supplier') });
+    expect(s.status()).toBe(403);
+  });
+
+  for (const [role, path] of [['warehouse', '/batches'], ['ph_team', '/ph/batches']]) {
+    test(`${role}: the batch says which order its tracking belongs to, and links it in one go`, async ({ page, request }) => {
+      const f = await fixture(request);
+      await loginAs(page, role);
+      await page.goto(`${path}?b=${f.batchId}`);
+
+      const hint = page.locator('.batch-po-hint');
+      await expect(hint).toContainText(`label #1 on ${f.po.po_code}`, { timeout: 15_000 });
+      await page.getByRole('button', { name: `Link to ${f.po.po_code}` }).click();
+
+      const modal = page.locator('.modal.po-link');
+      await expect(modal).toBeVisible();
+      // The order is pre-picked and the box pre-matched to its label by tracking number.
+      await expect(modal.locator('.po-link-batch.on')).toContainText(f.po.po_code);
+      await expect(modal.locator('.po-link-row select')).toHaveValue(String(f.poBoxId));
+      await modal.getByRole('button', { name: `Link to ${f.po.po_code}` }).click();
+      await expect(modal).toBeHidden({ timeout: 10_000 });
+
+      // The batch now says it's on the order, attached afterwards by this person…
+      await expect(page.locator('.batch-po')).toContainText(`Received against ${f.po.po_code}`, { timeout: 10_000 });
+      await expect(page.locator('.batch-po')).toContainText('attached to the order afterwards');
+      await expect(page.locator('.batch-po-link')).toHaveCount(0);
+      // …and the order counts the pairs and is on the Reconciliation list.
+      const rc = await (await request.get(`/api/po/reconciliation?poId=${f.po.id}`, { headers: auth('ph_team') })).json();
+      expect(rc.summary.received_units).toBe(2);
+      expect(rc.po.status).toBe('receiving');
+    });
+  }
+});

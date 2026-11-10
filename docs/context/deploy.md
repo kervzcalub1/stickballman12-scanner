@@ -56,6 +56,10 @@ run the migration after schema changes, on every environment.**
 - **Data tab**: paste the `ALTER TABLE … ADD COLUMN IF NOT EXISTS …` block
   (mirror of `scripts/db-setup.mjs`), or
 - `railway ssh` into the app container → `npm run db:setup`, or
+  (the web **Console** is a login shell whose `/etc/profile` drops Node off the PATH →
+  `npm: command not found`; since 2026-11-10 `server.mjs` writes
+  `/etc/profile.d/zz-app-node-path.sh` on boot (`api/_lib/consolePath.js`) to put it back.
+  On an old container: `export PATH=/mise/shims:$PATH` first), or
 - locally with the **public** URL:
   `DATABASE_URL='<DATABASE_PUBLIC_URL>' npm run db:setup`.
 - Note: internal `postgres.railway.internal` only resolves inside Railway; from

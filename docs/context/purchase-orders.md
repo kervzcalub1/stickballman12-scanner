@@ -601,7 +601,7 @@ Suppliers send orders as a message — a SKU, then `size x qty` (or `size-qty`) 
 ```
 DZ5485-201
 8.5 x 2
-9 x 3
+9 x 3 $110          ← a price on a size line is that size's own
 IB4025-100 $120     ← optional shelf price ea for every size under it
 10 x 1
 ```
@@ -620,6 +620,72 @@ pairs, an editable **Shelf price ea**) → one **Add N pairs** → `POST /api/po
   **adds** to its qty, so pasting again tops up. The whole list is validated first.
 - Shoes only (a box needs dimensions on every line). **No UPC** is sent — a SKU lookup's
   UPC belongs to one size ([[upc-is-per-size]]).
+- **Prices in the message (2026-11-12).** A PO price is the SHELF price ea only. Read at the
+  END of a SKU line, a size line, a name line, or on a line of its own under the SKU:
+  `$120` · `120$` · `US$`/`USD 120`/`120 USD` · `@120` / `@ $120` · `120 ea` / `each` / `/pr` /
+  `/pair` / `per pair` / `a pair` / `pp` · `price 120` / `price ea` / `cost: 120` / `unit price` ·
+  `120.00` (exactly two decimals — no size or qty is written that way) · `$1,234.50` · on a
+  size line only, `9 x 2 - 110` (dash, ≥ $20). **A bare number is never a price** (`10.5`,
+  `DZ5485-201 120`, `9 x 2` stay what they are; the whole line is matched as a size / code
+  BEFORE any price is looked for). A size's own price (`9 x 2 $110`) overrides the SKU's
+  price; the same SKU in two blocks at two prices keeps each block's price on its sizes;
+  one SKU + size at two prices is refused ("one price per size"). **Totals**: `DZ5485-201
+  total $1,050` (or `$1,050 total`) on the SKU line → price ea = total ÷ that block's pairs,
+  `9 x 2 total $220` → $110 — both marked `priceFrom: 'total'` and the preview says "check
+  it"; a `Total: $2,420` line on its own is NEVER used as a price — it's the check (the
+  preview shows "The message says $2,420 — this list comes to $X ✓ / check the prices").
+  Strict still: a priced line it can't place (`price TBD`, a second different price for the
+  SKU, a price above any SKU) goes to "Not added" and ends the shoe. Also: bullets (`•`,
+  `- `) are stripped; `SKU name $120` on one line is a code + its name (a plain line right
+  under a bare code is still the name, so `1906R Silver` there isn't read as a new code).
+- **Price ABOVE the code (the owner's real message, 2026-11-12):** `$42.71 ✅` / `900001-007` /
+  `8 x 1`, blank lines between shoes. Ticks, crosses, emoji and WhatsApp `*bold*` markers are
+  stripped from every line (`clean`). A lone price line goes by position and blank lines:
+  right above a code with nothing of a shoe open (start of paste, or after a blank line) →
+  that code's; under a code / after its sizes with no code next → that shoe's. If the
+  paste's first lone price sits above a code, the whole paste is "price above" and a price
+  right above a code is that code's even without blank lines. A price sitting between two
+  shoes with neither rule settling it → "Not added". **Two different prices for one shoe**
+  (above + below, or above + on the SKU line) → the shoe is left UNPRICED and the line is
+  listed — never picked. Fixture: `e2e/fixtures/po-manifest-price-above.txt` (77 shoes, 260
+  pairs, $11,261.21 (fixture values), checked against an independent block-by-block read in the test).
+- **Per-size price → server**: `scan-bulk` sizes take an optional `unitCost` that overrides
+  the shoe's (`sizes: [{ size, qty, unitCost? }]`). The store list (`storePaste.js`) takes one
+  price per shoe entry, so a per-size-priced shoe is split into one entry per price
+  (`splitByPrice`) — no price is lost.
+- **Upload a CSV (2026-11-12)** — same window, same preview, same **Add N pairs**, same
+  `scan-bulk` (no server change beyond the per-size price). **📄 Upload a CSV** button or
+  drop the file on the paste box; `.csv` / `.tsv` / `.txt` / `.xlsx` (first sheet, read with
+  `sheinReprice.js`'s `openWorkbook`/`readSheet`, lazy-loaded — no new dependency); `.xls` /
+  Numbers → "Save it as CSV". A `.txt` with no header row is the message itself → the paste
+  box. Parser `src/lib/poCsv.js` (`parseDelimited` → `parsePoTable`, merge shared with the
+  paste via `mergeEntries`). Columns by HEADER (case/space/punctuation-blind, first 15 rows
+  searched, so a title line above is fine): SKU = `sku`/`style`/`style code`/`style #`/
+  `product code`/`item code`/`item`/`article`…; Size = `size`/`sz`/`us size`/`size (us)`…;
+  Qty = `qty`/`quantity`/`pairs`/`units`/`count`/`pcs`…; Price ea = `price`/`cost`/`unit price`/
+  `price ea`/`each`/`shelf`/`rate`…; Line total = `total`/`amount`/`line total`/`ext price`/
+  `subtotal` (→ price ea = total ÷ qty, marked). Product name columns are ignored (the
+  catalogue still names the shoe). Layouts: **rows** (SKU · Size · Qty), **per pair** (no
+  qty column → each row is 1 pair), **matrix** (no Size column, ≥ 2 headers that are sizes:
+  `8`, `8.5`, `US 9`, `9.5Y`; pairs in the cells; a Qty column there must equal the row's
+  sum). Handles BOM, quotes, `""`, `,`/`;`/tab/`|` (sniffed), `$1,234.50`, `220,00` in a `;`
+  file, blank rows, a `TOTAL` row (→ the check line). No SKU column / no Size column → said
+  plainly. Every unreadable row is listed under "Not added" as `Row N: …` with why (not a
+  style code, half-size-only check, qty not whole / 0, price not an amount, …). The preview
+  says which columns it read ("SKU = “Style #” · Qty = …").
+  - **No official format** (owner: "both varies"): a header nobody spells the same way
+    ("Style Code / SKU", "Size (US Men)", "Price Paid") is matched by the word it CONTAINS
+    when no exact synonym is there (retail / MSRP / market columns are never the price);
+    a title line that mentions "style" doesn't steal the header; a repeated header row
+    (multi-page export) is skipped; ✅ / emoji in any cell are stripped.
+  - **No header row / one column** = the message pasted into a sheet (the owner's real
+    Google Sheets export: one column, CRLF, first row empty, blank rows between shoes). Each
+    row's cells are joined with a space, blank rows stay blank lines, and the PASTE parser
+    reads it (`parsePoGrid` → `layout: 'text'`, preview: "Read as a pasted list"). A
+    many-column table whose header can't be named still says "No SKU column". Fixture
+    `e2e/fixtures/po-manifest-one-column.csv` gives exactly the paste fixture's result.
+- Shoe names are looked up 35 at a time, a minute apart (`sku-search` allows 40/min) — a
+  77-shoe list otherwise ran into the limit and read "not in the catalogue".
 - **The supplier's whole-order list** (2026-10-20): suppliers often have ONE manifest for the
   whole purchase before anything is split into boxes. Supplier portal → order card
   **"📋 Paste the whole-order manifest"** → `PoScanModal pasteOnly` (no scanner — one-at-a-time

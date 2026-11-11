@@ -17,7 +17,7 @@
 //
 // The list is the invoice, so every SKU needs its price: unpriced ones come back in
 // `unpriced`, and the caller refuses the paste until they're fixed.
-import { parsePoPaste } from './poPaste.js';
+import { parsePoPaste, splitByPrice } from './poPaste.js';
 
 // "Store: AF #1234", "Store - AF 1234", "Store #12", "Store 12" — never "Store Exclusive Dunk"
 // (a shoe-name line), so a bare word after "Store" doesn't start a block.
@@ -50,6 +50,9 @@ export function parseStorePaste(text) {
   let total = 0;
   for (const b of blocks) {
     const r = parsePoPaste(b.text.join('\n'));
+    // A store list takes ONE price per shoe entry: a shoe priced per size ("9 x 2 $110")
+    // becomes one entry per price, so no size's price is lost (po/store-list).
+    r.shoes = r.shoes.flatMap(splitByPrice);
     for (const s of r.skipped) skipped.push({ ...s, store: b.name });
     if (!r.shoes.length) { skipped.push({ line: `Store: ${b.name}`, why: 'a store with no shoes under it' }); continue; }
     for (const s of r.shoes) {

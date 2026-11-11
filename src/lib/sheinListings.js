@@ -104,6 +104,13 @@ export const BLOCKERS = {
     title: () => 'SHEIN shows no US default merchant warehouse for the store.', fix: () => 'Set one in Seller Center.', action: null },
   photos_need_priv: { level: 'note', scope: 'product', applies: ['publish'],
     title: () => 'Photos weren’t converted for this preview.', fix: () => 'Photos are converted when an admin, or someone with the Connect integrations privilege, runs the preview.', action: null },
+  // 2026-11-11 · replace the photos of a product already on SHEIN (op 'photos')
+  photo_edit_unsupported: { level: 'blocked', scope: 'product', applies: ['photos'],
+    title: (p) => (p?.why === 'multi_skc' ? `This SHEIN product has ${p?.skcCount ?? 'several'} colours — photos can only be replaced here on a one-colour product.`
+      : p?.why === 'spu_plan_unclear' ? 'SHEIN keeps product-level photos for this shoe, but its category rules don’t say which kinds — we can’t replace them safely.'
+        : p?.why === 'sku_group_code' ? 'Some sizes on SHEIN have a photo without a photo group — SHEIN needs all or none, so we can’t replace them safely.'
+          : 'SHEIN didn’t give this product’s photo group, which a photo change needs.'),
+    fix: () => 'Change the photos in SHEIN Seller Center for this one.', action: null },
   photo_cap_reached: { level: 'blocked', scope: 'store', applies: ['publish'],
     title: (p) => `Today’s photo-conversion limit is used up (${p?.used ?? '?'} of ${p?.cap ?? '?'} SHEIN conversions, EST day).`,
     fix: () => 'Preview again tomorrow (EST) — or an admin raises the daily limit (setting shein_transform_cap).', action: null },
@@ -148,8 +155,10 @@ export const BLOCKERS = {
     title: () => 'SHEIN retired this product’s size field; sizes can’t be added.', fix: () => 'It has to be listed again as a new product.', action: null },
   review_open: { level: 'review', scope: 'product', applies: ['edit', 'add_sizes'],
     title: (p) => `SHEIN is reviewing an earlier edit${p?.sentAt ? ` (sent ${p.sentAt} EST)` : ''}.`, fix: () => 'We retry after the review closes.', action: { kind: 'check_review', label: 'Check now' } },
-  review_rejected: { level: 'error', scope: 'product', applies: ['publish', 'edit', 'add_sizes'],
-    title: (p) => `SHEIN rejected it: “${p?.failedReason || p?.sheinMessage || 'no reason given'}”.`, fix: () => 'Fix it, then send again.', action: { kind: 'send_again', label: 'Send again' } },
+  review_rejected: { level: 'error', scope: 'product', applies: ['publish', 'edit', 'add_sizes', 'photos'],
+    title: (p) => `SHEIN rejected it: “${p?.failedReason || p?.sheinMessage || 'no reason given'}”.`,
+    fix: (p) => (isPhotoRejection(p?.failedReason || p?.sheinMessage) ? 'The photos have text, a logo or the store name on them. Fix photos: leave those out, then send the new photos (Replace SHEIN photos, or Publish again for a new shoe).' : 'Fix it, then send again.'),
+    action: (p) => (isPhotoRejection(p?.failedReason || p?.sheinMessage) ? { kind: 'fix_photos', label: 'Fix photos' } : { kind: 'send_again', label: 'Send again' }) },
   shein_prevalid: { level: 'error', scope: 'product', applies: ['publish', 'edit', 'add_sizes'],
     title: (p) => `SHEIN pre-check: ${p?.module ? `${p.module}: ` : ''}${p?.sheinMessage || 'refused'}.`, fix: () => 'Usually a person has to fix the listing.', action: null },
   price_locked: { level: 'note', scope: 'variant', applies: ['edit'],
@@ -250,6 +259,9 @@ export function renderBlocker(b) {
     title: def.title(params), fix: def.fix(params), action: action || null, sheinSaid: params.sheinMessage || null };
 }
 export const blocker = (code, params = {}, field = null) => ({ code, field, params });
+// SHEIN rejected it for its PHOTOS (2026-11-11): "picture: … watermark …", "Banned: … images or titles … false
+// service promises …" — the PH-branded photos. → the fix is Choose photos + Replace SHEIN photos / Publish again.
+export const isPhotoRejection = (text) => /picture|image|photo|watermark|false (service|efficacy)|图片|水印/i.test(String(text || ''));
 const isNote = (b) => ['note', 'review'].includes(BLOCKERS[b.code]?.level);
 
 // The LISTING syncs' gate (2026-10-28): a product is sent to SHEIN (publish, add sizes, update prices &
@@ -1198,7 +1210,7 @@ export function planEdit({ spu, product, stored = [], productRow = null, fill = 
 
 // The details SHEIN now requires ride in the same partialEdit — the WHOLE list (it replaces), only when
 // one is missing (sending it reviews every colour of the shoe).
-function withAttrs(body, plan, attrs) {
+export function withAttrs(body, plan, attrs) {
   if (!attrs?.list?.length) return;
   body.product_attribute_list = attrs.list;
   plan.attributes = { added: attrs.added, dropped: attrs.dropped || [], count: attrs.list.length };
@@ -1224,6 +1236,14 @@ export function summarizePlan(plan) {
     if (!sz.length) return lead([...(plan.blockers || []), ...(plan.notes || [])]) || 'Nothing to publish.';
     return [`Will publish “${plan.title?.text || ''}” with ${sz.length} size${sz.length === 1 ? '' : 's'}: ${sz.map((z) => `${z.sheinSize}${z.kind === 'custom' ? ' (custom)' : ''} ${usd(z.price)}`).join(', ')}`,
       `${(plan.images || []).length} photo${(plan.images || []).length === 1 ? '' : 's'}`, plan.quota?.controlled ? `uses ${plan.quota.uses} of ${plan.quota.available} monthly new-product limit` : ''].filter(Boolean).join(' · ');
+  }
+  if (plan.op === 'photos') {
+    const im = plan.images || [];
+    if (!im.length) return lead([...(plan.blockers || []), ...(plan.notes || [])]) || 'Nothing to send';
+    const ph = plan.photos || {};
+    return [`Will replace SHEIN’s ${(plan.current || []).length} photo${(plan.current || []).length === 1 ? '' : 's'} with ${im.length}`,
+      ph.count != null ? `from ${ph.count} ${ph.source === 'ph_edited' ? 'PH edited' : 'Shopify'} photo${ph.count === 1 ? '' : 's'}${ph.skipped ? ` (${ph.skipped} left out)` : ''}` : '',
+      plan.skuImages ? `each size’s photo → the new main photo (${plan.skuImages})` : '', (plan.spuImages || []).length ? `${plan.spuImages.length} product-level photo${plan.spuImages.length === 1 ? '' : 's'}` : '', attrPart()].filter(Boolean).join(' · ');
   }
   if (plan.op === 'price') {
     const pr = plan.prices || [];
@@ -1278,7 +1298,9 @@ export const ITEM_STATUSES = {
 };
 export const itemStatus = (kind, status) => (ITEM_STATUSES[kind === 'run' ? 'run' : 'preview'][status]) || { label: status, chip: 'ebo-chip', tone: 'muted' };
 // Phase 3 — what each op of a preview / send is (the sheet's tag), and the run words that differ by op.
-export const OP_LABEL = { add_sku: 'Add sizes', price: 'Prices', edit: 'Sizes & SKUs', publish: 'Publish' };
+export const OP_LABEL = { add_sku: 'Add sizes', price: 'Prices', edit: 'Sizes & SKUs', publish: 'Publish', photos: 'Photos' };
+// 2026-11-11 — a preview / send that replaces the photos of shoes already on SHEIN (op 'photos', alone).
+export const isPhotoOps = (ops) => (ops || []).includes('photos');
 export const isUpdateOps = (ops) => (ops || []).some((o) => o === 'price' || o === 'edit');
 // Phase 4 — a preview / send of brand-new products (op 'publish', never mixed with the others).
 export const isPublishOps = (ops) => (ops || []).includes('publish');
@@ -1288,6 +1310,10 @@ export const PUBLISH_WORD = {
   run: { done: 'Approved', in_review: 'In review', failed: 'Error' },
 };
 export const OP_SAY = {
+  photos: {
+    in_review: 'Sent. SHEIN is reviewing the new photos (hours to days); the old ones stay live until it approves. Then send any sizes SHEIN rejected again (Add missing sizes).',
+    done: 'SHEIN approved the new photos. Sizes SHEIN rejected before can go again now: Add missing sizes.',
+  },
   price: {
     in_review: 'Sent. A price that goes UP waits for SHEIN’s price review — it shows In review until SHEIN approves it. Cuts apply at once.',
     done: 'Done — SHEIN shows the new price.',

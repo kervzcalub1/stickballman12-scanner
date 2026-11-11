@@ -3134,10 +3134,13 @@ await sql(`
     blockers        JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT shein_listing_job_items_op_check CHECK (op IN ('read','add_sku','edit','price','mall_state','publish','seller_sku','recheck')),
     CONSTRAINT shein_listing_job_items_status_check CHECK (status IN ('pending','sending','sent','in_review','done','skipped','deferred','changed','failed'))
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_listing_job_items_job ON shein_listing_job_items (job_id, seq)`);
+// The ops a job item may carry — ONE definition, re-applied on every run (2026-11-11: + 'photos', replace a live shoe's photos).
+const SHEIN_ITEM_OPS = ['read', 'add_sku', 'edit', 'price', 'mall_state', 'publish', 'seller_sku', 'recheck', 'photos'];
+await sql(`ALTER TABLE shein_listing_job_items DROP CONSTRAINT IF EXISTS shein_listing_job_items_op_check`);
+await sql(`ALTER TABLE shein_listing_job_items ADD CONSTRAINT shein_listing_job_items_op_check CHECK (op IN (${SHEIN_ITEM_OPS.map((o) => `'${o}'`).join(',')}))`);
 // Phase 2 (add sizes, 2026-10-27): the per-product plan a person reads (sizes / relinks / skipped),
 // SHEIN's review follow-up, and the transport-retry count (business refusals are never retried).
 await sql(`ALTER TABLE shein_listing_job_items ADD COLUMN IF NOT EXISTS plan JSONB`);
@@ -3194,6 +3197,8 @@ await sql(`ALTER TABLE shein_brand_map ALTER COLUMN brand_code DROP NOT NULL`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS title_override TEXT`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS skc_value_id BIGINT`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS use_ph_photos BOOLEAN NOT NULL DEFAULT false`);
+// "Leave this photo out" (2026-11-11): photo keys (URL without ?query) the publish never sends to SHEIN
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS photo_skip TEXT[] NOT NULL DEFAULT '{}'`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS publish_again_by TEXT`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS publish_again_at TIMESTAMPTZ`);
 // SHEIN image conversion (transform-pic) is an ASSET call: it makes a SHEIN-hosted URL, changes no product.

@@ -2457,6 +2457,165 @@ test.describe.serial('SHEIN Listings Phase 3 — preview, run, review (server jo
 
 /* ------------------- Phase 3 — the page (Needs update → Synced) ------------------- */
 
+// 2026-11-11 (user): SHEIN rejects edits of live shoes because their photos carry text / a logo — replace
+// the photos of a shoe ALREADY on SHEIN (op 'photos'): ONE partialEdit → SHEIN's review.
+test.describe('SHEIN Listings — replace live photos: the planner (pure)', () => {
+  const img = (g, id, type, sort) => ({ groupCode: g, imageItemId: id, imageType: type, imageUrl: `https://img.ltwebstatic.com/old/${id}.jpg`, sort });
+  const spu = (extra = {}) => ({ spuName: 'S1', skcInfoList: [{ skcName: 'K1', productMultiNameList: [{ language: 'en', productName: 'Dunk White' }],
+    skcImageInfoList: [img('G1', 1, 'MAIN', 1), img('G1', 2, 'DETAIL', 2), img('G1', 3, 'SQUARE', 3)],
+    skuInfoList: [{ skuCode: 'A', skuImageInfoList: img('GA', 4, 'MAIN', 1) }, { skuCode: 'B', skuImageInfoList: [img('GB', 5, 'MAIN', 1)] }] }], ...extra });
+  const conv = { converted: { '0:1': 'https://n/0-1.jpg', '1:2': 'https://n/1-2.jpg', '0:5': 'https://n/0-5.jpg' }, errors: [], photoCount: 2, conversions: 3, cached: 0 };
+  test('the body: the SKC list replaced whole (its group code, every photo NEW), every size’s photo → the new main, the SKC title kept; blockers when SHEIN’s data doesn’t allow it', async () => {
+    const { planPhotoEdit, imagePlan } = await import('../src/lib/sheinPublish.js');
+    const fill = { fill_in_standard_list: [{ field_key: 'skc_title', show: true, required: false }] };
+    const { body, plan } = planPhotoEdit({ spu: spu(), fill, ip: imagePlan({}), images: conv });
+    expect(body).toEqual({ spu_name: 'S1', skc_list: [{ skc_name: 'K1',
+      image_info: { image_group_code: 'G1', image_info_list: [{ image_sort: 1, image_type: 1, image_url: 'https://n/0-1.jpg' }, { image_sort: 2, image_type: 2, image_url: 'https://n/1-2.jpg' }, { image_sort: 3, image_type: 5, image_url: 'https://n/0-5.jpg' }] },
+      skc_title: 'Dunk White', skc_multi_language_name_list: [{ language: 'en', name: 'Dunk White' }],
+      sku_list: [{ sku_code: 'A', image_info: { image_group_code: 'GA', image_info_list: [{ image_sort: 1, image_type: 1, image_url: 'https://n/0-1.jpg' }] } },
+        { sku_code: 'B', image_info: { image_group_code: 'GB', image_info_list: [{ image_sort: 1, image_type: 1, image_url: 'https://n/0-1.jpg' }] } }] }] });
+    expect(JSON.stringify(body)).not.toContain('image_item_id');                 // every photo is new
+    expect(plan.current.map((x) => x.type)).toEqual(['MAIN', 'DETAIL', 'SQUARE']);
+    expect(plan.skuImages).toBe(2);
+    expect(summarizePlan(plan)).toBe('Will replace SHEIN’s 3 photos with 3 · each size’s photo → the new main photo (2)');
+    // no SKU images → no sku_list (left out = kept); one photo left on the old plan → no_image
+    const noSku = spu(); noSku.skcInfoList[0].skuInfoList.forEach((k) => delete k.skuImageInfoList);
+    expect(planPhotoEdit({ spu: noSku, fill, ip: imagePlan({}), images: conv }).body.skc_list[0].sku_list).toBeUndefined();
+    expect(planPhotoEdit({ spu: spu(), fill, ip: imagePlan({}), images: { ...conv, photoCount: 1 } }).plan.blockers.map((b) => b.code)).toContain('no_image');
+    // SHEIN keeps SPU photos (new plan) → they're replaced too, with their own group code
+    const np = imagePlan({ picture_config_list: [{ field_key: 'spu_image_detail_show', is_true: true }, { field_key: 'spu_image_detail_single', is_true: true }] });
+    const withSpu = planPhotoEdit({ spu: spu({ spuImageInfoList: [img('GS', 9, 'MAIN', 1)] }), fill, ip: np, images: { ...conv, converted: { ...conv.converted } } });
+    expect(withSpu.body.image_info).toEqual({ image_group_code: 'GS', image_info_list: [{ image_sort: 1, image_type: 1, image_url: 'https://n/0-1.jpg' }] });
+    // blockers: two colours · no group code · a size photo without a group (all or none) · a reference link we'd clear · SHEIN's rules unread
+    const two = spu(); two.skcInfoList.push({ ...two.skcInfoList[0], skcName: 'K2' });
+    expect(planPhotoEdit({ spu: two, fill, ip: imagePlan({}), images: conv }).plan.blockers[0]).toMatchObject({ code: 'photo_edit_unsupported', params: { why: 'multi_skc', skcCount: 2 } });
+    const ng = spu(); ng.skcInfoList[0].skcImageInfoList.forEach((x) => delete x.groupCode);
+    expect(planPhotoEdit({ spu: ng, fill, ip: imagePlan({}), images: conv }).plan.blockers[0].params.why).toBe('no_group_code');
+    const half = spu(); delete half.skcInfoList[0].skuInfoList[1].skuImageInfoList;
+    expect(planPhotoEdit({ spu: half, fill, ip: imagePlan({}), images: conv }).plan.blockers[0].params.why).toBe('sku_group_code');
+    const link = { fill_in_standard_list: [{ field_key: 'reference_product_link', show: true }] };
+    expect(planPhotoEdit({ spu: spu(), fill: link, ip: imagePlan({}), images: conv }).plan.blockers[0]).toMatchObject({ code: 'skc_field_uncopyable', params: { field: 'competing_product_link' } });
+    expect(planPhotoEdit({ spu: spu(), fill: null, fillUnread: true, ip: imagePlan({}), images: conv }).body).toBe(null);
+  });
+  test('SHEIN rejecting the PHOTOS points at the fix (Fix photos), anything else stays “Send again”', async () => {
+    const { isPhotoRejection } = await import('../src/lib/sheinListings.js');
+    expect(isPhotoRejection('picture:The image contains watermark information.')).toBe(true);
+    expect(isPhotoRejection('Banned:If your product images or titles contain false service promises or false efficacy promises')).toBe(true);
+    expect(isPhotoRejection('Sale price too low')).toBe(false);
+    expect(renderBlocker(blocker('review_rejected', { failedReason: 'picture:The image contains watermark information.' })).action).toEqual({ kind: 'fix_photos', label: 'Fix photos' });
+    expect(renderBlocker(blocker('review_rejected', { failedReason: 'price' })).action).toEqual({ kind: 'send_again', label: 'Send again' });
+  });
+});
+
+test.describe.serial('SHEIN Listings — replace live photos (server jobs vs the fake SHEIN)', () => {
+  let L; let D; let auth; let png; let started; let savedSpu; let previewId;
+  const hosted = [];
+  const pics = [1, 2, 3].map((i) => `https://cdn.e2e.test/7702-${i}.png`);
+  const SHOP = () => SHOPIFY().map((x) => (x.productId === gidP(7702) ? { ...x, images: pics.map((url) => ({ url, width: 1200, height: 800 })) } : x));
+  const items = async (jobId) => (await D.listListingJobItems(jobId, { limit: 1000 })).map((i) => ({ ...i, n: Number(i.shopify_product_id.split('/').pop()) }));
+  const finished = async (id) => { await waitFor(async () => { const j = await D.getListingJob(id); return !['queued', 'running'].includes(j.status) && !L.listingJobRunning(); }); return D.getListingJob(id); };
+  const io = () => ({ ...p2IO(L.IO, { shopify: SHOP }), recentShelf: async () => new Set(),
+    fetchImage: async () => png, hostImage: async (key) => { hosted.push(key); return `https://r2.e2e.test/${key}`; } });
+  const preview = async (ns, convertPhotos) => { const j = await L.startListingJob({ kind: 'preview', by: 'e2e-ph', scope: { productIds: ns.map(gidP), ops: ['photos'], convertPhotos }, io: io() }); jobsMade.add(j.id); return finished(j.id); };
+  const old = (g, id, type, sort) => ({ groupCode: g, imageItemId: id, imageType: type, imageUrl: `https://img.ltwebstatic.com/e2e/old-${id}.jpg`, sort });
+
+  test.beforeAll(async () => {
+    if (!pool || !secretsOk || foreign) return;
+    L = await import('../api/_lib/shein-listing.js'); D = await import('../api/_lib/db.js');
+    const { createCanvas } = await import('@napi-rs/canvas');
+    const c = createCanvas(1200, 800); c.getContext('2d').fillRect(0, 0, 1200, 800); png = await c.encode('png');
+    const { signToken } = await import('../api/_lib/util.js');
+    auth = { ph: { Authorization: `Bearer ${signToken({ uid: 'e2e-ph', username: 'e2e_ph', name: 'E2E PH', role: 'ph_team' })}` } };
+    started = new Date();
+    // the women's Dunk on SHEIN WITH its (branded) photos: an SKC photo group + a photo per size
+    savedSpu = JSON.parse(JSON.stringify(SHEIN.E2ESPU2));
+    const skc = SHEIN.E2ESPU2.skcInfoList[0];
+    skc.skcImageInfoList = [old('G-SKC2', 21, 'MAIN', 1), old('G-SKC2', 22, 'DETAIL', 2), old('G-SKC2', 23, 'SQUARE', 3)];
+    skc.skuInfoList.forEach((k, i) => { k.skuImageInfoList = old(`G-${k.skuCode}`, 30 + i, 'MAIN', 1); });
+    const { rows } = await pool.query(`SELECT id FROM shein_listing_jobs WHERE started_by LIKE 'e2e-p%'`);
+    await pool.query(`DELETE FROM shein_listing_jobs WHERE id = ANY($1::bigint[])`, [rows.map((r) => r.id)]);
+    await pool.query(`DELETE FROM shein_listing_variants WHERE ${TEST_IDS}`);
+    await pool.query(`DELETE FROM shein_listing_products WHERE ${TEST_IDS}`);
+    fake.p2 = P2(); fake.p4 = P4();
+    const snap = await L.startListingJob({ kind: 'snapshot', by: 'e2e-p5', io: testIO(L.IO, { shopify: SHOP }) });
+    jobsMade.add(snap.id); await finished(snap.id);
+  });
+  test.beforeEach(() => { test.skip(!pool || !secretsOk || foreign, 'needs the database + BUY_GC_KEY (and no real SHEIN Listings data)'); });
+  test.afterAll(async () => {
+    if (savedSpu) SHEIN.E2ESPU2 = savedSpu;
+    fake.p2 = null; fake.p4 = null;
+    if (pool && started) await pool.query(`DELETE FROM shein_listing_cache WHERE fetched_at >= $1 AND kind = 'pic'`, [started]);
+  });
+
+  test('a PH preview reads only — SHEIN’s photos now, no photo converted, nothing sendable; a shoe whose SHEIN photos have no group code can’t be changed here', async () => {
+    fake.writes.length = 0; const t0 = fake.p4.transforms.length;
+    const job = await preview([7702, 7701], false);
+    const it = (await items(job.id)).find((i) => i.n === 7702);
+    expect(it).toMatchObject({ op: 'photos', status: 'skipped', body: null });
+    expect(it.plan.current.map((x) => x.type)).toEqual(['MAIN', 'DETAIL', 'SQUARE']);
+    expect(it.plan.notes.map((n) => n.code)).toContain('photos_need_priv');
+    const a = (await items(job.id)).find((i) => i.n === 7701);                   // the Air Max on SHEIN has no photo group in spu-info
+    expect(a.plan.blockers[0]).toMatchObject({ code: 'photo_edit_unsupported', params: { why: 'no_group_code' } });
+    expect(fake.p4.transforms.length).toBe(t0); expect(fake.writes).toEqual([]);
+    expect(job.counts).toMatchObject({ shein_writes: 0 });
+  });
+
+  test('the preview (admin): the photos picked (photo 1 left out) converted; ONE partialEdit body — SKC photos, each size’s photo, the SKC title; 0 writes', async ({ request }) => {
+    expect((await request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'publish_choices', productId: gidP(7702), photoSkip: [pics[0]] } })).status()).toBe(200);
+    fake.writes.length = 0; const h0 = hosted.length;
+    const job = await preview([7702], true);
+    previewId = job.id;
+    expect(job).toMatchObject({ status: 'awaiting_confirm', counts: expect.objectContaining({ photo_edits: 1, photos_sent: 3, shein_writes: 0 }) });
+    const it = (await items(job.id))[0];
+    expect(it.status).toBe('done');
+    const list = it.body.skc_list[0].image_info.image_info_list;
+    expect(list.map((x) => [x.image_sort, x.image_type])).toEqual([[1, 1], [2, 2], [3, 5]]);
+    expect(list.every((x) => /^https:\/\/img\.ltwebstatic\.com\/e2e\//.test(x.image_url) && !/old-/.test(x.image_url))).toBe(true);
+    expect(it.body).toEqual({ spu_name: 'E2ESPU2', skc_list: [{ skc_name: 'E2ESKC2', image_info: { image_group_code: 'G-SKC2', image_info_list: list },
+      skc_title: 'Dunk Low Women White', skc_multi_language_name_list: [{ language: 'en', name: 'Dunk Low Women White' }],
+      sku_list: ['E2E2-07', 'E2E2-08'].map((k) => ({ sku_code: k, image_info: { image_group_code: `G-${k}`, image_info_list: [{ image_sort: 1, image_type: 1, image_url: list[0].image_url }] } })) }] });
+    expect(it.plan.photos).toMatchObject({ source: 'shopify', count: 2, skipped: 1, converted: 3 });
+    const crypto2 = await import('node:crypto'); const { RENDER_VERSION } = await import('../api/_lib/shein-publish.js');
+    expect(hosted.slice(h0)).not.toContain(`shein-publish/${crypto2.createHash('sha256').update(`${pics[0]}|${RENDER_VERSION}`).digest('hex')}.jpg`);   // the left-out photo never leaves us
+    expect(fake.writes).toEqual([]);
+    // the endpoint: photos alone — never mixed with another op
+    const mixed = await request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'preview', productIds: [gidP(7702)], ops: ['photos', 'add_sku'] } });
+    expect(mixed.status()).toBe(400);
+  });
+
+  test('the send: ONE partialEdit (the fake checks it) → In review with SHEIN’s version; SHEIN approves → Done, the photos follow-up refreshes the product', async () => {
+    const j = await L.startRunJob({ previewJobId: previewId, by: 'e2e-ph', io: io() }); jobsMade.add(j.id);
+    const run = await finished(j.id);
+    const it = (await items(run.id))[0];
+    expect(it, JSON.stringify({ s: it.status, e: it.error })).toMatchObject({ op: 'photos', status: 'in_review', version: expect.stringMatching(/^E2EV/) });
+    const sent = fake.p2.edits.filter((e) => e.body.spu_name === 'E2ESPU2');
+    expect(sent).toHaveLength(1); expect(sent[0].ok).toBe(true);
+    expect(sent[0].body).toEqual(it.body);
+    approveOnFake('E2ESPU2');
+    await L.listingFollowUp({ io: io(), force: true });
+    const after = (await D.getListingItems([it.id]))[0];
+    expect(after.status).toBe('done');
+    expect(summarizePlan(after.plan)).toMatch(/^Will replace SHEIN’s 3 photos with 3 · from 2 Shopify photos \(1 left out\)/);
+    await pool.query(`UPDATE shein_listing_products SET photo_skip = '{}' WHERE shopify_product_id = $1`, [gidP(7702)]);
+  });
+
+  test('the drawer: SHEIN rejected the shoe for its photos → the “Photos on SHEIN” section says so; Fix photos opens it; Replace SHEIN photos starts the photo preview', async ({ page }) => {
+    await pool.query(`UPDATE shein_listing_variants SET blockers = $2::jsonb WHERE row_key = $1`,
+      [gidV(770295), JSON.stringify([{ code: 'review_rejected', params: { failedReason: 'picture:The image contains watermark information.' } }])]);
+    await loginAs(page, 'ph_team');
+    await page.setViewportSize({ width: 1320, height: 1000 });
+    await page.goto(`/ph/shein-listings?product=${encodeURIComponent(gidP(7702))}`);
+    const dr = page.locator('.shl-drawer');
+    const sec = dr.locator('[data-photos-sec]');
+    await expect(sec.locator('[data-photo-rejected]')).toContainText('SHEIN rejected this shoe for its photos');
+    await expect(sec.locator('[data-photo-rejected]')).toContainText('watermark');
+    await expect(sec.locator('[data-photo-run="done"]')).toContainText('SHEIN approved the new photos');
+    await expect(sec.locator('[data-dry="photos"]')).toHaveClass(/primary/);
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+});
+
 test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices & sizes, automatic price update)', () => {
   test.use({ timezoneId: 'Asia/Manila' });
   let L; let D; let savedAuto;
@@ -2699,6 +2858,23 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
 // in-process (canvas) and "hosted" on a fake R2.
 
 test.describe('SHEIN Listings Phase 4 — the planner (pure)', () => {
+  test('leave a photo out (2026-11-11): photo keys drop the ?query, the kept photos keep their order, the readiness count comes off the source in use', async () => {
+    const { photoKey, keepPhotos, countAfterSkip, isShopifyPhoto } = await import('../src/lib/sheinPublish.js');
+    expect(photoKey('https://CDN.Shopify.com/s/files/1/x/cover.jpg?v=1730000000#a')).toBe('https://cdn.shopify.com/s/files/1/x/cover.jpg');
+    expect(photoKey('')).toBe('');
+    expect(isShopifyPhoto('https://cdn.shopify.com/s/files/a.jpg?v=2')).toBe(true);
+    expect(isShopifyPhoto('https://pub.r2.dev/ph/a.jpg')).toBe(false);
+    const urls = ['https://cdn.shopify.com/a.jpg?v=1', 'https://cdn.shopify.com/b.jpg?v=1', 'https://cdn.shopify.com/c.jpg?v=9'];
+    expect(keepPhotos(urls, ['https://cdn.shopify.com/a.jpg?v=7'])).toEqual({ urls: urls.slice(1), skipped: 1 });   // a re-uploaded ?v= is the same photo
+    expect(keepPhotos(urls, [])).toEqual({ urls, skipped: 0 });
+    expect(keepPhotos(urls, null)).toEqual({ urls, skipped: 0 });
+    const ph = new Set(['https://pub.r2.dev/ph/1.jpg']);
+    const skip = ['https://cdn.shopify.com/a.jpg', 'https://pub.r2.dev/ph/1.jpg'];
+    expect(countAfterSkip(3, skip, false, ph)).toBe(2);                      // Shopify's photos: only the Shopify skip counts
+    expect(countAfterSkip(1, skip, true, ph)).toBe(0);                       // the PH photos: only the PH skip counts
+    expect(countAfterSkip(null, skip, false, ph)).toBe(null);                // unknown stays unknown
+  });
+
   test('size groups, title / description cleaning, the picture plan by the spu_image_detail_show key, D6 validation', async () => {
     const { sizeGroupOf, cleanTitle, cleanDescription, imagePlan, imageConversions, validateBoxDefaults, BOX_PLACEHOLDERS } = await import('../src/lib/sheinPublish.js');
     expect(['9', '9.5W', '5Y', '4C', '11C'].map(sizeGroupOf)).toEqual(['adult', 'women', 'youth', 'toddler', 'child']);
@@ -3014,6 +3190,43 @@ test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fak
     const again = fake.p4.transforms.length;
     await preview([7708]);
     expect(fake.p4.transforms.length).toBe(again);
+  });
+
+  test('leave a photo out: publish_choices photoSkip (PH ok, https links, ≤ 40, DB only) → the preview never converts or sends it; too few left → “Only n photo” in the readiness', async ({ request }) => {
+    const choose = (data, headers = auth.ph) => request.post('/api/shein/listings', { headers, data: { action: 'publish_choices', productId: gidP(7708), ...data } });
+    const { signToken } = await import('../api/_lib/util.js');
+    const wh = { Authorization: `Bearer ${signToken({ uid: 'e2e-wh', username: 'e2e_wh', name: 'E2E Warehouse', role: 'warehouse' })}` };
+    expect((await choose({ photoSkip: [img(7708)[0].url] }, wh)).status()).toBe(403);
+    expect((await choose({ photoSkip: ['http://cdn.e2e.test/x.png'] })).status()).toBe(400);
+    expect((await choose({ photoSkip: 'nope' })).status()).toBe(400);
+    expect((await choose({ photoSkip: Array.from({ length: 41 }, (_, i) => `https://cdn.e2e.test/${i}.png`) })).status()).toBe(400);
+    fake.writes.length = 0;
+    const saved = await (await choose({ photoSkip: [`${img(7708)[0].url}?v=5`, img(7708)[0].url] })).json();
+    expect(saved.product.photo_skip).toEqual([img(7708)[0].url]);                 // keyed without ?query, de-duplicated
+    try {
+      const hostedBefore = hosted.length;
+      const it = await one((await preview([7708])).id, 7708);
+      expect(it.plan.photos).toMatchObject({ source: 'shopify', count: 2, skipped: 1 });
+      const crypto = await import('node:crypto');
+      const { RENDER_VERSION } = await import('../api/_lib/shein-publish.js');
+      const keyOf = (u) => crypto.createHash('sha256').update(`${u}|${RENDER_VERSION}`).digest('hex');
+      // photo 1 is never fetched / hosted / converted (the pic cache is warm from the last preview, so check the cache too)
+      expect(hosted.slice(hostedBefore)).not.toContain(`shein-publish/${keyOf(img(7708)[0].url)}.jpg`);
+      expect(it.plan.images.length).toBe(3);                                     // main + 1 detail + square, from photos 2–3
+      expect(fake.writes).toEqual([]);
+      // two of three left out → 1 photo, SHEIN needs 2: the stored readiness says so at once (no Re-read)
+      await choose({ photoSkip: [img(7708)[0].url, img(7708)[1].url] });
+      const v = (await pool.query(`SELECT blockers FROM shein_listing_variants WHERE row_key = $1`, [gidV(770809)])).rows[0];
+      expect(v.blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'no_image', params: expect.objectContaining({ count: 1, need: 2 }) })]));
+    } finally {
+      expect((await choose({ photoSkip: [] })).status()).toBe(200);
+    }
+    const v2 = (await pool.query(`SELECT blockers FROM shein_listing_variants WHERE row_key = $1`, [gidV(770809)])).rows[0];
+    expect((v2.blockers || []).map((b) => b.code)).not.toContain('no_image');
+    // GET ?photos= : a Shopify product id only, one we hold
+    expect((await request.get('/api/shein/listings?photos=', { headers: auth.ph })).status()).toBe(400);
+    expect((await request.get(`/api/shein/listings?photos=${encodeURIComponent('shein:E2EX')}`, { headers: auth.ph })).status()).toBe(400);
+    expect((await request.get(`/api/shein/listings?photos=${encodeURIComponent(gidP(999991))}`, { headers: auth.ph })).status()).toBe(404);
   });
 
   test('store gates are checked before anything: SHEIN can’t take listings / the monthly quota is used → nothing sendable, for every product', async () => {
@@ -3574,6 +3787,19 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     // put it all back
     expect((await act({ productIds: [gidP(7709), gidP(7705)], patch: { usePhPhotos: false, skcValueId: null }, titles: { [gidP(7709)]: null } })).status).toBe(200);
     expect(await row(7709)).toEqual({ use_ph_photos: false, skc_value_id: null, title_override: null });
+    // "Leave out the cover on all" (2026-11-11): each shoe's stored cover (Shopify's photo 1) into its photo_skip, and back
+    expect((await act({ productIds: [gidP(7709)], patch: { skipCover: 'yes' } })).status).toBe(400);
+    const skipOf = async (n) => (await pool.query(`SELECT image_url, photo_skip FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(n)])).rows[0];
+    const cover = await act({ productIds: [gidP(7709), gidP(7705)], patch: { skipCover: true } });
+    expect(cover.status).toBe(200);
+    const s9 = await skipOf(7709);
+    expect(s9.photo_skip).toEqual([s9.image_url.split('?')[0]]);
+    expect((await act({ productIds: [gidP(7709)], patch: { skipCover: true } })).status).toBe(200);   // twice = once
+    expect((await skipOf(7709)).photo_skip).toHaveLength(1);
+    const setup = await (await request.get(`/api/shein/listings?publishSetup=${encodeURIComponent(gidP(7709))}`, { headers: auth.ph })).json();
+    expect(setup.products[0]).toMatchObject({ coverSkipped: true, photoSkip: 1 });
+    expect((await act({ productIds: [gidP(7709), gidP(7705)], patch: { skipCover: false } })).status).toBe(200);
+    expect((await skipOf(7709)).photo_skip).toEqual([]); expect((await skipOf(7705)).photo_skip).toEqual([]);
     expect(await logCount()).toBe(n0); expect(fake.writes.length).toBe(w0);
   });
 
@@ -3607,6 +3833,42 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
       await pool.query(`DELETE FROM product_photos WHERE sku = $1`, [style]);
       await pool.query(`UPDATE shein_listing_products SET shopify_json = $2 WHERE shopify_product_id = $1`, [gidP(7709), JSON.stringify(was)]);
       await choose(false);
+    }
+  });
+
+  // 2026-11-11 (user): SHEIN rejects the PH-branded cover ("watermark", "false service promises") — remove a photo before publishing.
+  test('Choose photos (drawer): each photo with Leave out / Put back, saved per shoe (our records); the photo line says how many are left out; 390 px no horizontal scroll', async ({ page }) => {
+    const pics = [1, 2, 3].map((i) => `https://cdn.e2e.test/7709-${i}.png`);
+    // Shopify's photo read is a live call — stubbed here; the save goes to the real endpoint (DB only)
+    await page.route('**/api/shein/listings?photos=*', async (route) => {
+      const skip = new Set((await pool.query(`SELECT photo_skip FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(7709)])).rows[0].photo_skip);
+      await route.fulfill({ json: { ok: true, productId: gidP(7709), style: 'DD1391-100', usePhPhotos: false, source: 'shopify', max: 11, stale: [], ph: [],
+        shopify: pics.map((u) => ({ url: u, key: u, width: 1200, height: 800, skipped: skip.has(u) })), sent: pics.filter((u) => !skip.has(u)).length } });
+    });
+    await loginAs(page, 'ph_team');
+    await page.setViewportSize({ width: 1320, height: 1000 });
+    try {
+      await page.goto(`/ph/shein-listings?product=${encodeURIComponent(gidP(7709))}`);
+      const dr = drawer(page);
+      await line(page, 'photos').getByRole('button', { name: 'Choose photos' }).click();
+      const picker = dr.locator('[data-photos-picker]');
+      await expect(picker.locator('.shl-photo')).toHaveCount(3);
+      await expect(picker).toContainText('3 of 3 photos go to SHEIN, from Shopify');
+      await picker.locator('[data-photo="1"]').getByRole('button', { name: 'Leave out' }).click();
+      await expect(picker.locator('[data-photo="1"]')).toHaveAttribute('data-skipped', 'yes');
+      await expect(picker).toContainText('Photo 1 left out — SHEIN won’t get it.');
+      await expect(picker).toContainText('2 of 3 photos go to SHEIN');
+      expect((await pool.query(`SELECT photo_skip FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(7709)])).rows[0].photo_skip).toEqual([pics[0]]);
+      await expect(line(page, 'photos')).toContainText('1 photo left out');
+      await picker.locator('[data-photo="2"]').getByRole('button', { name: 'Leave out' }).click();
+      await expect(picker).toContainText('Only 1 photo left — SHEIN usually needs at least 2.');
+      await page.setViewportSize({ width: 390, height: 844 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await picker.locator('[data-photo="2"]').getByRole('button', { name: 'Put back' }).click();
+      await expect(picker.locator('[data-photo="2"]')).toHaveAttribute('data-skipped', 'no');
+      await expect(picker).toContainText('Photo 2 put back.');
+    } finally {
+      await pool.query(`UPDATE shein_listing_products SET photo_skip = '{}' WHERE shopify_product_id = $1`, [gidP(7709)]);
     }
   });
 
@@ -4228,7 +4490,9 @@ test.describe.serial('SHEIN Listings Phase 5 — the switch-over + go-live cards
     // the shoes first seen 4–5 days ago are before the start → not counted yet
     await expect(line(page, 'cutover', 'b')).not.toContainText('E2E Cutover Missed Shoe');
     // move the start back 10 days (as if ticked then) — the window now covers both shoes
-    await pool.query(`UPDATE app_settings SET value = jsonb_set(value::jsonb, '{paused_4seller,at}', to_jsonb((now() - interval '10 days')::text))::text WHERE key = $1`, [KEY]);
+    // 10 EST CALENDAR days back (wall clock in New York): a plain now() − 10 days crosses a DST change and lands on the
+    // EST day before when run late in the evening EST (CI 2026-11-11 23:17 EST: "Day 9")
+    await pool.query(`UPDATE app_settings SET value = jsonb_set(value::jsonb, '{paused_4seller,at}', to_jsonb((((now() AT TIME ZONE 'America/New_York') - interval '10 days') AT TIME ZONE 'America/New_York')::text))::text WHERE key = $1`, [KEY]);
     await page.reload();
     await expect(card(page, 'cutover').locator('[data-cutover-sum]')).toContainText('Day 10 of 30');
     await expect(card(page, 'cutover').locator('[data-cutover-sum]')).toContainText('20 days left');

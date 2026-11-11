@@ -9,7 +9,7 @@ import {
   productPhotosForSku, getSetting, setSetting, countTransformPicToday, listPublishUnconfirmed, markVariantsPublished, verifySizeMapById, verifySizeMap, setListingPublished, updateListingItem, setVariantsLastError,
 } from './db.js';
 import { r2Configured, presignUrl, publicUrl, isAllowedPhotoUrl } from './r2.js';
-import { planPublish, imagePlan, imageConversions, BOX_PLACEHOLDERS, sizeGroupOf, validateBoxDefaults, templateParts } from '../../src/lib/sheinPublish.js';
+import { planPublish, imagePlan, imageConversions, keepPhotos, BOX_PLACEHOLDERS, sizeGroupOf, validateBoxDefaults, templateParts } from '../../src/lib/sheinPublish.js';
 import { blocker, spuPayload, stableJson, hashString, BLOCKERS } from '../../src/lib/sheinListings.js';
 
 const H = 3600_000; const DAY = 24 * H;
@@ -206,6 +206,18 @@ export async function convertPhotos({ urls, fill, io, log }) {
   return out;
 }
 
+// The photos SHEIN gets for a product (publish and the photo replace share it): the PH edited photos for
+// the style when "Use PH edited photos" is on and there are any, else Shopify's (live read) — minus the
+// ones a person left out (photo_skip), in order. → { urls, skipped, source }
+export async function sourcePhotos(row, product) {
+  let urls = [];
+  if (row?.use_ph_photos && product?.style) urls = (await productPhotosForSku(product.style)).map((p) => p.url);
+  const ph = urls.length > 0;
+  if (!urls.length) urls = (product?.images || []).map((i) => i.url);
+  const kept = keepPhotos(urls, row?.photo_skip);
+  return { urls: kept.urls, skipped: kept.skipped, source: ph ? 'ph_edited' : 'shopify' };
+}
+
 /* --------------------------------- one product --------------------------------- */
 // Read everything fresh and build ONE product's publish plan + body (the dry run and the run share it).
 export async function buildPublish(it, { jctx, io, log, fatal }) {
@@ -277,13 +289,11 @@ export async function buildPublish(it, { jctx, io, log, fatal }) {
     pre.plan.photos = { converted: false, why: 'needs_priv' };
     return { body: null, plan: pre.plan, variantIds: [] };
   }
-  let urls = [];
-  if (d.product.use_ph_photos && product?.style) urls = (await productPhotosForSku(product.style)).map((p) => p.url);
-  if (!urls.length) urls = (product?.images || []).map((i) => i.url);
-  const images = await convertPhotos({ urls: urls.slice(0, 11), fill, io, log: lg });
+  const src = await sourcePhotos(d.product, product);
+  const images = await convertPhotos({ urls: src.urls.slice(0, 11), fill, io, log: lg });
   const { body, plan, checklist } = planPublish({ ...input, images });
   plan.checklist = checklist;
-  plan.photos = { source: d.product.use_ph_photos && urls.length ? 'ph_edited' : 'shopify', count: urls.length, converted: images.conversions, cached: images.cached };
+  plan.photos = { source: src.source, count: src.urls.length, skipped: src.skipped, converted: images.conversions, cached: images.cached };
   return { body, plan, variantIds: plan.sizes.map((z) => z.variantId) };
 }
 

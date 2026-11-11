@@ -710,6 +710,76 @@ are judged on the choices too, and `publish_choices(_bulk)` recount at once (DB 
   Shopify filter + counts; the gate skips publish / add sizes / update with no SHEIN read for the item; 390 px filter +
   bulk sheet); the box-banner test now goes bar → fix step (no dry run) → drawer "Dry run anyway".
 
+## Leave a photo out before publishing (built 2026-11-11)
+**Why:** SHEIN rejected many publishes for the PH-branded photos (brick background, shoe name + style, store logo):
+“picture: The image contains watermark information.” and “Banned: … false service promises …”. A person now picks
+the photos SHEIN must not get.
+- **Column:** `shein_listing_products.photo_skip TEXT[]` (default `{}`) = photo KEYS — `photoKey(url)` = the URL
+  without `?query` / `#hash`, host lower-cased (Shopify's `?v=` changes on re-upload). Pure helpers in
+  `src/lib/sheinPublish.js`: `photoKey`, `keepPhotos(urls, skip) → {urls, skipped}`, `countAfterSkip(count, skip, ph,
+  phKeys)`, `isShopifyPhoto`, `PHOTO_SKIP_MAX` (40).
+- **Publish:** `buildPublish` drops left-out photos BEFORE the 11-photo cut and the conversions (never fetched, hosted
+  or transform-pic'd); `plan.photos.skipped` = how many (the sheet says “n left out by you”). Photo 1 of what's left is
+  the main photo.
+- **Readiness:** `publishContext` loads the PH photo keys per style (`phPhotoKeys`, replaced `phPhotoCounts`) and takes
+  the left-out photos of the source in use off the count → `no_image` (“Only n photo”) appears at once (saves recount).
+- **Endpoints** (`api/shein/listings.js`, PH ok, our DB only):
+  - `GET ?photos=<gid>` → `{ source 'shopify'|'ph_edited', usePhPhotos, style, shopify:[{url,key,width,height,skipped}],
+    ph:[{url,key,angle,skipped}], sent, max 11, stale:[{key, shopify}] }` — Shopify's photos read LIVE
+    (`shopifyListingProduct`) + `product_photos` (ph_edited) for the style; never SHEIN. `shein:` ids → 400, unknown → 404.
+  - `publish_choices { productId, photoSkip: [https url] }` (≤ 40; non-https / not a list → 400) — the FULL list, keyed.
+  - `publish_choices_bulk { productIds, patch: { skipCover: true|false } }` — adds / removes each shoe's stored cover
+    (`image_url` = Shopify's photo 1) on its `photo_skip` (`setListingCoverSkip`); `publishSetup` rows carry
+    `photoSkip` (count) + `coverSkipped`.
+- **Page:** `src/components/SheinPhotoPicker.jsx` — a grid (photo 1 = main), tap a photo to zoom (`ImageZoomModal`),
+  **Leave out / Put back** per photo, “n of m photos go to SHEIN”, a warning under 2, stale left-outs → “Forget
+  them”. Where: the drawer checklist's photo line (**Choose photos**, line shows “n photos left out”), the drawer's
+  “Published from this page” section of a refused / rejected publish, and the bulk sheet's Photos block (**Leave out
+  the cover on all n** / Put the cover back on all).
+- e2e (`shein-listings.spec.js`): pure helpers; publish_choices photoSkip validation + the preview never converts the
+  left-out photo + readiness `no_image` at once; bulk `skipCover`; the drawer picker (Shopify read stubbed) + 390 px.
+
+## Replace the photos of a shoe already on SHEIN — op `photos` (built 2026-11-11)
+**Why:** live shoes (4seller's or ours) carry PH-branded photos. partialEdit re-judges the WHOLE colour (SKC) on every
+edit, so once SHEIN started rejecting those photos ("watermark", "false service promises") every later edit of the
+shoe — new sizes, relinks — was rejected too. Spec + SHEIN doc line refs: session scratchpad `rejected-fix-spec.md`
+(shein-api-specialist; edit guide 8ca3c2b9, image guide 4d96fc8f). A never-approved product can't be edited (edit
+guide l. 5-8) — that case is Publish again (a NEW publish) with the photos left out.
+- **Op `photos`** (alone, like `publish`; `PREVIEW_OPS`; the endpoint 400s a mix). `buildPhotoEdit` (shein-listing.js):
+  live Shopify read + the stock gate → spu-info → fill (cached) → doc state (review open → deferred) → `editAttrs` →
+  `planPhotoEdit` (pure, `src/lib/sheinPublish.js`). Picture plan of THIS product: SHEIN keeps SPU photos
+  (`spuImageInfoList`) → `imagePlan(category fill)`, else the old plan (`imagePlan({})`). Photos = `sourcePhotos`
+  (shared with publish: PH edited when on, else Shopify, minus `photo_skip`) → `convertPhotos` (H2: only an admin /
+  Connect-integrations preview converts; PH → note `photos_need_priv`, nothing sendable).
+- **Body** (ONE partialEdit): `{ spu_name, skc_list:[{ skc_name, image_info:{ image_group_code (spu-info), FULL new
+  list }, skc_title + skc_multi_language_name_list as SHEIN has them (when the store shows skc_title — left out =
+  cleared), sku_list: every SKU { sku_code, image_info:{ its group code, [new main] } } only when the SKUs carry
+  images (all or none) }], image_info (SPU) only when SHEIN keeps SPU photos }` + `product_attribute_list` when
+  `editAttrs` adds required details. Every photo NEW (no `image_item_id`). Never: is_spu_pic, prices, stock, sale attrs.
+- **Blockers:** `photo_edit_unsupported` (`why` multi_skc · no_group_code · sku_group_code · spu_plan_unclear → Seller
+  Center), `skc_field_uncopyable` (rules unread / reference link we'd clear / required skc title missing),
+  `no_image` / `image_rejected` / `photo_cap_reached`, the attribute problems.
+- **Run / review:** the same rails as edit (idempotency key + `sendState` = preVersion, `didItArrive` = a new doc
+  version in review). Approved → `applyReview` → done + `afterApplied` (spu cache refresh). Then the person re-runs
+  **Add missing sizes** for sizes SHEIN rejected (`planAddSizes` retries `review_rejected`; `imageOf(sibling)` now
+  copies the NEW photo). The old photos stay live during the review.
+- **`review_rejected` now routes by SHEIN's reason** (`isPhotoRejection`: picture / image / watermark / false
+  service|efficacy / 图片 / 水印): fix text + action `fix_photos` ("Fix photos", opens the drawer's photo section;
+  in `PUBLISH_FIX_KINDS`), else `send_again` as before.
+- **Page:** drawer **Photos on SHEIN** (shoes on SHEIN): rejection banner with SHEIN's words, the last photo send's
+  state, **Choose photos** (`SheinPhotoPicker`) + **Replace SHEIN photos** (preview `ops:['photos']`; primary when
+  rejected for photos). Products bar: **Replace SHEIN photos (n)** for ticked shoes on SHEIN (≤ 100, syncable) → a
+  dialog with "First leave out Shopify's cover photo on all n" (`publish_choices_bulk skipCover`) → the preview. Sheet:
+  `PhotoEditPlan` (On SHEIN now → SHEIN will get, source + left-out count, size photos, SPU photos), stats, Confirm
+  "Replace photos of n products on SHEIN" (admin / Connect integrations). Jobs label "replace SHEIN photos".
+- **DB:** `shein_listing_job_items_op_check` is now re-applied on every `db:setup` from ONE list (`SHEIN_ITEM_OPS`,
+  + `photos`) — it lived only in the CREATE, so existing DBs never got new ops. **Prod needs `db:setup`.**
+- **Pilot (unknowns only a live call settles):** one shoe first — diff spu-info before/after (only photos changed;
+  `groupCode` kept or new), confirm the shoe stays on shelf during the review, then re-run its rejected sizes.
+- e2e (`shein-listings.spec.js` → "replace live photos"): the planner (body, all-or-none size photos, SPU photos, the
+  blockers), `isPhotoRejection` + the action; vs the fake SHEIN: PH preview reads only, admin preview body + the
+  left-out photo never hosted, endpoint refuses a mix, the run → In review → approved → done; the drawer section.
+
 ## Phase 5 — 4seller cut-over + go-live (built 2026-10-27)
 - **Where:** Setup tab, on top: **Go-live checklist** then **4seller cut-over**; once "4seller paused" is ticked the
   connection strip shows "4seller cut-over: day N of 30 · n of 5 pass" (or "Ready to cancel 4seller") → Setup.

@@ -27,7 +27,7 @@ import { createPortal } from 'react-dom';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { ProgressBar, RemoteThumb } from './common.jsx';
-import { renderBlocker, itemStatus, itemRetryable, itemUnconfirmed, itemCanSendAgain, PRICE_FROM, ITEM_NO_ANSWER, OP_LABEL, OP_SAY, PRICE_CODE, isUpdateOps, isPublishOps, PUBLISH_WORD } from '../lib/sheinListings.js';
+import { renderBlocker, itemStatus, itemRetryable, itemUnconfirmed, itemCanSendAgain, PRICE_FROM, ITEM_NO_ANSWER, OP_LABEL, OP_SAY, PRICE_CODE, isUpdateOps, isPublishOps, isPhotoOps, PUBLISH_WORD } from '../lib/sheinListings.js';
 import { GROUP_LABEL, BOX_LABEL } from './SheinPublishBits.jsx';
 import { cmToIn, gToLb } from '../lib/sheinPublish.js';
 import { fmt, money, when, NEEDS_PRIV } from './SheinListingsBits.jsx';
@@ -129,7 +129,7 @@ function PublishPlan({ plan }) {
         <div className="shl-d-sec" data-plan="photos">
           <h4 className="shl-h4">Photos{imgs.length ? ` (${fmt(imgs.length)})` : ''}</h4>
           {imgs.length > 0 && <div className="shl-pthumbs">{imgs.map((x) => <span key={x.image_sort} className="shl-pthumb-w"><RemoteThumb src={x.image_url} className="ebl-thumb shl-pthumb" alt={`${IMG_TYPE[x.image_type] || 'photo'} ${x.image_sort}`} /><span className="muted xs">{IMG_TYPE[x.image_type] || x.image_type}</span></span>)}</div>}
-          {ph && <p className="muted xs" data-photos="">{fmt(ph.count)} source photo{ph.count === 1 ? '' : 's'} from {ph.source === 'ph_edited' ? 'the PH edited photos' : 'Shopify'} · {fmt(ph.converted)} converted for SHEIN in this preview{ph.cached ? ` · ${fmt(ph.cached)} already converted earlier` : ''}. Padded to 1500 × 1500 on white, never cropped.</p>}
+          {ph && <p className="muted xs" data-photos="">{fmt(ph.count)} source photo{ph.count === 1 ? '' : 's'} from {ph.source === 'ph_edited' ? 'the PH edited photos' : 'Shopify'} {ph.skipped ? ` · ${fmt(ph.skipped)} left out by you` : ''} · {fmt(ph.converted)} converted for SHEIN in this preview{ph.cached ? ` · ${fmt(ph.cached)} already converted earlier` : ''}. Padded to 1500 × 1500 on white, never cropped.</p>}
         </div>
       )}
       {sizes.length > 0 && (
@@ -153,6 +153,31 @@ function PublishPlan({ plan }) {
 }
 
 // One product of the preview / the send.
+// 2026-11-11: replace the photos of a shoe already on SHEIN — what SHEIN has now → what it will get.
+const SHEIN_IMG_TYPE = { 1: 'main', 2: 'detail', 5: 'square', MAIN: 'main', DETAIL: 'detail', SQUARE: 'square', PIECE: 'piece' };
+function PhotoEditPlan({ plan }) {
+  const now = plan.current || [];
+  const imgs = plan.images || [];
+  const ph = plan.photos || null;
+  const strip = (list, key) => <div className="shl-pthumbs">{list.map((x, i) => <span key={i} className="shl-pthumb-w"><RemoteThumb src={x[key]} className="ebl-thumb shl-pthumb" alt={`${SHEIN_IMG_TYPE[x.type ?? x.image_type] || 'photo'} ${i + 1}`} /><span className="muted xs">{SHEIN_IMG_TYPE[x.type ?? x.image_type] || x.type || x.image_type || ''}</span></span>)}</div>;
+  return (
+    <div data-plan="photos">
+      <div className="shl-d-sec" data-plan="photos-now">
+        <h4 className="shl-h4">On SHEIN now ({fmt(now.length)})</h4>
+        {now.length ? strip(now, 'url') : <p className="muted xs">SHEIN showed no photos for this colour.</p>}
+      </div>
+      <div className="shl-d-sec" data-plan="photos-new">
+        <h4 className="shl-h4">SHEIN will get{imgs.length ? ` (${fmt(imgs.length)})` : ''}</h4>
+        {imgs.length > 0 ? strip(imgs, 'image_url') : <p className="muted xs">{ph?.why === 'needs_priv' ? 'Not converted in this preview — an admin, or someone with Connect integrations, previews it to see the new photos.' : 'Nothing yet — see above.'}</p>}
+        {ph && ph.count != null && <p className="muted xs">{fmt(ph.count)} photo{ph.count === 1 ? '' : 's'} from {ph.source === 'ph_edited' ? 'the PH edited photos' : 'Shopify'}{ph.skipped ? ` · ${fmt(ph.skipped)} left out by you` : ''} · {fmt(ph.converted)} converted for SHEIN in this preview{ph.cached ? ` · ${fmt(ph.cached)} already converted earlier` : ''}.</p>}
+        {plan.skuImages > 0 && <p className="muted xs">Each size’s photo ({fmt(plan.skuImages)}) becomes the new main photo — SHEIN needs all or none.</p>}
+        {(plan.spuImages || []).length > 0 && <p className="muted xs">SHEIN also keeps product-level photos for this shoe: they are replaced too ({fmt(plan.spuImages.length)}).</p>}
+        <p className="muted xs">Only the photos change{plan.skcTitleCopied ? ' (the colour title is re-sent exactly as SHEIN has it)' : ''} — prices, stock, sizes and the title stay as they are.</p>
+      </div>
+    </div>
+  );
+}
+
 function ItemRow({ it, kind, isAdmin, canWrite, busy, onRetry, onDryRunAgain, onPublishAgain, onLookAgain, onSendAgain, onlyOne, isUpdate, sameAsAbove }) {
   const [open, setOpen] = useState(onlyOne);
   const isPub = it.op === 'publish';
@@ -166,7 +191,8 @@ function ItemRow({ it, kind, isAdmin, canWrite, busy, onRetry, onDryRunAgain, on
   const relinks = plan.relinks || [];
   const mallOn = plan.mallOn || [];
   const titleChg = !isPub && plan.title && typeof plan.title === 'object' ? plan.title : null;
-  const hasDetail = !!(isPub || plan.sizes?.length || plan.prices?.length || mallOn.length || titleChg || relinks.length || skipped.length || head.length || (isAdmin && it.body));
+  const isPh = it.op === 'photos';
+  const hasDetail = !!(isPub || isPh || plan.sizes?.length || plan.prices?.length || mallOn.length || titleChg || relinks.length || skipped.length || head.length || (isAdmin && it.body));
   // F1: a publish SHEIN didn't confirm is neither "refused" nor retryable — Look again / Send again
   const unconfirmed = kind === 'run' && itemUnconfirmed(it);
   const refused = kind === 'run' && it.status === 'failed' && !itemRetryable(it) && !unconfirmed;
@@ -218,7 +244,7 @@ function ItemRow({ it, kind, isAdmin, canWrite, busy, onRetry, onDryRunAgain, on
       {open && hasDetail && (
         <div className="shl-ditem-body">
           {head.map((b, i) => <p key={i} className="xs"><b>{b.title}</b>{b.fix ? ` ${b.fix}` : ''}{b.sheinSaid ? <span className="shl-shein-said">SHEIN said: “{b.sheinSaid}”</span> : null}</p>)}
-          {isPub ? <PublishPlan plan={plan} /> : <SizesTable plan={plan} />}
+          {isPub ? <PublishPlan plan={plan} /> : isPh ? <PhotoEditPlan plan={plan} /> : <SizesTable plan={plan} />}
           <PriceTable plan={plan} codes={codes} />
           {mallOn.length > 0 && (
             <div className="shl-d-sec" data-plan="mall">
@@ -301,6 +327,7 @@ export function DryRunView({ jobId, canWrite, isAdmin, onSwitch, onClose, onSign
   }, [d, kind]);
   const isUpdate = isUpdateOps(d?.job?.scope?.ops) || items.some((i) => i.op === 'price' || i.op === 'edit');
   const isPublish = isPublishOps(d?.job?.scope?.ops) || items.some((i) => i.op === 'publish');
+  const isPhotos = isPhotoOps(d?.job?.scope?.ops) || items.some((i) => i.op === 'photos');
   // Phase 4: photos converted for SHEIN by this preview (asset calls — not a listing write), the quota it uses
   const converted = items.reduce((a, i) => a + Number(i.plan?.photos?.converted || 0), 0);
   const quota = items.find((i) => i.status === 'done' && i.plan?.quota)?.plan?.quota || items.find((i) => i.plan?.quota)?.plan?.quota || null;
@@ -314,7 +341,7 @@ export function DryRunView({ jobId, canWrite, isAdmin, onSwitch, onClose, onSign
   const runId = kind === 'preview' ? sentAs(j) : null;
 
   const confirm = () => act('run', { action: 'run', previewJobId: Number(j.id) }, (r) => { if (r?.job?.id) onSwitch?.(r.job.id); });
-  const dryAgain = (productIds) => act('preview', { action: 'preview', productIds, ...(isPublish ? { ops: ['publish'] } : isUpdate ? { ops: ['price', 'edit'] } : {}) }, (r) => { if (r?.job?.id) onSwitch?.(r.job.id); });
+  const dryAgain = (productIds) => act('preview', { action: 'preview', productIds, ...(isPublish ? { ops: ['publish'] } : isPhotos ? { ops: ['photos'] } : isUpdate ? { ops: ['price', 'edit'] } : {}) }, (r) => { if (r?.job?.id) onSwitch?.(r.job.id); });
   // Phase 4: an admin lets a product SHEIN rejected go again — recorded, then a fresh preview to check
   async function publishAgain(it) {
     setBusy('publish_again'); setErr(''); setMsg('');
@@ -367,6 +394,15 @@ export function DryRunView({ jobId, canWrite, isAdmin, onSwitch, onClose, onSign
               {quota?.controlled && <div className={`er-stat${(c.publishable || 0) > Number(quota.available) ? ' warn' : ''}`} data-quota=""><b>uses {fmt(c.publishable ?? 0)} of {fmt(quota.available)}</b><span>monthly new-product limit left this month</span></div>}
             </div>
           )}
+          {kind === 'preview' && !running && isPhotos && (
+            <div className="er-stats shl-dstats" data-stats="photos">
+              <div className="er-stat"><b>{fmt(c.products ?? items.length)}</b><span>products checked</span></div>
+              <div className="er-stat ok"><b>{fmt(c.photo_edits ?? c.sendable ?? 0)}</b><span>get new photos</span></div>
+              <div className="er-stat"><b>{fmt(c.photos_sent ?? 0)}</b><span>photos SHEIN will get</span></div>
+              <div className={`er-stat${c.skipped ? ' warn' : ''}`}><b>{fmt(c.skipped ?? 0)}</b><span>can’t change here (each says why)</span></div>
+              <div className="er-stat"><b>{fmt(converted)}</b><span>photos converted for SHEIN</span></div>
+            </div>
+          )}
           {kind === 'preview' && !running && isUpdate && (
             <>
               <div className="er-stats shl-dstats" data-stats="update">
@@ -383,7 +419,7 @@ export function DryRunView({ jobId, canWrite, isAdmin, onSwitch, onClose, onSign
           )}
           {kind === 'preview' && !running && (
             <>
-              {!isUpdate && !isPublish && <div className="er-stats shl-dstats">
+              {!isUpdate && !isPublish && !isPhotos && <div className="er-stats shl-dstats">
                 <div className="er-stat"><b>{fmt(c.products ?? items.length)}</b><span>products checked</span></div>
                 <div className="er-stat ok"><b>{fmt(c.sendable ?? 0)}</b><span>products to send</span></div>
                 <div className="er-stat"><b>{fmt(c.sizes ?? 0)}</b><span>sizes to add</span></div>
@@ -394,14 +430,15 @@ export function DryRunView({ jobId, canWrite, isAdmin, onSwitch, onClose, onSign
               </div>}
               <p className={`sm shl-proof${c.shein_writes ? ' bad' : ''}`} data-proof="">
                 {c.shein_writes ? <><b>{fmt(c.shein_writes)} changes on SHEIN</b> — a preview should never change anything. Tell an admin.</>
-                  : isPublish ? <><b>0 changes on SHEIN · {plural(converted, 'photo')} converted</b> — this preview read SHEIN ({plural(c.shein_calls ?? 0, 'call')}) and only converted photos into SHEIN’s image format. Nothing on SHEIN changed.</>
+                  : isPublish || isPhotos ? <><b>0 changes on SHEIN · {plural(converted, 'photo')} converted</b> — this preview read SHEIN ({plural(c.shein_calls ?? 0, 'call')}) and only converted photos into SHEIN’s image format. Nothing on SHEIN changed.</>
                     : <><b>0 changes on SHEIN</b> — this preview only read SHEIN ({plural(c.shein_calls ?? 0, 'read')}). Nothing on SHEIN changed.</>}
               </p>
               {runId && <p className="sm">Confirmed — sent as job #{runId}. <button type="button" className="shl-linkbtn" onClick={() => onSwitch?.(runId)}>Open the send →</button></p>}
               {!runId && j.status === 'done' && !n && <p className="muted sm">Nothing to send: every product below says why.</p>}
               {confirmable && j.started_by === AUTO_BY && <p className="sm shl-pline violet">Started by the automatic price update. The server sends it by itself at its next check, or you can confirm it now.</p>}
               {confirmable && isPublish && <p className="muted xs">Each product goes to SHEIN as ONE new listing at stock 0, then SHEIN reviews it (hours to days) — it shows In review until SHEIN approves it, then automatic sync sets its stock. Each one uses 1 of the store’s monthly monthly new-product limit, and deleting it later doesn’t give that back.</p>}
-              {confirmable && !isPublish && (isUpdate
+              {confirmable && isPhotos && <p className="muted xs">ONE edit per product replaces its photos on SHEIN, then SHEIN reviews it (hours to days) — the old photos stay live until SHEIN approves, and nothing else on the shoe can change meanwhile. Once approved, send the sizes SHEIN rejected again (Add missing sizes).</p>}
+              {confirmable && !isPublish && !isPhotos && (isUpdate
                 ? <p className="muted xs">Prices go through SHEIN’s price tool. A size with a live SHEIN special isn’t changed unless you chose to end the special. A cut applies at once; a rise may go to SHEIN’s price review and shows In review until SHEIN approves. Sizes turned back on and SKU changes go in ONE edit per product, then SHEIN reviews it. Stock is never touched — automatic sync owns it.</p>
                 : <p className="muted xs">New sizes go up at stock 0 in ONE edit per product, then SHEIN reviews each product (hours to days). Approved sizes then get their stock from automatic sync. A custom size is store-wide and permanent.</p>)}
             </>
@@ -435,8 +472,8 @@ export function DryRunView({ jobId, canWrite, isAdmin, onSwitch, onClose, onSign
       {onClose && <button type="button" className="btn ghost sm" onClick={onClose}>{confirmable ? 'Not now' : 'Close'}</button>}
       {confirmable && (
         <button type="button" className="btn primary sm" data-confirm="" disabled={!canWrite || !!busy || !n}
-          title={!canWrite ? NEEDS_PRIV : isPublish ? `Publishes each ready product on SHEIN as ONE new listing, from preview #${j.id}` : isUpdate ? `Sends the prices and ONE edit per product to SHEIN, from preview #${j.id}` : `Sends ONE edit per product to SHEIN, from preview #${j.id}`} onClick={confirm}>
-          {busy === 'run' ? 'Starting…' : isPublish ? `Publish ${plural(n, 'new product')} on SHEIN` : isUpdate ? `Send changes for ${plural(nProducts, 'product')} to SHEIN` : `Send ${plural(c.sizes ?? 0, 'size')} to SHEIN (${plural(n, 'product')})`}
+          title={!canWrite ? NEEDS_PRIV : isPublish ? `Publishes each ready product on SHEIN as ONE new listing, from preview #${j.id}` : isPhotos ? `Replaces the photos of each product on SHEIN (ONE edit each), from preview #${j.id}` : isUpdate ? `Sends the prices and ONE edit per product to SHEIN, from preview #${j.id}` : `Sends ONE edit per product to SHEIN, from preview #${j.id}`} onClick={confirm}>
+          {busy === 'run' ? 'Starting…' : isPublish ? `Publish ${plural(n, 'new product')} on SHEIN` : isPhotos ? `Replace photos of ${plural(n, 'product')} on SHEIN` : isUpdate ? `Send changes for ${plural(nProducts, 'product')} to SHEIN` : `Send ${plural(c.sizes ?? 0, 'size')} to SHEIN (${plural(n, 'product')})`}
         </button>
       )}
     </>
@@ -457,8 +494,8 @@ export function DryRunView({ jobId, canWrite, isAdmin, onSwitch, onClose, onSign
     <>
       <div className="shl-d-head shl-sheet-head">
         <div className="shl-d-title"><div className="shl-pname">{heading} {chip}</div>
-          <div className="muted xs">{kind === 'run' ? (isPublish ? 'Publishing new products on SHEIN' : isUpdate ? 'Updating prices, sizes turned off and wrong SKUs on SHEIN' : 'Adding the missing sizes to shoes already on SHEIN')
-            : `${isPublish ? 'Publish new products' : isUpdate ? 'Update prices & sizes' : 'Add missing sizes'} — what WOULD be sent; nothing has gone to SHEIN`}</div></div>
+          <div className="muted xs">{kind === 'run' ? (isPublish ? 'Publishing new products on SHEIN' : isPhotos ? 'Replacing photos of shoes on SHEIN' : isUpdate ? 'Updating prices, sizes turned off and wrong SKUs on SHEIN' : 'Adding the missing sizes to shoes already on SHEIN')
+            : `${isPublish ? 'Publish new products' : isPhotos ? 'Replace SHEIN photos' : isUpdate ? 'Update prices & sizes' : 'Add missing sizes'} — what WOULD be sent; nothing has gone to SHEIN`}</div></div>
         <button type="button" className="btn ghost sm shl-close" aria-label="Close" onClick={onClose}>✕</button>
       </div>
       <div className="shl-d-body">{body}</div>

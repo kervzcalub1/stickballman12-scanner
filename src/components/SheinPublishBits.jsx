@@ -19,6 +19,7 @@ import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { fmt, when, NEEDS_PRIV, BlockerSay, FixButton } from './SheinListingsBits.jsx';
 import { plain } from '../lib/sheinWords.js';
+import { SheinPhotoPicker } from './SheinPhotoPicker.jsx';
 import { BOX_PLACEHOLDERS, sizeGroupOf, validateImperialBox, boxToImperial, boxFromImperial, cleanTitle, isKnownBrand, favouriteLeaves } from '../lib/sheinPublish.js';
 
 export const GROUP_LABEL = {
@@ -511,8 +512,8 @@ export function StoreGateBanner({ gates, readAt }) {
 
 /* ------------------------------- the checklist ------------------------------- */
 // The fixes a checklist line opens inline (the rest use the blocker's own button).
-const PANEL = { category: 'Choose category', brand: 'Map to a SHEIN brand', title: 'Review title', colour: 'Pick the colour', attributes: 'Set SHEIN details', box: 'Confirm box sizes' };
-const PANEL_OK = { category: 'Change', brand: 'Change', title: 'Edit SHEIN title' };
+const PANEL = { category: 'Choose category', brand: 'Map to a SHEIN brand', title: 'Review title', colour: 'Pick the colour', attributes: 'Set SHEIN details', box: 'Confirm box sizes', photos: 'Choose photos' };
+const PANEL_OK = { category: 'Change', brand: 'Change', title: 'Edit SHEIN title', photos: 'Choose photos' };
 const STORE_KEYS = new Set(['store', 'quota', 'shelf', 'site']);
 
 export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut, onAct }) {
@@ -547,6 +548,7 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
     if (key === 'colour') return <ColourPicker productId={p.shopify_product_id} productTypeId={Number(cat.product_type_id)} current={p.skc_value_id} onSignOut={onSignOut} onSaved={() => done('colour', 'Colour saved.')} />;
     if (key === 'attributes') return <AttrEditor productTypeId={Number(cat.product_type_id)} categoryId={Number(cat.category_id)} canWrite={canWrite} focus={focus} onSignOut={onSignOut} onSaved={() => setFixed((s) => new Set([...s, 'attributes']))} />;
     if (key === 'box') return <BoxDefaults compact canWrite={canWrite} onSignOut={onSignOut} onSaved={() => done('box', 'Box sizes confirmed for every new product.')} />;
+    if (key === 'photos') return <SheinPhotoPicker productId={p.shopify_product_id} onSignOut={onSignOut} onSaved={() => { setFixed((s) => new Set([...s, 'photos'])); onReload?.(); }} />;
     return null;
   };
 
@@ -584,6 +586,7 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
               {l.key === 'photos' && (
                 <label className="shl-pub-ph"><input type="checkbox" checked={!!p.use_ph_photos} disabled={!!busy} onChange={(e) => togglePh(e.target.checked)} /><span>Use PH edited photos <span className="muted xs shl-block">The PH team’s photos for {p.style || 'this style'} when there are any, else Shopify’s.</span></span></label>
               )}
+              {l.key === 'photos' && l.ok !== true && p.photo_skip?.length > 0 && <span className="muted xs shl-block" data-skip-count="">{fmt(p.photo_skip.length)} photo{p.photo_skip.length === 1 ? '' : 's'} left out — SHEIN won’t get {p.photo_skip.length === 1 ? 'it' : 'them'}.</span>}
             </span>
             <span className="shl-pub-btns">
               {canPanel && <button type="button" className={`btn xs ${l.ok === false ? 'shl-fix' : 'ghost'}`} aria-expanded={open === l.key} onClick={() => setOpen(open === l.key ? '' : l.key)}>{open === l.key ? 'Close' : panelLabel}</button>}
@@ -605,6 +608,6 @@ function OkDetail({ k, p, cat }) {
   let t = null;
   if (k === 'category' && cat) t = cat.category_path || `SHEIN category ${cat.category_id}`;
   if (k === 'title' && p.title_override) t = `SHEIN title: “${p.title_override}”`;
-  if (k === 'photos' && p.use_ph_photos) t = 'Using the PH edited photos';
+  if (k === 'photos') t = [p.use_ph_photos ? 'Using the PH edited photos' : null, p.photo_skip?.length ? `${p.photo_skip.length} photo${p.photo_skip.length === 1 ? '' : 's'} left out` : null].filter(Boolean).join(' · ') || null;
   return t ? <span className="muted xs shl-block">{t}</span> : null;
 }

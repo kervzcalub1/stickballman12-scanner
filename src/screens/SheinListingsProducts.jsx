@@ -281,6 +281,8 @@ export function SheinListingsProducts({ setStatusAll, d, status, q, setQ, brand,
   const pickedAdd = addRows.length;
   const pickedUpd = updRows.length;
   const pickedNew = pubRows.length;
+  // 2026-11-11: shoes ON SHEIN whose photos can be replaced (the same Shopify gate as every listing sync)
+  const photoRows = pickedRows.filter((p) => p.spu && !String(p.shopify_product_id).startsWith('shein:') && rowSyncable(p)).slice(0, BULK_MAX);
   // a ticked new shoe that still has a ✕ to fix → the button opens the fix step first, never the preview
   const pubNeedsFix = pubRows.filter((p) => ['blocked', 'error'].includes(p.status)).length;
   const deadWhy = [...new Set(deadRows.map(rowSyncWhy))].join(' / ');
@@ -288,6 +290,15 @@ export function SheinListingsProducts({ setStatusAll, d, status, q, setQ, brand,
     ...pickedRows.filter((p) => canPublish(p) && !rowSyncable(p)).map((p) => ({ productId: p.shopify_product_id, title: p.title, why: `${rowSyncWhy(p)} — not sent to SHEIN` })),
     ...rows.slice(BULK_MAX).map((p) => ({ productId: p.shopify_product_id, title: p.title, why: `over ${BULK_MAX} at a time — do it in a second batch` })),
   ];
+  const [photoAsk, setPhotoAsk] = useState(null);   // { ids, cover } — the "Replace SHEIN photos" question
+  async function photoPreview() {
+    const { ids, cover } = photoAsk;
+    try {
+      if (cover) await api.sheinListingAction({ action: 'publish_choices_bulk', productIds: ids, patch: { skipCover: true } });
+      setPhotoAsk(null);
+      if (await onDryRun(ids, ['photos'])) setPicked(new Set());
+    } catch (e) { if (e.unauthorized) onSignOut(); else setPhotoAsk({ ...photoAsk, err: plain(e.message) }); }
+  }
   const openBulk = (intent) => setBulk({ ids: pubRows.slice(0, BULK_MAX).map((p) => p.shopify_product_id), leftOut: leftOutFor(pubRows), intent });
   // "Publish new products": straight to the preview only when EVERY ticked new shoe is ready (the server's
   // checklist, one call); otherwise the bulk-edit sheet opens on the fix step.
@@ -387,6 +398,11 @@ export function SheinListingsProducts({ setStatusAll, d, status, q, setQ, brand,
               onClick={async () => { if (await onDryRun(addRows.map((p) => p.shopify_product_id))) setPicked(new Set()); }}>{busy === 'preview' ? 'Starting…' : 'Add missing sizes'}{pickedAdd ? <> <span className="shl-bar-n">{fmt(pickedAdd)}</span></> : null}</button>
             <button type="button" className={`btn ${primary(pickedUpd, pickedAdd !== lead)}`} disabled={!!busy || !!active || !pickedUpd} title={updTitle} data-dry="update"
               onClick={async () => { if (await onDryRun(updRows.map((p) => p.shopify_product_id), UPDATE_OPS)) setPicked(new Set()); }}>{busy === 'preview' ? 'Starting…' : 'Update prices & sizes'}{pickedUpd ? <> <span className="shl-bar-n">{fmt(pickedUpd)}</span></> : null}</button>
+            {photoRows.length > 0 && (
+              <button type="button" className="btn ghost sm" data-dry="photos" disabled={!!busy || !!active}
+                title={running || `Preview new photos for the ${fmt(photoRows.length)} ticked shoe${photoRows.length === 1 ? '' : 's'} already on SHEIN — what SHEIN has now → what it would get. Nothing is sent.`}
+                onClick={() => setPhotoAsk({ ids: photoRows.map((p) => p.shopify_product_id), cover: true })}>Replace SHEIN photos <span className="shl-bar-n">{fmt(photoRows.length)}</span></button>
+            )}
             <button type="button" className={`btn ${primary(pickedNew, pickedAdd !== lead && pickedUpd !== lead)}`} disabled={!!busy || !!active || !pickedNew || checking} title={pubTitle} data-dry="publish" data-needs-fix={pubNeedsFix || undefined}
               onClick={publishOrFix}>{checking ? 'Checking…' : busy === 'preview' ? 'Starting…' : pubNeedsFix ? 'Fix & publish' : 'Publish new products'}{pickedNew ? <> <span className="shl-bar-n">{fmt(pickedNew)}</span></> : null}</button>
           </span>
@@ -396,6 +412,21 @@ export function SheinListingsProducts({ setStatusAll, d, status, q, setQ, brand,
         <SheinBulkPublish ids={bulk.ids} leftOut={bulk.leftOut} intent={bulk.intent} active={active} busy={busy} onSignOut={onSignOut}
           onClose={() => setBulk(null)} onOpen={(id) => { setBulk(null); onOpen(id); }}
           onDryRun={async (ids, ops) => { const r = await onDryRun(ids, ops); if (r) setPicked(new Set()); return r; }} />
+      )}
+      {photoAsk && (
+        <div className="modal-overlay" onClick={() => setPhotoAsk(null)}>
+          <div className="modal form-modal shl-photo-ask" role="dialog" aria-modal="true" aria-label="Replace SHEIN photos" data-photo-ask="" onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title">Replace the SHEIN photos of {fmt(photoAsk.ids.length)} shoe{photoAsk.ids.length === 1 ? '' : 's'}</h3>
+            <p className="sm">Each shoe gets the photos picked for it (its own “Choose photos” in Details; the PH edited photos when that is on, else Shopify’s). The preview shows what SHEIN has now next to what it would get — nothing is sent until someone confirms.</p>
+            <label className="shl-pub-ph"><input type="checkbox" checked={photoAsk.cover} onChange={(e) => setPhotoAsk({ ...photoAsk, cover: e.target.checked })} />
+              <span>First leave out Shopify’s cover photo (photo 1) on all {fmt(photoAsk.ids.length)} <span className="muted xs shl-block">The branded cover — text, a logo or the store name on it — is what SHEIN calls a watermark. Our records only; Shopify isn’t changed.</span></span></label>
+            {photoAsk.err && <p className="error xs" role="alert">{photoAsk.err}</p>}
+            <div className="shl-pub-acts">
+              <button type="button" className="btn ghost sm" onClick={() => setPhotoAsk(null)}>Cancel</button>
+              <button type="button" className="btn primary sm" data-act="photos-preview" disabled={!!busy} onClick={photoPreview}>Preview new photos</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

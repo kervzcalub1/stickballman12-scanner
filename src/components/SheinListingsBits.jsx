@@ -42,7 +42,7 @@ export function goPath(href) {
 // "leave off SHEIN") or open another page are live; everything that would change SHEIN, or
 // belongs to a later phase, is shown disabled with NEXT_PHASE.
 // Phase 4: the fixes for publishing a new product live in its drawer's checklist — a row's button opens it.
-export const PUBLISH_FIX_KINDS = ['choose_category', 'set_attr', 'review_title', 'use_ph_photos', 'set_defaults', 'publish_again'];
+export const PUBLISH_FIX_KINDS = ['choose_category', 'set_attr', 'review_title', 'use_ph_photos', 'set_defaults', 'publish_again', 'fix_photos'];   // fix_photos: the drawer's photo section (2026-11-11)
 const LIVE_KINDS = new Set(['add_custom_size', 'edit_size_map', 'leave_off', 'include', 'open_shopify', 'open_match', 'open_shopify_listings', 'open_seller_center', ...PUBLISH_FIX_KINDS]);
 // open_match with `here`: the fix is this shoe's own "Fix SHEIN sizes" (onMatch — the drawer opens /
 // scrolls to it); without it (another SHEIN product holds the SKU) the SHEIN check page.

@@ -642,8 +642,12 @@ export const api = {
   // server (never a public URL — these carry an address and a live barcode).
   poLabelsSign: (poId) => post('/api/po/labels-sign', { poId }),
   poLabelsAttach: (payload) => post('/api/po/labels-attach', payload),
-  poLabelDownload: (poId, poBoxId) => downloadBlob(`/api/po/label-download?poId=${encodeURIComponent(poId)}`
-    + (poBoxId ? `&poBoxId=${encodeURIComponent(poBoxId)}` : '')),
+  // An order holds several labels PDFs (labels arrive in parts): no box/file = every label
+  // on the order as one PDF; fileId = one uploaded file; poBoxId = one label's pages.
+  poLabelDownload: (poId, poBoxId, fileId) => downloadBlob(`/api/po/label-download?poId=${encodeURIComponent(poId)}`
+    + (poBoxId ? `&poBoxId=${encodeURIComponent(poBoxId)}` : '')
+    + (fileId ? `&fileId=${encodeURIComponent(fileId)}` : '')),
+  poLabelsRemove: (poId, fileId) => post('/api/po/labels-remove', { poId, fileId }),
 
   poArchived: () => get('/api/po/archived'),
   poUnarchive: (poId) => post('/api/po/unarchive', { poId }),

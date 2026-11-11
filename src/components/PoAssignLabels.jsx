@@ -15,6 +15,7 @@ import React, { useState } from 'react';
 import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
 import { CARRIERS } from '../lib/carriers.js';
+import { saveLabelsSheet } from './PoLabelsFile.jsx';
 
 export function PoAssignLabels({ po, boxes, stores = [], onDone, onSignOut }) {
   const [open, setOpen] = useState(false);
@@ -90,13 +91,8 @@ export function PoAssignLabels({ po, boxes, stores = [], onDone, onSignOut }) {
       if (pdfFile && storeSheet) {
         try {
           setStatus('Saving the labels PDF…');
-          const { key, url } = await api.poLabelsSign(po.id);
-          const put = await fetch(url, { method: 'PUT', body: pdfFile, headers: { 'Content-Type': 'application/pdf' } });
-          if (!put.ok) throw new Error(`Upload failed (${put.status})`);
-          await api.poLabelsAttach({
-            poId: po.id, key, name: pdfFile.name, pages: pdfPages.length,
-            pageMap: pdfPages.filter((x) => x.value).map((x) => ({ tracking: x.value, page: x.page })),
-          });
+          // Added beside any labels PDF already on the order — nothing is replaced.
+          await saveLabelsSheet(po.id, pdfFile, pdfPages);
         } catch (e) {
           setError(`Labels assigned, but the PDF could not be stored (${e.message}). Attach it from “Shipping labels”.`);
         }

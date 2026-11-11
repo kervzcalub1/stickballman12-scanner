@@ -209,7 +209,7 @@ export function SupplierApp({ user, onSignOut }) {
     setOpenId(id); setDetail(null); setError('');
     writeParam('po', String(id));
     api.poGet(id)
-      .then((r) => { setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] }); setBusinessName(r.businessName || ''); setShipTo(r.shipTo || null); })
+      .then((r) => { setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [], labelFiles: r.labelFiles || [] }); setBusinessName(r.businessName || ''); setShipTo(r.shipTo || null); })
       .catch((e) => { if (e.unauthorized) return onSignOut(); setError(e.message); });
   };
   const refreshDetail = () => { if (openId) openPo(openId); };
@@ -236,7 +236,7 @@ export function SupplierApp({ user, onSignOut }) {
   // closed, a new order is being opened, or this supplier's own save is in flight — the
   // scan modal is a draft and must never be swapped out from under them.
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'po_stores', 'items', 'batches'], async () => {
+  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'po_stores', 'po_label_files', 'items', 'batches'], async () => {
     await afterTyping('.app');
     try {
       const n = (await api.poList()).pos || [];
@@ -246,7 +246,7 @@ export function SupplierApp({ user, onSignOut }) {
       const r = await api.poGet(id);
       setDetail((cur) => {
         if (!cur || Number(cur.po?.id) !== Number(id)) return cur;
-        const next = { po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] };
+        const next = { po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [], labelFiles: r.labelFiles || [] };
         return same(cur, next) ? cur : next;
       });
     } catch (e) { if (e.unauthorized) onSignOut(); }
@@ -262,7 +262,7 @@ export function SupplierApp({ user, onSignOut }) {
     setError('');
     try {
       const r = await api.poTrackRefresh(openId, boxId != null ? Number(boxId) : undefined);
-      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] });
+      setDetail((cur) => ({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [], labelFiles: r.labelFiles || cur?.labelFiles || [] }));
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { if (boxId != null) setTrackBoxBusy(null); else setTrackBusy(false); }
   };
@@ -277,7 +277,7 @@ export function SupplierApp({ user, onSignOut }) {
     setBusy(true); setError('');
     try {
       const r = await api.poCloseBox(Number(box.id));
-      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] });
+      setDetail((cur) => ({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [], labelFiles: r.labelFiles || cur?.labelFiles || [] }));
       setCloseReview(null);
       setPackedBox(box);
     } catch (e) {
@@ -291,7 +291,7 @@ export function SupplierApp({ user, onSignOut }) {
     setBusy(true); setError('');
     try {
       const r = await api.poReopenBox(Number(box.id));
-      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] });
+      setDetail((cur) => ({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [], labelFiles: r.labelFiles || cur?.labelFiles || [] }));
     } catch (e) {
       if (e.unauthorized) return onSignOut();
       setError(e.message);
@@ -303,7 +303,7 @@ export function SupplierApp({ user, onSignOut }) {
     setBusy(true);
     try {
       const r = await api.poShip(Number(box.id));
-      setDetail({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [] });
+      setDetail((cur) => ({ po: r.po, boxes: r.boxes, lines: r.lines, stores: r.stores || [], labelFiles: r.labelFiles || cur?.labelFiles || [] }));
       loadList();
     } catch (e) {
       if (e.unauthorized) return onSignOut();
@@ -602,7 +602,7 @@ export function SupplierApp({ user, onSignOut }) {
             )}
             {/* The labels our team bought for this order. Read-only here — they print
                 them, they don't upload them. */}
-            <PoLabelsFile po={po} onSignOut={onSignOut} />
+            <PoLabelsFile po={po} files={detail.labelFiles || []} onSignOut={onSignOut} />
             <PoDropoffReceipts po={po} isSupplier onSignOut={onSignOut} />
 
             {po.by_store && (

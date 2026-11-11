@@ -4581,6 +4581,7 @@ export async function getPoFull(id) {
   const sql = db();
   const po = (await sql`SELECT * FROM purchase_orders WHERE id = ${id}`)[0];
   if (!po) return null;
+  if (po.labels_key) await adoptLegacyPoLabels(id);
   // `received_units` = what the WAREHOUSE actually counted into this label's box, beside
   // what the supplier declared for it. A label on an order raised after the boxes landed
   // has no manifest at all, so its declared total is legitimately 0 — and a card reading
@@ -4636,8 +4637,11 @@ export async function getPoFull(id) {
         tracking_number: b.tracking_number, units: b.units, items: b.items }))
     : [];
   const dropoffReceipts = await listPoDropoffReceipts(id);
+  // Every labels PDF on the order (many since 2026-11-12 — labels arrive in parts). No
+  // storage key in it. The legacy single file was adopted above, before the boxes were read.
+  const labelFiles = await listPoLabelFiles(id, { adopt: false });
   return {
-    dropoffReceipts, po, boxes, lines, batches, stores, untied_boxes };
+    dropoffReceipts, labelFiles, po, boxes, lines, batches, stores, untied_boxes };
 }
 
 /* ---- Store orders: the audit (docs/store-orders-plan.md §4.5–4.7, PR D) ------------
@@ -7089,6 +7093,7 @@ export async function deletePo(poId, { by = null, role = null, reason = null } =
                coalesce(p.created_by, CASE WHEN p.raised_by = 'supplier' THEN p.supplier_name || ' (supplier)' END),
                p.created_at, ${reason || null}, to_jsonb(p),
                jsonb_build_object(
+                 'po_label_files',    coalesce((SELECT jsonb_agg(to_jsonb(f) ORDER BY f.id) FROM po_label_files f WHERE f.po_id = p.id), '[]'::jsonb),
                  'po_boxes',          coalesce((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.box_number, b.id) FROM po_boxes b WHERE b.po_id = p.id), '[]'::jsonb),
                  'po_lines',          coalesce((SELECT jsonb_agg(to_jsonb(l) ORDER BY l.id) FROM po_lines l WHERE l.po_id = p.id), '[]'::jsonb),
                  'po_comments',       coalesce((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM po_comments c WHERE c.po_id = p.id), '[]'::jsonb),
@@ -7109,8 +7114,11 @@ export async function listDeletedPos({ limit = 300 } = {}) {
   return db()`
     SELECT id, po_id, po_code, supplier_name, tag_code, status, box_count, unit_count, po_created_by, po_created_at,
            reason, deleted_by, deleted_by_role, deleted_at, restored_at, restored_by, archived_at,
-           (recovered IS NOT NULL) AS is_recovered, po_json ->> 'labels_key' AS labels_key,
-           coalesce(po_json ->> 'labels_name', recovered ->> 'labels_name') AS labels_name
+           (recovered IS NOT NULL) AS is_recovered,
+           coalesce(po_json ->> 'labels_key', children -> 'po_label_files' -> 0 ->> 'key') AS labels_key,
+           coalesce(po_json ->> 'labels_name', children -> 'po_label_files' -> 0 ->> 'name', recovered ->> 'labels_name') AS labels_name,
+           greatest(jsonb_array_length(coalesce(children -> 'po_label_files', '[]'::jsonb)),
+                    CASE WHEN po_json ->> 'labels_key' IS NOT NULL THEN 1 ELSE 0 END)::int AS label_file_count
       FROM deleted_pos ORDER BY coalesce(deleted_at, archived_at) DESC, id DESC LIMIT ${limit}`;
 }
 
@@ -7135,6 +7143,8 @@ export async function restoreDeletedPo(id, by) {
   const rows = (k) => JSON.stringify(c[k] || []);
   await sql.transaction([
     sql`INSERT INTO purchase_orders OVERRIDING SYSTEM VALUE SELECT * FROM jsonb_populate_record(NULL::purchase_orders, ${JSON.stringify(d.po_json)}::jsonb)`,
+    // Before po_boxes: a label points at its file (po_boxes.label_file_id).
+    sql`INSERT INTO po_label_files OVERRIDING SYSTEM VALUE SELECT * FROM jsonb_populate_recordset(NULL::po_label_files, ${rows('po_label_files')}::jsonb)`,
     sql`INSERT INTO po_boxes OVERRIDING SYSTEM VALUE SELECT * FROM jsonb_populate_recordset(NULL::po_boxes, ${rows('po_boxes')}::jsonb)`,
     sql`INSERT INTO po_lines OVERRIDING SYSTEM VALUE SELECT * FROM jsonb_populate_recordset(NULL::po_lines, ${rows('po_lines')}::jsonb)`,
     sql`INSERT INTO po_resolutions SELECT * FROM jsonb_populate_recordset(NULL::po_resolutions, ${rows('po_resolutions')}::jsonb)`,
@@ -7420,88 +7430,210 @@ export async function movePoBox(boxId, targetPoId, { createdBy = null } = {}) {
   };
 }
 
-/* ---- The courier's labels PDF (R2) ------------------------------------------
+/* ---- The courier's labels PDFs (R2) -----------------------------------------
    Kept so the supplier can print the label for the box they're packing rather than
-   hunting for the email it arrived in. ONE object per order, exactly as uploaded; the
-   page↔label mapping lives on po_boxes.label_page, so a per-box download extracts a page
-   instead of us storing N files that could drift from the original. */
+   hunting for the email it arrived in. An order holds MANY files (po_label_files), each
+   stored exactly as uploaded: labels arrive in parts — 7 of 30 this week, the other 23
+   next — and each upload ADDS a file. A label points at the file it lives in
+   (po_boxes.label_file_id) and its page range there, so a per-box download extracts
+   pages instead of us storing N split files that could drift from the original.
 
-// Record an uploaded PDF against the order and map its pages to labels.
+   The remap rule when a new file comes in: the NEWEST file that carries a label wins,
+   and a label the new file doesn't carry keeps the file it already had — re-uploading
+   last week's sheet with three new labels on it never takes a label away.
+
+   The single file the order used to hold (purchase_orders.labels_*) is "legacy": db:setup
+   copies it into po_label_files, and adoptLegacyPoLabels() does the same on the fly for
+   any order that db:setup hasn't reached yet, so an old order keeps downloading. */
+
+// Which pages of ONE file belong to which label: a label owns every page up to the NEXT
+// label page in that file. The sheets bought from UPS CampusShip interleave a packing slip
+// after each label, and that slip goes in that box — so the per-box download is a range,
+// and the last label runs to the end of the file. "Next label" counts every page a
+// tracking number was read off, not only the ones on this order: a stranger's label must
+// never ride along in our box's download.
+// Returns Map<trackKey, { page, end }>; the first page wins if a number appears twice.
+export function labelPageRanges(pageMap = [], pages = null) {
+  const norm = searchTrackKey;
+  const marks = (Array.isArray(pageMap) ? pageMap : [])
+    .map((m) => ({ key: norm(m?.tracking), page: Number(m?.page) }))
+    .filter((m) => m.key && Number.isInteger(m.page) && m.page > 0)
+    .sort((a, b) => a.page - b.page);
+  const total = Number(pages) || (marks.length ? marks[marks.length - 1].page : 0);
+  const starts = [...new Set(marks.map((m) => m.page))];
+  const out = new Map();
+  for (const m of marks) {
+    if (out.has(m.key)) continue;
+    const next = starts.find((p) => p > m.page);
+    // Guard the arithmetic rather than trusting the caller's page count: an end before
+    // the start would hand someone an empty or backwards PDF.
+    out.set(m.key, { page: m.page, end: Math.max(m.page, (next ? next - 1 : total) || m.page) });
+  }
+  return out;
+}
+
+// The order's legacy single file (purchase_orders.labels_*) as a po_label_files row, with
+// its labels pointed at it. Idempotent — the same statements db:setup runs, for one order —
+// and a no-op once it's done or when there was never a legacy file.
+export async function adoptLegacyPoLabels(poId) {
+  const sql = db();
+  const legacy = (await sql`
+    SELECT 1 FROM purchase_orders p
+     WHERE p.id = ${poId} AND p.labels_key IS NOT NULL
+       AND (NOT EXISTS (SELECT 1 FROM po_label_files f WHERE f.key = p.labels_key)
+            OR EXISTS (SELECT 1 FROM po_boxes b WHERE b.po_id = p.id AND b.label_page IS NOT NULL AND b.label_file_id IS NULL))`)[0];
+  if (!legacy) return;
+  await sql`
+    INSERT INTO po_label_files (po_id, key, name, pages, uploaded_by, uploaded_at)
+    SELECT p.id, p.labels_key, p.labels_name, p.labels_pages, p.labels_uploaded_by, coalesce(p.labels_uploaded_at, p.created_at, now())
+      FROM purchase_orders p
+     WHERE p.id = ${poId} AND p.labels_key IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM po_label_files f WHERE f.key = p.labels_key)
+    ON CONFLICT (key) DO NOTHING`;
+  await sql`
+    UPDATE po_boxes b SET label_file_id = f.id
+      FROM purchase_orders p JOIN po_label_files f ON f.key = p.labels_key
+     WHERE p.id = ${poId} AND b.po_id = p.id AND f.po_id = p.id
+       AND b.label_page IS NOT NULL AND b.label_file_id IS NULL`;
+}
+
+// Every labels file on the order, oldest first, with how many labels each one currently
+// serves. The storage key is deliberately NOT selected: nothing on screen needs it, and
+// it must never reach a supplier.
+export async function listPoLabelFiles(poId, { adopt = true } = {}) {
+  if (adopt) await adoptLegacyPoLabels(poId);
+  return db()`
+    SELECT f.id, f.name, f.pages, f.uploaded_by, f.uploaded_at,
+           (SELECT count(*) FROM po_boxes b WHERE b.label_file_id = f.id)::int AS labels
+      FROM po_label_files f WHERE f.po_id = ${poId} ORDER BY f.uploaded_at, f.id`;
+}
+
+// Record an uploaded PDF against the order — ADDED beside any file already there — and
+// point every label it carries at it (newest file wins; see the rule above).
 // The mapping is keyed on the TRACKING NUMBER read off each page, never on page order:
 // the labels a page maps to may have been reordered, edited or typed in by hand before
 // the order was created, and a label pointing at someone else's page is worse than none.
 export async function attachPoLabels({ poId, key, name, pages, pageMap = [], uploadedBy = null }) {
   const sql = db();
   const norm = searchTrackKey;
+  await adoptLegacyPoLabels(poId);
+  const cleanMap = (Array.isArray(pageMap) ? pageMap : [])
+    .map((m) => ({ tracking: String(m?.tracking ?? ''), page: Number(m?.page) }))
+    .filter((m) => m.tracking && Number.isInteger(m.page) && m.page > 0);
+  // Re-attaching the SAME key (a retried request) updates that row rather than adding a
+  // second copy. A key that belongs to another order is refused.
+  const file = (await sql`
+    INSERT INTO po_label_files (po_id, key, name, pages, page_map, uploaded_by)
+    VALUES (${poId}, ${key}, ${name || null}, ${pages || null}, ${JSON.stringify(cleanMap)}::jsonb, ${uploadedBy})
+    ON CONFLICT (key) DO UPDATE
+       SET name = EXCLUDED.name, pages = EXCLUDED.pages, page_map = EXCLUDED.page_map,
+           uploaded_by = EXCLUDED.uploaded_by, uploaded_at = now()
+     WHERE po_label_files.po_id = EXCLUDED.po_id
+    RETURNING id`)[0];
+  if (!file) return { error: 'That file belongs to another order.' };
+  const fileId = Number(file.id);
+
   const boxes = await sql`SELECT id, tracking_number FROM po_boxes WHERE po_id = ${poId}`;
-  const byTracking = new Map(boxes.filter((b) => b.tracking_number).map((b) => [norm(b.tracking_number), Number(b.id)]));
-
-  const queries = [sql`
-    UPDATE purchase_orders
-    SET labels_key = ${key}, labels_name = ${name || null}, labels_pages = ${pages || null},
-        labels_uploaded_at = now(), labels_uploaded_by = ${uploadedBy}
-    WHERE id = ${poId}`,
-  // Every page pointer on the order is cleared before the new sheet is mapped. There is
-  // ONE stored file per order, so a replacement makes every old `label_page` an index
-  // into a file that no longer exists — and page 3 of the new sheet is somebody else's
-  // label, which is far worse than no label at all. A label the new sheet doesn't carry
-  // now has no page, and its download button hides itself.
-  sql`UPDATE po_boxes SET label_page = NULL, label_page_end = NULL WHERE po_id = ${poId}`];
-
-  // A label owns every page up to the NEXT label. The sheets bought from UPS CampusShip
-  // interleave a packing slip after each label, and that slip goes in that box — so the
-  // per-box download is a range, and the last label runs to the end of the file.
-  const wanted = pageMap
-    .map((m) => ({ boxId: byTracking.get(norm(m.tracking)), page: Number(m.page) }))
-    .filter((m) => m.boxId && Number.isInteger(m.page) && m.page > 0)
-    .sort((a, b) => a.page - b.page);
-  const total = Number(pages) || (wanted.length ? wanted[wanted.length - 1].page : 0);
-  const matched = [];
-  for (let i = 0; i < wanted.length; i++) {
-    const { boxId, page } = wanted[i];
-    const next = wanted[i + 1]?.page;
-    // Guard the arithmetic rather than trusting the caller's page count: an end before
-    // the start would hand someone an empty or backwards PDF.
-    const end = Math.max(page, (next ? next - 1 : total) || page);
-    matched.push({ boxId, page, end });
+  const ranges = labelPageRanges(cleanMap, pages);
+  const queries = [];
+  for (const b of boxes) {
+    const r = b.tracking_number ? ranges.get(norm(b.tracking_number)) : null;
+    // Not in this file → left exactly as it was (its older file still serves it).
+    if (!r) continue;
     queries.push(sql`
-      UPDATE po_boxes SET label_page = ${page}, label_page_end = ${end}
-      WHERE id = ${boxId} AND po_id = ${poId}`);
+      UPDATE po_boxes SET label_file_id = ${fileId}, label_page = ${r.page}, label_page_end = ${r.end}
+      WHERE id = ${b.id} AND po_id = ${poId}`);
   }
-  await sql.transaction(queries);
-  return { matched: matched.length, pages: pages || 0 };
+  if (queries.length) await sql.transaction(queries);
+  return { matched: queries.length, pages: pages || 0, fileId };
 }
 
-// The stored file + the page for one label (when poBoxId is given).
-export async function getPoLabelFile(poId, poBoxId = null) {
+// What label-download serves:
+//   poBoxId → { po, box, file }    one label + the file it lives in (file null = no page)
+//   fileId  → { po, file }         one uploaded file as-is
+//   neither → { po, files }        every file, oldest first (merged by the caller)
+// null when the order — or the box / file on it — doesn't exist, or it has no file at all.
+export async function getPoLabelFile(poId, { poBoxId = null, fileId = null } = {}) {
   const sql = db();
-  const po = (await sql`
-    SELECT id, po_code, supplier_user_id, labels_key, labels_name, labels_pages
-    FROM purchase_orders WHERE id = ${poId}`)[0];
-  if (!po || !po.labels_key) return null;
-  let box = null;
+  const po = (await sql`SELECT id, po_code, supplier_user_id FROM purchase_orders WHERE id = ${poId}`)[0];
+  if (!po) return null;
+  await adoptLegacyPoLabels(poId);
   if (poBoxId != null) {
-    box = (await sql`SELECT id, box_number, label_page, label_page_end, tracking_number
-                     FROM po_boxes WHERE id = ${poBoxId} AND po_id = ${poId}`)[0] || null;
+    const box = (await sql`
+      SELECT b.id, b.box_number, b.label_page, b.label_page_end, b.tracking_number, b.label_file_id,
+             f.key AS file_key, f.name AS file_name
+        FROM po_boxes b LEFT JOIN po_label_files f ON f.id = b.label_file_id AND f.po_id = b.po_id
+       WHERE b.id = ${poBoxId} AND b.po_id = ${poId}`)[0] || null;
     if (!box) return null;
+    if (!(await sql`SELECT 1 FROM po_label_files WHERE po_id = ${poId} LIMIT 1`).length) return null;
+    return { po, box, file: box.file_key && box.label_page ? { key: box.file_key, name: box.file_name } : null };
   }
-  return { po, box };
+  if (fileId != null) {
+    const file = (await sql`SELECT id, key, name, pages FROM po_label_files WHERE id = ${fileId} AND po_id = ${poId}`)[0];
+    return file ? { po, file } : null;
+  }
+  const files = await sql`SELECT id, key, name, pages FROM po_label_files WHERE po_id = ${poId} ORDER BY uploaded_at, id`;
+  return files.length ? { po, files } : null;
 }
 
-// Forget the file: clear the mapping and hand the key back so the caller can delete the
-// object. Returns null when there was nothing stored.
+// Delete ONE file: only the labels it was serving lose their page — and each of those
+// falls back to the newest remaining file that also carries it (each file's own read is
+// kept in page_map), so deleting a re-upload can't strand a label an older sheet still
+// holds. Returns { key } for the caller to delete from R2, or null if not on this order.
+export async function removePoLabelFile(poId, fileId) {
+  const sql = db();
+  await adoptLegacyPoLabels(poId);
+  const file = (await sql`SELECT id, key FROM po_label_files WHERE id = ${fileId} AND po_id = ${poId}`)[0];
+  if (!file) return null;
+  const orphans = await sql`SELECT id, tracking_number FROM po_boxes WHERE po_id = ${poId} AND label_file_id = ${fileId}`;
+  const others = await sql`
+    SELECT id, pages, page_map FROM po_label_files
+     WHERE po_id = ${poId} AND id <> ${fileId} ORDER BY uploaded_at DESC, id DESC`;
+  const rangesOf = others.map((f) => ({ id: Number(f.id), ranges: labelPageRanges(f.page_map || [], f.pages) }));
+  const queries = [
+    sql`UPDATE po_boxes SET label_file_id = NULL, label_page = NULL, label_page_end = NULL
+         WHERE po_id = ${poId} AND label_file_id = ${fileId}`,
+  ];
+  let remapped = 0;
+  for (const b of orphans) {
+    const k = searchTrackKey(b.tracking_number);
+    const hit = k ? rangesOf.find((f) => f.ranges.has(k)) : null;
+    if (!hit) continue;
+    const r = hit.ranges.get(k);
+    remapped++;
+    queries.push(sql`UPDATE po_boxes SET label_file_id = ${hit.id}, label_page = ${r.page}, label_page_end = ${r.end}
+                      WHERE id = ${b.id} AND po_id = ${poId}`);
+  }
+  queries.push(sql`DELETE FROM po_label_files WHERE id = ${fileId} AND po_id = ${poId}`);
+  // The legacy columns may point at this same object: clear them, or the next read would
+  // adopt the deleted file straight back.
+  queries.push(sql`
+    UPDATE purchase_orders
+       SET labels_key = NULL, labels_name = NULL, labels_pages = NULL,
+           labels_uploaded_at = NULL, labels_uploaded_by = NULL
+     WHERE id = ${poId} AND labels_key = ${file.key}`);
+  await sql.transaction(queries);
+  return { key: file.key, unmapped: orphans.length - remapped, remapped };
+}
+
+// Forget EVERY file on the order (archiving it): clear the mapping and hand the keys back
+// so the caller can delete the objects. [] when there was nothing stored.
 export async function clearPoLabels(poId) {
   const sql = db();
   const po = (await sql`SELECT labels_key FROM purchase_orders WHERE id = ${poId}`)[0];
-  if (!po?.labels_key) return null;
+  if (!po) return [];
+  const files = await sql`SELECT key FROM po_label_files WHERE po_id = ${poId}`;
+  const keys = [...new Set([...files.map((f) => f.key), po.labels_key].filter(Boolean))];
+  if (!keys.length) return [];
   await sql.transaction([
-    sql`UPDATE po_boxes SET label_page = NULL, label_page_end = NULL WHERE po_id = ${poId}`,
+    sql`UPDATE po_boxes SET label_file_id = NULL, label_page = NULL, label_page_end = NULL WHERE po_id = ${poId}`,
+    sql`DELETE FROM po_label_files WHERE po_id = ${poId}`,
     sql`UPDATE purchase_orders
         SET labels_key = NULL, labels_name = NULL, labels_pages = NULL,
             labels_uploaded_at = NULL, labels_uploaded_by = NULL
         WHERE id = ${poId}`,
   ]);
-  return po.labels_key;
+  return keys;
 }
 
 export async function closePo(poId) {

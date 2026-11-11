@@ -1,10 +1,10 @@
 // POST /api/po/labels-attach  (ph_team / admin)
 //   { poId, key, name?, pages?, pageMap?: [{ tracking, page }] }
-// Records an uploaded labels PDF against the order and maps its pages to labels. The map
-// is keyed on the tracking number READ OFF each page, not page order — see attachPoLabels.
+// Records an uploaded labels PDF against the order — one more file beside any already
+// there — and maps its pages to labels. The map is keyed on the tracking number READ OFF
+// each page, not page order — see attachPoLabels.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { getPo, attachPoLabels, clearPoLabels, dbConfigured } from '../_lib/db.js';
-import { deleteObject, r2Configured } from '../_lib/r2.js';
+import { getPo, attachPoLabels, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -30,10 +30,11 @@ export default async function handler(req, res) {
   try {
     const po = await getPo(poId);
     if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
-    // Replacing an earlier sheet: drop the old object so a superseded label can't be
-    // pulled later, and so the bucket doesn't collect every corrected re-upload.
-    const previous = po.labels_key && po.labels_key !== key ? await clearPoLabels(poId) : null;
-
+    // The key labels-sign minted for THIS order (po-labels/<code>-<ts>.pdf) — never one
+    // pointing at another order's file.
+    if (!key.startsWith(`po-labels/${po.po_code}-`)) return send(res, 400, { ok: false, error: 'Invalid file key.' });
+    // ADDED beside any file already on the order (labels arrive in parts); nothing is
+    // replaced or deleted here — see attachPoLabels for which file a label points at.
     const r = await attachPoLabels({
       poId, key,
       name: String(body.name ?? '').trim().slice(0, 200) || null,
@@ -41,9 +42,7 @@ export default async function handler(req, res) {
       pageMap,
       uploadedBy: user.name || user.username || null,
     });
-    if (previous && r2Configured()) {
-      deleteObject(previous).catch((e) => console.warn('[po/labels-attach] old file:', e.message));
-    }
+    if (r.error) return send(res, 409, { ok: false, error: r.error });
     return send(res, 200, { ok: true, ...r });
   } catch (e) {
     console.error('[po/labels-attach]', e.message);

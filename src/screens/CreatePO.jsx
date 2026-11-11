@@ -9,6 +9,7 @@ import { TopBar } from '../components/common.jsx';
 import { CARRIERS, carrierName } from '../lib/carriers.js';
 import { estToday } from '../lib/format.js';
 import { useLive } from '../hooks.js';
+import { saveLabelsSheet } from '../components/PoLabelsFile.jsx';
 
 // EST, not UTC: an order raised at 9pm EST would otherwise be dated tomorrow, and one
 // raised from a PH desk dated by Manila's calendar. The whole system dates by EST.
@@ -30,10 +31,10 @@ export function CreatePO({ onHome, onSignOut }) {
   const [error, setError] = useState('');
   const [created, setCreated] = useState(null); // { po, boxes } after success
   const [pdfStatus, setPdfStatus] = useState(''); // progress/result note for the PDF import
-  // The imported file itself, kept so it can be stored once the order exists — the
-  // supplier prints their box's label from it instead of hunting through email.
-  const [pdfFile, setPdfFile] = useState(null);
-  const [pdfPages, setPdfPages] = useState([]);   // [{ page, value }] from the import
+  // The imported files themselves, kept so they can be stored once the order exists — the
+  // supplier prints their box's label from them instead of hunting through email. Several
+  // at once is normal (labels bought in parts); each is stored as its own file.
+  const [pdfSheets, setPdfSheets] = useState([]);   // [{ file, pages: [{ page, value }] }] from the import
   const [dragOver, setDragOver] = useState(false); // dropzone highlight while dragging a file
 
   useEffect(() => {
@@ -52,28 +53,49 @@ export function CreatePO({ onHome, onSignOut }) {
   const addLabel = () => setLabels((ls) => [...ls, { trackingNumber: '', carrierKey: null }]);
   const removeLabel = (i) => setLabels((ls) => (ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls));
 
-  // Upload a PDF of shipping labels (one label per page) → auto-create a label row
-  // per page with its tracking number read off the page. Rows stay fully editable.
-  const importPdf = async (file) => {
-    if (!file) return;
+  // Upload one or more PDFs of shipping labels (one label per page) → auto-create a label
+  // row per page with its tracking number read off the page. Rows stay fully editable, and
+  // a number already in the list (the same label in two files) isn't added twice.
+  const importPdfs = async (list) => {
+    const files = [...(list || [])].filter((f) => f && (f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '')));
+    if (!files.length) { setError('Pick a PDF file of shipping labels.'); return; }
     setError(''); setPdfStatus('Reading PDF…');
     try {
       const { decodeTrackingPdf, labelPagesOnly } = await import('../trackingOcr.js');
-      const results = await decodeTrackingPdf(file, (p, n) => setPdfStatus(`Reading page ${p} of ${n}…`));
-      if (!results.length) { setPdfStatus(''); setError('That PDF had no pages to read.'); return; }
-      // Packing slips are interleaved after every label — they carry no barcode, and used
-      // to import as blank rows to delete by hand.
-      const { labels: pages, skipped, undecidable } = labelPagesOnly(results);
-      const found = pages.map((r) => ({ trackingNumber: r.value || '', carrierKey: r.carrierKey || null }));
-      setPdfFile(file); setPdfPages(results);
+      const norm = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
+      const seen = new Set(labels.map((l) => norm(l.trackingNumber)).filter(Boolean));
+      const read = []; const found = [];
+      let pageCount = 0; let slips = 0; let carriers = 0; let blind = 0; let dupes = 0;
+      for (let i = 0; i < files.length; i++) {
+        const of = files.length > 1 ? ` (${i + 1} of ${files.length})` : '';
+        const results = await decodeTrackingPdf(files[i], (p, n) => setPdfStatus(`Reading page ${p} of ${n}${of}…`));
+        if (!results.length) continue;
+        read.push({ file: files[i], pages: results });
+        pageCount += results.length;
+        // Packing slips are interleaved after every label — they carry no barcode, and used
+        // to import as blank rows to delete by hand.
+        const { labels: pages, skipped, undecidable } = labelPagesOnly(results);
+        slips += skipped.length;
+        if (undecidable) blind++;
+        for (const r of pages) {
+          const k = norm(r.value);
+          if (k && seen.has(k)) { dupes++; continue; }
+          if (k) seen.add(k);
+          found.push({ trackingNumber: r.value || '', carrierKey: r.carrierKey || null });
+          if (r.carrierKey) carriers++;
+        }
+      }
+      if (!read.length) { setPdfStatus(''); setError('That PDF had no pages to read.'); return; }
+      setPdfSheets((s) => [...s, ...read]);
       // Keep any tracking numbers already typed; append the imported rows after them.
       setLabels((ls) => { const kept = ls.filter((l) => l.trackingNumber.trim()); return [...kept, ...found]; });
-      const carrierCount = pages.filter((r) => r.carrierKey).length;
-      setPdfStatus(undecidable
-        ? `Added ${pages.length} label${pages.length === 1 ? '' : 's'} — no tracking number could be read from any page. Fill them in below.`
-        : `Added ${pages.length} label${pages.length === 1 ? '' : 's'} from ${results.length} pages`
-          + `${carrierCount ? `, detected ${carrierCount} courier${carrierCount === 1 ? '' : 's'}` : ''}.`
-          + `${skipped.length ? ` Skipped ${skipped.length} page${skipped.length === 1 ? '' : 's'} with no tracking number (packing slips).` : ''}`);
+      const inN = read.length > 1 ? ` in ${read.length} PDFs` : '';
+      setPdfStatus(blind === read.length
+        ? `Added ${found.length} label${found.length === 1 ? '' : 's'} — no tracking number could be read from any page. Fill them in below.`
+        : `Added ${found.length} label${found.length === 1 ? '' : 's'} from ${pageCount} pages${inN}`
+          + `${carriers ? `, detected ${carriers} courier${carriers === 1 ? '' : 's'}` : ''}.`
+          + `${dupes ? ` ${dupes} already in the list, skipped.` : ''}`
+          + `${slips ? ` Skipped ${slips} page${slips === 1 ? '' : 's'} with no tracking number (packing slips).` : ''}`);
     } catch (e) {
       setPdfStatus(''); setError(`Could not read that PDF. ${e.message || ''}`.trim());
     }
@@ -81,15 +103,15 @@ export function CreatePO({ onHome, onSignOut }) {
 
   const onDrop = (e) => {
     e.preventDefault(); setDragOver(false);
-    const file = [...(e.dataTransfer?.files || [])].find((f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
-    if (!file) { setError('Drop a PDF file of shipping labels.'); return; }
-    importPdf(file);
+    const files = [...(e.dataTransfer?.files || [])];
+    if (!files.some((f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name))) { setError('Drop a PDF file of shipping labels.'); return; }
+    importPdfs(files);
   };
 
   const reset = () => {
     setSupplierUserId(''); setTagCode(''); setDateOfPurchase(today()); setNotes('');
     setLabels([{ trackingNumber: '', carrierKey: null }]); setCreated(null); setError('');
-    setOrderKind('shoes');
+    setOrderKind('shoes'); setPdfSheets([]); setPdfStatus('');
   };
 
   const submit = async () => {
@@ -106,23 +128,23 @@ export function CreatePO({ onHome, onSignOut }) {
         tagCode, dateOfPurchase, notes, orderKind,
         labels: cleaned,
       });
-      // Store the sheet against the order it just became. Best-effort: the order is
-      // created either way, and the labels can be attached later from its own page.
-      if (pdfFile) {
+      // Store the sheets against the order it just became, each as its own file.
+      // Best-effort: the order is created either way, and the labels can be attached later
+      // from its own page.
+      if (pdfSheets.length) {
+        let matched = 0; let pages = 0; let saved = 0;
         try {
-          setPdfStatus('Saving the labels PDF…');
-          const { key, url } = await api.poLabelsSign(r.po.id);
-          const put = await fetch(url, { method: 'PUT', body: pdfFile, headers: { 'Content-Type': 'application/pdf' } });
-          if (!put.ok) throw new Error(`Upload failed (${put.status})`);
-          const att = await api.poLabelsAttach({
-            poId: r.po.id, key, name: pdfFile.name, pages: pdfPages.length,
-            pageMap: pdfPages.filter((x) => x.value).map((x) => ({ tracking: x.value, page: x.page })),
-          });
-          setPdfStatus(att.matched
-            ? `Labels PDF saved — ${att.matched} of ${pdfPages.length} pages matched a label.`
-            : 'Labels PDF saved, but no page matched a tracking number — single-label downloads won’t work.');
+          for (let i = 0; i < pdfSheets.length; i++) {
+            setPdfStatus(pdfSheets.length > 1 ? `Saving labels PDF ${i + 1} of ${pdfSheets.length}…` : 'Saving the labels PDF…');
+            const att = await saveLabelsSheet(r.po.id, pdfSheets[i].file, pdfSheets[i].pages);
+            matched += att.matched || 0; pages += pdfSheets[i].pages.length; saved++;
+          }
+          const what = pdfSheets.length > 1 ? `${pdfSheets.length} labels PDFs saved` : 'Labels PDF saved';
+          setPdfStatus(matched
+            ? `${what} — ${matched} of ${pages} pages matched a label.`
+            : `${what}, but no page matched a tracking number — single-label downloads won’t work.`);
         } catch (e) {
-          setPdfStatus(`The order was created, but the labels PDF could not be saved (${e.message}). Attach it from the order page.`);
+          setPdfStatus(`The order was created, but ${saved ? `only ${saved} of ${pdfSheets.length} labels PDFs were` : 'the labels PDF could not be'} saved (${e.message}). Attach ${saved ? 'the rest' : 'it'} from the order page.`);
         }
       }
       setCreated({ po: r.po, boxes: r.boxes });
@@ -218,11 +240,11 @@ export function CreatePO({ onHome, onSignOut }) {
             onDragLeave={() => setDragOver(false)}
             onDrop={onDrop}
           >
-            <input type="file" accept="application/pdf" hidden
-              onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; importPdf(f); }} />
+            <input type="file" accept="application/pdf" multiple hidden
+              onChange={(e) => { const l = [...(e.target.files || [])]; e.target.value = ''; importPdfs(l); }} />
             <span className="po-dropzone-icon">📄</span>
-            <span className="po-dropzone-text"><b>Drag &amp; drop a labels PDF</b> here, or <span className="po-dropzone-link">browse</span></span>
-            <span className="muted sm">One label per page — each tracking number is read in automatically.</span>
+            <span className="po-dropzone-text"><b>Drag &amp; drop labels PDFs</b> here, or <span className="po-dropzone-link">browse</span></span>
+            <span className="muted sm">One label per page — each tracking number is read in automatically. Several PDFs at once is fine.</span>
           </label>
           <p className="po-dropzone-note sm">The tracking numbers are read off each page, and the PDF is saved with the order so the supplier can print the label for the box they’re packing. It’s only ever served to them through the app — never a public link.</p>
           {pdfStatus && <p className="po-pdf-status sm">{pdfStatus}</p>}

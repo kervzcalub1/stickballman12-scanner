@@ -20,12 +20,12 @@ export default async function handler(req, res) {
   try {
     const po = await closePo(poId);
     if (!po) return send(res, 409, { ok: false, error: 'Only a reconciled purchase order can be archived.' });
-    // Archived = every box has landed and the labels are spent. Take the PDF out of the
-    // bucket with the order rather than leaving ship-to addresses and live-looking
-    // barcodes lying around. Best-effort: the archive is the point, not the cleanup.
+    // Archived = every box has landed and the labels are spent. Take EVERY labels PDF on
+    // the order out of the bucket with it rather than leaving ship-to addresses and
+    // live-looking barcodes lying around. Best-effort: the archive is the point, not the cleanup.
     if (r2Configured()) {
       clearPoLabels(poId)
-        .then((key) => (key ? deleteObject(key) : null))
+        .then((keys) => Promise.allSettled(keys.map((k) => deleteObject(k))))
         .catch((e) => console.warn('[po/close] labels cleanup:', e.message));
     }
     return send(res, 200, { ok: true, po });

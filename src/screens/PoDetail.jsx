@@ -45,6 +45,7 @@ const FROZEN = ['reconciled', 'closed'];
 // others — `untied_boxes` was, and the "Tie to…" picker never showed (2026-10-24).
 const detailOf = (r) => ({
   po: r.po, boxes: r.boxes, lines: r.lines, batches: r.batches || [], stores: r.stores || [], untied_boxes: r.untied_boxes || [],
+  labelFiles: r.labelFiles || [],
 });
 
 // Live re-reads (docs/context/live-updates.md) wait for whoever is TYPING on this page to
@@ -100,7 +101,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
   // Live: a supplier scanning into a label, the warehouse receiving a box, a carrier
   // update — the manifest, the counts and the chips move without F5. Quiet: no "Loading…",
   // and held while this person has a dialog open or a save of their own in flight.
-  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'po_stores', 'po_store_charges', 'po_store_receipts', 'items', 'batches', 'batch_boxes'], async () => {
+  useLive(['purchase_orders', 'po_boxes', 'po_lines', 'po_stores', 'po_store_charges', 'po_store_receipts', 'po_label_files', 'items', 'batches', 'batch_boxes'], async () => {
     await afterTyping('.app');
     try {
       const r = await api.poGet(poId);
@@ -203,7 +204,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
       // Anything the refresh comes back without is kept as loaded, never blanked: the
       // "received into" panel, and a store order's stores / untied boxes (dropping those
       // blanked the store list on every tracking refresh).
-      setDetail((d) => ({ ...detailOf(r), batches: r.batches || d?.batches || [], stores: r.stores || d?.stores || [], untied_boxes: r.untied_boxes || d?.untied_boxes || [] }));
+      setDetail((d) => ({ ...detailOf(r), batches: r.batches || d?.batches || [], stores: r.stores || d?.stores || [], untied_boxes: r.untied_boxes || d?.untied_boxes || [], labelFiles: r.labelFiles || d?.labelFiles || [] }));
     } catch (e) { if (e.unauthorized) return onSignOut(); setError(e.message); }
     finally { if (boxId != null) setTrackBoxBusy(null); else setTrackBusy(false); }
   };
@@ -307,7 +308,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
 
               {/* The courier's own labels, so the supplier can print the one for the box
                   they're packing instead of digging through email. */}
-              <PoLabelsFile po={po} canUpload={!FROZEN.includes(po.status)} onChanged={load} onSignOut={onSignOut} />
+              <PoLabelsFile po={po} files={detail.labelFiles || []} canUpload={!FROZEN.includes(po.status)} onChanged={load} onSignOut={onSignOut} />
               <PoDropoffReceipts po={po} onSignOut={onSignOut} />
 
               {/* What this order is actually counting. Receiving normally sets this itself;

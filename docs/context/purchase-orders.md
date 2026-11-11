@@ -615,8 +615,8 @@ pairs, an editable **Shelf price ea**) → one **Add N pairs** → `POST /api/po
   have been the next shoe's code). Pre-sell keeps its lenient behaviour.
 - `scan-bulk` = `po/scan` / `po/scan-order` for a whole list in ONE request (those are
   120/min; a real list is more, and a loop that 429s halfway half-declares a label). Same
-  gates (supplier scope, `manifestEditBlock`, per-box vs whole-order scope, whole-order is
-  PH-only), same attribution, same `addPoScan`/`addPoOrderScan` — an existing SKU+size
+  gates (supplier scope, `manifestEditBlock`, per-box vs whole-order scope, a supplier's whole-order
+  list through `supplierOrderListBlock`), same attribution, same `addPoScan`/`addPoOrderScan` — an existing SKU+size
   **adds** to its qty, so pasting again tops up. The whole list is validated first.
 - Shoes only (a box needs dimensions on every line). **No UPC** is sent — a SKU lookup's
   UPC belongs to one size ([[upc-is-per-size]]).
@@ -688,15 +688,51 @@ pairs, an editable **Shelf price ea**) → one **Add N pairs** → `POST /api/po
   77-shoe list otherwise ran into the limit and read "not in the catalogue".
 - **The supplier's whole-order list** (2026-10-20): suppliers often have ONE manifest for the
   whole purchase before anything is split into boxes. Supplier portal → order card
-  **"📋 Paste the whole-order manifest"** → `PoScanModal pasteOnly` (no scanner — one-at-a-time
-  `po/scan-order` stays staff-only) → `scan-bulk {poId}` → order lines (`po_box_id` NULL,
+  **"📋 Paste the whole-order manifest"** → `PoScanModal startPaste` (was `pasteOnly`; since
+  2026-11-12 they can also SCAN it in through `po/scan-order` — see below) → `scan-bulk {poId}` → order lines (`po_box_id` NULL,
   `entered_on_behalf=false`), `manifest_scope='po'` (Path C). Gates: their own order, PO
   `draft`, no per-box lines yet, never on `'order+box'` (that order-level list is OUR buying
   receipt — `po/line` now also refuses a supplier editing it). After that the labels lose
   **Add items** and **Review & close** works with nothing listed on the box (close-box/ship
   already check the order list on Path C). The supplier edits the list line by line while
   the order is a draft. Shoes only, as above.
-- E2E: `e2e/po-paste.spec.js`.
+- **…or SCANNED in (2026-11-12)** — for the supplier with a scan gun who won't split by box.
+  The card has two buttons, **📷 Scan the whole-order manifest** (primary) and **📋 Paste the
+  whole-order manifest**; both open the SAME window (`PoScanModal po instant`, `startPaste`
+  picks the tab) with the "📋 Paste a list / ← Scan instead" toggle the per-box window
+  already has — two plain verbs on the card for the two kinds of supplier, one window to
+  learn. `instant` = **rapid scan** (whole order, shoes only; staff's windows keep the draft
+  flow):
+  - **UPC that names SKU + size** → one pair on the order AT ONCE (`po/scan-order`, qty 1,
+    that UPC on that size only): `beepOk`, a flash `+1 · DZ5485-612 · 10.5`, the running list
+    `DZ5485-612 · 10.5 · ×3` — no draft, no dialog, the field never disabled. The same UPC
+    again = +1 (`addPoOrderScan` adds). Scans queue in order; pairs of one SKU + size still
+    waiting behind a write fold into ONE post (qty n). A code already answered this session
+    isn't looked up again (`upc-search` is 40/min); a 429 from the catalogue waits 20 s and
+    carries on (up to 3×) instead of failing the scans behind it.
+  - **Can't go straight in** → `beepErr` and a card under **Finish these** while the gun
+    carries on: *no size from the barcode* (the shoe's sizes as chips, or type `5C` / `3Y` /
+    `10.5`), *a SKU typed/scanned into the field* (catalogue name if known; a style code the
+    catalogue doesn't carry still goes in by its code, as in a paste — `skuOf`), *not found*
+    (scan or type the SKU on the card → name fills in if known → size → qty, default 1),
+    *only Alias knew the barcode* (`AliasCodeCheck` on the card; the answer is kept per
+    barcode, so the next scan of it goes straight in). Each card: optional **Shelf price ea**,
+    **Add N pairs · size X**, ✕ to leave it out. The same barcode again bumps that card's qty.
+    A UPC rides along only when the size is the one the barcode itself named.
+  - Lookup / write failures (timeout, 409 gate) land in the existing "Not added" list.
+  - **Review** = the Order manifest card: every line editable (size, qty, price, ✕) while the
+    order is a draft, plus a total row: `N SKUs · N units · N with no price` and the shelf
+    total of the priced lines (blank is not $0).
+  - **Server**: `po/scan-order` now takes a supplier, gated by `supplierOrderListBlock`
+    (`api/_lib/po-manifest.js`) — the ONE gate `scan-bulk {poId}` uses too: own order (403),
+    never `'order+box'`, `draft` only, shoes only (409); plus what applies to everyone in both:
+    not `by_store`, no per-box lines yet. Supplier lines: `entered_on_behalf=false`,
+    `entered_by` NULL; `manifest_scope='po'`. Rate limit: **300/min for a supplier** (one post
+    per pair), staff unchanged at 120/min. Staff behaviour of `scan-order` is otherwise
+    identical (any order `draft`/`receiving`, boxes allowed, always on-behalf).
+  - Not verified: a real Bluetooth gun on iOS (the app's ⌨ on-screen keypad — `SoftKeypad`,
+    mounted for suppliers too — covers typing a SKU / size when iOS hides the keyboard).
+- E2E: `e2e/po-paste.spec.js`, `e2e/po-order-scan.spec.js`.
 
 ## Who may write a manifest, and when (`manifestEditBlock`)
 One rule, three lifecycles — get this wrong and a supplier is locked out of their own
@@ -1230,7 +1266,7 @@ Two escape hatches for when a supplier won't use the scan-out portal:
 
 - **Option 3 (Path C) — supplier gives ONE list for the whole purchase, not per box.** PH enters it
   against the **PO itself** (a `po_lines` row with **`po_box_id` NULL**), not a label —
-  `POST /api/po/scan-order` (ph_team; always on-behalf) via `addPoOrderScan` (conflict target =
+  `POST /api/po/scan-order` (ph_team, always on-behalf; since 2026-11-12 also the supplier on their own draft — "The supplier's whole-order list") via `addPoOrderScan` (conflict target =
   partial unique index `(po_id, sku, size) WHERE po_box_id IS NULL`), which flips
   **`purchase_orders.manifest_scope` `box`→`po`** (`setPoManifestScope`). **A PO is one scope
   or the other** — `scan-order` 409s if the PO already has per-box lines (`poHasBoxLines`), and the

@@ -1,3 +1,5 @@
+import { hasOrderedList } from '../../src/lib/postatus.js';
+
 // "Can this manifest still be edited?" — one answer over two very different lifecycles,
 // shared by `po/scan` (add a line) and `po/line` (edit/remove one).
 //
@@ -89,6 +91,26 @@ export function orderListEditBlock({ po, onBehalf = false }) {
   if (!['draft', 'shipped', 'receiving'].includes(po.status)) {
     return { code: 409, error: 'This order’s list can no longer be edited.' };
   }
+  return null;
+}
+
+// "May this SUPPLIER write their own whole-order list (Path C)?" — the one gate for both
+// ways in: the paste (`po/scan-bulk {poId}`) and the one-at-a-time scan (`po/scan-order`).
+// Their own order only; never onto an order raised from a buying request — that
+// order-level list is OUR receipt ('order+box'), not their account of what they sent;
+// only while it's still a draft (once every label has shipped it's PH's to correct); and
+// shoes only (an empty box needs its dimensions on every line). The callers add what
+// applies to everyone: not a store order, not on top of a per-box manifest.
+// Staff on the supplier's behalf never come through here. Returns null or { code, error }.
+export function supplierOrderListBlock({ po, user }) {
+  if (Number(po.supplier_user_id) !== Number(user.uid))
+    return { code: 403, error: 'You do not have access to this order.' };
+  if (hasOrderedList(po))
+    return { code: 409, error: 'This order lists what you send per box — add items to one of your labels.' };
+  if (po.status !== 'draft')
+    return { code: 409, error: 'Every label on this order has shipped — the manifest can no longer be edited here.' };
+  if (isBoxesOrder(po))
+    return { code: 409, error: 'This order is for empty shoe boxes — each box needs its dimensions, so add them one at a time.' };
   return null;
 }
 

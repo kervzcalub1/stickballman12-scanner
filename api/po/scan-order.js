@@ -1,19 +1,31 @@
-// POST /api/po/scan-order  (ph_team / admin)
+// POST /api/po/scan-order  (supplier / ph_team / admin)
 //   { poId, sku, size, dimensions?, qty?, name?, upc?, colorway?, gender?, unitCost?, tip? }
 // Whole-order manifest (Path C): the supplier gave ONE list for the whole purchase with no
-// per-box breakdown, so PH enters it against the PO itself (a po_line with po_box_id NULL)
-// rather than a specific label. Flips the PO to manifest_scope='po'. Always on-behalf.
+// per-box breakdown, so it's entered against the PO itself (a po_line with po_box_id NULL)
+// rather than a specific label. Flips the PO to manifest_scope='po'.
 // A PO can't mix a per-box manifest and a whole-order one. Writes only po_lines.
-import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
+//
+// Two callers:
+//   · staff (PH / admin) on the supplier's behalf — any order, `draft` or `receiving`,
+//     shoes or empty boxes; always `entered_on_behalf`.
+//   · the SUPPLIER scanning their own whole-order list (2026-11-12, "📷 Scan the whole-order
+//     manifest") — exactly the gate their whole-order paste has in po/scan-bulk
+//     (`supplierOrderListBlock`: own order, draft, never 'order+box', shoes only), plus
+//     what applies to everyone below; their own line (`entered_on_behalf=false`).
+import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPo, poHasBoxLines, addPoOrderScan, setPoManifestScope, dbConfigured } from '../_lib/db.js';
-import { money, isBoxesOrder, normalizeDimensions } from '../_lib/po-manifest.js';
+import { money, isBoxesOrder, normalizeDimensions, supplierOrderListBlock } from '../_lib/po-manifest.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
-  const user = requireRole(req, res, ['ph_team']);
+  const user = requireRole(req, res, ['supplier', 'ph_team']);
   if (!user) return;
-  if (!rateLimit(req, { windowMs: 60_000, max: 120 }))
+  const supplier = user.role === 'supplier' && !isPrivileged(user.role);
+  // A supplier's scanner posts ONE pair per scan (staff's window posts one line per size of a
+  // finished shoe), so a gun through 300 pairs needs more room than 120/min. The client also
+  // folds repeat scans of one size that queue up behind a write into a single post.
+  if (!rateLimit(req, { windowMs: 60_000, max: supplier ? 300 : 120 }))
     return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
 
@@ -29,6 +41,10 @@ export default async function handler(req, res) {
   try {
     const po = await getPo(poId);
     if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
+    if (supplier) {
+      const blocked = supplierOrderListBlock({ po, user });
+      if (blocked) return send(res, blocked.code, { ok: false, error: blocked.error });
+    }
     // An empty-box line is keyed on the size AND the carton's dimensions; a shoe line on
     // the size alone.
     const boxesOrder = isBoxesOrder(po);
@@ -56,8 +72,9 @@ export default async function handler(req, res) {
       return send(res, 409, { ok: false, error: 'This PO already has a per-box manifest — add items to a label instead.' });
 
     // Env admin/superadmin have a non-numeric uid; stamp the flag but leave entered_by NULL.
+    // The supplier's own line carries neither (as their paste in po/scan-bulk).
     const uidNum = Number(user.uid);
-    const enteredBy = Number.isInteger(uidNum) ? uidNum : null;
+    const enteredBy = !supplier && Number.isInteger(uidNum) ? uidNum : null;
 
     const line = await addPoOrderScan({
       poId, sku, size,
@@ -70,7 +87,7 @@ export default async function handler(req, res) {
       unitCost: money(body.unitCost),
       tip: money(body.tip),
       enteredBy,
-      enteredOnBehalf: true,
+      enteredOnBehalf: !supplier,
     });
     await setPoManifestScope(poId, 'po');
     return send(res, 200, { ok: true, line });

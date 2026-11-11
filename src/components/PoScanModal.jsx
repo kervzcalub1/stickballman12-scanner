@@ -8,9 +8,10 @@ import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
 import { isUpcCode, usSizeChart, compareSizes, isCameraReread } from '../lib/codes.js';
 import { DimensionsFields, dimsComplete, dimsToText, emptyDims } from './PoDimensions.jsx';
-import { parsePoPaste, listValue } from '../lib/poPaste.js';
+import { parsePoPaste, listValue, skuOf } from '../lib/poPaste.js';
 import { readPoFile, PO_FILE_ACCEPT } from '../lib/poCsv.js';
 import { AliasCodeCheck, aliasOnlyCode } from './AliasCodeCheck.jsx';
+import { beepOk, beepErr } from '../lib/beep.js';
 
 const CameraScanner = lazy(() => import('./CameraScanner.jsx'));
 
@@ -130,6 +131,109 @@ export function PoLineHeader({ boxesOrder = false }) {
   );
 }
 
+// RAPID SCAN (the supplier's whole-order list): a scan that can't go straight in — the
+// barcode gave the shoe but no size, the code wasn't found, a SKU was typed, or only Alias
+// knew the barcode — waits here while the gun carries on. The supplier finishes it: the SKU
+// (scan or type it; the catalogue name fills in when known, never required), the size
+// (chips, or typed: 5C, 3Y, 10.5…), the quantity, an optional shelf price ea → Add.
+function PoFinishCard({ entry, busy, onChange, onAdd, onDismiss, onLookUp, onSignOut, onCodeConfirm, onCodeFix }) {
+  const [skuText, setSkuText] = useState(entry.sku || '');
+  const [err, setErr] = useState('');
+  const [finding, setFinding] = useState(false);
+  const known = !!entry.sku;
+  const chips = (() => {
+    const opts = (entry.sizeOptions || []).map(String);
+    const kind = opts.some((x) => /y$/i.test(x)) ? 'y' : opts.some((x) => /w$/i.test(x)) ? 'w' : '';
+    return opts.length > 1 ? opts : [...new Set([...opts, ...usSizeChart(kind)])];
+  })();
+  // The SKU the supplier scanned or typed for a code the catalogue didn't know. Named from
+  // the catalogue when it's there; a style code it doesn't carry still goes in by its code
+  // (as in a paste) — anything else is asked again rather than guessed.
+  const findSku = async () => {
+    const v = skuText.trim();
+    if (!v) return;
+    setErr('');
+    if (isUpcCode(v)) { setErr('That’s a barcode — type the style code printed on the box label (e.g. DZ5485-201).'); return; }
+    setFinding(true);
+    try {
+      const p = await onLookUp(v);
+      const sku = p?.sku || skuOf(v);
+      if (!sku) { setErr('That doesn’t look like a style code (e.g. DZ5485-201).'); return; }
+      onChange({ sku, name: p?.name || '', colorway: p?.colorway || '', gender: p?.gender || null, sizeOptions: p?.sizes || [], image: p?.image || '' });
+      setSkuText(sku);
+    } catch (e) { if (e.unauthorized) onSignOut(); else setErr(e.message); } finally { setFinding(false); }
+  };
+  const size = String(entry.size || '').trim();
+  const ready = known && !entry.codeCheck && !!size && entry.qty >= 1;
+  const why = entry.why === 'notfound' ? <>Not found: <code>{entry.code}</code> — scan or type the SKU from the box label</>
+    : entry.codeCheck ? 'Check the style code on this box first'
+    : entry.why === 'typed' ? 'Pick the size and how many'
+    : <>No size from the barcode <code>{entry.code}</code> — pick it</>;
+  return (
+    <li className="po-finish" data-testid="po-finish">
+      <div className="po-finish-head">
+        <div className="po-finish-what">
+          <b>{known ? entry.sku : 'Unknown barcode'}</b>
+          {known && (
+            <span className={`muted xs${entry.name ? '' : ' po-paste-warn'}`}>{entry.name || 'not in the catalogue — added by its SKU'}</span>
+          )}
+          <span className="muted xs po-finish-why">{why}</span>
+        </div>
+        <button type="button" className="btn icon ghost" title="Leave this one out" aria-label="Leave this one out" onClick={onDismiss}>×</button>
+      </div>
+      {!known && (
+        <form className="po-finish-sku" onSubmit={(e) => { e.preventDefault(); findSku(); }}>
+          <input autoCapitalize="characters" autoCorrect="off" aria-label="SKU for this shoe" placeholder="Scan or type the SKU"
+            value={skuText} onChange={(e) => setSkuText(e.target.value)} />
+          <button type="submit" className="btn sm" disabled={finding}>{finding ? 'Looking…' : 'Look up'}</button>
+        </form>
+      )}
+      {err && <div className="error sm">{err}</div>}
+      {entry.codeCheck && (
+        <AliasCodeCheck key={entry.codeCheck} code={entry.codeCheck} current={entry.sku} onSignOut={onSignOut}
+          onConfirm={onCodeConfirm} onFix={onCodeFix} />
+      )}
+      {known && !entry.codeCheck && (<>
+        <div className="size-chips" role="group" aria-label={`Size for ${entry.sku}`}>
+          {chips.map((z) => (
+            <button type="button" key={z} className={`size-chip${size === z ? ' on' : ''}`} aria-pressed={size === z}
+              onClick={() => onChange({ size: z })}>{z}</button>
+          ))}
+        </div>
+        <div className="po-finish-fields">
+          <label className="po-size-money">
+            <span className="muted xs">Size</span>
+            <input className="sz" placeholder="5C, 3Y, 10.5…" aria-label={`Typed size for ${entry.sku}`} value={entry.size}
+              onChange={(e) => onChange({ size: e.target.value })} />
+          </label>
+          <div className="po-size-money">
+            <span className="muted xs">Qty</span>
+            <span className="qty-stepper">
+              <button type="button" className="btn icon ghost step" aria-label="One less" onClick={() => onChange({ qty: Math.max(1, entry.qty - 1) })}>−</button>
+              <input className="qty" type="number" inputMode="numeric" min="1" aria-label={`Quantity for ${entry.sku}`} value={entry.qty}
+                onChange={(e) => onChange({ qty: Math.min(999, Math.max(1, parseInt(e.target.value, 10) || 1)) })} />
+              <button type="button" className="btn icon ghost step" aria-label="One more" onClick={() => onChange({ qty: Math.min(999, entry.qty + 1) })}>+</button>
+            </span>
+          </div>
+          <label className="po-size-money">
+            <span className="muted xs">Shelf price ea</span>
+            <span className="po-money-input">
+              <span className="po-money-sym">$</span>
+              <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" aria-label={`Shelf price ea for ${entry.sku}`}
+                value={entry.cost ?? ''} onChange={(e) => onChange({ cost: e.target.value })} />
+            </span>
+          </label>
+        </div>
+      </>)}
+      <div className="po-finish-actions">
+        <button type="button" className="btn primary" disabled={busy || !ready} onClick={onAdd}>
+          {ready ? `Add ${entry.qty} pair${entry.qty === 1 ? '' : 's'} · size ${size}` : known ? (entry.codeCheck ? 'Check the code first' : 'Pick a size') : 'Find the SKU first'}
+        </button>
+      </div>
+    </li>
+  );
+}
+
 // Scan / type a UPC or SKU → resolve the product → tap size chips (tap again for
 // +1) → add the whole shoe (every size) to the label at once, like the warehouse
 // Add-Item flow. Each size posts one po_line via /api/po/scan.
@@ -139,10 +243,13 @@ const sameSku = (a, b) => String(a || '').toUpperCase().replace(/[\s-]/g, '') ==
 // `box` = add to a specific shipping label (per-box manifest). `po` (with no box) = add to
 // the whole order (Path C — one list for the whole purchase, no per-box breakdown). Exactly
 // one of the two is passed; everything else is identical.
-// `pasteOnly` = the window opens on "Paste a list" with no scanner behind it — the
-// supplier's whole-order list, where one-at-a-time entry (po/scan-order) is staff-only.
-export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, onClose, onAdded, onSignOut }) {
+// `startPaste` = the window opens on "Paste a list" (the scanner is one tap away).
+// `instant` = RAPID SCAN for the supplier's whole-order list (shoes only): a barcode that
+// gives the shoe AND its size is one pair on the order at once — no draft, no dialog — and
+// anything that can't go straight in waits in "Finish these" while the gun carries on.
+export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, instant = false, onClose, onAdded, onSignOut }) {
   const orderMode = !box;
+  const rapid = instant && orderMode && !boxesOrder;
   // Name the target the way the rest of the app does — a reship is "the replacement
   // shipment" everywhere else, so "Label 3" here would read as a fourth original box.
   const targetLabel = orderMode ? 'the whole order'
@@ -197,7 +304,7 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
   // (src/lib/poPaste.js). Shoes only: an empty box needs its dimensions on every line.
   // `file` = an uploaded CSV / TSV / .xlsx read into the same result (src/lib/poCsv.js); while
   // one is loaded it IS the list, and the text box steps aside.
-  const [paste, setPaste] = useState(pasteOnly ? { text: '', prices: {} } : null); // null = closed; { text, prices: {sku: '120'}, file? }
+  const [paste, setPaste] = useState(startPaste ? { text: '', prices: {} } : null); // null = closed; { text, prices: {sku: '120'}, file? }
   const [lookups, setLookups] = useState({});         // sku -> { state: 'loading'|'ok'|'none', name, colorway, gender }
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef(null);
@@ -254,7 +361,7 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
       const out = await api.poScanBulk(orderMode ? { poId: Number(po.id), shoes } : { poBoxId: Number(box.id), shoes });
       for (const line of out.lines || []) recordScan(line);
       setFlash({ type: 'added', text: `Added ${out.pairs} pair${out.pairs === 1 ? '' : 's'} · ${shoes.length} SKU${shoes.length === 1 ? '' : 's'} to ${targetLabel}` });
-      setPaste(pasteOnly ? { text: '', prices: {} } : null); onAdded();
+      setPaste(startPaste ? { text: '', prices: {} } : null); onAdded();
     } catch (e) {
       if (e.unauthorized) return onSignOut();
       setError(e.message); onAdded();
@@ -265,7 +372,8 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
   const recordScan = (line, fallbackName) => setRecent((rs) => {
     if (!line) return rs;
     // A box line is identified by its dimensions, a shoe line by its size.
-    const what = [line.size ? `size ${line.size}` : '', line.dimensions || ''].filter(Boolean).join(' · ');
+    const what = rapid ? `${line.sku} · ${line.size}`
+      : [line.size ? `size ${line.size}` : '', line.dimensions || ''].filter(Boolean).join(' · ');
     const key = `${line.sku}|#|${what}`;
     return [{ key, name: line.name || fallbackName || line.sku, what, qty: line.qty_expected ?? 1 },
       ...rs.filter((r) => r.key !== key)];
@@ -286,7 +394,7 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
     }
     setCode(''); setError('');
     setLooking((n) => n + 1);
-    enqueue(() => resolveOne(c).finally(() => setLooking((n) => n - 1)));
+    enqueue(() => (rapid ? resolveRapid(c) : resolveOne(c)).finally(() => setLooking((n) => n - 1)));
   };
   const resolveOne = async (c) => {
     try {
@@ -344,6 +452,149 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
         setFlash({ type: 'dup', text: e.timeout ? `Catalogue timed out — scan ${c} again` : `Not found · ${c}` });
       }
     }
+  };
+
+  // ---- RAPID SCAN (`instant`: the supplier's whole-order list) ----
+  // No draft: a barcode that names the shoe AND its size is one pair on the order the
+  // moment it's read (a tone, the running list, the field stays live). Correctness is
+  // checked at Review — the order manifest card, where every line can be fixed or removed
+  // while the order is a draft. Anything that can't go straight in waits in `toFinish`.
+  const [toFinish, setToFinish] = useState([]);       // [{ key, why, code, sku, name, …, size, qty, cost, upc }]
+  const [finishBusy, setFinishBusy] = useState(null);  // key of the one being added
+  // A gun fires the same box code again and again; the catalogue allows 40 lookups a
+  // minute. A code already answered this session isn't asked again.
+  const lookupCacheRef = useRef(new Map());           // code -> product
+  // Pairs read but not yet written, by SKU + size. A scan that lands while its line is
+  // still waiting in the queue folds into it (qty +1) instead of posting again.
+  const writesRef = useRef(new Map());
+  const addedTimer = useRef(null);
+  // The order card re-reads after a write; under a gun that's once the scans settle.
+  const addedSoon = () => { clearTimeout(addedTimer.current); addedTimer.current = setTimeout(() => onAdded(), 700); };
+  useEffect(() => () => clearTimeout(addedTimer.current), []);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const lookUp = async (c, { sku = false } = {}) => {
+    const ck = `${sku ? 's' : 'c'}:${c.toUpperCase()}`;
+    if (lookupCacheRef.current.has(ck)) return lookupCacheRef.current.get(ck);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const { product } = !sku && isUpcCode(c) ? await api.searchUpc(c) : await api.searchSku(c);
+        lookupCacheRef.current.set(ck, product);
+        return product;
+      } catch (e) {
+        // Rate-limited: wait it out and carry on — the scans behind this one are kept, in order.
+        if (e.status === 429 && attempt < 3) {
+          setFlash({ type: 'warn', text: 'The catalogue asked us to slow down — your scans are kept and go in by themselves in a moment.' });
+          await sleep(20_000);
+          continue;
+        }
+        throw e;
+      }
+    }
+  };
+  const lookUpSku = async (v) => {
+    try { return await lookUp(v, { sku: true }); } catch (e) {
+      if (e.status === 404) return null; // not in the catalogue — still allowed by its code
+      throw e;
+    }
+  };
+  const writeLine = async (key) => {
+    const w = writesRef.current.get(key);
+    if (!w) return;
+    writesRef.current.delete(key);
+    try {
+      const { line } = await api.poScanOrder({ poId: Number(po.id), sku: w.sku, size: w.size, qty: w.qty,
+        name: w.name || '', upc: w.upc || '', colorway: w.colorway || '', gender: w.gender || null,
+        ...(w.unitCost != null ? { unitCost: w.unitCost } : {}) });
+      recordScan(line, w.name);
+      addedSoon();
+    } catch (e) {
+      if (e.unauthorized) { onSignOut(); return; }
+      beepErr();
+      setFailed((f) => [{ code: `${w.sku} · ${w.size} ×${w.qty}`, why: e.message || 'not added' }, ...f].slice(0, 20));
+      setFlash({ type: 'dup', text: `Not added · ${w.sku} · ${w.size}` });
+    }
+  };
+  // One pair (or a finished entry's qty) onto the order. Its write runs in the scan queue,
+  // so the order on screen is the order scanned.
+  const addPairs = (l, qty = 1) => {
+    const key = `${String(l.sku).toUpperCase()}|${String(l.size).toUpperCase()}`;
+    const w = writesRef.current.get(key);
+    if (w) { w.qty += qty; if (l.unitCost != null) w.unitCost = l.unitCost; return; }
+    writesRef.current.set(key, { ...l, qty });
+    enqueue(() => writeLine(key));
+  };
+  const finishKey = useRef(0);
+  const queueFinish = (entry) => {
+    beepErr();
+    setToFinish((list) => {
+      // The same barcode again is another box of it: one more pair on the entry already waiting.
+      const same = list.find((x) => x.code && x.code === entry.code && x.why === entry.why);
+      if (same) return list.map((x) => (x === same ? { ...x, qty: Math.min(999, x.qty + 1) } : x));
+      return [...list, { size: '', qty: 1, cost: '', ...entry, key: ++finishKey.current }];
+    });
+    setFlash({ type: 'warn', text: entry.why === 'notfound' ? `Not found · ${entry.code} — finish it below, keep scanning`
+      : entry.why === 'check' ? `Check the style code on ${entry.sku} below — keep scanning`
+      : `${entry.sku} — pick its size below, keep scanning` });
+  };
+  const resolveRapid = async (c) => {
+    const isUpc = isUpcCode(c);
+    let p;
+    try { p = await lookUp(c); } catch (e) {
+      if (e.unauthorized) return onSignOut();
+      if (e.status === 404 || /not found|no product/i.test(e.message || '')) {
+        // A typed style code the catalogue doesn't carry still goes in by its code.
+        const typed = !isUpc && skuOf(c);
+        if (typed) return queueFinish({ why: 'typed', code: c, sku: typed, name: '' });
+        return queueFinish({ why: 'notfound', code: c, sku: '' });
+      }
+      beepErr();
+      setFailed((f) => [{ code: c, why: e.message || (e.timeout ? 'catalogue timed out — scan it again' : 'not looked up') }, ...f].slice(0, 20));
+      setFlash({ type: 'dup', text: e.timeout ? `Catalogue timed out — scan ${c} again` : `Not looked up · ${c}` });
+      return undefined;
+    }
+    // Only Alias knew this barcode: the box's printed code is checked once per barcode
+    // before it counts (src/components/AliasCodeCheck.jsx), then it goes straight in.
+    const alias = aliasOnlyCode(p, isUpc ? c : '');
+    const told = alias ? codeDecisionsRef.current.get(c) : null;
+    const q = told?.fix ? { ...p, ...told.fix } : p;
+    const base = { code: c, sku: q.sku || (isUpc ? '' : c), name: q.name || '', colorway: q.colorway || '', gender: q.gender || null,
+      image: q.image || '', sizeOptions: q.sizes || [] };
+    const size = isUpc && q.scannedSize ? String(q.scannedSize) : '';
+    if (!base.sku) return queueFinish({ ...base, why: 'notfound', sku: '' });
+    if (alias && !told) return queueFinish({ ...base, why: 'check', codeCheck: alias, size, upc: size ? c : '', upcSize: size });
+    if (size) {
+      // A UPC is ONE size's box: it goes on the line for the size it named, and no other.
+      beepOk();
+      setFlash({ type: 'added', text: `+1 · ${base.sku} · ${size}` });
+      addPairs({ ...base, size, upc: c });
+      return undefined;
+    }
+    return queueFinish({ ...base, why: isUpc ? 'size' : 'typed' });
+  };
+  const patchFinish = (key, patch) => setToFinish((list) => list.map((x) => (x.key === key ? { ...x, ...patch } : x)));
+  const dropFinish = (key) => setToFinish((list) => list.filter((x) => x.key !== key));
+  const addFinished = async (entry) => {
+    const size = String(entry.size || '').trim();
+    if (!entry.sku || !size) return;
+    setFinishBusy(entry.key);
+    try {
+      // The barcode's own UPC only on the size that barcode named — a size picked by hand
+      // for a code that didn't say one isn't that code's ([[upc-is-per-size]]).
+      const upc = entry.upc && entry.upcSize && entry.upcSize === size ? entry.upc : '';
+      const { line } = await api.poScanOrder({ poId: Number(po.id), sku: entry.sku, size, qty: entry.qty,
+        name: entry.name || '', upc, colorway: entry.colorway || '', gender: entry.gender || null,
+        ...(moneyOf(entry.cost) != null ? { unitCost: moneyOf(entry.cost) } : {}) });
+      beepOk();
+      recordScan(line, entry.name);
+      setFlash({ type: 'added', text: `Added ${entry.qty} · ${entry.sku} · ${size}` });
+      dropFinish(entry.key);
+      onAdded();
+    } catch (e) {
+      if (e.unauthorized) return onSignOut();
+      beepErr();
+      setError(e.message);
+    } finally { setFinishBusy(null); refocusScan(); }
+    return undefined;
   };
 
   // What a freshly-resolved shoe starts with. Identical on both kinds — a box is bought
@@ -494,6 +745,9 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
           // qty, product name, a chip/button). That refocus was bouncing every click back
           // to SKU, so the size field was impossible to type letters into (5C, 3Y, …).
           if (mCam || paste || pendingSwitch) return;
+          // A tap on a finish card (its labels, its SKU / size fields) keeps the focus it gave;
+          // its BUTTONS hand it back to the scan field below, like every other button here.
+          if (!e.target.closest('button') && e.target.closest('.po-finish')) return;
           // After a BUTTON (a size chip, +/−) the scan field takes focus back, or the gun's
           // Enter would press that button again and add a pair nobody scanned. "+ Custom"
           // is the exception: its new size box takes the focus.
@@ -506,7 +760,7 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
           <button type="button" className="btn icon ghost" onClick={onClose}>×</button>
         </div>
 
-        {!boxesOrder && !draft && !pasteOnly && (
+        {!boxesOrder && !draft && (
           <div className="po-paste-toggle">
             <button type="button" className={`btn sm ${paste ? 'primary' : 'ghost'}`} disabled={busy}
               onClick={() => { setError(''); setPaste((p) => (p ? null : { text: '', prices: {} })); }}>
@@ -610,7 +864,7 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
               </div>
             )}
             <div className="modal-actions">
-              <button type="button" className="btn ghost" disabled={busy} onClick={() => (pasteOnly ? onClose() : setPaste(null))}>{pasteOnly ? 'Close' : 'Cancel'}</button>
+              <button type="button" className="btn ghost" disabled={busy} onClick={() => (startPaste ? onClose() : setPaste(null))}>{startPaste ? 'Close' : 'Cancel'}</button>
               <button type="button" className="btn primary wide" disabled={busy || !parsed?.pairs} onClick={addPasted}>
                 {busy ? 'Adding…' : parsed?.pairs ? `Add ${parsed.pairs} pair${parsed.pairs === 1 ? '' : 's'} (${parsed.shoes.length} SKU${parsed.shoes.length === 1 ? '' : 's'}) to ${orderMode ? 'order' : 'label'}` : 'Paste a list to add'}
               </button>
@@ -648,10 +902,32 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
           </div>
         )}
         {error && !paste && <div className="error sm mt">{error}</div>}
-        {!draft && !busy && !looking && !paste && (
+        {!draft && !busy && !looking && !paste && !(rapid && (toFinish.length || recent.length)) && (
           <p className="muted sm mt">{boxesOrder
             ? 'Scan or type the SKU printed on the empty box — the shoe’s name fills in, and a scanned UPC fills the size too. Then tap the size each box is for and give its dimensions; a new row starts at the last carton you typed, so a run of sizes is measured once.'
+            : rapid ? 'Scan each box’s UPC — every scan is one pair on the order, straight away (the same box again = one more). A code we can’t place, or a SKU you type, waits below for its size and quantity while you keep scanning. Check the list on the order before you ship.'
             : 'Scan a shoe’s UPC to begin — its size auto-fills. Add other sizes with the chips, or “+ Custom” if a size isn’t listed. Re-scanning the same shoe bumps its size by 1.'}</p>
+        )}
+
+        {rapid && toFinish.length > 0 && (
+          <div className="po-finish-panel" role="region" aria-label="Finish these">
+            <div className="po-finish-panel-head">
+              <b>Finish {toFinish.length === 1 ? 'this one' : `these ${toFinish.length}`}</b>
+              <span className="muted xs">keep scanning — these wait for you</span>
+            </div>
+            <ul className="po-finish-list">
+              {toFinish.map((x) => (
+                <PoFinishCard key={x.key} entry={x} busy={finishBusy === x.key} onSignOut={onSignOut}
+                  onChange={(patch) => patchFinish(x.key, patch)} onDismiss={() => dropFinish(x.key)}
+                  onAdd={() => addFinished(x)} onLookUp={lookUpSku}
+                  onCodeConfirm={() => { codeDecisionsRef.current.set(x.code, { fix: null }); patchFinish(x.key, { codeCheck: '' }); }}
+                  onCodeFix={({ found, sizes, ...fix }) => {
+                    codeDecisionsRef.current.set(x.code, { fix: { ...fix, sizes } });
+                    patchFinish(x.key, { ...fix, sizeOptions: sizes?.length ? sizes : x.sizeOptions, codeCheck: '' });
+                  }} />
+              ))}
+            </ul>
+          </div>
         )}
 
         {recent.length > 0 && (

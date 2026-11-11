@@ -174,7 +174,9 @@ export function SupplierApp({ user, onSignOut }) {
   const staffLabel = `${businessName || 'Stickballman12 LLC'}'s Staff`;
   const [scanBox, setScanBox] = useState(null); // po_box currently being scanned into
   const [closeReview, setCloseReview] = useState(null); // po_box being reviewed before closing
-  const [pasteOrder, setPasteOrder] = useState(null);    // the PO a whole-order list is being pasted onto
+  // The whole-order list being filled: { po, paste } — scanned (the gun, one pair per scan)
+  // or pasted; the same window either way, one tap between the two.
+  const [orderEntry, setOrderEntry] = useState(null);
   // The box that was just closed — drives the "print the manifest, put it inside, seal it"
   // step. Closing is the moment the contents are final, so it's the only moment the
   // printed sheet is guaranteed to match what's in the box.
@@ -252,7 +254,7 @@ export function SupplierApp({ user, onSignOut }) {
     } catch (e) { if (e.unauthorized) onSignOut(); }
   }, {
     mount: false,
-    paused: page !== 'orders' || busy || newOpen || !!scanBox || !!pasteOrder || !!closeReview || !!packedBox
+    paused: page !== 'orders' || busy || newOpen || !!scanBox || !!orderEntry || !!closeReview || !!packedBox
       || lineBusy != null || trackBusy || trackBoxBusy != null,
   });
   // Refresh tracking status. Omit `boxId` to refresh every label at once; pass one to
@@ -821,8 +823,8 @@ export function SupplierApp({ user, onSignOut }) {
             {(() => {
               // Whole-order manifest (Path C): ONE list for the whole purchase, not tied to a
               // label — the supplier often has the full manifest before anything is split
-              // into boxes. They paste it here (po/scan-bulk) and fix it line by line while
-              // the order is a draft; our team may also have entered it for them. Not on a
+              // into boxes. They scan it in (po/scan-order, one pair per scan) or paste it
+              // (po/scan-bulk) and fix it line by line while the order is a draft; our team may also have entered it for them. Not on a
               // buying-request order: its order-level list is our receipt, and theirs is
               // per label. Shoes only (an empty box needs dimensions on every line).
               if (po.by_store) return null;
@@ -832,6 +834,12 @@ export function SupplierApp({ user, onSignOut }) {
               const canEdit = po.status === 'draft' && !hasOrderedList(po);
               if (!orderLines.length && !canPaste) return null;
               const units = orderLines.reduce((n, l) => n + (l.qty_expected || 0), 0);
+              // The review: what the list adds up to — SKUs, pairs and the shelf total of
+              // the lines that carry a price (a blank price says nothing, never $0).
+              const skus = new Set(orderLines.map((l) => String(l.sku || '').toUpperCase())).size;
+              const priced = orderLines.filter((l) => l.unit_cost != null && l.unit_cost !== '');
+              const shelf = priced.reduce((t, l) => t + Number(l.unit_cost) * (l.qty_expected || 0), 0);
+              const unpriced = orderLines.filter((l) => l.unit_cost == null || l.unit_cost === '').reduce((n, l) => n + (l.qty_expected || 0), 0);
               return (
                 <div className="card po-box">
                   <div className="po-card-top">
@@ -839,7 +847,7 @@ export function SupplierApp({ user, onSignOut }) {
                     <span className="muted sm">{unitsLabel(units)}</span>
                   </div>
                   {!orderLines.length && (
-                    <p className="muted sm">Have one list for the whole order, not split into boxes yet? Paste it here instead of filling each box — then just close and ship the boxes.</p>
+                    <p className="muted sm">Have one list for the whole order, not split into boxes yet? Scan every box into it, or paste it, instead of filling each box — then just close and ship the boxes.</p>
                   )}
                   {orderLines.length > 0 && (canEdit ? (
                     <ul className="po-lines po-lines-edit">
@@ -861,9 +869,18 @@ export function SupplierApp({ user, onSignOut }) {
                       ))}
                     </ul>
                   ))}
+                  {orderLines.length > 0 && (
+                    <div className="po-box-total">
+                      <span className="muted sm">{skus} SKU{skus === 1 ? '' : 's'} · {unitsLabel(units)}{priced.length > 0 && unpriced > 0 ? ` · ${unpriced} with no price` : ''}</span>
+                      {priced.length > 0 && <span className="po-box-total-n">{money(shelf)}</span>}
+                    </div>
+                  )}
                   {canPaste && (
                     <div className="po-box-actions">
-                      <button className="btn sm" disabled={busy} onClick={() => setPasteOrder(po)}>
+                      <button className="btn sm primary" disabled={busy} onClick={() => setOrderEntry({ po, paste: false })}>
+                        📷 {orderLines.length ? 'Scan more into the order manifest' : 'Scan the whole-order manifest'}
+                      </button>
+                      <button className="btn sm" disabled={busy} onClick={() => setOrderEntry({ po, paste: true })}>
                         📋 {orderLines.length ? 'Paste more to the order manifest' : 'Paste the whole-order manifest'}
                       </button>
                     </div>
@@ -879,8 +896,8 @@ export function SupplierApp({ user, onSignOut }) {
         <PoScanModal box={scanBox} boxesOrder={boxesOrder} onClose={() => setScanBox(null)}
           onAdded={refreshDetail} onSignOut={onSignOut} />
       )}
-      {pasteOrder && (
-        <PoScanModal po={pasteOrder} pasteOnly onClose={() => setPasteOrder(null)}
+      {orderEntry && (
+        <PoScanModal po={orderEntry.po} instant startPaste={orderEntry.paste} onClose={() => setOrderEntry(null)}
           onAdded={refreshDetail} onSignOut={onSignOut} />
       )}
 

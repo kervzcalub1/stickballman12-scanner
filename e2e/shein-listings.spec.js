@@ -4490,7 +4490,9 @@ test.describe.serial('SHEIN Listings Phase 5 — the switch-over + go-live cards
     // the shoes first seen 4–5 days ago are before the start → not counted yet
     await expect(line(page, 'cutover', 'b')).not.toContainText('E2E Cutover Missed Shoe');
     // move the start back 10 days (as if ticked then) — the window now covers both shoes
-    await pool.query(`UPDATE app_settings SET value = jsonb_set(value::jsonb, '{paused_4seller,at}', to_jsonb((now() - interval '10 days')::text))::text WHERE key = $1`, [KEY]);
+    // 10 EST CALENDAR days back (wall clock in New York): a plain now() − 10 days crosses a DST change and lands on the
+    // EST day before when run late in the evening EST (CI 2026-11-11 23:17 EST: "Day 9")
+    await pool.query(`UPDATE app_settings SET value = jsonb_set(value::jsonb, '{paused_4seller,at}', to_jsonb((((now() AT TIME ZONE 'America/New_York') - interval '10 days') AT TIME ZONE 'America/New_York')::text))::text WHERE key = $1`, [KEY]);
     await page.reload();
     await expect(card(page, 'cutover').locator('[data-cutover-sum]')).toContainText('Day 10 of 30');
     await expect(card(page, 'cutover').locator('[data-cutover-sum]')).toContainText('20 days left');

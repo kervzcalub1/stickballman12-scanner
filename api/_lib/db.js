@@ -12123,6 +12123,31 @@ export async function setListingPublishChoices(productId, { titleOverride, skcVa
     WHERE shopify_product_id = ${productId} RETURNING *`;
   return r || null;
 }
+// Per shoe (2026-11-11): THIS shoe's SHEIN category (null = back to its product type's map) — DB only.
+export async function setListingCategoryPick(productId, pick, by) {
+  const [r] = await db()`UPDATE shein_listing_products SET
+      category_pick_id = ${pick ? pick.categoryId : null}::bigint, category_pick_ptid = ${pick ? pick.productTypeId : null}::bigint,
+      category_pick_path = ${pick ? pick.path || null : null}::text, category_pick_by = ${pick ? by : null}::text, category_pick_at = CASE WHEN ${!!pick} THEN now() ELSE NULL END, updated_at = now()
+    WHERE shopify_product_id = ${productId} RETURNING *`;
+  return r || null;
+}
+// THIS shoe's own value for one SHEIN detail (attr_overrides[attributeId]); value null = remove it. DB only.
+export async function setListingAttrOverride(productId, attributeId, value) {
+  const key = String(attributeId);
+  const [r] = value
+    ? await db()`UPDATE shein_listing_products SET attr_overrides = COALESCE(attr_overrides, '{}'::jsonb) || jsonb_build_object(${key}::text, ${JSON.stringify(value)}::jsonb), updated_at = now()
+        WHERE shopify_product_id = ${productId} RETURNING *`
+    : await db()`UPDATE shein_listing_products SET attr_overrides = COALESCE(attr_overrides, '{}'::jsonb) - ${key}::text, updated_at = now()
+        WHERE shopify_product_id = ${productId} RETURNING *`;
+  return r || null;
+}
+export async function listingAttrOverridesBySpu(spu) {
+  const [r] = await db()`SELECT attr_overrides FROM shein_listing_products WHERE spu = ${spu} AND attr_overrides <> '{}'::jsonb LIMIT 1`;
+  return r?.attr_overrides || null;
+}
+export async function listListingCategoryPicks() {
+  return await db()`SELECT DISTINCT category_pick_id, category_pick_ptid FROM shein_listing_products WHERE category_pick_id IS NOT NULL AND category_pick_ptid IS NOT NULL`;
+}
 // An admin's explicit "Publish again" after SHEIN rejected the first publish (L5): recorded on the
 // product, and the refused item's key released so the next run may send.
 export async function markPublishAgain(productIds, by) {
@@ -12176,7 +12201,7 @@ export async function productPhotosForSku(sku, source = 'ph_edited') {
 export async function loadListingPrev() {
   const [products, variants] = await Promise.all([
     // + the publish choices (title / colour / PH photos): the stored readiness of a new shoe is judged on them too
-    db()`SELECT shopify_product_id, excluded, excluded_by, excluded_at, shopify_hash, shopify_json, computed_hash, spu, review_version, title_override, skc_value_id, use_ph_photos, photo_skip FROM shein_listing_products`,
+    db()`SELECT shopify_product_id, excluded, excluded_by, excluded_at, shopify_hash, shopify_json, computed_hash, spu, review_version, title_override, skc_value_id, use_ph_photos, photo_skip, category_pick_id, category_pick_ptid, category_pick_path, attr_overrides FROM shein_listing_products`,
     db()`SELECT row_key, shein_sku, match, excluded, excluded_by, excluded_at, synced_hash, synced_fields, last_error FROM shein_listing_variants`,
   ]);
   return { products: new Map(products.map((r) => [r.shopify_product_id, r])), variants: new Map(variants.map((r) => [r.row_key, r])) };

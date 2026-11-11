@@ -77,7 +77,7 @@ export const BLOCKERS = {
     action: { kind: 'edit_size_map', label: 'Add foot length' } },
   missing_attr: { level: 'blocked', scope: 'product', applies: ['publish', 'edit', 'add_sizes'],
     title: (p) => `Missing SHEIN detail: ${p?.attribute || 'a required attribute'}.`,
-    fix: (p) => (p?.why === 'typed_per_shoe' ? 'It is typed per shoe — fill it in for this shoe in Seller Center, then preview again.' : 'Set it once for the product type.'),
+    fix: (p) => (p?.why === 'typed_per_shoe' ? 'It is typed per shoe (e.g. the model name) — open “Set SHEIN details” and type it for this shoe, then preview again.' : 'Set it for this shoe, or once for the product type in Setup.'),
     action: { kind: 'set_attr', label: 'Set it' } },
   no_category: { level: 'blocked', scope: 'product', applies: ['publish'],
     title: (p) => `No SHEIN category picked.${p?.suggestion ? ` We suggest ${p.suggestion}.` : ''}`, fix: () => 'Choose the SHEIN category.', action: { kind: 'choose_category', label: 'Choose category' } },

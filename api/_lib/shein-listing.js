@@ -25,7 +25,7 @@ import {
   sheinAssocRulesLogged, sheinCategorySuggestLogged, sheinComplianceLogged, sheinTransformPicLogged, sheinPublishLogged,
 } from './shein.js';
 import { buildPublish, publishGates, readPublishAnswer, publishApproved, readBoxDefaults, fetchImage, hostOnR2, templateFor, assocRequired, sourcePhotos, convertPhotos } from './shein-publish.js';
-import { publishReadiness, attributePatch, templateParts, countAfterSkip, planPhotoEdit, spuHasSpuPhotos, imagePlan } from '../../src/lib/sheinPublish.js';
+import { publishReadiness, attributePatch, templateParts, shoeAttrDefaults, countAfterSkip, planPhotoEdit, spuHasSpuPhotos, imagePlan } from '../../src/lib/sheinPublish.js';
 import { shopifyListingCatalogue, shopifyListingProduct, shopifyConfigured, styleFromTitle } from './shopify.js';
 import {
   createListingJob, getListingJob, activeListingJob, claimListingJob, touchListingJob, finishListingJob, markStaleListingJobs, resumeListingJob,
@@ -35,7 +35,7 @@ import {
   countSheinApiLog, getSetting, setSetting,
   getListingProduct, listListingProducts, updateListingItem, markListingItemSending, dueRunItems, runJobsWithDueItems, requeueListingJob,
   setListingJobStatus, listingInflight, markVariantsPublished, setVariantsLastError, verifySizeMap, verifySizeMapById, getPlatformQuotes, listListingJobItems,
-  createRunJob, getListingItems, sheinShelfRecords, markVariantsSynced, listingPriceOffProducts, listCategoryMaps, listBrandMaps, setListingPublished, listAttrDefaults,
+  createRunJob, getListingItems, sheinShelfRecords, markVariantsSynced, listingPriceOffProducts, listCategoryMaps, listBrandMaps, setListingPublished, listAttrDefaults, listingAttrOverridesBySpu, listListingCategoryPicks,
   listPublishUnconfirmed, resumeListingJob as resumeJobRow, phPhotoKeys,
 } from './db.js';
 import { walkActive, pushSpus } from './shein-live.js';
@@ -327,7 +327,9 @@ async function publishContext(maps, market) {
     phPhotoKeys().catch(() => new Map())]);
   // re-review G1: a product with a publish SHEIN never confirmed shows publish_unconfirmed (no new publish)
   const unconfirmed = new Map(); for (const x of unconf) if (!unconfirmed.has(x.shopify_product_id)) unconfirmed.set(x.shopify_product_id, { itemId: Number(x.id), jobId: Number(x.job_id) });
-  const cats = [...new Set(categoryMaps.map((m) => Number(m.category_id)))]; const types = [...new Set(categoryMaps.map((m) => Number(m.product_type_id)))];
+  const picks = await listListingCategoryPicks().catch(() => []);   // the shoes' own categories (2026-11-11)
+  const cats = [...new Set([...categoryMaps.map((m) => Number(m.category_id)), ...picks.map((x) => Number(x.category_pick_id))])];
+  const types = [...new Set([...categoryMaps.map((m) => Number(m.product_type_id)), ...picks.map((x) => Number(x.category_pick_ptid))])];
   const [fillRows, tplRows, permRows] = await Promise.all([listListingCache('fill_standard', cats), listListingCache('attr_template', types), listListingCache('custom_perm', cats)]);
   const fills = new Map(fillRows.map((r) => [Number(r.key), r.payload]));
   const templates = new Map(tplRows.filter((r) => r.payload && r.payload.attribute_infos).map((r) => [Number(r.key), r.payload]));
@@ -608,7 +610,9 @@ export async function editAttrs(spu, { io = IO, log = null } = {}) {
   const template = await templateFor(ptid, io, log).catch((e) => { if (fatal(e)) throw e; return null; });
   if (!template?.attribute_infos) return null;
   const parts = templateParts(template);
-  const defaults = await listAttrDefaults(ptid);
+  // + the shoe's own details (Product Model typed while fixing it, 2026-11-11) on top of Setup's
+  const own = spu?.spuName ? await listingAttrOverridesBySpu(String(spu.spuName)).catch(() => null) : null;
+  const defaults = shoeAttrDefaults(await listAttrDefaults(ptid), own, ptid);
   const product = new Map(parts.product.map((a) => [Number(a.attribute_id), a]));
   const cur = new Map();
   for (const x of spu?.productAttributeInfoList || []) {

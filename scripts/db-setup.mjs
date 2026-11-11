@@ -3197,6 +3197,13 @@ await sql(`ALTER TABLE shein_brand_map ALTER COLUMN brand_code DROP NOT NULL`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS title_override TEXT`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS skc_value_id BIGINT`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS use_ph_photos BOOLEAN NOT NULL DEFAULT false`);
+// Per shoe (2026-11-11): a person picks THIS shoe's SHEIN category while fixing it (wins over the product
+// type's map); its own SHEIN details live in attr_overrides ({ "<attributeId>": { ptid, valueIds, extraValues, by, at } }).
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS category_pick_id BIGINT`);
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS category_pick_ptid BIGINT`);
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS category_pick_path TEXT`);
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS category_pick_by TEXT`);
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS category_pick_at TIMESTAMPTZ`);
 // "Leave this photo out" (2026-11-11): photo keys (URL without ?query) the publish never sends to SHEIN
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS photo_skip TEXT[] NOT NULL DEFAULT '{}'`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS publish_again_by TEXT`);

@@ -478,7 +478,7 @@ async function onPublishSide(path, body, res) {
     case '/open-api/goods/query-category-tree': answer(res, { data: P4TREE }); return true;
     case '/open-api/goods/image-category-suggestion': answer(res, { data: [{ categoryId: String(P4CAT), order: 1, vote: 92 }] }); return true;
     case '/open-api/goods/query-publish-fill-in-standard': answer(res, p4fill()); return true;
-    case '/open-api/goods/query-attribute-template': answer(res, { data: [P4TEMPLATE] }); return true;
+    case '/open-api/goods/query-attribute-template': answer(res, { data: [p.template || P4TEMPLATE] }); return true;   // p.template: a test swaps the template (per-shoe Product Model)
     case '/open-api/goods/get-custom-attribute-permission-config': answer(res, { data: [{ last_category_id: P4CAT, attribute_id: ATTR, has_permission: 1 }] }); return true;
     case '/open-api/goods/get-associated-attribute-rules': {
       const req = (body.get_linked_rule_req_list || [])[0] || {};
@@ -2942,6 +2942,33 @@ test.describe('SHEIN Listings — an edit carries the details SHEIN now requires
     expect(m.list).toBe(null);
     expect(m.problems[0]).toMatchObject({ code: 'missing_attr', params: { attribute: 'Model', why: 'typed_per_shoe' } });
   });
+  test('per shoe (2026-11-11): shoeCategory / shoeAttrDefaults — the shoe’s own category and details win; a typed detail is filled on an edit ONLY from the shoe’s own value', async () => {
+    const { attributePatch, shoeCategory, shoeAttrDefaults, buildAttributes, templateParts, attrValueProblem } = await import('../src/lib/sheinPublish.js');
+    const map = { category_id: '9960001', product_type_id: '960601', category_path: 'E2E Shoes › Men' };
+    expect(shoeCategory({}, map)).toEqual({ categoryId: 9960001, productTypeId: 960601, path: 'E2E Shoes › Men', source: 'map' });
+    expect(shoeCategory({ category_pick_id: '9960002', category_pick_ptid: '960602', category_pick_path: 'E2E Shoes › Women' }, map)).toEqual({ categoryId: 9960002, productTypeId: 960602, path: 'E2E Shoes › Women', source: 'shoe' });
+    expect(shoeCategory({ category_pick_id: '9960002' }, null)).toBe(null);                  // a pick without its product type is ignored
+    const defs = [{ product_type_id: 960601, attribute_id: 7000, value_ids: [7001], extra_values: [] }, { product_type_id: 960601, attribute_id: 7200, value_ids: [7201], extra_values: [] }];
+    const own = { 7000: { ptid: 960601, valueIds: [7002], extraValues: [] }, 7300: { ptid: 960601, valueIds: [], extraValues: ['Samba OG'] }, 7400: { ptid: 999, valueIds: [1], extraValues: [] } };
+    const merged = shoeAttrDefaults(defs, own, 960601);
+    expect(merged.map((d) => [d.attribute_id, d.value_ids, d.extra_values, !!d.shoe])).toEqual([[7200, [7201], [], false], [7000, [7002], [], true], [7300, [], ['Samba OG'], true]]);   // 7400 = another product type
+    expect(shoeAttrDefaults(defs, null, 960601)).toEqual(defs);
+    // publish: a required TYPED detail with no value says "type it for this shoe"; the shoe's value is sent
+    const model = { ...P4TEMPLATE, attribute_infos: [...P4TEMPLATE.attribute_infos, { attribute_id: 7300, attribute_name_en: 'Product Model', attribute_type: 4, attribute_mode: 0, attribute_status: 3, data_dimension: 1, attribute_value_info_list: [] }] };
+    const parts = templateParts(model);
+    expect(buildAttributes({ parts, defaults: defs }).problems).toEqual([expect.objectContaining({ code: 'missing_attr', params: { attributeId: 7300, attribute: 'Product Model', why: 'typed_per_shoe' } })]);
+    expect(buildAttributes({ parts, defaults: merged }).rows).toEqual([{ attribute_id: 7000, attribute_value_id: 7002 }, { attribute_id: 7200, attribute_value_id: 7201 }, { attribute_id: 7300, attribute_extra_value: 'Samba OG' }]);
+    // an edit of a live shoe: Setup's typed text is never used ("Dunk Low"), the shoe's own is
+    const spu = spuWith([cur(7000, 7001)]);
+    expect(attributePatch({ spu, template: model, defaults: [...defs, { product_type_id: 960601, attribute_id: 7300, value_ids: [], extra_values: ['Dunk Low'] }] }).problems[0]).toMatchObject({ params: { why: 'typed_per_shoe' } });
+    expect(attributePatch({ spu, template: model, defaults: merged })).toMatchObject({ list: [{ attribute_id: 7000, attribute_value_id: 7001 }, { attribute_id: 7300, attribute_extra_value: 'Samba OG' }], added: [{ attributeId: 7300, attribute: 'Product Model' }], problems: [] });
+    // the one value check Setup and the per-shoe save share
+    const a = (id) => model.attribute_infos.find((x) => x.attribute_id === id);
+    expect(attrValueProblem(a(7300), [], ['Samba OG'])).toBe(null);
+    expect(attrValueProblem(a(7300), [], [])).toBe('Type one value.');
+    expect(attrValueProblem(a(7000), [7001, 7002], [])).toBe('Pick exactly one value.');
+    expect(attrValueProblem(a(7000), [9999], [])).toMatch(/isn’t in SHEIN’s list/);
+  });
   test('planEdit / planAddSizes: the list rides in the same partialEdit (with a note); a detail with no default blocks the edit', async () => {
     const product = { ...SHOPIFY().find((p) => p.productId === gidP(7704)), title: 'Jordan 1 GS Retro (GS0001-001)' };
     const names = [{ language: 'en', name: 'Jordan 1 GS (GS0001-001)' }];
@@ -3229,6 +3256,53 @@ test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fak
     expect((await request.get(`/api/shein/listings?photos=${encodeURIComponent(gidP(999991))}`, { headers: auth.ph })).status()).toBe(404);
   });
 
+  test('per shoe (2026-11-11): THIS shoe’s category (a leaf, DB only) and its own typed Product Model — never another shoe’s; the preview sends the shoe’s value', async ({ request }) => {
+    const choose = (data, headers = auth.ph) => request.post('/api/shein/listings', { headers, data: { action: 'publish_choices', productId: gidP(7708), ...data } });
+    const { signToken } = await import('../api/_lib/util.js');
+    const wh = { Authorization: `Bearer ${signToken({ uid: 'e2e-wh', username: 'e2e_wh', name: 'E2E Warehouse', role: 'warehouse' })}` };
+    const catOf = async (n) => (await L.readinessMany([await D.getListingProduct(gidP(n))])).get(gidP(n))?.category;
+    try {
+      // the category, for this shoe only: a LEAF of SHEIN's tree; the other shoe of the type keeps the map
+      expect((await choose({ categoryPick: { categoryId: P4CAT } }, wh)).status()).toBe(403);
+      expect((await choose({ categoryPick: { categoryId: 9960000 } })).status()).toBe(400);
+      const w = await (await choose({ categoryPick: { categoryId: 9960002 } })).json();
+      expect(w.product).toMatchObject({ category_pick_id: '9960002', category_pick_ptid: '960602', category_pick_path: 'E2E Shoes › E2E Women’s Sneakers', category_pick_by: 'E2E PH' });
+      expect(await catOf(7708)).toMatchObject({ categoryId: 9960002, productTypeId: 960602, source: 'shoe' });
+      expect(await catOf(7709)).toMatchObject({ categoryId: P4CAT, source: 'map' });
+      expect((await (await choose({ categoryPick: null })).json()).product).toMatchObject({ category_pick_id: null, category_pick_ptid: null });
+      expect(await catOf(7708)).toMatchObject({ categoryId: P4CAT, source: 'map' });
+
+      // Product Model: required + typed → per shoe ("Dunk Low" in Setup fit one Nike)
+      fake.p4.template = { ...P4TEMPLATE, attribute_infos: [...P4TEMPLATE.attribute_infos, { attribute_id: 7300, attribute_name_en: 'Product Model', attribute_type: 4, attribute_mode: 0, attribute_status: 3, data_dimension: 1, attribute_value_info_list: [] }] };
+      await pool.query(`DELETE FROM shein_listing_cache WHERE kind = 'attr_template' AND key = $1`, [String(P4TYPE)]);
+      let it = await one((await preview([7708])).id, 7708);
+      expect(it.body).toBe(null);
+      expect(it.plan.checklist.find((l) => l.key === 'attributes')).toMatchObject({ ok: false, blockers: [expect.objectContaining({ code: 'missing_attr', params: expect.objectContaining({ attributeId: 7300, why: 'typed_per_shoe' }) })] });
+      expect((await choose({ attr: { attributeId: 9999, extraValues: ['x'] } })).status()).toBe(400);           // not a detail of this category
+      expect((await choose({ attr: { attributeId: 7300, extraValues: [] } })).status()).toBe(400);
+      expect((await choose({ attr: { attributeId: 7000, valueIds: [9999] } })).status()).toBe(400);
+      expect((await choose({ attr: { attributeId: 7300, extraValues: ['x'] } }, wh)).status()).toBe(403);
+      const saved = await (await choose({ attr: { attributeId: 7300, extraValues: ['  Air Force 1   Low '] } })).json();
+      expect(saved.product.attr_overrides['7300']).toMatchObject({ ptid: P4TYPE, valueIds: [], extraValues: ['Air Force 1 Low'], by: 'E2E PH' });
+      fake.writes.length = 0;
+      it = await one((await preview([7708])).id, 7708);
+      expect(it.body.product_attribute_list).toEqual([{ attribute_id: 7000, attribute_value_id: 7001 }, { attribute_id: 7200, attribute_value_id: 7201 }, { attribute_id: 7300, attribute_extra_value: 'Air Force 1 Low' }]);
+      expect(fake.writes).toEqual([]);
+      // the other shoe of the same type is still asked for ITS model
+      const other = await one((await preview([7709])).id, 7709);
+      expect(other.plan.checklist.find((l) => l.key === 'attributes').blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'missing_attr', params: expect.objectContaining({ attributeId: 7300 }) })]));
+      // a picked detail for this shoe wins over Setup's; Remove = back to Setup's
+      expect((await choose({ attr: { attributeId: 7000, valueIds: [7002] } })).status()).toBe(200);
+      it = await one((await preview([7708])).id, 7708);
+      expect(it.body.product_attribute_list[0]).toEqual({ attribute_id: 7000, attribute_value_id: 7002 });
+      expect((await (await choose({ attr: { attributeId: 7000, clear: true } })).json()).product.attr_overrides).toEqual({ 7300: expect.any(Object) });
+    } finally {
+      fake.p4.template = null;
+      await pool.query(`DELETE FROM shein_listing_cache WHERE kind = 'attr_template' AND key = $1`, [String(P4TYPE)]);
+      await pool.query(`UPDATE shein_listing_products SET attr_overrides = '{}'::jsonb, category_pick_id = NULL, category_pick_ptid = NULL, category_pick_path = NULL, category_pick_by = NULL, category_pick_at = NULL WHERE shopify_product_id = ANY($1::text[])`, [[gidP(7708), gidP(7709)]]);
+    }
+  });
+
   test('store gates are checked before anything: SHEIN can’t take listings / the monthly quota is used → nothing sendable, for every product', async () => {
     fake.p4.canPublish = false; fake.p4.reason = 'KYC not finished'; await clearGates();
     let it = await one((await preview([7708, 7709])).id, 7708);
@@ -3474,6 +3548,24 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await expect(line(page, 'brand')).toHaveAttribute('data-ok', 'unread');     // SHEIN's rules for it not read yet → never ✓ by default
     const { rows: [m] } = await pool.query(`SELECT category_id, product_type_id, set_by FROM shein_category_map WHERE shopify_product_type = 'E2E Sneakers' AND size_group = 'adult'`);
     expect(m).toEqual({ category_id: String(P4CAT), product_type_id: String(P4TYPE), set_by: 'E2E PH' });
+    // per shoe (2026-11-11): changing a category a shoe already has defaults to THIS shoe only; "use the shared one again" undoes it
+    await line(page, 'category').getByRole('button', { name: 'Change' }).click();
+    await expect(panel.locator('[data-scope]')).toHaveAttribute('data-scope', 'shoe');
+    await panel.getByRole('searchbox', { name: 'Search SHEIN categories' }).fill('women');
+    await panel.locator('.shl-cat-list .shl-cat-opt[data-cat="9960002"] input').check();
+    await panel.getByRole('button', { name: 'Use “E2E Women’s Sneakers” for this shoe' }).click();
+    await expect(dr.locator('[data-checklist]')).toContainText('Saved for this shoe only: E2E Shoes › E2E Women’s Sneakers');
+    await expect(line(page, 'category')).toContainText('E2E Women’s Sneakers · this shoe only');
+    expect((await pool.query(`SELECT category_id FROM shein_category_map WHERE shopify_product_type = 'E2E Sneakers' AND size_group = 'adult'`)).rows[0].category_id).toBe(String(P4CAT));   // the type's map untouched
+    await line(page, 'category').getByRole('button', { name: 'Change' }).click();
+    await panel.getByRole('button', { name: 'Use the shared category again' }).click();
+    await expect(dr.locator('[data-checklist]')).toContainText('This shoe uses its type’s category again');
+    expect((await pool.query(`SELECT category_pick_id FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(7708)])).rows[0].category_pick_id).toBe(null);
+    // SHEIN details: the shoe's own editor first, Setup's type-wide one behind a link
+    await line(page, 'attributes').getByRole('button', { name: /Set SHEIN details|Edit details/ }).click();
+    const ap = line(page, 'attributes');
+    await expect(ap.locator('[data-panel="shoe-attributes"], .notice')).toBeVisible();
+    await expect(ap.getByRole('button', { name: /Set a detail for every shoe of this SHEIN type/ })).toBeVisible();
     expect(fake.writes).toEqual([]);
   });
 
@@ -3538,8 +3630,11 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await bp.getByRole('combobox', { name: /SHEIN brand for E2E Nike/ }).selectOption('NIKE01');
     await bp.getByRole('button', { name: 'Save brand' }).click();
     await expect(line(page, 'brand')).toContainText('Saved — checked again by the next preview.');
-    // SHEIN details: the per-type defaults editor (Required first); the attribute SHEIN adds with leather goes in by API
+    // SHEIN details: the shoe's own editor first (2026-11-11) — it lists Upper Material as required too;
+    // the per-type defaults editor (Required first) is behind its link; the attribute SHEIN adds with leather goes in by API
     await line(page, 'attributes').getByRole('button', { name: 'Set SHEIN details' }).click();
+    await expect(line(page, 'attributes').locator('[data-panel="shoe-attributes"] [data-shoe-attr="7000"]')).toContainText('Required');
+    await line(page, 'attributes').getByRole('button', { name: /Set a detail for every shoe of this SHEIN type/ }).click();
     const ap = line(page, 'attributes').locator('[data-panel="attributes"]');
     await expect(ap).toContainText('required still missing');           // the last preview read SHEIN's template for this type
     const upper = ap.locator('.shl-attr[data-attr="7000"]');

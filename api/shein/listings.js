@@ -31,6 +31,9 @@
 //   Phase 4 — publish brand-new products: preview { …, ops:['publish'] } (never mixed; filter = products NOT on SHEIN);
 //     photos are converted (R2 + transform-pic) only when the starter is an admin / Connect integrations holder (security H2);
 //   publish_choices { productId, titleOverride?, skcValueId?, usePhPhotos?, photoSkip?: [url] } (PH, DB only) -> { ok, product };
+//     + categoryPick: { categoryId } | null (THIS shoe's SHEIN category, a leaf; only a shoe never live on SHEIN — 409 else)
+//     + attr: { attributeId, valueIds?, extraValues? } | { attributeId, clear: true } (THIS shoe's own SHEIN detail, e.g. Product Model;
+//       checked against the template of the shoe's category) — 2026-11-11
 //   publish_choices_bulk { productIds (≤ 100), patch: { skcValueId?, usePhPhotos?, skipCover? }, productTypeId?, titles?: { [productId]: title | null } }
 //     (PH, DB only; the same validation as publish_choices; a colour needs productTypeId and every product must be
 //     mapped to that SHEIN product type) -> { ok, updated, missing };
@@ -48,10 +51,11 @@ import {
   dbConfigured, listListingProducts, listingSummary, getListingProduct, listingItemsForProduct, listSheinApiLog, getListingCache, getListingJob,
   activeListingJob, latestListingJob, markStaleListingJobs, requestListingStop, cancelQueuedListingJob, setListingExcluded, listingVariantProductIds,
   getSetting, setSetting, getListingItems, updateListingItem, requeueListingJob, resumeListingJob,
-  lastPreviewItem, markPublishAgain, setListingPublishChoices,
+  lastPreviewItem, markPublishAgain, setListingPublishChoices, setListingCategoryPick, setListingAttrOverride,
   listingShopifyCounts, getListingProductsMany, setListingPublishChoicesMany, listCategoryMaps, listListingCache, setListingCoverSkip, productPhotosForSku,
 } from '../_lib/db.js';
-import { publishChecklist, cleanTitle, sizeGroupOf, templateParts, photoKey, keepPhotos, isShopifyPhoto, PHOTO_SKIP_MAX } from '../../src/lib/sheinPublish.js';
+import { publishChecklist, cleanTitle, sizeGroupOf, templateParts, photoKey, keepPhotos, isShopifyPhoto, PHOTO_SKIP_MAX, shoeCategory, attrValueProblem } from '../../src/lib/sheinPublish.js';
+import { treeLeaves } from '../_lib/shein-publish.js';
 import { sheinStatus } from '../_lib/shein.js';
 import { shopifyAdminStore, shopifyEnsureWebhooks, shopifyListingProduct } from '../_lib/shopify.js';
 import { startListingJob, startRunJob, resumeJob, recomputeStored, kickListingJobs, PREVIEW_OPS, readAutoPrice, setAutoPrice, lookAgainPublish, sendAgainPublish, readinessChecklist, readinessMany, userThrottle } from '../_lib/shein-listing.js';
@@ -66,12 +70,16 @@ const SHOP_FILTERS = ['active', 'inactive'];
 const blockingLines = (list) => (list || []).filter((l) => l.ok === false).map((l) => l.key);
 // The size groups the drawer maps a category by (its Shopify sizes not left off) — productGroups() on the page.
 const groupsOf = (variants) => [...new Set(variants.filter((v) => v.shopify_variant_id && !v.excluded).map((v) => sizeGroupOf(v.shopify_size)).filter(Boolean))];
-// The SHEIN product type each product's category map gives (one size group only), else null.
-const typeOf = (row, variants, maps) => {
+// The SHEIN category a product goes to: the shoe's own pick (2026-11-11), else its product type's map
+// (one size group only), else null. typeOf = its SHEIN product type.
+const categoryOf = (row, variants, maps) => {
   const g = groupsOf(variants);
   const m = g.length === 1 ? maps.find((x) => x.shopify_product_type === String(row.product_type || '') && x.size_group === g[0]) : null;
-  return m ? Number(m.product_type_id) : null;
+  return shoeCategory(row, m);
 };
+const typeOf = (row, variants, maps) => categoryOf(row, variants, maps)?.productTypeId ?? null;
+// Never live on SHEIN (not on it, or our publish was rejected): its category can still change.
+const neverLive = (d) => !String(d.product.shopify_product_id).startsWith('shein:') && !d.variants.some((v) => v.shein_sku);
 const idList = (v) => [...new Set(String(v || '').split(',').map((x) => x.trim()).filter(Boolean))];
 const HOOK_TOPICS = ['PRODUCTS_CREATE', 'PRODUCTS_UPDATE', 'PRODUCTS_DELETE'];
 const HOOKS_KEY = 'shein_listing_hooks';
@@ -199,9 +207,12 @@ export default async function handler(req, res) {
       if (!d) return send(res, 404, { ok: false, error: 'That product isn’t in SHEIN Listings (yet) — re-read Shopify + SHEIN.' });
       const [items, log] = await Promise.all([listingItemsForProduct(pid, d.product.spu, 5), d.product.spu ? listSheinApiLog({ spu: d.product.spu, limit: 20 }) : []]);
       let checklist = null; let checklistFrom = null;
-      if (!d.product.spu && !String(pid).startsWith('shein:')) {
+      // + a shoe SHEIN rejected (never live): fixing it (category, details, photos) happens before Publish again (2026-11-11)
+      if (!String(pid).startsWith('shein:') && (!d.product.spu || neverLive(d))) {
         const last = await lastPreviewItem(pid, 'publish');
-        if (last?.plan?.checklist) { checklist = last.plan.checklist; checklistFrom = { jobId: Number(last.job_id), at: last.updated_at }; }
+        // a preview from BEFORE the last send judged the rejected publish — read the readiness instead
+        const sentAt = Math.max(0, ...items.filter((i) => i.op === 'publish' && i.kind === 'run').map((i) => new Date(i.sent_at || i.updated_at || 0).getTime()));
+        if (last?.plan?.checklist && new Date(last.updated_at).getTime() > sentAt) { checklist = last.plan.checklist; checklistFrom = { jobId: Number(last.job_id), at: last.updated_at }; }
         else {
           // the readiness from the cache — a line SHEIN's rules weren't read for is null ("not read yet"), never ✓
           checklist = await readinessChecklist(d.product, d.variants).catch(() => null)
@@ -329,6 +340,48 @@ export default async function handler(req, res) {
         }
         if (b.skcValueId !== undefined) { const v = b.skcValueId == null || b.skcValueId === '' ? null : Number(b.skcValueId); if (v != null && !Number.isSafeInteger(v)) return send(res, 400, { ok: false, error: 'That isn’t a SHEIN value id.' }); patch.skcValueId = v; }
         if (b.usePhPhotos !== undefined) patch.usePhPhotos = b.usePhPhotos === true;
+        // Per shoe (2026-11-11): THIS shoe's SHEIN category, and its own value for a SHEIN detail (Product Model)
+        if (b.categoryPick !== undefined || b.attr !== undefined) {
+          const cur = await getListingProduct(pid);
+          if (!cur) return send(res, 404, { ok: false, error: 'That product isn’t in SHEIN Listings.' });
+          if (b.categoryPick !== undefined) {
+            if (!neverLive(cur)) return send(res, 409, { ok: false, error: 'This shoe is already live on SHEIN — its category can’t be changed from here (SHEIN keeps a live product in its category).' });
+            if (b.categoryPick == null) { await setListingCategoryPick(pid, null, by); }
+            else {
+              const tree = (await getListingCache('category_tree', 'store'))?.payload || null;
+              if (!tree) return send(res, 409, { ok: false, error: 'SHEIN’s category list hasn’t been read yet — read it first (Choose category → Read SHEIN’s categories).' });
+              const leaf = treeLeaves(tree).find((l) => l.categoryId === Number(b.categoryPick?.categoryId));
+              if (!leaf || leaf.productTypeId == null) return send(res, 400, { ok: false, error: 'That isn’t a last-level SHEIN category (SHEIN only takes products in a leaf).' });
+              await setListingCategoryPick(pid, { categoryId: leaf.categoryId, productTypeId: leaf.productTypeId, path: leaf.path }, by);
+            }
+          }
+          if (b.attr !== undefined) {
+            const a0 = b.attr && typeof b.attr === 'object' && !Array.isArray(b.attr) ? b.attr : null;
+            const attributeId = Number(a0?.attributeId);
+            if (!Number.isSafeInteger(attributeId) || attributeId < 1) return send(res, 400, { ok: false, error: 'Which SHEIN detail? (attr.attributeId)' });
+            if (a0.clear === true) await setListingAttrOverride(pid, attributeId, null);
+            else {
+              const fresh = await getListingProduct(pid);
+              // a shoe live on SHEIN: the product type SHEIN has it in (what its edits are checked against); else ours
+              const ptid = !neverLive(fresh) && fresh.product.product_type_id ? Number(fresh.product.product_type_id) : typeOf(fresh.product, fresh.variants, await listCategoryMaps());
+              if (!ptid) return send(res, 409, { ok: false, error: 'Choose this shoe’s SHEIN category first — the details SHEIN asks for depend on it.' });
+              const tpl = (await getListingCache('attr_template', ptid))?.payload || null;
+              const a = tpl ? templateParts(tpl).product.find((x) => Number(x.attribute_id) === attributeId) : null;
+              if (!tpl) return send(res, 409, { ok: false, error: 'SHEIN’s list of details for this category hasn’t been read yet — read it first (a publish preview reads it).' });
+              if (!a) return send(res, 400, { ok: false, error: 'That isn’t a SHEIN detail of this shoe’s category.' });
+              const valueIds = (Array.isArray(a0.valueIds) ? a0.valueIds : []).map(Number).filter(Number.isSafeInteger).slice(0, 50);
+              const extraValues = (Array.isArray(a0.extraValues) ? a0.extraValues : []).map((x) => String(x ?? '').replace(/\s+/g, ' ').trim().slice(0, 100)).filter(Boolean).slice(0, 50);
+              const bad = attrValueProblem(a, valueIds, extraValues);
+              if (bad) return send(res, 400, { ok: false, error: bad });
+              await setListingAttrOverride(pid, attributeId, { ptid, valueIds, extraValues, by, at: new Date().toISOString() });
+            }
+          }
+          if (!Object.keys(patch).length && b.photoSkip === undefined) {
+            const row = (await getListingProduct(pid)).product;
+            await recountAfterChoices();
+            return send(res, 200, { ok: true, product: productOut(row) });
+          }
+        }
         if (b.photoSkip !== undefined) {
           const list = b.photoSkip == null ? [] : b.photoSkip;
           if (!Array.isArray(list) || list.length > PHOTO_SKIP_MAX) return send(res, 400, { ok: false, error: `photoSkip: a list of at most ${PHOTO_SKIP_MAX} photo links.` });

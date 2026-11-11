@@ -21,7 +21,7 @@ import {
   listCategoryMaps, saveCategoryMap, deleteCategoryMap, listAttrDefaults, saveAttrDefault, deleteAttrDefault, listBrandMaps, saveBrandMap, deleteBrandMap,
 } from '../_lib/db.js';
 import { treeLeaves, readBoxDefaults, saveBoxDefaults } from '../_lib/shein-publish.js';
-import { SIZE_GROUPS, templateParts, BOX_PLACEHOLDERS, isKnownBrand, KNOWN_BRANDS } from '../../src/lib/sheinPublish.js';
+import { SIZE_GROUPS, templateParts, BOX_PLACEHOLDERS, isKnownBrand, KNOWN_BRANDS, attrValueProblem } from '../../src/lib/sheinPublish.js';
 import { dbConfigured, listSizeMaps, saveSizeMap, deleteSizeMap, listingSizeUsage, listListingCache, getListingCache, latestListingJob } from '../_lib/db.js';
 import { recomputeStored, readSizeLists } from '../_lib/shein-listing.js';
 import { validateCustomText, customTextConflict, suggestCustomSpelling, sizeKey } from '../../src/lib/sheinListings.js';
@@ -218,14 +218,8 @@ async function phase4Maps(req, res, user, type, qs) {
     if (!a) return send(res, 400, { ok: false, error: 'That isn’t a product attribute of this SHEIN product type.' });
     const valueIds = (Array.isArray(body.valueIds) ? body.valueIds : []).map(Number).filter(Number.isSafeInteger);
     const extraValues = (Array.isArray(body.extraValues) ? body.extraValues : []).map((x) => String(x).trim().slice(0, 100)).filter(Boolean);
-    const known = new Set((a.attribute_value_info_list || []).map((v) => Number(v.attribute_value_id)));
-    if (valueIds.some((v) => !known.has(v))) return send(res, 400, { ok: false, error: 'A value isn’t in SHEIN’s list for this attribute.' });
-    const mode = Number(a.attribute_mode);
-    if (mode === 3 && valueIds.length !== 1) return send(res, 400, { ok: false, error: 'Pick exactly one value.' });
-    if (mode === 1 && (!valueIds.length || (Number(a.attribute_input_num) && valueIds.length > Number(a.attribute_input_num)))) return send(res, 400, { ok: false, error: `Pick 1 to ${a.attribute_input_num || 'any'} values.` });
-    if (mode === 0 && extraValues.length !== 1) return send(res, 400, { ok: false, error: 'Type one value.' });
-    if (mode === 4 && (!valueIds.length || valueIds.length !== extraValues.length)) return send(res, 400, { ok: false, error: 'One amount per value.' });
-    if (mode === 4 && Number(a.attribute_type) === 3 && extraValues.reduce((n, x) => n + Number(x), 0) !== 100) return send(res, 400, { ok: false, error: 'The amounts must add up to 100.' });
+    const bad = attrValueProblem(a, valueIds, extraValues);   // one check, shared with the per-shoe save (listings.js publish_choices attr)
+    if (bad) return send(res, 400, { ok: false, error: bad });
     return send(res, 200, { ok: true, default: await saveAttrDefault({ productTypeId: ptid, attributeId: Number(a.attribute_id), valueIds, extraValues }, by) });
   }
   // brand

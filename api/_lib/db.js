@@ -11901,6 +11901,14 @@ export async function listingItemSpus(jobId, status = 'done') {
 export async function listListingJobItems(jobId, { limit = 500, offset = 0, status = null } = {}) {
   return await db()`SELECT * FROM shein_listing_job_items WHERE job_id = ${jobId} AND (${status}::text IS NULL OR status = ${status}::text) ORDER BY seq, id LIMIT ${limit} OFFSET ${offset}`;
 }
+// The latest PUBLISH send of a product (a run job's item), however many previews came after it — the drawer
+// decides "rejected → fix + Publish again" from it, never from the last 5 items (2026-11-11: two previews
+// pushed it out and a never-approved shoe got the live-shoe tools).
+export async function lastPublishRunItem(productId) {
+  const [r] = await db()`SELECT i.*, j.kind, j.mode FROM shein_listing_job_items i JOIN shein_listing_jobs j ON j.id = i.job_id
+    WHERE i.shopify_product_id = ${productId} AND i.op = 'publish' AND j.kind = 'run' ORDER BY i.id DESC LIMIT 1`;
+  return r || null;
+}
 export async function listingItemsForProduct(productId, spu, limit = 5) {
   return await db()`SELECT i.*, j.kind, j.mode FROM shein_listing_job_items i JOIN shein_listing_jobs j ON j.id = i.job_id
     WHERE (i.shopify_product_id = ${productId} OR (${spu}::text IS NOT NULL AND i.spu = ${spu}::text)) ORDER BY i.id DESC LIMIT ${limit}`;

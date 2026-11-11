@@ -3389,6 +3389,25 @@ test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fak
     expect(it.status).toBe('done');                                             // ready to send again
   });
 
+  test('a rejected shoe (never live) — 2026-11-11: the drawer finds its rejected send past any number of previews; add-sizes / photo previews say “never approved” without asking SHEIN', async ({ request }) => {
+    for (let i = 0; i < 5; i += 1) await preview([7709]);                     // previews used to push the send out of the last 5 items
+    const d = await (await request.get(`/api/shein/listings?product=${encodeURIComponent(gidP(7709))}`, { headers: auth.ph })).json();
+    expect(d.jobItems.some((x) => x.op === 'publish' && x.kind === 'run')).toBe(false);
+    expect(d.lastPublishRun).toMatchObject({ op: 'publish', kind: 'run', status: 'failed' });
+    expect(d.neverLive).toBe(true);
+    expect(d.checklist).toHaveLength(18);                                         // fixed before Publish again, in the drawer
+    const spuCalls = () => fake.calls.filter((c) => c.path === '/open-api/goods/spu-info').length;
+    const before = spuCalls();
+    for (const ops of [undefined, ['photos']]) {
+      const j = await L.startListingJob({ kind: 'preview', by: 'e2e-p4', scope: { productIds: [gidP(7709)], ...(ops ? { ops, convertPhotos: true } : {}) }, io: io() });
+      jobsMade.add(j.id); await finished(j.id);
+      const it = await one(j.id, 7709);
+      expect(it.body).toBe(null);
+      expect(it.plan.blockers.map((b) => b.code)).toEqual(['never_approved']);
+    }
+    expect(spuCalls()).toBe(before);
+  });
+
   test('SHEIN refuses (pre-check): Error with SHEIN’s words, mapped to a better blocker; the key released; ops are never mixed', async ({ request }) => {
     fake.p4.refuse = 'Detail image must be at least 900 px';
     const job = await run((await preview([7709])).id);

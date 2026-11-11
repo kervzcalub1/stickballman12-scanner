@@ -468,7 +468,7 @@ export function ShoeAttrEditor({ product, productTypeId, categoryId = null, canW
                 <span className="muted xs">{MODE_HINT[a.mode] || 'Pick'}</span>
               </div>
               {a.mode === 0
-                ? <input className="input" value={dr.extraValues?.[0] || ''} maxLength={100} aria-label={`${a.name} for this shoe`} placeholder={MODEL_HINT.test(a.name || '') ? 'e.g. Samba OG' : ''}
+                ? <input className="input" value={dr.extraValues?.[0] || ''} maxLength={100} aria-label={`${a.name} for this shoe`} placeholder={/model/i.test(a.name || '') ? 'e.g. Samba OG' : ''}
                     onChange={(e) => setDrafts((m) => ({ ...m, [a.attributeId]: { valueIds: [], extraValues: [e.target.value] } }))}
                     onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(a); } }} />
                 : <AttrControl a={a} dr={dr} onChange={(next) => setDrafts((m) => ({ ...m, [a.attributeId]: next }))} />}

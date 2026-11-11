@@ -6841,6 +6841,11 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .shl-cat-path { min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
 .shl-cat-tag { margin-left: 8px; }
 .shl-attr-seed { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* Per shoe (2026-11-11): who gets a category pick, and the link to Setup's type-wide details */
+.shl-cat-scope { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.shl-cat-scope .shl-radio { align-items: flex-start; }
+.shl-cat-scope p { margin: 2px 0 0; }
+.shl-pub-type-wide { margin: 8px 0 0; }
 .shl-attr-seed .input { flex: 1 1 240px; min-width: 0; }
 .shl-attrs { display: flex; flex-direction: column; gap: 8px; }
 .shl-attr { border: 1px solid var(--border); border-left: 3px solid #5b6270; border-radius: 8px; padding: 8px 10px; }

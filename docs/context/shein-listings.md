@@ -780,6 +780,48 @@ guide l. 5-8) — that case is Publish again (a NEW publish) with the photos lef
   blockers), `isPhotoRejection` + the action; vs the fake SHEIN: PH preview reads only, admin preview body + the
   left-out photo never hosted, endpoint refuses a mix, the run → In review → approved → done; the drawer section.
 
+## Per shoe: category + SHEIN details (Product Model) while fixing (built 2026-11-11)
+**Why:** the owner removed Setup's Product Model default ("Dunk Low" — one Nike's model, wrong for adidas and most
+Nikes), so the model must be typed per shoe; and a shoe SHEIN rejected needs its category / details fixed before
+**Publish again**, but its drawer showed no checklist (it has an SPU from the rejected publish).
+- **Columns** (`shein_listing_products`, `db-setup.mjs`): `category_pick_id`, `category_pick_ptid`, `category_pick_path`,
+  `category_pick_by`, `category_pick_at`; the shoe's details reuse `attr_overrides` (was unused) =
+  `{ "<attributeId>": { ptid, valueIds, extraValues, by, at } }`. **Prod needs `db:setup`.**
+- **Pure** (`src/lib/sheinPublish.js`): `shoeCategory(row, mapRow)` (the shoe's pick wins over the type map; a pick
+  without its product type is ignored) · `shoeAttrDefaults(defaults, overrides, ptid)` (Setup's defaults + the
+  shoe's on top, same attribute → the shoe's; a value saved under ANOTHER product type is ignored; shoe rows carry
+  `shoe: true`) · `attrValueProblem(a, valueIds, extraValues)` (the one value check — Setup's `listing-maps type=attr`
+  and the per-shoe save share it).
+- **Rules:** `buildAttributes` — a REQUIRED TYPED detail (mode 0) with no value → `missing_attr` why `typed_per_shoe`
+  ("type it for this shoe"). A Setup typed value is still used for a publish if someone sets one; on an EDIT of a
+  live shoe (`attributePatch`) a typed detail is filled ONLY from the shoe's own value (`shoe: true`), never Setup's.
+- **Used by:** `publishReadiness` / `publishContext` (+ `listListingCategoryPicks` so the picked categories' rules and
+  templates are in the cache), `buildPublish` (category + tree check, details), `editAttrs` (live edits: add sizes,
+  SKU fixes, photo replace — looks the shoe up by SPU, `listingAttrOverridesBySpu`), `typeOf`/`categoryOf` in
+  `api/shein/listings.js`, `loadListingPrev` (+ the 4 columns).
+- **Endpoint:** `publish_choices` (PH ok, DB only, recount) + `categoryPick: { categoryId } | null` — a LEAF of the cached
+  tree (400 not a leaf, 409 tree unread); refused (409) for a shoe already live on SHEIN (`neverLive` = no size has a
+  SHEIN SKU) · + `attr: { attributeId, valueIds?, extraValues? } | { attributeId, clear: true }` — checked against the
+  template of the shoe's category (409 no category / template unread, 400 not a detail of it / bad value); a live
+  shoe's details are saved under the product type SHEIN has it in (`product_type_id`). Typed text is trimmed, spaces
+  collapsed, ≤ 100.
+- **GET `?product=`:** a shoe never live on SHEIN (incl. a rejected publish) now gets the `checklist`; a preview from
+  BEFORE the last send is ignored (it judged the rejected publish) → the readiness instead.
+- **Page:** drawer shows the checklist for a rejected shoe too (+ "Fix what SHEIN rejected below … then an admin
+  presses Publish again"). **Category** line → `CategoryPicker perShoe`: **Only this shoe** / **For every Shopify “type”
+  shoe in group** — default = this shoe when the shoe already has a category, the type when it has none; "Use the
+  shared category again" clears the pick; saving for the type also clears this shoe's pick. ✓ line says "· this shoe
+  only". **SHEIN details** line → `ShoeAttrEditor` (THIS shoe: needed first, chips Set for this shoe / From Setup / Typed
+  per shoe, Save for this shoe / Remove), Setup's `AttrEditor` behind "Set a detail for every shoe of this SHEIN type
+  instead (Setup)". Live shoe with a `missing_attr` blocker (sizes / product / its last edits): drawer section **SHEIN
+  details for this shoe** (`[data-shoe-details]`) with the same editor.
+- **Not built:** changing the category of a shoe already live on SHEIN (SHEIN keeps a live product in its category);
+  the bulk sheet has no per-shoe Product Model (typed one by one in the drawer).
+- e2e (`shein-listings.spec.js`): pure (shoeCategory / shoeAttrDefaults / typed_per_shoe / attributePatch / the value
+  check); vs the fake SHEIN (`fake.p4.template` swaps in a required typed Product Model): the pick + the type map
+  untouched, the preview blocks then sends the shoe's model, the other shoe still asked, a picked detail wins, Remove;
+  the page: Change → Only this shoe → "· this shoe only" → shared again; details panel = the shoe's editor first.
+
 ## Phase 5 — 4seller cut-over + go-live (built 2026-10-27)
 - **Where:** Setup tab, on top: **Go-live checklist** then **4seller cut-over**; once "4seller paused" is ticked the
   connection strip shows "4seller cut-over: day N of 30 · n of 5 pass" (or "Ready to cancel 4seller") → Setup.

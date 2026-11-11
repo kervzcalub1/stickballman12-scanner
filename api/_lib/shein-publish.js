@@ -9,7 +9,7 @@ import {
   productPhotosForSku, getSetting, setSetting, countTransformPicToday, listPublishUnconfirmed, markVariantsPublished, verifySizeMapById, verifySizeMap, setListingPublished, updateListingItem, setVariantsLastError,
 } from './db.js';
 import { r2Configured, presignUrl, publicUrl, isAllowedPhotoUrl } from './r2.js';
-import { planPublish, imagePlan, imageConversions, keepPhotos, BOX_PLACEHOLDERS, sizeGroupOf, validateBoxDefaults, templateParts } from '../../src/lib/sheinPublish.js';
+import { planPublish, imagePlan, imageConversions, keepPhotos, shoeCategory, shoeAttrDefaults, BOX_PLACEHOLDERS, sizeGroupOf, validateBoxDefaults, templateParts } from '../../src/lib/sheinPublish.js';
 import { blocker, spuPayload, stableJson, hashString, BLOCKERS } from '../../src/lib/sheinListings.js';
 
 const H = 3600_000; const DAY = 24 * H;
@@ -237,11 +237,13 @@ export async function buildPublish(it, { jctx, io, log, fatal }) {
   const maps = jctx.categoryMaps || await listCategoryMaps();
   const row = groups.length === 1 ? maps.find((m) => m.shopify_product_type === String(product?.productType || '') && m.size_group === groups[0]) : null;
   let category = null; let suggestion = null;
-  const tree = row ? await categoryTree(io, lg).catch((e) => { if (fatal(e)) throw e; return null; }) : null;
-  if (row) {
-    const leaf = tree ? treeLeaves(tree).find((l) => l.categoryId === Number(row.category_id)) : null;
-    category = { categoryId: Number(row.category_id), productTypeId: Number(leaf?.productTypeId ?? row.product_type_id), path: row.category_path || leaf?.path || null,
-      treeOk: !tree ? undefined : !!leaf && Number(leaf.productTypeId) === Number(row.product_type_id) };
+  // the shoe's own category (picked while fixing it, 2026-11-11) wins over its product type's map
+  const sc = shoeCategory(d.product, row);
+  if (sc) {
+    const tree = await categoryTree(io, lg).catch((e) => { if (fatal(e)) throw e; return null; });
+    const leaf = tree ? treeLeaves(tree).find((l) => l.categoryId === sc.categoryId) : null;
+    category = { categoryId: sc.categoryId, productTypeId: Number(leaf?.productTypeId ?? sc.productTypeId), path: sc.path || leaf?.path || null, source: sc.source,
+      treeOk: !tree ? undefined : !!leaf && Number(leaf.productTypeId) === sc.productTypeId };
   } else if (product?.image) {
     // S8: one suggestion per product a day (a read, but no need to ask on every dry run)
     const s = await cached('cat_suggest', it.shopify_product_id, DAY, () => io.sheinCategorySuggest(product.images?.[0]?.url || product.image, String(product.title || '').slice(0, 1000), lg)).catch((e) => { if (fatal(e)) throw e; return []; });
@@ -250,7 +252,7 @@ export async function buildPublish(it, { jctx, io, log, fatal }) {
   const fill = category ? await fillFor(category.categoryId, io, lg).catch((e) => { if (fatal(e)) throw e; return null; }) : null;
   const template = category ? await templateFor(category.productTypeId, io, lg).catch((e) => { if (fatal(e)) throw e; return null; }) : null;
   const parts = template ? templateParts(template) : null;
-  const attrDefaults = category ? await listAttrDefaults(category.productTypeId) : [];
+  const attrDefaults = category ? shoeAttrDefaults(await listAttrDefaults(category.productTypeId), d.product.attr_overrides, category.productTypeId) : [];
   const assoc = category && template ? await assocRequired({ categoryId: category.categoryId, productTypeId: category.productTypeId, defaults: attrDefaults, parts, io, log: lg }).catch((e) => { if (fatal(e)) throw e; return []; }) : [];
   const permission = category && parts?.size ? await permissionFor(category.categoryId, parts.size.attributeId, io, lg).catch(() => null) : null;
   // brand (D5)

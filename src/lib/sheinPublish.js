@@ -334,7 +334,8 @@ export function buildAttributes({ parts, defaults = [], assoc = [] }) {
     const known = new Set((a.attribute_value_info_list || []).map((v) => Number(v.attribute_value_id)));
     const allowed = assocBy.get(id)?.allowed || [];
     if (Number(a.data_dimension) === 3) { if (required) problems.push(blocker('missing_attr', { attributeId: id, attribute: name, why: 'sku_scope' })); continue; }
-    if (!d) { if (required) problems.push(blocker('missing_attr', { attributeId: id, attribute: name, allowed: allowed.length ? allowed : [...known].slice(0, 30) })); continue; }
+    // a TYPED detail (Product Model) is per shoe: missing → "type it for this shoe", never a store default
+    if (!d) { if (required) problems.push(blocker('missing_attr', { attributeId: id, attribute: name, ...(Number(a.attribute_mode) === 0 ? { why: 'typed_per_shoe' } : { allowed: allowed.length ? allowed : [...known].slice(0, 30) }) })); continue; }
     if (d.stale) { problems.push(blocker('missing_attr', { attributeId: id, attribute: name, why: 'template_changed' })); continue; }
     const ids = (d.value_ids || []).map(Number); const extras = (d.extra_values || []).map(String);
     const mode = Number(a.attribute_mode);
@@ -363,6 +364,41 @@ export function buildAttributes({ parts, defaults = [], assoc = [] }) {
   return { rows, problems };
 }
 
+// Per shoe (2026-11-11): while fixing a shoe a person may pick THIS shoe's SHEIN category and type its own
+// SHEIN details — Product Model is per shoe (the old Setup default "Dunk Low" fit one Nike, not an adidas).
+// Stored on shein_listing_products: category_pick_id / _ptid / _path, and attr_overrides =
+// { "<attributeId>": { ptid, valueIds, extraValues, by, at } }.
+// The shoe's category wins over its product type's map (Setup). → { categoryId, productTypeId, path, source } | null
+export function shoeCategory(row, mapRow) {
+  if (row?.category_pick_id && row?.category_pick_ptid) return { categoryId: Number(row.category_pick_id), productTypeId: Number(row.category_pick_ptid), path: row.category_pick_path || null, source: 'shoe' };
+  return mapRow ? { categoryId: Number(mapRow.category_id), productTypeId: Number(mapRow.product_type_id), path: mapRow.category_path || null, source: 'map' } : null;
+}
+// Setup's defaults for the product type with the shoe's own details on top (same attribute → the shoe's).
+// A detail set under another product type (the category changed since) is ignored. Rows keep the
+// shein_attr_defaults shape; the shoe's carry shoe: true.
+export function shoeAttrDefaults(defaults, overrides, productTypeId) {
+  const ptid = Number(productTypeId);
+  if (!ptid) return [];
+  const own = Object.entries(overrides && typeof overrides === 'object' ? overrides : {})
+    .filter(([id, o]) => o && Number(o.ptid) === ptid && Number.isSafeInteger(Number(id)))
+    .map(([id, o]) => ({ product_type_id: ptid, attribute_id: Number(id), value_ids: (o.valueIds || []).map(Number), extra_values: (o.extraValues || []).map(String), stale: false, shoe: true, set_by: o.by || null, set_at: o.at || null }));
+  const mine = new Set(own.map((o) => o.attribute_id));
+  return [...(defaults || []).filter((d) => Number(d.product_type_id) === ptid && !mine.has(Number(d.attribute_id))), ...own];
+}
+// One detail's values against SHEIN's template row (Setup and the per-shoe save share it). → error text | null.
+export function attrValueProblem(a, valueIds = [], extraValues = []) {
+  const known = new Set((a?.attribute_value_info_list || []).map((v) => Number(v.attribute_value_id)));
+  if (valueIds.some((v) => !known.has(v))) return 'A value isn’t in SHEIN’s list for this attribute.';
+  const mode = Number(a.attribute_mode);
+  if (mode === 3 && valueIds.length !== 1) return 'Pick exactly one value.';
+  if (mode === 1 && (!valueIds.length || (Number(a.attribute_input_num) && valueIds.length > Number(a.attribute_input_num)))) return `Pick 1 to ${a.attribute_input_num || 'any'} values.`;
+  if (mode === 0 && extraValues.length !== 1) return 'Type one value.';
+  if (mode === 0 && (a.rule_info_list || []).some((r) => Number(r.condition_type) === 1) && !/^[1-9]\d*$/.test(extraValues[0])) return 'SHEIN wants a whole number here.';
+  if (mode === 4 && (!valueIds.length || valueIds.length !== extraValues.length)) return 'One amount per value.';
+  if (mode === 4 && Number(a.attribute_type) === 3 && extraValues.reduce((n, x) => n + Number(x), 0) !== 100) return 'The amounts must add up to 100.';
+  return null;
+}
+
 // An EDIT of a product already on SHEIN (partialEdit: sizes, SKUs, sizes back on) is re-checked
 // WHOLE — a detail SHEIN made required after the product was listed (4seller's Nikes lack "Reflection",
 // found 2026-10-28) refuses every edit. product_attribute_list REPLACES the list (doc 3002047 rule 3),
@@ -370,7 +406,8 @@ export function buildAttributes({ parts, defaults = [], assoc = [] }) {
 // product attributes are kept) + each missing required one (status 3 ∪ assoc) from the person's
 // defaults (Setup → SHEIN details), checked like a publish (buildAttributes). Only PICKED values
 // (Reflection: No, not dangerous goods…) — a TYPED one is per shoe (the Product Model default is
-// "Dunk Low"), so a product missing it is blocked, never given another shoe's text.
+// "Dunk Low"), so a product missing it is blocked unless a person typed it for THIS shoe (attr_overrides,
+// shoeAttrDefaults — 2026-11-11), never given another shoe's text.
 // → { list | null (nothing missing: send no list), added: [{attributeId, attribute}], dropped: [ids], problems }.
 export function attributePatch({ spu, template, defaults = [], assoc = [] }) {
   if (!template?.attribute_infos) return { list: null, added: [], dropped: [], problems: [], unread: true };
@@ -394,7 +431,8 @@ export function attributePatch({ spu, template, defaults = [], assoc = [] }) {
   for (const a of parts.product) {
     const id = Number(a.attribute_id);
     if (have.has(id) || !(Number(a.attribute_status) === 3 || assocBy.has(id))) continue;
-    if (Number(a.attribute_mode) === 0) { problems.push(blocker('missing_attr', { attributeId: id, attribute: a.attribute_name_en || a.attribute_name || String(id), why: 'typed_per_shoe' })); continue; }
+    // typed (Product Model): only THIS shoe's own value (shoeAttrDefaults → shoe: true), never Setup's
+    if (Number(a.attribute_mode) === 0 && !(defaults || []).some((d) => Number(d.attribute_id) === id && d.shoe)) { problems.push(blocker('missing_attr', { attributeId: id, attribute: a.attribute_name_en || a.attribute_name || String(id), why: 'typed_per_shoe' })); continue; }
     const at = buildAttributes({ parts: { ...parts, product: [a] }, defaults, assoc: assocBy.has(id) ? [assocBy.get(id)] : [] });
     if (at.problems.length) { problems.push(...at.problems); continue; }
     rows.push(...at.rows); added.push({ attributeId: id, attribute: a.attribute_name_en || a.attribute_name || String(id) });
@@ -518,7 +556,7 @@ export function planPublish(input) {
   // 1B-2 · category (D7)
   if (!category) blockers.push(blocker('no_category', { suggestion: input.suggestion || null }));
   else if (category.treeOk === false) blockers.push(blocker('no_category', { why: 'tree_changed', categoryId: category.categoryId }));
-  plan.category = category ? { id: category.categoryId, productTypeId: category.productTypeId, path: category.path || null } : null;
+  plan.category = category ? { id: category.categoryId, productTypeId: category.productTypeId, path: category.path || null, source: category.source || 'map' } : null;
 
   // 1B-3 · rules
   if (category && !fill && !readiness) blockers.push(blocker('fill_required', { field: 'query-publish-fill-in-standard (not read)' }));
@@ -688,14 +726,15 @@ const VARIANT_CODES = new Set(['size_needs_map', 'size_not_on_shein', 'size_unre
 export function publishReadiness(product, ctx = {}) {
   const groups = [...new Set((product.variants || []).map((v) => sizeGroupOf(v.size)).filter(Boolean))];
   const row = groups.length === 1 ? (ctx.categoryMaps || []).find((m) => m.shopify_product_type === String(product.productType || '') && m.size_group === groups[0]) : null;
-  const category = row ? { categoryId: Number(row.category_id), productTypeId: Number(row.product_type_id), path: row.category_path || null } : null;
+  const sc = shoeCategory(ctx.productRow, row);   // the shoe's own pick first (2026-11-11)
+  const category = sc ? { categoryId: sc.categoryId, productTypeId: sc.productTypeId, path: sc.path, source: sc.source } : null;
   const fill = category ? ctx.fills?.get(category.categoryId) || null : null;
   const template = category ? ctx.templates?.get(category.productTypeId) || null : null;
   const parts = template ? templateParts(template) : null;
   const bm = (ctx.brandMaps || []).find((b) => b.vendor === String(product.vendor || '').trim().toLowerCase());
   const perm = category && parts?.size ? ctx.permissions?.get(`${category.categoryId}|${parts.size.attributeId}`) : null;
   const { plan, checklist } = planPublish({
-    product, productRow: { ...(ctx.productRow || {}), excludedVariants: ctx.excludedVariants || new Set() }, category, fill, template, attrDefaults: (ctx.attrDefaults || []).filter((d) => category && Number(d.product_type_id) === category.productTypeId),
+    product, productRow: { ...(ctx.productRow || {}), excludedVariants: ctx.excludedVariants || new Set() }, category, fill, template, attrDefaults: category ? shoeAttrDefaults(ctx.attrDefaults, ctx.productRow?.attr_overrides, category.productTypeId) : [],
     brand: bm ? { code: bm.brand_code, name: bm.brand_name, noBrand: !!bm.no_brand, listed: !bm.brand_code ? true : !ctx.brands ? null : ctx.brands.some((b) => b.brand_code === bm.brand_code) } : null,
     unconfirmed: ctx.unconfirmed?.get?.(product.productId) || null,
     maps: ctx.maps || [], permission: perm == null ? null : Number(perm), customValues: (parts?.size?.values || []).filter((v) => v.custom).map((v) => v.label),

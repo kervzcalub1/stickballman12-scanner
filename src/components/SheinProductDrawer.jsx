@@ -18,7 +18,7 @@ import { itemStatus, isPhotoRejection } from '../lib/sheinListings.js';
 import { plain } from '../lib/sheinWords.js';
 import { NEEDS_PRIV } from './SheinListingsBits.jsx';
 import { useFixes, UPDATE_OPS, isRise } from '../screens/SheinListingsProducts.jsx';
-import { PublishChecklist } from './SheinPublishBits.jsx';
+import { PublishChecklist, ShoeAttrEditor } from './SheinPublishBits.jsx';
 import { SheinShoeFix } from './SheinShoeFix.jsx';
 import { SheinPhotoPicker } from './SheinPhotoPicker.jsx';
 
@@ -97,6 +97,9 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
   const photoReason = [...(p?.blockers || []), ...variants.flatMap((v) => v.blockers || []), ...(pubRun?.blockers || [])]
     .map((b) => (b.code === 'review_rejected' ? b.params?.failedReason || b.sheinSaid : null)).find((x) => isPhotoRejection(x)) || null;
   const photoRun = (d?.jobItems || []).find((i) => i.op === 'photos' && i.kind === 'run') || null;
+  // a live shoe missing a SHEIN detail it must carry (Product Model…) — from its sizes' / its last edits' blockers (2026-11-11)
+  const attrNeed = [...(p?.blockers || []), ...variants.flatMap((v) => v.blockers || []), ...(d?.jobItems || []).flatMap((i) => i.blockers || [])]
+    .filter((b) => b.code === 'missing_attr' && b.params?.attributeId);
 
   return createPortal(
     <>
@@ -122,8 +125,9 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
           {!d && !err && <>{[0, 1, 2, 3].map((i) => <div key={i} className="shl-skel shl-skel-row" />)}</>}
           {p && (
             <>
-              {isNew && d.checklist && (
+              {(isNew || republish) && d.checklist && (
                 <div ref={listRef}>
+                  {republish && <p className="muted xs" data-fix-before-again="">Fix what SHEIN rejected below — category, SHEIN details (Product Model) or photos — then an admin presses <b>Publish again</b> and checks the new preview. Nothing is sent before that.</p>}
                   {fixFirst && toFix > 0 && (
                     <div className="shl-banner warn" role="status" data-fix-first="">
                       <b>Fix {toFix === 1 ? 'this' : `these ${fmt(toFix)}`} first — nothing was sent or previewed</b>
@@ -178,6 +182,16 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                   </div>
                 )}
               </section>}
+
+              {isShopify && !isNew && !republish && attrNeed.length > 0 && (
+                <section className="shl-d-sec" data-shoe-details="">
+                  <h4 className="shl-h4">SHEIN details for this shoe</h4>
+                  <p className="muted xs">SHEIN now requires {attrNeed.map((b) => b.params?.attribute || 'a detail').filter((x, i, a) => a.indexOf(x) === i).join(', ')} on this shoe, and refuses every edit (new sizes, SKU fixes, photos) until it has {attrNeed.length === 1 ? 'it' : 'them'}. Set {attrNeed.length === 1 ? 'it' : 'them'} here; the next edit carries {attrNeed.length === 1 ? 'it' : 'them'}.</p>
+                  {p.product_type_id ? <ShoeAttrEditor product={p} productTypeId={Number(p.product_type_id)} categoryId={p.category_id ? Number(p.category_id) : null} canWrite={!!d.canWrite}
+                    focus={attrNeed.map((b) => b.params?.attributeId).filter(Boolean)} onSignOut={onSignOut} onSaved={() => load()} />
+                    : <p className="notice xs">SHEIN’s product type for this shoe isn’t read yet — Re-read SHEIN first.</p>}
+                </section>
+              )}
 
               {isShopify && !isNew && variants.some((v) => v.shein_sku) && (
                 <SheinShoeFix p={p} variants={variants} canWrite={!!d.canWrite} connected={connected} open={matchOpen} onSignOut={onSignOut} onReload={load} />

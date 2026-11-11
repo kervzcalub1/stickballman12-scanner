@@ -57,7 +57,10 @@ function ReadButton({ canWrite, label, busyLabel = 'Reading SHEIN…', onRead, h
 
 /* ------------------------------- category ------------------------------- */
 // SHEIN only takes a product in a LAST-level category; the path is what a person searches.
-export function CategoryPicker({ productType, sizeGroup, productId = null, current = null, canWrite, onSaved, onCancel, onSignOut, lede = null }) {
+// perShoe (2026-11-11): while fixing ONE shoe, the pick can be for this shoe only (publish_choices
+// categoryPick — wins over the type's map) or for every shoe of its Shopify type + size group (the map).
+// shoePick = the shoe's own category id when it has one ("Use the shared category again").
+export function CategoryPicker({ productType, sizeGroup, productId = null, current = null, canWrite, onSaved, onCancel, onSignOut, lede = null, perShoe = false, shoePick = null }) {
   const { d, err, reload } = useLoad(() => api.sheinPublishMaps('category'), [], onSignOut);
   const [sug, setSug] = useState(null);      // null = asking / not asked
   const [sugErr, setSugErr] = useState('');
@@ -65,6 +68,8 @@ export function CategoryPicker({ productType, sizeGroup, productId = null, curre
   const [pick, setPick] = useState(current ? String(current) : '');
   const [busy, setBusy] = useState(false);
   const [saveErr, setSaveErr] = useState('');
+  // no category yet → set it up once for the type; changing one a shoe already has → only this shoe
+  const [scope, setScope] = useState(perShoe && (shoePick || current || !sizeGroup) ? 'shoe' : 'type');
   useEffect(() => {
     if (!productId) return undefined;
     let live = true;
@@ -91,10 +96,22 @@ export function CategoryPicker({ productType, sizeGroup, productId = null, curre
     if (!picked) return;
     setBusy(true); setSaveErr('');
     try {
+      if (scope === 'shoe') {
+        await choose(productId, { categoryPick: { categoryId: Number(pick) } });
+        onSaved?.({ category_path: picked.path, shoe: true });
+        return;
+      }
       const s = suggested.find((x) => String(x.categoryId) === pick);
       const r = await api.sheinPublishMapSave('category', { action: 'set', productType: productType || '', sizeGroup, categoryId: Number(pick), suggestion: s ? { categoryId: s.categoryId, vote: s.vote, order: s.order } : null });
+      if (perShoe && shoePick) await choose(productId, { categoryPick: null });   // "every shoe" includes this one: drop its own pick
       onSaved?.(r.map);
     } catch (e) { if (e.unauthorized) onSignOut?.(); else setSaveErr(plain(e.message)); }
+    finally { setBusy(false); }
+  }
+  async function backToShared() {
+    setBusy(true); setSaveErr('');
+    try { await choose(productId, { categoryPick: null }); onSaved?.({ shoe: true, cleared: true }); }
+    catch (e) { if (e.unauthorized) onSignOut?.(); else setSaveErr(plain(e.message)); }
     finally { setBusy(false); }
   }
   const Opt = ({ l, tag }) => {
@@ -108,7 +125,15 @@ export function CategoryPicker({ productType, sizeGroup, productId = null, curre
   };
   return (
     <div className="shl-pub-panel" data-panel="category">
-      <p className="xs shl-pub-lede">For every Shopify <b>“{productType || '(no product type)'}”</b> shoe in <b>{GROUP_LABEL[sizeGroup] || sizeGroup}</b>{lede ? <> — {lede}</> : ''}. Saved once on our side; nothing goes to SHEIN.</p>
+      {perShoe ? (
+        <div className="shl-cat-scope" role="radiogroup" aria-label="Who gets this category" data-scope={scope}>
+          <label className="shl-radio"><input type="radio" name={`shl-scope-${productId}`} checked={scope === 'shoe'} onChange={() => setScope('shoe')} /> <span><b>Only this shoe</b> <span className="muted xs">— the other shoes keep their category</span></span></label>
+          <label className="shl-radio"><input type="radio" name={`shl-scope-${productId}`} checked={scope === 'type'} disabled={!sizeGroup} onChange={() => setScope('type')} /> <span>For every Shopify <b>“{productType || '(no product type)'}”</b> shoe in <b>{GROUP_LABEL[sizeGroup] || sizeGroup || '—'}</b></span></label>
+          <p className="muted xs">Saved on our side; nothing goes to SHEIN until a publish is confirmed.{shoePick ? ' This shoe has its own category now.' : ''}</p>
+        </div>
+      ) : (
+        <p className="xs shl-pub-lede">For every Shopify <b>“{productType || '(no product type)'}”</b> shoe in <b>{GROUP_LABEL[sizeGroup] || sizeGroup}</b>{lede ? <> — {lede}</> : ''}. Saved once on our side; nothing goes to SHEIN.</p>
+      )}
       {err && <p className="error xs">{err}</p>}
       {!d && !err && <div className="shl-skel shl-skel-line" />}
       {d && !leaves && (
@@ -141,7 +166,8 @@ export function CategoryPicker({ productType, sizeGroup, productId = null, curre
           {saveErr && <p className="error xs" role="alert">{saveErr}</p>}
           <div className="shl-pub-acts">
             {onCancel && <button type="button" className="btn ghost sm" onClick={onCancel}>Cancel</button>}
-            <button type="button" className="btn primary sm" disabled={!picked || busy || !sizeGroup} onClick={save}>{busy ? 'Saving…' : picked ? `Use “${picked.path.split(' › ').at(-1)}”` : 'Pick a category'}</button>
+            {perShoe && shoePick && <button type="button" className="btn ghost sm" disabled={busy} data-act="shared-category" onClick={backToShared}>Use the shared category again</button>}
+            <button type="button" className="btn primary sm" disabled={!picked || busy || (scope === 'type' && !sizeGroup)} onClick={save}>{busy ? 'Saving…' : picked ? `Use “${picked.path.split(' › ').at(-1)}”${scope === 'shoe' && perShoe ? ' for this shoe' : ''}` : 'Pick a category'}</button>
           </div>
         </>
       )}
@@ -358,6 +384,113 @@ export function AttrEditor({ productTypeId, categoryId = null, canWrite, onSaved
   );
 }
 
+/* --------------------------- SHEIN details for ONE shoe --------------------------- */
+// 2026-11-11: some details are per shoe — Product Model above all (the old Setup default "Dunk Low" fit one
+// Nike, never an adidas). A value typed here is THIS shoe's (publish_choices attr → attr_overrides) and wins over
+// Setup's default for the same detail; a TYPED required detail is only ever taken from here. Saved for the
+// shoe's current SHEIN product type — after a category change to another type it is asked again.
+const ownDraft = (o) => (o ? { valueIds: (o.valueIds || []).map(Number), extraValues: o.extraValues || [] } : null);
+const MODEL_HINT = /model|style name|series/i;
+export function ShoeAttrEditor({ product, productTypeId, categoryId = null, canWrite, onSaved, onSignOut, focus = [] }) {
+  const ptid = Number(productTypeId) || null;
+  const { d, err, reload } = useLoad(() => (ptid ? api.sheinPublishMaps('attr', { productTypeId: ptid }) : Promise.resolve({ template: null, defaults: [] })), [ptid], onSignOut);
+  const [drafts, setDrafts] = useState({});
+  const [rowErr, setRowErr] = useState({});
+  const [busy, setBusy] = useState('');
+  const [all, setAll] = useState(false);
+  const attrs = d?.template?.attributes || [];
+  const own = useMemo(() => {
+    const m = new Map();
+    for (const [id, o] of Object.entries(product?.attr_overrides || {})) if (o && Number(o.ptid) === ptid) m.set(Number(id), o);
+    return m;
+  }, [product?.attr_overrides, ptid]);
+  const typeDefault = useMemo(() => new Map((d?.defaults || []).map((x) => [Number(x.attribute_id), x])), [d]);
+  const want = new Set(focus.map(Number));
+  // typed + required with no Setup value (Product Model since its default was removed) = typed for each shoe
+  const perShoe = (a) => a.mode === 0 && (a.status === 3 || want.has(a.attributeId)) && !typeDefault.has(a.attributeId);
+  const covered = (a) => own.has(a.attributeId) || (typeDefault.has(a.attributeId) && !typeDefault.get(a.attributeId)?.stale);
+  const needed = (a) => (a.status === 3 || want.has(a.attributeId)) && !covered(a);
+  const rank = (a) => (needed(a) ? 0 : own.has(a.attributeId) ? 1 : perShoe(a) || MODEL_HINT.test(a.name || '') ? 2 : 3);
+  const sorted = [...attrs].sort((a, b) => rank(a) - rank(b));
+  const shown = all ? sorted : sorted.filter((a) => rank(a) < 3 || drafts[a.attributeId]);
+  const missing = attrs.filter(needed);
+  const draftOf = (id) => drafts[id] || ownDraft(own.get(id)) || { valueIds: [], extraValues: [] };
+  const label = (a, x) => (a.mode === 0 ? (x.extra_values || x.extraValues || [])[0] : (x.value_ids || x.valueIds || []).map((v) => a.values.find((o) => o.id === Number(v))?.label || v).join(', '));
+
+  async function save(a) {
+    const dr = draftOf(a.attributeId);
+    const bad = draftProblem(a, dr);
+    if (bad) { setRowErr((m) => ({ ...m, [a.attributeId]: bad })); return; }
+    setBusy(`s${a.attributeId}`);
+    try {
+      await choose(product.shopify_product_id, { attr: { attributeId: a.attributeId, valueIds: dr.valueIds, extraValues: (dr.extraValues || []).map((x) => String(x).trim()) } });
+      setRowErr((m) => ({ ...m, [a.attributeId]: '' }));
+      setDrafts((m) => { const n = { ...m }; delete n[a.attributeId]; return n; });
+      onSaved?.(`${a.name || 'Detail'} saved for this shoe.`);
+    } catch (e) { if (e.unauthorized) onSignOut?.(); else setRowErr((m) => ({ ...m, [a.attributeId]: plain(e.message) })); }
+    finally { setBusy(''); }
+  }
+  async function clear(a) {
+    setBusy(`c${a.attributeId}`);
+    try { await choose(product.shopify_product_id, { attr: { attributeId: a.attributeId, clear: true } }); onSaved?.(`${a.name || 'Detail'} removed from this shoe.`); }
+    catch (e) { if (e.unauthorized) onSignOut?.(); else setRowErr((m) => ({ ...m, [a.attributeId]: plain(e.message) })); }
+    finally { setBusy(''); }
+  }
+
+  if (!ptid) return <p className="notice xs">Choose this shoe’s SHEIN category first — the details SHEIN asks for depend on it.</p>;
+  if (err) return <p className="error xs">{err}</p>;
+  if (!d) return <div className="shl-skel shl-skel-line" />;
+  if (!d.template) {
+    return (
+      <div className="notice xs">SHEIN’s list of details for this category hasn’t been read yet.{' '}
+        {categoryId ? <ReadButton canWrite={canWrite} label="Read SHEIN’s details (read-only)" onRead={async () => { await api.sheinListingMeta({ category: categoryId, refresh: 1 }); await reload(); }} />
+          : <span className="muted">A publish preview reads it.</span>}
+      </div>
+    );
+  }
+  return (
+    <div className="shl-pub-panel" data-panel="shoe-attributes">
+      <p className="xs shl-pub-lede"><b>For this shoe only</b> — {product?.title || 'this shoe'}. Type the model the way the shoe is sold (e.g. Samba OG, Air Jordan 4 Retro, Ultraboost 1.0). A value here wins over Setup’s; nothing goes to SHEIN until a publish is confirmed.{missing.length ? <> <b>{fmt(missing.length)} required still missing.</b></> : ''}</p>
+      <div className="shl-attrs">
+        {shown.map((a) => {
+          const dr = draftOf(a.attributeId);
+          const mine = own.get(a.attributeId);
+          const def = typeDefault.get(a.attributeId);
+          const changed = drafts[a.attributeId] && JSON.stringify(drafts[a.attributeId]) !== JSON.stringify(ownDraft(mine) || { valueIds: [], extraValues: [] });
+          return (
+            <div key={a.attributeId} className={`shl-attr${needed(a) ? ' need' : ''}${changed ? ' chg' : ''}`} data-shoe-attr={a.attributeId}>
+              <div className="shl-attr-head">
+                <b>{a.name || `#${a.attributeId}`}</b>
+                {a.status === 3 ? <span className="ebo-chip bad">Required</span> : want.has(a.attributeId) ? <span className="ebo-chip bad">Required with your other choices</span> : <span className="ebo-chip">Optional</span>}
+                {mine && !changed && <span className="ebo-chip ok">Set for this shoe</span>}
+                {!mine && def && !perShoe(a) && <span className="ebo-chip">From Setup: {label(a, def) || '—'}</span>}
+                {!mine && perShoe(a) && <span className="ebo-chip warn">Typed per shoe</span>}
+                <span className="muted xs">{MODE_HINT[a.mode] || 'Pick'}</span>
+              </div>
+              {a.mode === 0
+                ? <input className="input" value={dr.extraValues?.[0] || ''} maxLength={100} aria-label={`${a.name} for this shoe`} placeholder={MODEL_HINT.test(a.name || '') ? 'e.g. Samba OG' : ''}
+                    onChange={(e) => setDrafts((m) => ({ ...m, [a.attributeId]: { valueIds: [], extraValues: [e.target.value] } }))}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(a); } }} />
+                : <AttrControl a={a} dr={dr} onChange={(next) => setDrafts((m) => ({ ...m, [a.attributeId]: next }))} />}
+              {rowErr[a.attributeId] && <p className="shl-field-bad" role="alert">{rowErr[a.attributeId]}</p>}
+              <div className="shl-pub-acts">
+                {mine && <span className="muted xs shl-grow">by {mine.by || '—'} {when(mine.at)}</span>}
+                {mine && !changed && <button type="button" className="btn ghost xs" disabled={!!busy} onClick={() => clear(a)}>{busy === `c${a.attributeId}` ? 'Removing…' : 'Remove'}</button>}
+                {changed && <button type="button" className="btn ghost xs" disabled={!!busy} onClick={() => setDrafts((m) => { const n = { ...m }; delete n[a.attributeId]; return n; })}>Undo</button>}
+                {changed && <button type="button" className="btn primary xs" disabled={!!busy} onClick={() => save(a)}>{busy === `s${a.attributeId}` ? 'Saving…' : 'Save for this shoe'}</button>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="shl-pub-acts">
+        {attrs.length > shown.length && <button type="button" className="btn ghost sm" onClick={() => setAll(true)}>Show all {fmt(attrs.length)} details</button>}
+        {all && <button type="button" className="btn ghost sm" onClick={() => setAll(false)}>Only the ones that matter</button>}
+      </div>
+    </div>
+  );
+}
+
 /* --------------------------- colour + title (per product) --------------------------- */
 export function ColourPicker({ productId, productTypeId, current, onSaved, onSignOut }) {
   const { d, err } = useLoad(() => api.sheinPublishMaps('attr', { productTypeId }), [productTypeId], onSignOut);
@@ -513,7 +646,7 @@ export function StoreGateBanner({ gates, readAt }) {
 /* ------------------------------- the checklist ------------------------------- */
 // The fixes a checklist line opens inline (the rest use the blocker's own button).
 const PANEL = { category: 'Choose category', brand: 'Map to a SHEIN brand', title: 'Review title', colour: 'Pick the colour', attributes: 'Set SHEIN details', box: 'Confirm box sizes', photos: 'Choose photos' };
-const PANEL_OK = { category: 'Change', brand: 'Change', title: 'Edit SHEIN title', photos: 'Choose photos' };
+const PANEL_OK = { category: 'Change', brand: 'Change', title: 'Edit SHEIN title', attributes: 'Edit details', photos: 'Choose photos' };
 const STORE_KEYS = new Set(['store', 'quota', 'shelf', 'site']);
 
 export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut, onAct }) {
@@ -524,7 +657,10 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
   const group = groups.length === 1 ? groups[0] : null;
   const maps = useLoad(() => api.sheinPublishMaps('category'), [], onSignOut);
   useLive(['shein_category_map', 'shein_brand_map'], maps.reload, { mount: false });
-  const cat = (maps.d?.maps || []).find((m) => m.shopify_product_type === String(p.product_type || '') && m.size_group === group) || null;
+  const typeCat = (maps.d?.maps || []).find((m) => m.shopify_product_type === String(p.product_type || '') && m.size_group === group) || null;
+  // the shoe's own category (picked while fixing it) wins over its type's map — 2026-11-11
+  const cat = p.category_pick_id ? { category_id: p.category_pick_id, product_type_id: p.category_pick_ptid, category_path: p.category_pick_path, shoe: true } : typeCat;
+  const [typeWide, setTypeWide] = useState(false);
   const [open, setOpen] = useState('');
   const [fixed, setFixed] = useState(() => new Set());   // lines saved in this session: re-checked by the next preview
   const [msg, setMsg] = useState('');
@@ -541,12 +677,24 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
   const panelFor = (key) => {
     const close = () => setOpen('');
     if (key === 'category') return <CategoryPicker productType={p.product_type || ''} sizeGroup={group} productId={p.shopify_product_id} current={cat?.category_id} canWrite={canWrite} onSignOut={onSignOut}
-      onCancel={close} onSaved={(m) => done('category', `Saved: every “${p.product_type || '(no type)'}” shoe in ${GROUP_LABEL[group]} goes to ${m?.category_path || 'that category'} — re-checked by the next preview.`)} />;
+      perShoe shoePick={p.category_pick_id || null}
+      onCancel={close} onSaved={(m) => done('category', m?.cleared ? `This shoe uses its type’s category again${typeCat ? ` (${typeCat.category_path || typeCat.category_id})` : ''} — re-checked by the next preview.`
+        : m?.shoe ? `Saved for this shoe only: ${m.category_path || 'that category'}. Check its SHEIN details next — they depend on the category.`
+          : `Saved: every “${p.product_type || '(no type)'}” shoe in ${GROUP_LABEL[group]} goes to ${m?.category_path || 'that category'} — re-checked by the next preview.`)} />;
     if (key === 'brand') return <BrandPicker vendor={p.vendor} canWrite={canWrite} onSignOut={onSignOut} onCancel={close} onSaved={(m) => done('brand', m ? `Saved: ${p.vendor} → SHEIN brand ${m.brand_name || m.brand_code}.` : 'Brand cleared.')} />;
     if (key === 'title') return <TitleEditor product={p} max={titleMax} onSignOut={onSignOut} onSaved={() => done('title', 'SHEIN title saved (Shopify unchanged).')} />;
     if (!cat && ['colour', 'attributes'].includes(key)) return <p className="notice xs">Choose the SHEIN category first — the colours and details SHEIN asks for depend on it.</p>;
     if (key === 'colour') return <ColourPicker productId={p.shopify_product_id} productTypeId={Number(cat.product_type_id)} current={p.skc_value_id} onSignOut={onSignOut} onSaved={() => done('colour', 'Colour saved.')} />;
-    if (key === 'attributes') return <AttrEditor productTypeId={Number(cat.product_type_id)} categoryId={Number(cat.category_id)} canWrite={canWrite} focus={focus} onSignOut={onSignOut} onSaved={() => setFixed((s) => new Set([...s, 'attributes']))} />;
+    if (key === 'attributes') return (
+      <>
+        <ShoeAttrEditor product={p} productTypeId={Number(cat.product_type_id)} categoryId={Number(cat.category_id)} canWrite={canWrite} focus={focus} onSignOut={onSignOut}
+          onSaved={(t) => { setFixed((s) => new Set([...s, 'attributes'])); setMsg(`${t} Re-checked by the next preview.`); onReload?.(); }} />
+        <p className="xs shl-pub-type-wide">
+          <button type="button" className="shl-linkbtn" aria-expanded={typeWide} onClick={() => setTypeWide(!typeWide)}>{typeWide ? 'Hide' : 'Set a detail for every shoe of this SHEIN type instead (Setup)'}</button>
+        </p>
+        {typeWide && <AttrEditor productTypeId={Number(cat.product_type_id)} categoryId={Number(cat.category_id)} canWrite={canWrite} focus={focus} onSignOut={onSignOut} onSaved={() => setFixed((s) => new Set([...s, 'attributes']))} />}
+      </>
+    );
     if (key === 'box') return <BoxDefaults compact canWrite={canWrite} onSignOut={onSignOut} onSaved={() => done('box', 'Box sizes confirmed for every new product.')} />;
     if (key === 'photos') return <SheinPhotoPicker productId={p.shopify_product_id} onSignOut={onSignOut} onSaved={() => { setFixed((s) => new Set([...s, 'photos'])); onReload?.(); }} />;
     return null;
@@ -606,7 +754,8 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
 }
 function OkDetail({ k, p, cat }) {
   let t = null;
-  if (k === 'category' && cat) t = cat.category_path || `SHEIN category ${cat.category_id}`;
+  if (k === 'category' && cat) t = `${cat.category_path || `SHEIN category ${cat.category_id}`}${cat.shoe ? ' · this shoe only' : ''}`;
+  if (k === 'attributes') { const n = Object.values(p.attr_overrides || {}).filter((o) => o && Number(o.ptid) === Number(cat?.product_type_id)).length; if (n) t = `${n} detail${n === 1 ? '' : 's'} set for this shoe`; }
   if (k === 'title' && p.title_override) t = `SHEIN title: “${p.title_override}”`;
   if (k === 'photos') t = [p.use_ph_photos ? 'Using the PH edited photos' : null, p.photo_skip?.length ? `${p.photo_skip.length} photo${p.photo_skip.length === 1 ? '' : 's'} left out` : null].filter(Boolean).join(' · ') || null;
   return t ? <span className="muted xs shl-block">{t}</span> : null;

@@ -285,6 +285,12 @@ export function planPhotoEdit({ spu, fill = null, fillUnread = false, ip, images
   const skcImages = imageList(ip.skc, conv, images.photoCount);
   const mainUrl = skcImages.find((x) => x.image_type === 1)?.image_url || null;
   if (!mainUrl) { plan.blockers.push(blocker('no_image', { count: 0, need: ip.need || 1 })); return { body: null, plan }; }
+  // The colour-block ("piece", type 6) photo SHEIN already has is KEPT: replacing the list without it was
+  // refused ("The number of pieces with sku is incomplete", HQ8717, 2026-11-11). It's a small swatch of the
+  // shoe, not one of our branded photos; sent again as SHEIN's own URL, after ours.
+  const pieces = now.filter((x) => /^(6|piece)$/i.test(String(x.imageType ?? '')) && x.imageUrl);
+  for (const x of pieces) skcImages.push({ image_sort: skcImages.length + 1, image_type: 6, image_url: x.imageUrl });
+  plan.piecesKept = pieces.length;
   const out = { skc_name: plan.skc, image_info: { image_group_code: group, image_info_list: skcImages } };
   if (titleRule?.show === true && skcNames.length) {
     out.skc_title = (skcNames.find((x) => /^en/i.test(x.language)) || skcNames[0]).name;

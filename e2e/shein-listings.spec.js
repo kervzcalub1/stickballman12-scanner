@@ -2465,6 +2465,14 @@ test.describe('SHEIN Listings — replace live photos: the planner (pure)', () =
     skcImageInfoList: [img('G1', 1, 'MAIN', 1), img('G1', 2, 'DETAIL', 2), img('G1', 3, 'SQUARE', 3)],
     skuInfoList: [{ skuCode: 'A', skuImageInfoList: img('GA', 4, 'MAIN', 1) }, { skuCode: 'B', skuImageInfoList: [img('GB', 5, 'MAIN', 1)] }] }], ...extra });
   const conv = { converted: { '0:1': 'https://n/0-1.jpg', '1:2': 'https://n/1-2.jpg', '0:5': 'https://n/0-5.jpg' }, errors: [], photoCount: 2, conversions: 3, cached: 0 };
+  test('the colour-block (“piece”) photo SHEIN already has is kept, after ours (2026-11-11: dropping it was refused)', async () => {
+    const { planPhotoEdit, imagePlan } = await import('../src/lib/sheinPublish.js');
+    const s = spu(); s.skcInfoList[0].skcImageInfoList.push(img('G1', 9, 'PIECE', 4));
+    const { body, plan } = planPhotoEdit({ spu: s, fill: {}, ip: imagePlan({}), images: conv });
+    expect(body.skc_list[0].image_info.image_info_list.at(-1)).toEqual({ image_sort: 4, image_type: 6, image_url: 'https://img.ltwebstatic.com/old/9.jpg' });
+    expect(plan.piecesKept).toBe(1);
+    expect(planPhotoEdit({ spu: spu(), fill: {}, ip: imagePlan({}), images: conv }).plan.piecesKept).toBe(0);
+  });
   test('the body: the SKC list replaced whole (its group code, every photo NEW), every size’s photo → the new main, the SKC title kept; blockers when SHEIN’s data doesn’t allow it', async () => {
     const { planPhotoEdit, imagePlan } = await import('../src/lib/sheinPublish.js');
     const fill = { fill_in_standard_list: [{ field_key: 'skc_title', show: true, required: false }] };

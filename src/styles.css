@@ -6415,6 +6415,16 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .po-paste-skipped { border: 1px solid rgba(233,196,106,0.4); background: rgba(233,196,106,0.10); color: #e9c46a;
   border-radius: 10px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; }
 .po-paste-skipped ul { margin: 4px 0 0; padding-left: 18px; }
+/* Upload a CSV (src/lib/poCsv.js): the button row, the loaded file, the drop target. */
+.po-paste { border-radius: 10px; }
+.po-paste-drop { outline: 2px dashed var(--accent, #4f8cff); outline-offset: 4px; }
+.po-paste-file-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.po-paste-file { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; }
+.po-paste-file-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
+.po-paste-file > p { margin: 6px 0 0; }
+.po-paste-size-price { font-weight: 600; }
+.po-paste-note { margin: 6px 0 0; }
+.po-paste-total { margin: 0 0 10px; }
 
 /* ── Store orders (docs/store-orders-plan.md) ─────────────────────────────────────
    The by-store list on the order (StoreOrderPanel) and the store chip in Receiving. */

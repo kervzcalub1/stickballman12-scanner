@@ -1,5 +1,6 @@
 // POST /api/po/scan-bulk  (supplier / ph_team / admin)
-//   { poBoxId, shoes: [{ sku, name?, colorway?, gender?, unitCost?, tip?, sizes: [{ size, qty }] }] }  → one label
+//   { poBoxId, shoes: [{ sku, name?, colorway?, gender?, unitCost?, tip?, sizes: [{ size, qty, unitCost? }] }] }  → one label
+//   (a size's unitCost — the shelf price ea of that size alone — overrides the shoe's)
 //   { poId,    shoes: [...] }                                                                           → the whole order (PH, or the supplier on their own draft)
 //   -> { ok, lines, pairs }
 //
@@ -55,7 +56,9 @@ export default async function handler(req, res) {
       const qty = parseInt(z?.qty, 10);
       if (!size) return send(res, 400, { ok: false, error: `${sku}: a size is blank.` });
       if (!(qty >= 1 && qty <= 999)) return send(res, 400, { ok: false, error: `${sku} size ${size}: quantity must be 1–999.` });
-      lines.push({ sku, size, qty, name: str(s.name, 200), colorway: str(s.colorway, 120), gender: str(s.gender, 20), unitCost, tip });
+      // A size's own price (the paste's "9 x 2 $110", a CSV row's price) overrides the shoe's.
+      const sizeCost = z.unitCost == null || z.unitCost === '' ? null : money(z.unitCost);
+      lines.push({ sku, size, qty, name: str(s.name, 200), colorway: str(s.colorway, 120), gender: str(s.gender, 20), unitCost: sizeCost ?? unitCost, tip });
     }
   }
   if (lines.length > MAX_LINES) return send(res, 400, { ok: false, error: `At most ${MAX_LINES} sizes in one paste.` });

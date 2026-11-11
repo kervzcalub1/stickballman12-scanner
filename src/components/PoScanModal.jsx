@@ -8,7 +8,8 @@ import { api } from '../api.js';
 import { Icon } from './NavIcons.jsx';
 import { isUpcCode, usSizeChart, compareSizes, isCameraReread } from '../lib/codes.js';
 import { DimensionsFields, dimsComplete, dimsToText, emptyDims } from './PoDimensions.jsx';
-import { parsePoPaste } from '../lib/poPaste.js';
+import { parsePoPaste, listValue } from '../lib/poPaste.js';
+import { readPoFile, PO_FILE_ACCEPT } from '../lib/poCsv.js';
 import { AliasCodeCheck, aliasOnlyCode } from './AliasCodeCheck.jsx';
 
 const CameraScanner = lazy(() => import('./CameraScanner.jsx'));
@@ -194,15 +195,35 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
   const refocusScan = () => { if (hasFinePointer()) inputRef.current?.focus({ preventScroll: true }); };
   // "Paste a list" — a supplier's "SKU / size x qty" message, many shoes at once
   // (src/lib/poPaste.js). Shoes only: an empty box needs its dimensions on every line.
-  const [paste, setPaste] = useState(pasteOnly ? { text: '', prices: {} } : null); // null = closed; { text, prices: {sku: '120'} }
+  // `file` = an uploaded CSV / TSV / .xlsx read into the same result (src/lib/poCsv.js); while
+  // one is loaded it IS the list, and the text box steps aside.
+  const [paste, setPaste] = useState(pasteOnly ? { text: '', prices: {} } : null); // null = closed; { text, prices: {sku: '120'}, file? }
   const [lookups, setLookups] = useState({});         // sku -> { state: 'loading'|'ok'|'none', name, colorway, gender }
-  const parsed = paste ? parsePoPaste(paste.text) : null;
+  const [dragOver, setDragOver] = useState(false);
+  const fileRef = useRef(null);
+  const parsed = !paste ? null : paste.file ? paste.file : parsePoPaste(paste.text);
+  const loadFile = async (f) => {
+    if (!f) return;
+    setError('');
+    try {
+      const r = await readPoFile(f);
+      // A .txt that's just the message goes into the paste box like a paste.
+      if (r.text != null) setPaste((p) => ({ ...(p || {}), text: r.text, prices: {}, file: null }));
+      else setPaste((p) => ({ ...(p || {}), prices: {}, file: r }));
+    } catch (e) { setError(`Could not read ${f.name}: ${e.message}`); }
+  };
+  // A "Total $1,050" in the message / file is never used as a price — it's the check.
+  const statedTotals = (parsed?.totals || []).filter((t) => t.amount != null);
+  const priced = statedTotals.length ? listValue(parsed.shoes, paste?.prices) : null;
   // Name each pasted SKU from the catalogue — a convenience, never a gate: a SKU the
   // catalogue doesn't carry is still added, by its code.
   const pastedSkus = (parsed?.shoes || []).map((x) => x.sku).join('|');
   useEffect(() => {
     if (!paste) return undefined;
-    const todo = (parsed?.shoes || []).filter((x) => !lookups[x.sku]).slice(0, 40);
+    // sku-search allows 40 a minute: a long list (a real one had 77 shoes) is named in
+    // batches a minute apart instead of the rest hitting the limit and reading "not in the
+    // catalogue". Names are a convenience — Add works before they're all in.
+    const todo = (parsed?.shoes || []).filter((x) => !lookups[x.sku]).slice(0, 35);
     if (!todo.length) return undefined;
     const t = setTimeout(() => {
       setLookups((m) => ({ ...m, ...Object.fromEntries(todo.map((x) => [x.sku, { state: 'loading' }])) }));
@@ -213,9 +234,9 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
             : { state: 'none' } })))
           .catch((e) => { if (e.unauthorized) onSignOut(); setLookups((m) => ({ ...m, [x.sku]: { state: 'none' } })); });
       }
-    }, 500);
+    }, Object.keys(lookups).length ? 61_000 : 500);
     return () => clearTimeout(t);
-  }, [pastedSkus]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pastedSkus, Object.keys(lookups).length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addPasted = async () => {
     const shoes = (parsed?.shoes || []).map((x) => {
@@ -223,7 +244,9 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
       const typed = paste.prices?.[x.sku];
       const cost = typed !== undefined ? moneyOf(typed) : x.unitCost;
       return { sku: x.sku, name: x.name || l.name || null, colorway: l.colorway || null, gender: l.gender || null,
-        unitCost: cost ?? null, sizes: x.sizes };
+        unitCost: cost ?? null,
+        // A size's own price ("9 x 2 $110", a CSV row's price) goes with that size.
+        sizes: x.sizes.map((z) => (z.unitCost != null ? { size: z.size, qty: z.qty, unitCost: z.unitCost } : { size: z.size, qty: z.qty })) };
     });
     if (!shoes.length) return;
     setBusy(true); setError('');
@@ -489,21 +512,50 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
               onClick={() => { setError(''); setPaste((p) => (p ? null : { text: '', prices: {} })); }}>
               {paste ? '← Scan instead' : '📋 Paste a list'}
             </button>
-            {!paste && <span className="muted xs">SKU, then “size x qty” lines — many shoes at once</span>}
+            {!paste && <span className="muted xs">SKU, then “size x qty” lines — or upload a CSV — many shoes at once</span>}
           </div>
         )}
         {paste ? (
-          <div className="po-paste">
-            <textarea className="input" rows={8} value={paste.text} autoFocus disabled={busy}
-              aria-label="Paste the list"
-              placeholder={'DZ5485-201\n8.5 x 2\n9 x 3\n9.5 x 4\n\nIB4025-100 $120\n10 x 1'}
-              onChange={(e) => setPaste((p) => ({ ...p, text: e.target.value }))} />
-            <p className="muted xs">One shoe per block: the SKU (optionally with its shelf price ea, e.g. <code>$120</code>), then one <code>size x qty</code> per line. Paste as many shoes as you like; the same SKU twice is added together. Sizes already on {targetLabel} go up by the pasted quantity.</p>
+          <div className={`po-paste${dragOver ? ' po-paste-drop' : ''}`}
+            onDragOver={(e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); setDragOver(true); } }}
+            onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false); }}
+            onDrop={(e) => { e.preventDefault(); setDragOver(false); if (!busy) loadFile(e.dataTransfer?.files?.[0]); }}>
+            <div className="po-paste-file-row">
+              <input ref={fileRef} type="file" accept={PO_FILE_ACCEPT} hidden aria-label="Upload a CSV file"
+                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; loadFile(f); }} />
+              <button type="button" className="btn sm ghost" disabled={busy} onClick={() => fileRef.current?.click()}>📄 Upload a CSV</button>
+              <span className="muted xs">.csv · .tsv · .xlsx — or drop the file here</span>
+            </div>
+            {paste.file ? (
+              <div className="po-paste-file">
+                <div className="po-paste-file-head">
+                  <b>📄 {paste.file.name}</b>
+                  <button type="button" className="btn sm ghost" disabled={busy} onClick={() => setPaste((p) => ({ ...p, file: null, prices: {} }))}>✕ Use a paste instead</button>
+                </div>
+                {paste.file.error
+                  ? <div className="error sm" role="alert">{paste.file.error}</div>
+                  : (
+                    <p className="muted xs">
+                      Read as {paste.file.layout === 'text' ? 'a pasted list (no header row: each row is a line of the message)'
+                        : paste.file.layout === 'matrix' ? 'one row per SKU, sizes across the top' : paste.file.layout === 'per-pair' ? 'one row per pair (no qty column)' : 'one row per SKU + size'}
+                      {(paste.file.columns || []).length > 0 && ` · ${paste.file.columns.map((c) => `${c.role} = “${c.header}”`).join(' · ')}`}
+                    </p>
+                  )}
+              </div>
+            ) : (<>
+              <textarea className="input" rows={8} value={paste.text} autoFocus disabled={busy}
+                aria-label="Paste the list"
+                placeholder={'DZ5485-201\n8.5 x 2\n9 x 3 $110\n9.5 x 4\n\nIB4025-100 $120\n10 x 1'}
+                onChange={(e) => setPaste((p) => ({ ...p, text: e.target.value }))} />
+              <p className="muted xs">One shoe per block: the SKU (optionally with its shelf price ea — <code>$120</code>, <code>@120</code>, <code>120 ea</code>, <code>price 120</code>), then one <code>size x qty</code> per line (a price after it, e.g. <code>9 x 2 $110</code>, is that size’s own). A number with no <code>$</code> or word beside it is never read as a price. Paste as many shoes as you like; the same SKU twice is added together. Sizes already on {targetLabel} go up by the pasted quantity.</p>
+            </>)}
             {parsed?.shoes.length > 0 && (
               <ul className="po-paste-list">
                 {parsed.shoes.map((x) => {
                   const l = lookups[x.sku];
                   const n = x.sizes.reduce((k, z) => k + z.qty, 0);
+                  const ownPrice = x.sizes.filter((z) => z.unitCost != null).length;
+                  const fromTotal = x.priceFrom === 'total' || x.sizes.some((z) => z.priceFrom === 'total');
                   return (
                     <li key={x.sku}>
                       <div className="po-paste-head">
@@ -515,26 +567,45 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
                       </div>
                       <div className="po-paste-sizes">
                         {[...x.sizes].sort((a, b) => compareSizes(a.size, b.size)).map((z) => (
-                          <span key={z.size} className="size-chip static">{z.size} ×{z.qty}</span>
-                        ))}
-                        <label className="po-size-money po-paste-price">
-                          <span className="muted xs">Shelf price ea</span>
-                          <span className="po-money-input">
-                            <span className="po-money-sym">$</span>
-                            <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00"
-                              value={paste.prices?.[x.sku] ?? (x.unitCost ?? '')}
-                              onChange={(e) => setPaste((p) => ({ ...p, prices: { ...p.prices, [x.sku]: e.target.value } }))} />
+                          <span key={z.size} className="size-chip static">
+                            {z.size} ×{z.qty}{z.unitCost != null && <span className="po-paste-size-price"> · ${z.unitCost.toFixed(2)}</span>}
                           </span>
-                        </label>
+                        ))}
+                        {ownPrice < x.sizes.length && (
+                          <label className="po-size-money po-paste-price">
+                            <span className="muted xs">{ownPrice ? 'Shelf price ea (other sizes)' : 'Shelf price ea'}</span>
+                            <span className="po-money-input">
+                              <span className="po-money-sym">$</span>
+                              <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00"
+                                value={paste.prices?.[x.sku] ?? (x.unitCost ?? '')}
+                                onChange={(e) => setPaste((p) => ({ ...p, prices: { ...p.prices, [x.sku]: e.target.value } }))} />
+                            </span>
+                          </label>
+                        )}
                       </div>
+                      {(ownPrice > 0 || fromTotal) && (
+                        <p className="muted xs po-paste-note">
+                          {ownPrice > 0 && 'A size showing its own price keeps it. '}
+                          {fromTotal && 'Price ea worked out from the line total ÷ its pairs — check it.'}
+                        </p>
+                      )}
                     </li>
                   );
                 })}
               </ul>
             )}
+            {priced && parsed.shoes.length > 0 && (
+              <p className="muted xs po-paste-total" role="note">
+                {paste.file ? 'The file’s total' : 'The message says'}: {statedTotals.map((t) => `$${t.amount.toFixed(2)}`).join(' · ')}
+                {' — this list comes to '}<b>${priced.total.toFixed(2)}</b>
+                {priced.unpriced > 0 && ` (+ ${priced.unpriced} pair${priced.unpriced === 1 ? '' : 's'} with no price)`}
+                {statedTotals.some((t) => Math.abs(t.amount - priced.total) < 0.005) ? ' ✓' : ' — check the prices'}
+              </p>
+            )}
+            {error && <div className="error sm" role="alert">{error}</div>}
             {parsed?.skipped.length > 0 && (
               <div className="po-paste-skipped" role="alert">
-                <b>Not added — fix these lines if they matter:</b>
+                <b>Not added — fix these {paste.file ? 'rows' : 'lines'} if they matter:</b>
                 <ul>{parsed.skipped.map((k, i) => <li key={i}><code>{k.line}</code> — {k.why}</li>)}</ul>
               </div>
             )}
@@ -576,7 +647,7 @@ export function PoScanModal({ box, po, boxesOrder = false, pasteOnly = false, on
             <ul>{failed.map((f, i) => <li key={i}><code>{f.code}</code> — {f.why}</li>)}</ul>
           </div>
         )}
-        {error && <div className="error sm mt">{error}</div>}
+        {error && !paste && <div className="error sm mt">{error}</div>}
         {!draft && !busy && !looking && !paste && (
           <p className="muted sm mt">{boxesOrder
             ? 'Scan or type the SKU printed on the empty box — the shoe’s name fills in, and a scanned UPC fills the size too. Then tap the size each box is for and give its dimensions; a new row starts at the last carton you typed, so a run of sizes is measured once.'

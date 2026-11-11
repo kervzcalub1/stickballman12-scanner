@@ -69,7 +69,7 @@ function StorePasteModal({ po, onClose, onAdded, onSignOut }) {
                 {s.shoes.map((x) => {
                   const n = x.sizes.reduce((k, z) => k + z.qty, 0);
                   return (
-                    <div key={x.sku} className="store-paste-shoe">
+                    <div key={`${x.sku}|${x.unitCost}`} className="store-paste-shoe">
                       <span className="po-line-meta">{x.sku}{x.name ? ` · ${x.name}` : ''}</span>
                       <span className={x.unitCost == null ? 'po-paste-warn xs' : 'muted xs'}>
                         {x.unitCost == null ? 'no price — add it on the SKU line' : `${money(x.unitCost)} ea · ${money(x.unitCost * n)}`}

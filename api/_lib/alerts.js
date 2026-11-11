@@ -163,11 +163,11 @@ export const ALERT_EVENTS = [
     defaultFor: (u) => isAdminRole(u.role),
   },
   {
-    // Order cancellations (cancellations.md): the warehouse sent the bot a photo; the
-    // reviewers (PH + admin) check it against the photo and cancel it on the platform.
+    // Order cancellations (cancellations.md): the floor sent the bot photos; the orders on
+    // them are recorded (no review step) — PH + admin hear what came in.
     key: 'cancel.logged', group: 'Cancellations', emoji: '🛑', required: false,
     title: 'Order to cancel',
-    when: 'The warehouse sends an order to cancel — check it and cancel it on the platform',
+    when: 'The warehouse records orders to cancel (one message per batch of photos)',
     who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
   },
   // Inbound issues (inbound-issues.md): a problem found at receiving is a case the PH team
@@ -766,17 +766,17 @@ export async function alertWaitlistDaily({ day, rows, file }) {
   });
 }
 
-// One message per photo, however many orders were on it.
+// One message per BATCH of photos (one reply on Telegram), however many orders were on them.
 export function alertCancellationsLogged(rows, by) {
   if (!rows?.length) return;
   const nums = rows.map((r) => r.order_number || 'number unreadable').slice(0, 8).join(', ');
-  const flagged = rows.filter((r) => (r.flags || []).length).length;
+  const flagged = rows.filter((r) => !r.order_number).length;
   fireAlert(() => alertUsers('cancel.logged', {
     actorUid: by?.id ?? null,
     ref: `cancel:${rows[0].id}`,
     code: rows.length === 1 ? `#${rows[0].id}` : `#${rows[0].id}–#${rows[rows.length - 1].id}`,
     body: `${by?.name || 'The warehouse'} sent ${rows.length === 1 ? 'an order' : `${rows.length} orders`} to cancel: ${nums}.`
-      + (flagged ? ` ${flagged} need${flagged === 1 ? 's' : ''} a closer look.` : ''),
+      + (flagged ? ` ${flagged} with no order number read — type it on the Cancellations page.` : ''),
     path: at('cancellations'),
   }));
 }

@@ -140,10 +140,10 @@ export const api = {
   undelivered: (days = '90') => get(`/api/undelivered?days=${encodeURIComponent(days)}`),
   markDelivered: (number, on, note) => post('/api/undelivered/mark', { number, on, note }),
   unmarkDelivered: (number) => post('/api/undelivered/mark', { number, undo: true }),
-  cancellations: (view = 'review', days = '30') => get(`/api/cancellations/list?view=${encodeURIComponent(view)}&days=${encodeURIComponent(days)}`),
+  cancellations: ({ from = null, to = null } = {}) => get(`/api/cancellations/list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) })}`),
   cancellation: (id) => get(`/api/cancellations/get?id=${encodeURIComponent(id)}`),
   saveCancellation: (row) => post('/api/cancellations/save', row),
-  cancellationAction: (id, action, extra = {}) => post('/api/cancellations/action', { id, action, ...extra }),
+  removeCancellation: (id, reason) => post('/api/cancellations/action', { id, action: 'remove', reason }),
   // Inbound issues (docs/context/inbound-issues.md)
   inboundIssues: (view = 'open', days = '30') => get(`/api/inbound-issues/list?view=${encodeURIComponent(view)}&days=${encodeURIComponent(days)}`),
   inboundIssue: (id) => get(`/api/inbound-issues/get?id=${encodeURIComponent(id)}`),

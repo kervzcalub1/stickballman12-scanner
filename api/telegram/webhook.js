@@ -11,8 +11,9 @@
 //     account that minted the token (the Alerts panel's "Connect Telegram"); a plain
 //     `/start` says who this chat is connected as (api/me/telegram.js, api/_lib/alerts.js)
 //   · a PHOTO (or an image sent as a file) in a private chat, from a connected warehouse /
-//     PH / admin account → an order to cancel: read, filed on the Cancellations page, and
-//     answered in the chat; a typed order number does the same (api/_lib/cancellations.js)
+//     PH / admin account → an order to cancel: read and recorded on the Cancellations page;
+//     ONE answer per batch of photos, as a reply to the first; a typed order number is
+//     recorded too (api/_lib/cancellations.js)
 //
 // ALWAYS ANSWERS 200 once the secret checks out. Telegram re-sends any update it didn't get
 // a 2xx for, so a failure here would come back as the same tap again and again; the
@@ -23,12 +24,12 @@
 // passes a dev card's taps on to TELEGRAM_DEV_FORWARD_URL (the dev tunnel) untouched, so a
 // test card is recorded in the dev database and never in the real one.
 import { send, applySecurity, getJsonBody } from '../_lib/util.js';
-import { dbConfigured, premiumChatIds, recordReplyMiss, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx } from '../_lib/db.js';
+import { dbConfigured, premiumChatIds, recordReplyMiss, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx, createCancellationPhoto, setCancellationPhotoPlatform } from '../_lib/db.js';
 import { telegramConfigured, telegramChatId, cancelChatId, tg, enqueue } from '../_lib/telegram.js';
 import { decideFromTelegram, decideTipFromTelegram } from '../_lib/telegramDecide.js';
 import { notifyEnv } from '../_lib/notify.js';
 import { alertCancellationsLogged } from '../_lib/alerts.js';
-import { downloadTelegramFile, fileCancellationPhoto, fileTypedCancellation, replyText, sayTo, HOW_TO, dayFrom, msgPicker, msgFor, msgAll, sendDayReport } from '../_lib/cancellations.js';
+import { fileTypedCancellation, typedReplyText, sayTo, HOW_TO, dayFrom, msgPicker, msgFor, msgAll, sendDayReport, cancelBatchStart, cancelBatchDone, readTelegramPhoto } from '../_lib/cancellations.js';
 import { platformFromCommand, platformLabel, PLATFORMS } from '../../src/lib/cancellations.js';
 import { parseApprovalReply, splitTipReply, sizeKey } from '../../src/lib/buyPaste.js';
 const PLATFORM_KEYS = new Set(PLATFORMS.map((p) => p.key));
@@ -491,9 +492,11 @@ async function handlePrivate(update, msg) {
 //   /alias + the photo (the command as the caption)        → that photo, and the album it opens
 //   /alias, then photos                                    → every photo for the next 10 minutes
 //   /stockx 12345678-12345678 - wrong size                 → a typed number
-// The read takes several seconds, so it runs AFTER the webhook has answered Telegram (an
-// update not answered in time is sent again; the photo row is keyed on the message, so a
-// re-send is ignored rather than filed twice).
+// The read takes several seconds, so it runs AFTER the webhook has answered Telegram. The
+// photo ROW is written first, before the answer (keyed on the message — a re-sent update
+// finds it and is ignored, never recorded twice; and it carries the file id, so a restart
+// mid-read can still fetch the picture). The bot answers once per batch: every photo one
+// person sends close together, as a reply to the first (cancelBatchStart / cancelBatchDone).
 const CAN_FILE = ['warehouse', 'ph_team', 'admin', 'superadmin'];
 const CTX_MIN = 10;
 // "/alias wrong size" → { cmd:'/alias', platform:'alias', rest:'wrong size' }; no command → cmd null.
@@ -566,9 +569,16 @@ async function fileFromChat(msg, { group = false } = {}) {
     const platform = words.platform || await getCancellationCtx(mine, CTX_MIN);
     const out = await fileTypedCancellation(words.rest, { ...ctx, platform });
     if (!out) return say(HOW_TO, false);
-    if (out.filed.length) alertCancellationsLogged(out.filed, who);
-    return say(replyText(out));
+    if (out.rows.length) alertCancellationsLogged(out.rows, who);
+    return say(typedReplyText(out));
   }
+  // The photo row FIRST, before Telegram gets its 200: a re-sent update stops here.
+  const known = words.platform || (album ? null : await getCancellationCtx(mine, CTX_MIN));
+  const photoId = await createCancellationPhoto({ caption: words.rest || null, tgChatId: chatId, tgMessageId: msg.message_id,
+    tgFileId: image, mediaGroupId: msg.media_group_id || null, platform: known, sentByUserId: who.id, sentBy: who.name });
+  if (photoId == null) return null;
+  const batch = `${chatId}:${msg.from?.id}`;
+  cancelBatchStart(batch, chatId, photoId);
   setImmediate(async () => {
     try {
       // An album's photos arrive together and only ONE carries the caption: give that one
@@ -576,16 +586,12 @@ async function fileFromChat(msg, { group = false } = {}) {
       if (album && !words.platform) await new Promise((r) => setTimeout(r, 1500));
       const resolvePlatform = async () => (album && await getCancellationCtx(album, CTX_MIN))
         || getCancellationCtx(mine, CTX_MIN);
-      const platform = words.platform || await resolvePlatform();
-      const buf = await downloadTelegramFile(image);
-      const out = await fileCancellationPhoto(buf, { ...ctx, caption: words.rest || null, platform, resolvePlatform });
-      if (out.filed?.length) alertCancellationsLogged(out.filed, who);
-      let text = replyText(out);
-      if (text && out.filed?.some((r) => !r.platform)) text += `\n\nTip: start with the platform — e.g. /alias and the photo.`;
-      if (text) await say(text);
-    } catch (e) {
-      console.error('[telegram/webhook] cancellation photo:', e.message);
-      await say(`⚠️ Something went wrong saving that picture (${e.message}). Please send it again, or type the order number.`).catch(() => {});
+      const platform = known || await resolvePlatform().catch(() => null);
+      if (platform && !known) await setCancellationPhotoPlatform(photoId, platform).catch(() => {});
+      await readTelegramPhoto({ id: photoId, fileId: image, chatId, messageId: msg.message_id, caption: words.rest || null,
+        platform, who: ctx.who }, { resolvePlatform });
+    } finally {
+      cancelBatchDone(batch);
     }
   });
   return null;

@@ -22,6 +22,7 @@ import { NOT_HERE_DAYS } from '../../src/lib/notHere.js';
 import { productAnswered } from '../../src/lib/sheinCutover.js';
 import { BLOCKERS as SHEIN_BLOCKERS } from '../../src/lib/sheinListings.js';
 import { photoKey, PHOTO_SKIP_MAX } from '../../src/lib/sheinPublish.js';
+import { styleIn } from '../../src/lib/cancellations.js';
 // Registration now sends the canonical form of a number, so anything that MATCHES a
 // number has to canonicalise too — see normalizeTrackingNumber for why.
 import { normalizeTrackingNumber } from './tracking.js';
@@ -12734,26 +12735,38 @@ export async function listManualDelivered({ days = null } = {}) {
 }
 
 // ── Order cancellations (docs/context/cancellations.md) ──────────────────────────────
-// The warehouse sends the bot a photo; api/_lib/cancellations.js reads it and files one
-// row per order here. PH/admin compare each row with its photo, verify, cancel on the
-// platform, and mark it submitted. order_key carries the duplicate guard (unique while
-// the row is not rejected — cancellations_live_key_uq).
+// The floor sends the bot a photo; api/_lib/cancellations.js reads it and RECORDS one row
+// per order here (since 2026-11-12 there is no review step). order_key carries the duplicate
+// guard (unique while the row is not removed — cancellations_live_key_uq; 'rejected' = removed).
 // (The column list is written out in each query: the db() shim can't splice a fragment in.)
 
+/**
+ * The photo row, written by the webhook BEFORE it answers Telegram — with the file id, so a
+ * restart mid-read can still fetch it. null = this Telegram message was already taken
+ * (Telegram re-sends an update it didn't get a 200 for).
+ */
 export async function createCancellationPhoto({ r2Key = null, bytes = null, contentType = 'image/jpeg', caption = null,
-  tgChatId = null, tgMessageId = null, sentByUserId = null, sentBy = null }) {
+  tgChatId = null, tgMessageId = null, tgFileId = null, mediaGroupId = null, platform = null, sentByUserId = null, sentBy = null }) {
   const rows = await db()`
-    INSERT INTO cancellation_photos (r2_key, bytes, content_type, caption, tg_chat_id, tg_message_id, sent_by_user_id, sent_by)
-    VALUES (${r2Key}, ${bytes}, ${contentType}, ${caption}, ${tgChatId}, ${tgMessageId}, ${sentByUserId}, ${sentBy})
+    INSERT INTO cancellation_photos (r2_key, bytes, content_type, caption, tg_chat_id, tg_message_id, tg_file_id, media_group_id,
+                                     platform, sent_by_user_id, sent_by)
+    VALUES (${r2Key}, ${bytes}, ${contentType}, ${caption}, ${tgChatId}, ${tgMessageId}, ${tgFileId}, ${mediaGroupId},
+            ${platform}, ${sentByUserId}, ${sentBy})
     ON CONFLICT (tg_chat_id, tg_message_id) WHERE tg_message_id IS NOT NULL DO NOTHING
     RETURNING id`;
-  return rows[0] ? Number(rows[0].id) : null;   // null = this Telegram message was already filed
+  return rows[0] ? Number(rows[0].id) : null;
 }
-export async function setCancellationPhotoRead(id, { status, error = null, r2Key, bytes } = {}) {
+export async function setCancellationPhotoRead(id, { status, error = null, r2Key, bytes, result } = {}) {
   if (r2Key !== undefined || bytes !== undefined) {
     await db()`UPDATE cancellation_photos SET r2_key = ${r2Key ?? null}, bytes = ${bytes ?? null} WHERE id = ${id}`;
   }
-  if (status) await db()`UPDATE cancellation_photos SET read_status = ${status}, read_error = ${error} WHERE id = ${id}`;
+  if (status) {
+    await db()`UPDATE cancellation_photos SET read_status = ${status}, read_error = ${error},
+                      result = ${result ? JSON.stringify(result) : null}::jsonb WHERE id = ${id}`;
+  }
+}
+export async function setCancellationPhotoPlatform(id, platform) {
+  await db()`UPDATE cancellation_photos SET platform = ${platform} WHERE id = ${id} AND platform IS NULL`;
 }
 export async function getCancellationPhoto(id) {
   const rows = await db()`SELECT id, r2_key, bytes, content_type, caption, read_status, read_error, sent_by, created_at
@@ -12761,7 +12774,134 @@ export async function getCancellationPhoto(id) {
   return rows[0] || null;
 }
 
-/** The live (not rejected) row already holding this number, if any. */
+// ── One reply per batch ──
+// replied_at is claimed compare-and-set: the live batcher and the restart sweep can both
+// try, and only the one that claims a photo answers for it.
+export async function claimCancellationPhotoReplies(ids) {
+  if (!ids?.length) return [];
+  const rows = await db()`UPDATE cancellation_photos SET replied_at = now()
+                            WHERE id = ANY(${ids.map(Number)}::bigint[]) AND replied_at IS NULL RETURNING id`;
+  return rows.map((r) => Number(r.id));
+}
+/** The send failed: let the sweep try again. */
+export async function releaseCancellationPhotoReplies(ids) {
+  if (!ids?.length) return;
+  await db()`UPDATE cancellation_photos SET replied_at = NULL WHERE id = ANY(${ids.map(Number)}::bigint[])`;
+}
+export async function cancellationPhotosForReply(ids) {
+  if (!ids?.length) return [];
+  const rows = await db()`SELECT id, tg_chat_id, tg_message_id, sent_by_user_id, sent_by, read_status, read_error, result, created_at
+                            FROM cancellation_photos WHERE id = ANY(${ids.map(Number)}::bigint[])
+                           ORDER BY tg_message_id NULLS LAST, id`;
+  return rows.map((r) => ({ ...r, id: Number(r.id), tg_chat_id: r.tg_chat_id == null ? null : Number(r.tg_chat_id),
+    tg_message_id: r.tg_message_id == null ? null : Number(r.tg_message_id) }));
+}
+/**
+ * After a restart: photos whose read never finished (`stuck`, re-read from Telegram) and
+ * photos read but never answered (`unanswered`). Only Telegram photos of the last 6 hours,
+ * and only ones old enough that the live batcher would have answered them by now.
+ */
+export async function strandedCancellationPhotos({ stuckAfterSec = 180, quietSec = 60 } = {}) {
+  const stuck = await db()`
+    SELECT id, tg_chat_id, tg_message_id, tg_file_id, media_group_id, platform, caption, sent_by_user_id, sent_by
+      FROM cancellation_photos
+     WHERE tg_file_id IS NOT NULL AND replied_at IS NULL AND read_status = 'pending'
+       AND created_at > now() - interval '6 hours' AND created_at < now() - make_interval(secs => ${stuckAfterSec}::int)
+     ORDER BY id`;
+  const unanswered = await db()`
+    SELECT id, tg_chat_id, sent_by_user_id
+      FROM cancellation_photos
+     WHERE tg_file_id IS NOT NULL AND replied_at IS NULL AND read_status <> 'pending'
+       AND created_at > now() - interval '6 hours' AND created_at < now() - make_interval(secs => ${quietSec}::int)
+     ORDER BY id`;
+  const n = (r) => ({ ...r, id: Number(r.id), tg_chat_id: r.tg_chat_id == null ? null : Number(r.tg_chat_id),
+    tg_message_id: r.tg_message_id == null ? null : Number(r.tg_message_id), sent_by_user_id: r.sent_by_user_id == null ? null : Number(r.sent_by_user_id) });
+  return { stuck: stuck.map(n), unanswered: unanswered.map(n) };
+}
+export async function cancellationIdsForPhoto(photoId) {
+  const rows = await db()`SELECT id FROM cancellations WHERE photo_id = ${photoId} ORDER BY id`;
+  return rows.map((r) => Number(r.id));
+}
+
+// ── Our own orders, by number or by tracking number (matchOurOrder in src/lib/cancellations.js) ──
+// keys = order keys (letters + digits, upper-case) — the read number and its confusable
+// neighbours; tracks = tracking numbers read off the label. Each order comes back as
+// { key, order_id, platform, source, tracking, lines:[{ sku, size, name, title }] } — the
+// eBay / SHEIN line SKU is OUR Shopify SKU, so its style code + size come from the Shopify
+// variant (shopify_listing_variants) where we have it.
+export async function knownOrdersFor({ keys = [], tracks = [] } = {}) {
+  const K = [...new Set(keys.filter(Boolean))];
+  const T = [...new Set(tracks.filter(Boolean).map((t) => String(t).toUpperCase().replace(/[^A-Z0-9]/g, '')))];
+  if (!K.length && !T.length) return [];
+  const out = [];
+  const ebay = await db()`
+    SELECT o.order_id, o.lines,
+           (SELECT f->>'number' FROM jsonb_array_elements(coalesce(o.fulfillments, '[]'::jsonb)) f
+             WHERE upper(regexp_replace(coalesce(f->>'number', ''), '[^A-Za-z0-9]', '', 'g')) = ANY(${T}::text[]) LIMIT 1) AS tracking
+      FROM ebay_orders o
+     WHERE upper(regexp_replace(o.order_id, '[^A-Za-z0-9]', '', 'g')) = ANY(${K}::text[])
+        OR EXISTS (SELECT 1 FROM jsonb_array_elements(coalesce(o.fulfillments, '[]'::jsonb)) f
+                    WHERE upper(regexp_replace(coalesce(f->>'number', ''), '[^A-Za-z0-9]', '', 'g')) = ANY(${T}::text[]))
+     LIMIT 50`;
+  for (const o of ebay) {
+    out.push({ source: 'ebay', platform: 'ebay', order_id: o.order_id, tracking: o.tracking || null,
+      lines: (Array.isArray(o.lines) ? o.lines : []).map((l) => ({ sku: l.sku || null, size: l.size || null, title: l.title || null })) });
+  }
+  const shein = K.length ? await db()`
+    SELECT order_no, seller_sku, title FROM shein_order_units
+     WHERE upper(regexp_replace(order_no, '[^A-Za-z0-9]', '', 'g')) = ANY(${K}::text[])
+     ORDER BY order_no, goods_id LIMIT 200` : [];
+  const byNo = new Map();
+  for (const u of shein) {
+    if (!byNo.has(u.order_no)) byNo.set(u.order_no, { source: 'shein', platform: 'shein', order_id: u.order_no, tracking: null, lines: [] });
+    byNo.get(u.order_no).lines.push({ sku: u.seller_sku || null, size: null, title: u.title || null });
+  }
+  out.push(...byNo.values());
+  const pre = await db()`
+    SELECT s.platform, s.order_id, s.tracking_number, st.sku, st.size, st.name
+      FROM presell_sales s LEFT JOIN presell_stock st ON st.id = s.stock_id
+     WHERE upper(regexp_replace(s.order_id, '[^A-Za-z0-9]', '', 'g')) = ANY(${K}::text[])
+        OR upper(regexp_replace(coalesce(s.tracking_number, ''), '[^A-Za-z0-9]', '', 'g')) = ANY(${T}::text[])
+     LIMIT 50`;
+  for (const s of pre) {
+    // Pre-sell stock carries the style code itself, so no Shopify step.
+    out.push({ source: 'presell', platform: s.platform, order_id: s.order_id, tracking: s.tracking_number || null,
+      lines: [{ style: s.sku || null, size: s.size || null, name: s.name || null }] });
+  }
+  // Shopify SKU → style code / size / product title, for the eBay + SHEIN lines.
+  const skus = [...new Set(out.filter((o) => o.source !== 'presell').flatMap((o) => o.lines.map((l) => l.sku)).filter(Boolean))];
+  const variants = skus.length ? await db()`
+    SELECT DISTINCT ON (sku) sku, style, size, product_title FROM shopify_listing_variants
+     WHERE sku = ANY(${skus}::text[]) ORDER BY sku, updated_at DESC` : [];
+  const v = new Map(variants.map((x) => [x.sku, x]));
+  return out.map((o) => ({
+    ...o,
+    key: String(o.order_id).toUpperCase().replace(/[^A-Z0-9]/g, ''),
+    lines: o.lines.map((l) => {
+      const x = v.get(l.sku) || {};
+      return { sku: l.style || x.style || styleIn(l.title) || styleIn(l.sku) || null, rawSku: l.sku || null, size: l.size || x.size || null, name: l.name || x.product_title || l.title || null, title: l.title || null };
+    }),
+  }));
+}
+
+/** Shoe names by style code from OUR catalogue (products, then received pairs, then pre-sell stock). Map key = letters+digits. */
+export async function catalogueNamesBySku(skus) {
+  const keyOf = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const forms = [...new Set(skus.filter(Boolean).flatMap((s) => {
+    const m = /^([A-Z0-9]+)[\s-]([A-Z0-9]+)$/.exec(String(s).toUpperCase());
+    return m ? [`${m[1]}-${m[2]}`, `${m[1]} ${m[2]}`, `${m[1]}${m[2]}`] : [String(s).toUpperCase()];
+  }))];
+  const out = new Map();
+  if (!forms.length) return out;
+  const take = (rows) => { for (const r of rows) if (r.name && !out.has(keyOf(r.sku))) out.set(keyOf(r.sku), r.name); };
+  take(await db()`SELECT sku, name FROM products WHERE upper(sku) = ANY(${forms}::text[]) AND coalesce(name, '') <> '' ORDER BY updated_at DESC`);
+  take(await db()`SELECT DISTINCT ON (upper(sku)) sku, name FROM items WHERE upper(sku) = ANY(${forms}::text[]) AND coalesce(name, '') <> ''
+                    ORDER BY upper(sku), created_at DESC`);
+  take(await db()`SELECT sku, name FROM presell_stock WHERE upper(sku) = ANY(${forms}::text[]) AND coalesce(name, '') <> ''`);
+  return out;
+}
+
+/** The live (not removed) row already holding this number, if any. */
 export async function findLiveCancellation(orderKey) {
   if (!orderKey) return null;
   const rows = await db()`SELECT id, status, platform, order_number, sent_by, created_at
@@ -12775,18 +12915,19 @@ export async function logCancellationEvent(id, action, actor, detail = null) {
 }
 
 /**
- * File one order. Returns { row } or { duplicate } — a number already live is never filed
- * twice; the race between two photos of the same order is settled by the unique index.
+ * Record one order. Returns { row } or { duplicate } — a number already live is never
+ * recorded twice; the race between two photos of the same order is settled by the unique index.
  */
 export async function createCancellation(f) {
   try {
     const rows = await db()`
       INSERT INTO cancellations (status, platform, order_number, order_key, sku, size, product, reason, note, flags,
-        ai_confidence, ai_raw, source, photo_id, sent_by_user_id, sent_by, tg_chat_id, tg_message_id)
+        ai_confidence, ai_raw, source, photo_id, sent_by_user_id, sent_by, tg_chat_id, tg_message_id, details_from, order_match)
       VALUES ('to_review', ${f.platform ?? null}, ${f.order_number ?? null}, ${f.order_key ?? null}, ${f.sku ?? null},
         ${f.size ?? null}, ${f.product ?? null}, ${f.reason ?? null}, ${f.note ?? null}, ${f.flags || []}::text[],
         ${f.ai_confidence ?? null}, ${f.ai_raw ? JSON.stringify(f.ai_raw) : null}::jsonb, ${f.source || 'telegram'},
-        ${f.photo_id ?? null}, ${f.sent_by_user_id ?? null}, ${f.sent_by ?? null}, ${f.tg_chat_id ?? null}, ${f.tg_message_id ?? null})
+        ${f.photo_id ?? null}, ${f.sent_by_user_id ?? null}, ${f.sent_by ?? null}, ${f.tg_chat_id ?? null}, ${f.tg_message_id ?? null},
+        ${f.details_from ?? null}, ${f.order_match ?? null})
       RETURNING id`;
     const id = Number(rows[0].id);
     await logCancellationEvent(id, 'created', f.sent_by, f.source === 'telegram' ? 'sent on Telegram' : f.source === 'typed' ? 'number typed to the bot' : 'added in the app');
@@ -12797,43 +12938,46 @@ export async function createCancellation(f) {
   }
 }
 
+const CX_COLS = 'c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason, c.note, c.flags, c.ai_confidence::float AS ai_confidence, c.source, c.photo_id, c.sent_by_user_id, c.sent_by, c.details_from, c.order_match, c.rejected_reason, c.created_at, c.updated_at';
+const cxRow = (r) => ({ ...r, id: Number(r.id), photo_id: r.photo_id == null ? null : Number(r.photo_id), sent_by_user_id: r.sent_by_user_id == null ? null : Number(r.sent_by_user_id) });
+
 export async function getCancellation(id) {
-  const rows = await db()`SELECT c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason,   c.note, c.flags, c.ai_confidence::float AS ai_confidence, c.source, c.photo_id, c.sent_by_user_id, c.sent_by,   c.verified_by, c.verified_at, c.submitted_by, c.submitted_at, c.platform_ref, c.rejected_reason,   c.created_at, c.updated_at FROM cancellations c WHERE c.id = ${id}`;
+  const rows = await rawQuery(`SELECT ${CX_COLS} FROM cancellations c WHERE c.id = $1`, [id]);
   if (!rows[0]) return null;
   const events = await db()`SELECT action, actor, detail, created_at FROM cancellation_events
                               WHERE cancellation_id = ${id} ORDER BY created_at, id`;
-  return { ...rows[0], id: Number(rows[0].id), photo_id: rows[0].photo_id == null ? null : Number(rows[0].photo_id), events };
+  return { ...cxRow(rows[0]), events };
+}
+export async function getCancellationsByIds(ids) {
+  if (!ids?.length) return [];
+  const rows = await rawQuery(`SELECT ${CX_COLS} FROM cancellations c WHERE c.id = ANY($1::bigint[]) ORDER BY c.id`, [ids.map(Number)]);
+  return rows.map(cxRow);
 }
 
-// view: review (to_review) | verified | submitted | rejected | all
-export async function listCancellations({ view = 'review', days = 30 } = {}) {
-  const d = days == null ? null : Math.max(1, Math.min(3650, Number(days) || 30));
-  const status = { review: 'to_review', verified: 'verified', submitted: 'submitted', rejected: 'rejected' }[view] || null;
-  const rows = await db()`
-    SELECT c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason,   c.note, c.flags, c.ai_confidence::float AS ai_confidence, c.source, c.photo_id, c.sent_by_user_id, c.sent_by,   c.verified_by, c.verified_at, c.submitted_by, c.submitted_at, c.platform_ref, c.rejected_reason,   c.created_at, c.updated_at FROM cancellations c
-     WHERE (${status}::text IS NULL OR c.status = ${status})
-       -- Open work is never hidden by the period: a row still to review or to cancel is
-       -- on the list however old it is. The period only trims the finished tabs.
-       AND (c.status IN ('to_review', 'verified') OR ${d}::int IS NULL
-            OR c.created_at >= now() - make_interval(days => ${d}::int))
-     ORDER BY c.created_at DESC, c.id DESC
-     LIMIT 1000`;
-  const [counts] = await db()`
-    SELECT count(*) FILTER (WHERE status = 'to_review')::int AS review,
-           count(*) FILTER (WHERE status = 'verified')::int AS verified
-      FROM cancellations`;
-  return { rows: rows.map((r) => ({ ...r, id: Number(r.id), photo_id: r.photo_id == null ? null : Number(r.photo_id) })), counts };
+// The record list: every row that isn't removed, sent on an EST day between from and to
+// (YYYY-MM-DD, either may be null = open). Platform / "no order #" / search are the page's.
+export const CANCELLATIONS_LIST_CAP = 3000;
+export async function listCancellations({ from = null, to = null } = {}) {
+  const rows = await rawQuery(
+    `SELECT ${CX_COLS} FROM cancellations c
+      WHERE c.status <> 'rejected'
+        AND ($1::date IS NULL OR (c.created_at AT TIME ZONE 'America/New_York')::date >= $1::date)
+        AND ($2::date IS NULL OR (c.created_at AT TIME ZONE 'America/New_York')::date <= $2::date)
+      ORDER BY c.created_at DESC, c.id DESC
+      LIMIT ${CANCELLATIONS_LIST_CAP + 1}`, [from, to]);
+  return { rows: rows.slice(0, CANCELLATIONS_LIST_CAP).map(cxRow), capped: rows.length > CANCELLATIONS_LIST_CAP };
 }
 
-/** Edit the fields. The flags are recomputed by the caller (flagsFor) and passed in. */
+/** Edit the fields (anyone who sees the page — a misread number, a missing SKU). */
 export async function updateCancellationFields(id, f, actor) {
   try {
     await db()`
       UPDATE cancellations SET platform = ${f.platform ?? null}, order_number = ${f.order_number ?? null},
              order_key = ${f.order_key ?? null}, sku = ${f.sku ?? null}, size = ${f.size ?? null},
              product = ${f.product ?? null}, reason = ${f.reason ?? null}, note = ${f.note ?? null},
-             flags = ${f.flags || []}::text[], updated_at = now()
-       WHERE id = ${id}`;
+             flags = ${f.flags || []}::text[], details_from = ${f.details_from ?? null}, order_match = ${f.order_match ?? null},
+             updated_at = now()
+       WHERE id = ${id} AND status <> 'rejected'`;
   } catch (e) {
     if (e.code === '23505') return { duplicate: await findLiveCancellation(f.order_key) };
     throw e;
@@ -12842,31 +12986,29 @@ export async function updateCancellationFields(id, f, actor) {
   return { row: await getCancellation(id) };
 }
 
-/** Move a row along. `from` = the statuses it may move from (compare-and-set: two reviewers can't both act). */
-export async function setCancellationStatus(id, { to, from, actor, detail = null, platformRef, rejectedReason, flags }) {
-  let rows;
-  if (to === 'verified') {
-    rows = await db()`UPDATE cancellations SET status = 'verified', verified_by = ${actor}, verified_at = now(),
-                        flags = ${flags || []}::text[], updated_at = now()
-                       WHERE id = ${id} AND status = ANY(${from}) RETURNING id`;
-  } else if (to === 'submitted') {
-    rows = await db()`UPDATE cancellations SET status = 'submitted', submitted_by = ${actor}, submitted_at = now(),
-                        platform_ref = ${platformRef ?? null}, updated_at = now()
-                       WHERE id = ${id} AND status = ANY(${from}) RETURNING id`;
-  } else if (to === 'rejected') {
-    rows = await db()`UPDATE cancellations SET status = 'rejected', rejected_reason = ${rejectedReason ?? null}, updated_at = now()
-                       WHERE id = ${id} AND status = ANY(${from}) RETURNING id`;
-  } else {
-    // Back to review — a failed submission, or a verify/reject taken back. Clears who
-    // verified it: the next verify is a new check.
-    rows = await db()`UPDATE cancellations SET status = 'to_review', verified_by = NULL, verified_at = NULL,
-                        submitted_by = NULL, submitted_at = NULL, rejected_reason = NULL,
-                        flags = ${flags || []}::text[], updated_at = now()
-                       WHERE id = ${id} AND status = ANY(${from}) RETURNING id`;
-  }
+/** Remove a row that isn't an order to cancel (a wrong photo). Kept, never listed; its number may be logged again. */
+export async function removeCancellation(id, { actor, reason }) {
+  const rows = await db()`UPDATE cancellations SET status = 'rejected', rejected_reason = ${reason}, updated_at = now()
+                            WHERE id = ${id} AND status <> 'rejected' RETURNING id`;
   if (!rows.length) return null;
-  await logCancellationEvent(id, to === 'to_review' ? 'reopened' : to, actor, detail);
+  await logCancellationEvent(id, 'removed', actor, reason);
   return getCancellation(id);
+}
+
+/**
+ * "Photo 4: no order number found — type it": a number this person types within 30 minutes
+ * fills their OLDEST photo row still without a number ON THE SAME PLATFORM (both named), so
+ * the photo and the number end up on one row instead of two.
+ */
+export async function openUnreadCancellation(userId, platform, minutes = 30) {
+  if (!userId || !platform) return null;
+  const rows = await db()`
+    SELECT id, platform FROM cancellations
+     WHERE sent_by_user_id = ${userId} AND order_key IS NULL AND status <> 'rejected' AND photo_id IS NOT NULL
+       AND created_at > now() - make_interval(mins => ${minutes}::int)
+       AND platform = ${platform}
+     ORDER BY created_at, id LIMIT 1`;
+  return rows[0] ? { id: Number(rows[0].id), platform: rows[0].platform } : null;
 }
 
 // "/alias, then the photos" (docs/context/cancellations.md): what a chat or an album named
@@ -12884,15 +13026,14 @@ export async function getCancellationCtx(key, minutes = 10) {
 }
 
 // One EST day of cancellations (the end-of-shift /msg, /msgall, /report on Telegram) —
-// by the day the warehouse SENT them, Eastern time. Rejected rows are not asked for.
-export async function listCancellationsForDay(ymd, { withRejected = false } = {}) {
+// by the day the floor SENT them, Eastern time. Removed rows are never in it.
+export async function listCancellationsForDay(ymd) {
   const rows = await db()`
     SELECT c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason, c.note,
-           c.flags, c.source, c.sent_by, c.verified_by, c.submitted_by, c.submitted_at, c.platform_ref,
-           c.rejected_reason, c.created_at
+           c.flags, c.source, c.sent_by, c.details_from, c.created_at
       FROM cancellations c
      WHERE (c.created_at AT TIME ZONE 'America/New_York')::date = ${ymd}::date
-       AND (${withRejected} OR c.status <> 'rejected')
+       AND c.status <> 'rejected'
      ORDER BY c.created_at, c.id`;
   return rows.map((r) => ({ ...r, id: Number(r.id) }));
 }

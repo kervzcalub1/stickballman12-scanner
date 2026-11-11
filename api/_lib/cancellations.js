@@ -2,23 +2,32 @@
 //
 // Karon (warehouse) used to type every 10–15-digit order number to cancel at the end of
 // the day. Now anyone on the floor sends the bot a picture (a label, a packing slip, a
-// screenshot of the order) in their private chat; this reads it, files one row per order
-// on the Cancellations page, and answers in the chat with what it read — or what it
-// couldn't. PH/admin check each row against the photo before anything is cancelled.
+// screenshot of the order) with the platform command (/alias …); this reads it, RECORDS one
+// row per order (number + shoe name, SKU, size), and answers ONCE per batch of photos, as a
+// reply to the first, with the list of what it recorded. No review step since 2026-11-12
+// (owner: "no verification anymore — just record it").
 //
-// THE MODEL IS A READER, NOT A DECIDER. It says which platform and which number it sees,
-// and how sure it is; the rules in src/lib/cancellations.js decide the flags, and a person
-// verifies every row. A photo it can't read still files a row WITH the photo, flagged, so a
-// reviewer can type the number off the picture — a failed read never loses the request.
+// THE READER IS A READER, NOT A DECIDER. It never invents a number or a detail it didn't
+// see; what makes a number certain is OUR OWN orders (fillDetails). A photo it can't read
+// still records a row WITH the photo, marked "no order # read", so a person can type the
+// number off the picture — a failed read never loses the request.
 import { tg, enqueue, sendAlertDocument } from './telegram.js';
 import { r2Configured, presignPutUrl } from './r2.js';
 import {
   createCancellationPhoto, setCancellationPhotoRead, createCancellation, findLiveCancellation, listCancellationsForDay,
+  knownOrdersFor, catalogueNamesBySku, getCancellation, getCancellationsByIds, updateCancellationFields, openUnreadCancellation,
+  claimCancellationPhotoReplies, releaseCancellationPhotoReplies, cancellationPhotosForReply, strandedCancellationPhotos,
+  cancellationIdsForPhoto,
 } from './db.js';
 import { estToday } from '../../src/lib/format.js';
+import { notifyEnv } from './notify.js';
+import { alertCancellationsLogged } from './alerts.js';
 import { readCancellationLocally, canOpenImage } from './cancelOcr.js';
-import { cancelMessage, cancelMessageAll, dayCounts, cancellationsCsv } from '../../src/lib/cancellations.js';
-import { PLATFORMS, cleanSku, cleanOrderNo, orderKey, flagsFor, platformFromNumber, platformLabel, FLAGS, BLOCKING } from '../../src/lib/cancellations.js';
+import { cancelMessage, cancelMessageAll, dayCounts, cancellationsCsv, batchReplyText, typedDetails } from '../../src/lib/cancellations.js';
+import {
+  PLATFORMS, cleanSku, cleanOrderNo, orderKey, flagsFor, platformFromNumber, platformLabel,
+  confusableKeys, matchOurOrder, detailsFromOrder, trackingFromText,
+} from '../../src/lib/cancellations.js';
 
 // What the bot's "/" menu lists (scripts/telegram-webhook.mjs → setMyCommands).
 export const BOT_COMMANDS = [
@@ -27,9 +36,10 @@ export const BOT_COMMANDS = [
   { command: 'msgall', description: "Today's cancel messages for every platform" },
   { command: 'report', description: "Today's cancellations as a CSV file" },
 ];
-export const HOW_TO = 'To log an order to cancel: send the platform, then the photo(s) — e.g. /alias and the picture (or put /alias in the photo\'s caption).\n'
+export const HOW_TO = 'To record orders to cancel: send the platform, then the photo(s) — e.g. /alias and the pictures (or put /alias in the caption). '
+  + 'I record each order and answer once with the list: order number + shoe, SKU, size.\n'
   + `Platforms: ${PLATFORMS.map((p) => `/${p.cmd} ${p.label}`).join(' · ')}\n`
-  + 'Or type the number: /stockx 12345678-12345678 - wrong size\n\n'
+  + 'Or type it: /stockx 12345678-12345678 · /alias 206557037 DD1391-100 9.5 - wrong size\n\n'
   + "End of shift (today, EST): /msg — pick a platform for its cancel message · /msgall — every platform · /report — a CSV file. "
   + 'Another day: add the date, e.g. /msgall yesterday or /report 2026-10-19';
 
@@ -181,26 +191,102 @@ async function storePhoto(photoId, jpeg) {
   return setCancellationPhotoRead(photoId, { r2Key: null, bytes: jpeg });
 }
 
+// ── The shoe: our orders first, then the label, then our catalogue ───────────────────
+// Order of trust (owner, 2026-11-12: "order number + shoe name, SKU, size"):
+//   1. OUR order with that number (eBay / SHEIN / pre-sell) — it confirms the number too; a
+//      number one OCR letter-for-digit slip away from exactly one of them is put right
+//      (matchOurOrder). A label with no order number but a tracking number that one of our
+//      orders shipped under → that order.
+//   2. what the label says (style code, size, the name line).
+//   3. a name for that style code from our own catalogue (products / items / pre-sell stock).
+// Never invented: a detail none of them has stays blank. No paid lookups.
+async function lookupKnown({ keys, tracks }) {
+  try { return await knownOrdersFor({ keys, tracks }); } catch (e) {
+    console.warn('[cancellations] order lookup failed:', e.message);
+    return [];
+  }
+}
 /**
- * One picture → rows. `who` = { id, name } (the linked app account). Returns what to say
- * back: { filed:[row], dupes:[{order_number, existing}], unreadable:bool, error }.
+ * `orders` = what the reader found ([{ order_number, platform, sku, size, product }]);
+ * `named` = the platform the sender named; `opts.text` = the text read (for tracking numbers);
+ * `opts.typed` = a person typed it (no correction — they typed what they meant).
+ * → the same orders with platform / number / shoe filled, plus details_from, order_match,
+ *   read_as (the number as read, when it was put right), by_tracking, note.
+ */
+export async function fillDetails(orders, named, { text = '', typed = false } = {}) {
+  const keys = orders.flatMap((o) => { const k = orderKey(o.order_number); return !k ? [] : typed ? [k] : [k, ...confusableKeys(k)]; });
+  const tracks = typed ? [] : trackingFromText(text);
+  const known = keys.length || tracks.length ? await lookupKnown({ keys, tracks }) : [];
+  let list = orders;
+  // No order number on the label, but a tracking number one of OUR orders shipped under.
+  if (!orders.some((o) => orderKey(o.order_number)) && tracks.length) {
+    const byTrack = [...new Map(known.filter((k) => k.tracking && (!named || k.platform === named)).map((k) => [k.key, k])).values()];
+    if (byTrack.length === 1) {
+      const o = orders[0] || {};
+      list = [{ ...o, order_number: byTrack[0].order_id, platform: byTrack[0].platform, by_tracking: true }];
+    }
+  }
+  const out = list.map((o) => {
+    const order_number = o.order_number ? cleanOrderNo(o.order_number) : null;
+    const m = order_number ? matchOurOrder(order_number, named || o.platform || null, known) : null;
+    const f = { ...o, order_number, platform: named || o.platform || platformFromNumber(order_number) || null, from: [] };
+    if (m && (!m.corrected || !typed)) {
+      const d = detailsFromOrder(m.order, o) || {};
+      f.platform = named || m.order.platform;
+      if (m.corrected) {
+        f.read_as = order_number;
+        f.note = `Read as ${order_number} on the photo; one character off our ${platformLabel(m.order.platform)} order ${m.order.order_id}, so recorded as that.`;
+      }
+      f.order_number = cleanOrderNo(m.order.order_id);
+      f.order_match = m.order.source;
+      if (d.product || d.sku || d.size) f.from.push(m.order.source);
+      f.product = d.product || o.product || null;
+      f.sku = d.sku || cleanSku(o.sku) || null;
+      f.size = d.size || o.size || null;
+      if ((!d.product && o.product) || (!d.sku && o.sku) || (!d.size && o.size)) f.from.push(typed ? 'typed' : 'label');
+    } else {
+      f.sku = cleanSku(o.sku) || null;
+      if (o.product || f.sku || o.size) f.from.push(typed ? 'typed' : 'label');
+    }
+    return f;
+  });
+  // 3. A name for a style code, from our own catalogue.
+  const need = [...new Set(out.filter((o) => !o.product && o.sku).map((o) => o.sku))];
+  if (need.length) {
+    let names = new Map();
+    try { names = await catalogueNamesBySku(need); } catch (e) { console.warn('[cancellations] catalogue lookup failed:', e.message); }
+    for (const o of out) {
+      const n = !o.product && o.sku ? names.get(orderKey(o.sku)) : null;
+      if (n) { o.product = n; o.from.push('catalogue'); }
+    }
+  }
+  return out.map(({ from, ...o }) => ({ ...o, details_from: [...new Set(from)].join(',') || null }));
+}
+
+/**
+ * One picture → rows. The photo row already exists (the webhook writes it before answering
+ * Telegram); `photoId` null = make one (tests / a caller without the webhook). `who` = the
+ * linked app account. Returns { photoId, rows:[row], dupes:[…], error, already } and keeps
+ * the same summary on the photo (`result`), which is what the batch reply is built from.
  */
 //
 // `platform` = what the sender named (/alias in the caption), or `resolvePlatform()` — asked
 // AFTER the read, because an album's other photos arrive with no caption at the same moment
 // as the one that carries "/alias", and the read is what gives that one time to be noted.
 // The sender's word beats the reader's guess.
-export async function fileCancellationPhoto(buf, { who, caption = null, platform = null, resolvePlatform = null, tgChatId = null, tgMessageId = null }) {
+export async function fileCancellationPhoto(buf, { photoId = null, who, caption = null, platform = null, resolvePlatform = null, tgChatId = null, tgMessageId = null }) {
   const reason = caption ? String(caption).trim().slice(0, 300) || null : null;
-  const photoId = await createCancellationPhoto({ caption: reason, tgChatId, tgMessageId, sentByUserId: who.id, sentBy: who.name });
-  if (photoId == null) return { already: true };   // Telegram re-sent a message we have
-  // A picture we can't even open (an iPhone HEIC sent "as a file"): keep it, file the row,
+  if (photoId == null) {
+    photoId = await createCancellationPhoto({ caption: reason, tgChatId, tgMessageId, sentByUserId: who.id, sentBy: who.name });
+    if (photoId == null) return { already: true };   // Telegram re-sent a message we have
+  }
+  // A picture we can't even open (an iPhone HEIC sent "as a file"): keep it, record the row,
   // and say how to send it so it can be read.
   const opens = await canOpenImage(buf);
   const jpeg = opens ? await shrinkImage(buf) : buf;
   await storePhoto(photoId, jpeg);
 
-  let read = null; let error = null;
+  let read = null; let error = null; let byTracking = null;
   if (!opens) error = "this picture's format can't be opened — send it as a photo (not as a file)";
   else {
     // 1. Our own server, no AI: tesseract on the ORIGINAL picture (more pixels than the copy we keep).
@@ -212,63 +298,100 @@ export async function fileCancellationPhoto(buf, { who, caption = null, platform
     } catch (e) {
       console.warn('[cancellations] local read failed:', e.message);
     }
+    // No order number, but a tracking number one of OUR orders shipped under (an eBay FedEx
+    // label prints only the tracking number): that order — before any AI.
+    if (!read && local?.text) {
+      const t = await fillDetails([], hint, { text: local.text });
+      if (t.length) { byTracking = t; read = { ...local, by: 'ocr' }; }
+    }
     // 2. Only when that found no order number: the AI, if it is switched on.
     if (!read && cancelAiConfigured()) {
       try { read = { ...(await readTwice(jpeg, hint)), by: 'ai' }; } catch (e) { error = e.message; }
     }
     if (!read && !error) read = { orders: [], what: '', by: 'ocr', text: local?.text || '' };
+    if (read && !read.text && local?.text) read.text = local.text;
   }
   const named = platform || (resolvePlatform ? await resolvePlatform().catch(() => null) : null);
-  await setCancellationPhotoRead(photoId, { status: error ? 'failed' : read.orders.length ? 'read' : 'nothing', error });
-
   const base = { photo_id: photoId, reason, sent_by_user_id: who.id, sent_by: who.name, tg_chat_id: tgChatId, tg_message_id: tgMessageId, source: 'telegram' };
+
+  // Our orders / the label / the catalogue: number confirmed and the shoe filled. A label
+  // with only a tracking number can still name one of our orders here.
+  const found = byTracking || (read && !error ? await fillDetails(read.orders, named, { text: read.text || '' }) : []);
+  const finish = async (rows, dupes, extra = {}) => {
+    const result = { rows: rows.map((r) => ({ id: r.id, ...(r.read_as ? { read_as: r.read_as } : {}), ...(r.by_tracking ? { by_tracking: true } : {}) })),
+      dupes: dupes.map((d) => ({ order_number: d.order_number, existing: { id: d.existing?.id, sent_by: d.existing?.sent_by || null } })), ...extra };
+    await setCancellationPhotoRead(photoId, { status: error ? 'failed' : rows.some((r) => r.order_number) || dupes.length ? 'read' : 'nothing', error, result });
+    return { photoId, rows, dupes, error };
+  };
   // Nothing usable: still one row with the photo, so the request reaches a person.
-  if (error || !read.orders.length) {
+  if (error || !found.some((o) => o.order_number)) {
     const flags = ['unreadable', 'no_number', ...(named ? [] : ['no_platform'])];
     const { row } = await createCancellation({ ...base, platform: named, flags,
       ai_raw: read ? { by: read.by, what: read.what, ...(read.text ? { text: read.text } : {}) } : { error },
       note: error ? `Could not read the photo: ${error}` : (read.what ? `Reader: ${read.what}` : null) });
-    return { filed: row ? [row] : [], dupes: [], unreadable: true, error, what: read?.what || '' };
+    return finish(row ? [row] : [], []);
   }
-  const filed = []; const dupes = []; const seen = new Set();
-  for (const o of read.orders) {
-    const order_number = o.order_number ? cleanOrderNo(o.order_number) : null;
-    const key = orderKey(order_number);
+  const rows = []; const dupes = []; const seen = new Set();
+  const raws = new Map(read.orders.map((o) => [orderKey(o.order_number), o]));
+  for (const o of found) {
+    const key = orderKey(o.order_number);
+    if (!key) continue;
     // The same number twice on one picture is one order, not "already logged by you".
-    if (key && seen.has(key)) continue;
-    if (key) seen.add(key);
-    const row = { platform: named || o.platform || platformFromNumber(order_number), order_number, sku: cleanSku(o.sku), size: o.size, product: o.product };
-    const flags = flagsFor(row, o);
-    const note = o.agreed !== false ? null
-      : o.onlySecond ? 'Only one of the two reads found this number'
-        : o.other ? `Second read said ${o.other}` : 'The second read did not find this number';
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const ai = raws.get(orderKey(o.read_as || o.order_number)) || o;
+    const row = { platform: o.platform, order_number: o.order_number, sku: o.sku, size: o.size, product: o.product };
+    // Our own order matched = certain: the reader's own doubts don't apply.
+    const flags = flagsFor(row, o.order_match ? null : ai);
+    const note = [o.note, ai.agreed !== false || o.order_match ? null
+      : ai.onlySecond ? 'Only one of the two reads found this number'
+        : ai.other ? `Second read said ${ai.other}` : 'The second read did not find this number',
+    o.by_tracking ? 'No order number on the photo — found by the tracking number on it.' : null].filter(Boolean).join(' ') || null;
     // What read it, and (no AI) the text it read — so a miss can be turned into a new rule.
-    const raw = { ...o, by: read.by, ...(read.by === 'ocr' && read.text ? { text: read.text } : {}) };
-    const out = await createCancellation({ ...base, ...row, order_key: key, flags, note, ai_confidence: o.confidence, ai_raw: raw });
-    if (out.duplicate) dupes.push({ order_number, existing: out.duplicate });
-    else filed.push(out.row);
+    const raw = { ...ai, by: read.by, ...(read.text ? { text: read.text } : {}) };
+    const out = await createCancellation({ ...base, ...row, order_key: key, flags, note, ai_confidence: ai.confidence ?? null, ai_raw: raw,
+      details_from: o.details_from, order_match: o.order_match || null });
+    if (out.duplicate) dupes.push({ order_number: o.order_number, existing: out.duplicate });
+    else rows.push({ ...out.row, read_as: o.read_as || null, by_tracking: !!o.by_tracking });
   }
-  return { filed, dupes, unreadable: false };
+  return finish(rows, dupes);
 }
 
 /** A number TYPED to the bot (the photo failed, or there was no photo). */
 export async function fileTypedCancellation(text, { who, platform: given = null, tgChatId = null, tgMessageId = null }) {
-  // [platform] number [ - reason]. A space continues the number only before another digit
-  // group ("1234 5678 9012"), so "12345678-12345678 - customer asked" keeps its reason apart.
+  // [platform] number [SKU] [size] [ - reason]. A space continues the number only before
+  // another digit group ("1234 5678 9012"), so "12345678-12345678 - customer asked" keeps its reason apart.
   const m = /^\s*(?:([A-Za-z]+)\s+)?#?([A-Za-z0-9](?:[A-Za-z0-9-]|\s(?=\d)){4,40}[A-Za-z0-9])(?:\s*[-–:]\s*|\s+)?(.*?)\s*$/s.exec(String(text || ''));
   if (!m) return null;
-  const order_number = cleanOrderNo(m[2]);
+  let num = m[2]; let rest = m[3] || '';
+  // "206557037 9.5": a space continues the number before a digit, so the size's "9" got glued on.
+  const glued = /^(.*\d)\s+(\d{1,2})$/.exec(num);
+  if (glued && (glued[1].match(/\d/g) || []).length >= 6) {
+    num = glued[1]; rest = `${glued[2]}${rest.startsWith('.') ? '' : ' '}${rest}`.trim();
+  }
+  const order_number = cleanOrderNo(num);
   const named = m[1] ? PLATFORMS.find((p) => p.key === m[1].toLowerCase() || p.label.toLowerCase() === m[1].toLowerCase())?.key : null;
   const platform = given || named || platformFromNumber(order_number);
   const key = orderKey(order_number);
   // An order number is mostly digits; "hello world123" is not a request to cancel anything.
   if (!key || (key.match(/\d/g) || []).length < 6) return null;
-  const row = { platform, order_number };
   const existing = await findLiveCancellation(key);
-  if (existing) return { filed: [], dupes: [{ order_number, existing }] };
-  const out = await createCancellation({ ...row, order_key: key, flags: flagsFor(row), reason: m[3]?.trim().replace(/^[-–:]\s*/, '').slice(0, 300) || null,
-    source: 'typed', sent_by_user_id: who.id, sent_by: who.name, tg_chat_id: tgChatId, tg_message_id: tgMessageId });
-  return out.duplicate ? { filed: [], dupes: [{ order_number, existing: out.duplicate }] } : { filed: [out.row], dupes: [] };
+  if (existing) return { rows: [], dupes: [{ order_number, existing }] };
+  const t = typedDetails(rest);
+  const [o] = await fillDetails([{ order_number, platform, sku: t.sku, size: t.size, product: null }], platform, { typed: true });
+  const row = { platform: o.platform, order_number: o.order_number, sku: o.sku, size: o.size, product: o.product };
+  const f = { ...row, order_key: orderKey(o.order_number), flags: flagsFor(row), details_from: o.details_from, order_match: o.order_match || null };
+  // "Photo 4: no order number found — type it": the number fills that photo's row.
+  const open = await openUnreadCancellation(who.id, platform);
+  if (open) {
+    const cur = await getCancellation(open.id);
+    const out = await updateCancellationFields(open.id, { ...f, platform: f.platform || cur.platform, reason: t.reason || cur.reason, note: cur.note,
+      changed: `order number typed to the bot: ${o.order_number}` }, who.name);
+    if (out.duplicate) return { rows: [], dupes: [{ order_number, existing: out.duplicate }] };
+    return { rows: [{ ...out.row, filled: true }], dupes: [] };
+  }
+  const out = await createCancellation({ ...f, reason: t.reason, source: 'typed', sent_by_user_id: who.id, sent_by: who.name, tg_chat_id: tgChatId, tg_message_id: tgMessageId });
+  return out.duplicate ? { rows: [], dupes: [{ order_number, existing: out.duplicate }] } : { rows: [out.row], dupes: [] };
 }
 
 // ── Telegram ─────────────────────────────────────────────────────────────────────────
@@ -283,37 +406,134 @@ export async function downloadTelegramFile(fileId) {
   return Buffer.from(await r.arrayBuffer());
 }
 
-const line = (r) => {
-  const hard = (r.flags || []).filter((f) => BLOCKING.includes(f));
-  const soft = (r.flags || []).filter((f) => !BLOCKING.includes(f));
-  const what = [platformLabel(r.platform) || 'Platform ?', r.order_number || 'no number', [r.sku, r.size].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
-  const tail = hard.length ? `\n   ⚠️ ${hard.map((f) => FLAGS[f]).join('; ')}` : soft.length ? `\n   🔎 ${soft.map((f) => FLAGS[f]).join('; ')}` : '';
-  return `#${r.id} ${what}${tail}`;
-};
-
-/** What the bot says back after a photo or a typed number. */
-export function replyText(out) {
-  if (out.already) return null;
-  const parts = [];
-  if (out.unreadable) {
-    parts.push(`⚠️ I couldn't read an order number on this picture${out.error ? ` (${out.error})` : out.what ? ` — it looks like: ${out.what}` : ''}.`);
-    parts.push(`It's saved as #${out.filed[0]?.id} for review with the photo, so nothing is lost.`);
-    parts.push('If you can, send a clearer photo, or type the number with its platform, e.g. /stockx 12345678-12345678');
-    return parts.join('\n');
-  }
-  if (out.filed.length) parts.push(`✅ Logged ${out.filed.length} for review:\n${out.filed.map(line).join('\n')}`);
-  for (const d of out.dupes) {
-    parts.push(`🔁 ${d.order_number} is already logged as #${d.existing.id}${d.existing.sent_by ? ` (by ${d.existing.sent_by})` : ''} — not added twice.`);
-  }
-  if (out.filed.some((r) => (r.flags || []).some((f) => BLOCKING.includes(f))))
-    parts.push('Rows marked ⚠️ will be fixed from the photo by the reviewer — or send a clearer picture.');
-  return parts.join('\n\n') || 'Nothing new to log.';
-}
-
 export const sayTo = (chatId, text, replyTo = null) => enqueue(() => tg('sendMessage', {
   chat_id: chatId, text,
   ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}),
 }));
+const devTag = () => (notifyEnv() === 'dev' ? '[dev] ' : '');
+
+/** What the bot says back after a typed number. */
+export function typedReplyText(out) {
+  const filled = out.rows.find((r) => r.filled);
+  const text = batchReplyText([{ n: null, rows: out.rows, dupes: out.dupes }]);
+  return filled ? `${text}\n\n(Filled the photo row #${filled.id} that had no order number.)` : text;
+}
+
+// ── ONE reply per batch of photos (2026-11-12) ───────────────────────────────────────
+// A batch = every photo one person sends in one chat close together: an album (Telegram
+// delivers it as separate updates within ~1 s) AND separate photos sent one after another.
+// The reads run one at a time (cancelOcr's queue), so a photo that arrives while the batch
+// is still being read simply joins it. Once the last photo is read, the batch waits QUIET_MS
+// for another; then ONE message goes out, as a reply to the batch's first photo.
+//
+// 4 s: an album's photos all arrive within ~1 s, and someone tapping "send" on photos one by
+// one is 2–3 s apart — while each read takes 1–2.5 s, so the window only has to cover the gap
+// AFTER the last read. Longer just makes everyone wait for the answer. CANCEL_BATCH_QUIET_MS
+// overrides it.
+//
+// The batch lives in memory; what survives a restart is on the photo rows (replied_at,
+// result). The sweep (cancellations-worker.js) answers anything left unanswered — worst case
+// per person rather than per batch, never twice (replied_at is claimed compare-and-set).
+const QUIET_MS = () => {
+  const n = Number(env('CANCEL_BATCH_QUIET_MS'));
+  return Number.isFinite(n) && n >= 200 && n <= 60_000 ? n : 4000;
+};
+const batches = new Map();       // `${chat}:${sender}` → { chatId, ids, pending, timer }
+const inFlight = new Set();      // photo ids this process is reading or holding for a reply
+export function cancelBatchStart(key, chatId, photoId) {
+  let b = batches.get(key);
+  if (!b) { b = { chatId, ids: [], pending: 0, timer: null }; batches.set(key, b); }
+  clearTimeout(b.timer); b.timer = null;
+  b.ids.push(photoId); b.pending += 1; inFlight.add(photoId);
+}
+export function cancelBatchDone(key) {
+  const b = batches.get(key);
+  if (!b) return;
+  b.pending -= 1;
+  if (b.pending > 0) return;
+  b.timer = setTimeout(() => {
+    if (batches.get(key) !== b || b.pending > 0) return;
+    batches.delete(key);
+    sendBatchReply(b.chatId, b.ids)
+      .catch((e) => console.error('[cancellations] batch reply:', e.message))
+      .finally(() => { for (const id of b.ids) inFlight.delete(id); });
+  }, QUIET_MS());
+}
+export const photoInFlight = (id) => inFlight.has(id);
+
+/** Answer for these photos — the ones not answered yet — in one message, under the first. */
+export async function sendBatchReply(chatId, photoIds) {
+  const claimed = await claimCancellationPhotoReplies(photoIds);
+  if (!claimed.length) return false;
+  try {
+    const photos = await cancellationPhotosForReply(claimed);
+    const refs = photos.flatMap((p) => p.result?.rows || []);
+    const rows = new Map((await getCancellationsByIds(refs.map((r) => r.id))).map((r) => [r.id, r]));
+    const items = photos.map((p, i) => ({
+      n: photos.length > 1 ? i + 1 : null,
+      error: !p.result?.rows?.length && p.read_status === 'failed' ? (p.read_error || 'it could not be read') : null,
+      why: p.read_status === 'failed' ? p.read_error || null : null,
+      rows: (p.result?.rows || []).map((r) => rows.get(r.id) && { ...rows.get(r.id), ...r }).filter(Boolean),
+      dupes: p.result?.dupes || [],
+    }));
+    const first = photos.find((p) => p.tg_message_id)?.tg_message_id || null;
+    await sayTo(chatId ?? photos[0].tg_chat_id, `${devTag()}${batchReplyText(items)}`, first);
+    const recorded = items.flatMap((x) => x.rows);
+    if (recorded.length) alertCancellationsLogged(recorded, { id: photos[0].sent_by_user_id, name: photos[0].sent_by });
+    return true;
+  } catch (e) {
+    await releaseCancellationPhotoReplies(claimed).catch(() => {});
+    throw e;
+  }
+}
+
+/** Read one photo that came in on Telegram (its row already written) — the live path and the sweep. */
+export async function readTelegramPhoto(p, { resolvePlatform = null } = {}) {
+  inFlight.add(p.id);
+  try {
+    const buf = await downloadTelegramFile(p.fileId);
+    return await fileCancellationPhoto(buf, { photoId: p.id, who: p.who, caption: p.caption || null, platform: p.platform || null,
+      resolvePlatform, tgChatId: p.chatId, tgMessageId: p.messageId });
+  } catch (e) {
+    console.error('[cancellations] photo:', e.message);
+    await setCancellationPhotoRead(p.id, { status: 'failed', error: e.message.slice(0, 300), result: { rows: [], dupes: [], error: e.message.slice(0, 300) } }).catch(() => {});
+    return { photoId: p.id, rows: [], dupes: [], error: e.message };
+  }
+}
+
+/**
+ * After a restart (or anything that dropped a batch): re-read photos whose read never
+ * finished, then answer every photo still unanswered, one message per person per chat.
+ */
+export async function sweepCancellationPhotos(opts = {}) {
+  const { stuck } = await strandedCancellationPhotos(opts);
+  let reread = 0;
+  for (const p of stuck.filter((x) => !inFlight.has(x.id))) {
+    try {
+      // Rows already recorded for it (the crash came after): just mark it read.
+      const ids = await cancellationIdsForPhoto(p.id);
+      if (ids.length) {
+        await setCancellationPhotoRead(p.id, { status: 'read', result: { rows: ids.map((id) => ({ id })), dupes: [] } });
+      } else {
+        await readTelegramPhoto({ id: p.id, fileId: p.tg_file_id, chatId: p.tg_chat_id, messageId: p.tg_message_id, caption: p.caption,
+          platform: p.platform, who: { id: p.sent_by_user_id, name: p.sent_by } });
+      }
+      reread += 1;
+    } finally { inFlight.delete(p.id); }
+  }
+  const { unanswered } = await strandedCancellationPhotos(opts);
+  const groups = new Map();
+  for (const p of unanswered.filter((x) => !inFlight.has(x.id))) {
+    const k = `${p.tg_chat_id}:${p.sent_by_user_id}`;
+    if (!groups.has(k)) groups.set(k, { chatId: p.tg_chat_id, ids: [] });
+    groups.get(k).ids.push(p.id);
+  }
+  let answered = 0;
+  for (const g of groups.values()) {
+    try { if (await sendBatchReply(g.chatId, g.ids)) answered += 1; } catch (e) { console.error('[cancellations] sweep reply:', e.message); }
+  }
+  return { reread, answered };
+}
 
 // ── End of shift: /msg, /msgall, /report ─────────────────────────────────────────────
 // All by ONE EST day — the warehouse runs these at the end of their shift, and "today"
@@ -362,11 +582,11 @@ export async function msgAll(ymd) {
   const rows = await listCancellationsForDay(ymd);
   return (cancelMessageAll(rows) || `No orders to cancel ${dayName(ymd)}.`) + leftOut(rows);
 }
-/** /report → the day's rows as a CSV, rejected ones included (it's the record). */
+/** /report → the day's recorded rows as a CSV (what the page lists for that day). */
 export async function sendDayReport(chatId, ymd) {
-  const rows = await listCancellationsForDay(ymd, { withRejected: true });
+  const rows = await listCancellationsForDay(ymd);
   if (!rows.length) return false;
-  const c = dayCounts(rows.filter((r) => r.status !== 'rejected'));
+  const c = dayCounts(rows);
   const per = PLATFORMS.filter((p) => c.by[p.key]).map((p) => `${p.label} ${c.by[p.key]}`).join(' · ');
   const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   await sendAlertDocument(chatId, {

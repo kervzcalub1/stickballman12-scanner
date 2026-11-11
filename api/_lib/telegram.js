@@ -122,12 +122,18 @@ const CAPTION_MAX = 1024; // Telegram's limit on a photo caption
 // upload it to Telegram), the code that said which (`e.cause.code`) was thrown away, and
 // nothing tried again, so one dropped connection cost the card its picture for good.
 //
-// Now: the step and the low-level code are named, and a drop is tried again —
-//   · the R2 READ on any drop or timeout (a read twice is harmless);
-//   · the Telegram UPLOAD only when the connection never opened (DNS, refused, connect
-//     timeout). A drop mid-upload may have landed, and a second copy is a second card with
-//     live buttons, so that one still falls back to text — now saying exactly why.
-const NEVER_SENT = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT', 'ENETUNREACH', 'EHOSTUNREACH']);
+// Now: the step and the low-level code are named, and a SHORT-LIVED drop is tried again —
+//   · the R2 READ on a drop/reset/timeout (a read twice is harmless);
+//   · the Telegram UPLOAD only when the connection never opened (temporary DNS, refused,
+//     connect timeout). A drop mid-upload may have landed, and a second copy is a second
+//     card with live buttons, so that one still falls back to text — now saying exactly why.
+// Only the codes listed, never an unknown one: a TLS refusal or a host that doesn't exist
+// will say the same thing three times. And the waits are short, because this runs INSIDE
+// the one Telegram queue — every card and every bot reply waits behind it (CI, #401: TLS
+// errors retried for 4.5 s a card starved the cancellations bot's replies past 15 s).
+const NEVER_SENT = new Set(['EAI_AGAIN', 'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT', 'ENETUNREACH', 'EHOSTUNREACH']);
+const DROPPED = new Set([...NEVER_SENT, 'ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNABORTED', 'UND_ERR_SOCKET',
+  'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'timeout']);
 const PHOTO_TRIES = 3;
 export function netCode(e) {
   const c = e?.cause;
@@ -140,14 +146,14 @@ export function isNetDrop(e) {
 }
 export function mayRetryPhoto(step, e) {
   if (!isNetDrop(e)) return false;
-  return step === 'read' ? true : NEVER_SENT.has(netCode(e));
+  return (step === 'read' ? DROPPED : NEVER_SENT).has(netCode(e));
 }
 export function photoWhy(step, e) {
   const where = step === 'read' ? 'reading it from storage' : 'uploading it to Telegram';
   const code = netCode(e);
   return `${e?.message || 'failed'}${code && !String(e?.message).includes(code) ? ` · ${code}` : ''} — ${where}`;
 }
-async function photoStep(step, fn, { tries = PHOTO_TRIES, waitMs = 1500 } = {}) {
+async function photoStep(step, fn, { tries = PHOTO_TRIES, waitMs = 400 } = {}) {
   for (let i = 1; ; i += 1) {
     try { return await fn(); } catch (e) {
       e.photoStep = step;

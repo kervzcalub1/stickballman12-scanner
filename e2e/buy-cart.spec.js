@@ -4414,7 +4414,11 @@ test('a photo that could not be sent says which step broke, and only a safe step
   // Reading is safe to repeat on any drop; an upload only when it never left the building.
   expect(mayRetryPhoto('read', drop('ECONNRESET'))).toBe(true);
   expect(mayRetryPhoto('upload', drop('ECONNRESET'))).toBe(false); // may have landed — no second card
-  expect(mayRetryPhoto('upload', drop('ENOTFOUND'))).toBe(true);
+  expect(mayRetryPhoto('upload', drop('ECONNREFUSED'))).toBe(true);
+  // Not a drop — the same answer three times, holding up the one Telegram queue (#401 CI).
+  expect(mayRetryPhoto('read', drop('ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE'))).toBe(false);
+  expect(mayRetryPhoto('read', drop('ENOTFOUND'))).toBe(false);
+  expect(mayRetryPhoto('read', drop(undefined))).toBe(false);
   expect(mayRetryPhoto('read', answered)).toBe(false);
   expect(photoWhy('read', drop('ECONNRESET'))).toBe('fetch failed · ECONNRESET — reading it from storage');
   expect(photoWhy('upload', drop('UND_ERR_SOCKET'))).toBe('fetch failed · UND_ERR_SOCKET — uploading it to Telegram');

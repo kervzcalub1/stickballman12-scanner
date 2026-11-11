@@ -192,6 +192,8 @@ test('the shoe name on a label is taken only when it reads whole; tracking numbe
   expect(labelProduct(['ke Air Max 90 A', '176889923'])).toBe(null);                    // a cut-off name: blank, never half
   expect(labelProduct(["Nike Air Max 90 'Anthracite Team Red'", '176889923'])).toBe("Nike Air Max 90 'Anthracite Team Red'");
   expect(labelProduct(['ITEM', 'UPS 1Z3YY4081218923258'])).toBe(null);                   // a tracking line is not a name
+  expect(labelProduct(['ITEM', 'Nike Air Max 90 "Anthracite Team Red"'])).toBe("Nike Air Max 90 'Anthracite Team Red'"); // OCR read the quote as " (Linux CI)
+  expect(labelProduct(['Nike Dunk Low “Panda”', '176889923'])).toBe("Nike Dunk Low 'Panda'");
   expect(trackingFromText('UPS 1Z3YY4081218923258\nTRK# 8790 6081 3551\n9632 0019 6 000 | 0 00 8790 6081 3551'))
     .toEqual(['1Z3YY4081218923258', '879060813551']);
 });

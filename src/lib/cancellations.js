@@ -152,17 +152,20 @@ const sheinLike = (t) => (t.match(/\d/g) || []).length >= 4 && (t.match(/[A-Z]/g
 // right under "ITEM", or carrying a quoted colourway — and starting with a capital, ≥ 3
 // words, nothing but name characters. Anything less stays blank (never a half name).
 const NAME_CHARS = /^[A-Z][A-Za-z0-9 .'‘’"“”()&/+-]{8,90}$/;
-const QUOTED = /['‘’][A-Za-z0-9][^'‘’]{1,40}['‘’]\s*$/;
+const QUOTED = /['‘’"“”][A-Za-z0-9][^'‘’"“”]{1,40}['‘’"“”]\s*$/;
+// Every quote mark → the plain ' Nike writes a colourway in. OCR reads the same ' as ’, ‘ or
+// even " depending on the font (Linux CI read 'Anthracite Team Red' as "Anthracite Team Red").
+const plainQuotes = (s) => s.replace(/[‘’"“”]/g, "'");
 export function labelProduct(lines) {
   const ok = (l) => !!l && NAME_CHARS.test(l) && l.split(' ').length >= 3 && !TRACKING_LINE.test(l) && !/\d{6,}/.test(l);
   for (let i = 0; i < lines.length; i++) {
     const m = /^ITEM\b[:\s]*(.*)$/i.exec(lines[i]);
     if (!m) continue;
     const cand = (m[1] || lines[i + 1] || '').trim();
-    if (ok(cand)) return cand.replace(/[‘’]/g, "'");
+    if (ok(cand)) return plainQuotes(cand);
   }
   const q = lines.find((l) => ok(l) && QUOTED.test(l));
-  return q ? q.replace(/[‘’]/g, "'") : null;
+  return q ? plainQuotes(q) : null;
 }
 
 /**

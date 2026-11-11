@@ -13,6 +13,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { CARRIERS } from '../lib/carriers.js';
 import { Icon } from './NavIcons.jsx';
+import { saveLabelsSheet } from './PoLabelsFile.jsx';
 
 const FROZEN = ['reconciled', 'closed'];
 export const poEditable = (po) => !!po && !FROZEN.includes(po.status);
@@ -132,65 +133,78 @@ export function PoDetailsEdit({ po, boxes = [], lineCount = 0, onChanged, onSign
   );
 }
 
-/* Add labels to an order that already exists — typed in, or read off the courier's PDF
+/* Add labels to an order that already exists — typed in, or read off the courier's PDFs
    exactly as the create-order form does it (one label per page, tracking number decoded
    from the barcode). Same component either way: the imported rows land in the same
    editable list as a typed one.
 
-   The FILE is the subtle part. An order stores ONE labels PDF, and a per-label download
-   is a page range into it — so attaching a second sheet replaces the first, and the
-   labels that came with the old one lose their printable page (`attachPoLabels` clears
-   every page pointer first, so nothing is left pointing at a stranger's label). That's
-   the right trade when the courier re-issues the whole set, and the wrong one when the
-   PDF only holds the new labels — so it's a choice, defaulted to safe, and never made
-   silently. */
+   Labels are often bought in parts (7 of 30 now, 23 next week), so this takes SEVERAL
+   PDFs at once, and saving them ADDS files to the order — a sheet already on file is
+   never replaced, and its labels keep printing (attachPoLabels: the newest file that
+   carries a label wins; a label it doesn't carry keeps its old file). Saving is therefore
+   the default; unticking it only skips storing the PDFs. */
 export function PoAddLabels({ po, boxes = [], onChanged, onSignOut }) {
   const [rows, setRows] = useState(null);   // null = closed
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [pdfFile, setPdfFile] = useState(null);
-  const [pdfPages, setPdfPages] = useState([]);    // [{ page, value }] from the import
+  const [sheets, setSheets] = useState([]);        // [{ file, pages: [{ page, value }] }] from the import
   const [pdfStatus, setPdfStatus] = useState('');
   const [dragOver, setDragOver] = useState(false);
-  const hasSheet = !!(po?.labels_key || po?.labels_pages || po?.labels_uploaded_at);
-  const [storeSheet, setStoreSheet] = useState(false);
+  const [storeSheet, setStoreSheet] = useState(true);
   if (!poEditable(po)) return null;
 
   const key = (t) => String(t || '').trim().toUpperCase().replace(/\s+/g, '');
   const onOrder = new Set(boxes.map((b) => key(b.tracking_number)).filter(Boolean));
   const set = (i, patch) => setRows((r) => r.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   const close = () => {
-    setRows(null); setError(''); setPdfFile(null); setPdfPages([]); setPdfStatus(''); setStoreSheet(false);
+    setRows(null); setError(''); setSheets([]); setPdfStatus(''); setStoreSheet(true);
   };
 
-  // Read a sheet of labels → one row per page, tracking number decoded from the barcode.
-  // Rows stay fully editable, and a page whose number is already on this order is dropped
-  // rather than added for the server to refuse.
-  const importPdf = async (file) => {
-    if (!file) return;
+  // Read one or more sheets of labels → one row per label page, tracking number decoded
+  // from the barcode. Rows stay fully editable, and a page whose number is already on this
+  // order (or already in the list from another file) is dropped rather than added for the
+  // server to refuse.
+  const importPdfs = async (list) => {
+    const files = [...(list || [])].filter((f) => f && (f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '')));
+    if (!files.length) { setError('Pick a PDF file of shipping labels.'); return; }
     setError(''); setPdfStatus('Reading PDF…');
     try {
       const { decodeTrackingPdf, labelPagesOnly } = await import('../trackingOcr.js');
-      const results = await decodeTrackingPdf(file, (p, n) => setPdfStatus(`Reading page ${p} of ${n}…`));
-      if (!results.length) { setPdfStatus(''); setError('That PDF had no pages to read.'); return; }
-      // Packing slips are interleaved after every label — they carry no barcode, and used
-      // to import as blank rows to delete by hand.
-      const { labels: pages, skipped, undecidable } = labelPagesOnly(results);
-      const dupes = pages.filter((r) => r.value && onOrder.has(key(r.value)));
-      const found = pages
-        .filter((r) => !(r.value && onOrder.has(key(r.value))))
-        .map((r) => ({ trackingNumber: r.value || '', carrierKey: r.carrierKey || null }));
-      setPdfFile(file); setPdfPages(results);
-      setStoreSheet(!hasSheet);   // nothing to lose when the order has no sheet yet
+      const seen = new Set([...onOrder, ...(rows || []).map((r) => key(r.trackingNumber)).filter(Boolean)]);
+      const read = [];
+      let added = 0; let pageCount = 0; let dupes = 0; let slips = 0; let carriers = 0; let blind = 0; const newRows = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const of = files.length > 1 ? ` (${i + 1} of ${files.length})` : '';
+        const results = await decodeTrackingPdf(file, (p, n) => setPdfStatus(`Reading page ${p} of ${n}${of}…`));
+        if (!results.length) continue;
+        read.push({ file, pages: results });
+        pageCount += results.length;
+        // Packing slips are interleaved after every label — they carry no barcode, and used
+        // to import as blank rows to delete by hand.
+        const { labels: pages, skipped, undecidable } = labelPagesOnly(results);
+        slips += skipped.length;
+        if (undecidable) blind++;
+        for (const r of pages) {
+          const k = key(r.value);
+          if (k && seen.has(k)) { dupes++; continue; }
+          if (k) seen.add(k);
+          newRows.push({ trackingNumber: r.value || '', carrierKey: r.carrierKey || null });
+          added++;
+          if (r.carrierKey) carriers++;
+        }
+      }
+      if (!read.length) { setPdfStatus(''); setError('That PDF had no pages to read.'); return; }
+      setSheets((s) => [...s, ...read]);
       // Keep whatever's already been typed; append the imported rows after it.
-      setRows((ls) => [...(ls || []).filter((l) => String(l.trackingNumber || '').trim()), ...found]);
-      const carrierCount = found.filter((r) => r.carrierKey).length;
-      setPdfStatus(undecidable
-        ? `Read ${pages.length} label${pages.length === 1 ? '' : 's'} — no tracking number could be read from any page. Fill them in below.`
-        : `Added ${found.length} label${found.length === 1 ? '' : 's'} from ${results.length} pages`
-          + `${carrierCount ? `, detected ${carrierCount} courier${carrierCount === 1 ? '' : 's'}` : ''}.`
-          + `${dupes.length ? ` ${dupes.length} page${dupes.length === 1 ? '' : 's'} already on this order, skipped.` : ''}`
-          + `${skipped.length ? ` Skipped ${skipped.length} page${skipped.length === 1 ? '' : 's'} with no tracking number (packing slips).` : ''}`);
+      setRows((ls) => [...(ls || []).filter((l) => String(l.trackingNumber || '').trim()), ...newRows]);
+      const inN = read.length > 1 ? ` in ${read.length} PDFs` : '';
+      setPdfStatus(blind === read.length
+        ? `Read ${added} label${added === 1 ? '' : 's'} — no tracking number could be read from any page. Fill them in below.`
+        : `Added ${added} label${added === 1 ? '' : 's'} from ${pageCount} pages${inN}`
+          + `${carriers ? `, detected ${carriers} courier${carriers === 1 ? '' : 's'}` : ''}.`
+          + `${dupes ? ` ${dupes} page${dupes === 1 ? '' : 's'} already on this order, skipped.` : ''}`
+          + `${slips ? ` Skipped ${slips} page${slips === 1 ? '' : 's'} with no tracking number (packing slips).` : ''}`);
     } catch (e) {
       setPdfStatus(''); setError(`Could not read that PDF. ${e.message || ''}`.trim());
     }
@@ -198,9 +212,9 @@ export function PoAddLabels({ po, boxes = [], onChanged, onSignOut }) {
 
   const onDrop = (e) => {
     e.preventDefault(); setDragOver(false);
-    const file = [...(e.dataTransfer?.files || [])].find((f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
-    if (!file) { setError('Drop a PDF file of shipping labels.'); return; }
-    importPdf(file);
+    const files = [...(e.dataTransfer?.files || [])];
+    if (!files.some((f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name))) { setError('Drop a PDF file of shipping labels.'); return; }
+    importPdfs(files);
   };
 
   const submit = async () => {
@@ -208,19 +222,16 @@ export function PoAddLabels({ po, boxes = [], onChanged, onSignOut }) {
       .filter((l) => l.trackingNumber);
     if (!cleaned.length) { setError('Enter at least one tracking number.'); return; }
     setBusy(true); setError('');
+    const saving = storeSheet && sheets.length > 0;
     try {
       await api.poLabelAdd(po.id, cleaned);
-      // Store the sheet AFTER the labels exist — attachPoLabels maps its pages by tracking
+      // Store the sheets AFTER the labels exist — attachPoLabels maps pages by tracking
       // number, so a page for a label that isn't on the order yet would map to nothing.
-      if (pdfFile && storeSheet) {
-        setPdfStatus('Saving the labels PDF…');
-        const { key: objKey, url } = await api.poLabelsSign(po.id);
-        const put = await fetch(url, { method: 'PUT', body: pdfFile, headers: { 'Content-Type': 'application/pdf' } });
-        if (!put.ok) throw new Error(`Upload failed (${put.status})`);
-        await api.poLabelsAttach({
-          poId: po.id, key: objKey, name: pdfFile.name, pages: pdfPages.length,
-          pageMap: pdfPages.filter((x) => x.value).map((x) => ({ tracking: x.value, page: x.page })),
-        });
+      if (saving) {
+        for (let i = 0; i < sheets.length; i++) {
+          setPdfStatus(sheets.length > 1 ? `Saving labels PDF ${i + 1} of ${sheets.length}…` : 'Saving the labels PDF…');
+          await saveLabelsSheet(po.id, sheets[i].file, sheets[i].pages);
+        }
       }
       close();
       onChanged?.();
@@ -228,7 +239,7 @@ export function PoAddLabels({ po, boxes = [], onChanged, onSignOut }) {
       if (e.unauthorized) return onSignOut?.();
       // The labels are on the order by this point if the failure came from the upload —
       // say so, rather than leaving it looking like nothing happened.
-      setError(pdfFile && storeSheet ? `The labels were added, but the PDF could not be saved (${e.message}).` : e.message);
+      setError(saving ? `The labels were added, but a PDF could not be saved (${e.message}). Add it from “Shipping labels”.` : e.message);
       onChanged?.();
     } finally { setBusy(false); }
   };
@@ -250,21 +261,19 @@ export function PoAddLabels({ po, boxes = [], onChanged, onSignOut }) {
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
       >
-        <input type="file" accept="application/pdf" hidden
-          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; importPdf(f); }} />
+        <input type="file" accept="application/pdf" multiple hidden
+          onChange={(e) => { const l = [...(e.target.files || [])]; e.target.value = ''; importPdfs(l); }} />
         <span className="po-dropzone-icon">📄</span>
-        <span className="po-dropzone-text"><b>Drag &amp; drop a labels PDF</b> here, or <span className="po-dropzone-link">browse</span></span>
-        <span className="muted sm">One label per page — each tracking number is read in automatically.</span>
+        <span className="po-dropzone-text"><b>Drag &amp; drop labels PDFs</b> here, or <span className="po-dropzone-link">browse</span></span>
+        <span className="muted sm">One label per page — each tracking number is read in automatically. Several PDFs at once is fine.</span>
       </label>
       {pdfStatus && <p className="po-pdf-status sm">{pdfStatus}</p>}
-      {pdfFile && (
+      {sheets.length > 0 && (
         <label className="po-store-sheet">
           <input type="checkbox" checked={storeSheet} onChange={(e) => setStoreSheet(e.target.checked)} />
           <span>
-            Save this PDF as the order's labels file
-            {hasSheet
-              ? <span className="muted sm"> — replaces the sheet already on file, and any label not in this PDF can no longer be printed from here.</span>
-              : <span className="muted sm"> — lets the supplier print each box's own label.</span>}
+            Save {sheets.length === 1 ? 'this PDF' : `these ${sheets.length} PDFs`} with the order
+            <span className="muted sm"> — lets the supplier print each box's own label. Added beside any labels PDF already on file; nothing is replaced.</span>
           </span>
         </label>
       )}

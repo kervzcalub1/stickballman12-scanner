@@ -4005,6 +4005,13 @@ button.box-existing-size:hover { border-color: var(--primary); }
 .po-labels-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .po-labels-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .po-labels-note { color: #e0a878; margin: 8px 0 0; }
+/* Several labels PDFs on one order (labels bought in parts) + drop-off receipts: both take
+   several files at once, dropped on the panel itself. */
+.po-labels-file.drag, .po-dropoff.drag { border-color: var(--primary); background: rgba(59,130,246,.10); }
+.po-label-files { list-style: none; margin: 8px 0 0; padding: 0; }
+.po-label-files li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid var(--border); }
+.po-label-files li:first-child { border-top: 0; }
+.po-label-file-name { font-size: 14px; overflow-wrap: anywhere; }
 /* Receiving box mode: the tracking number identified the carton, so the box number
    stopped being a guess. Stated in the affirmative, above the "already recorded" list. */
 .box-num-matched { color: var(--ok, #7ec98f); margin-bottom: 4px; }

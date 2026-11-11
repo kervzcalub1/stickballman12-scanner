@@ -43,6 +43,8 @@ export function supplierPoView(data) {
       ...r, uploaded_by: r.uploaded_role === 'supplier' ? r.uploaded_by : 'Our team',
     }));
   }
+  // Labels PDFs are bought and uploaded by our team; the file list carries no storage key.
+  if (out.labelFiles) out.labelFiles = out.labelFiles.map((f) => ({ ...f, uploaded_by: 'Our team' }));
   delete out.batches;
   delete out.untied_boxes;
   return out;

@@ -33,21 +33,43 @@ export function PoDropoffReceipts({ po, isSupplier = false, onSignOut }) {
   const dropped = hasDroppedOff(boxes);
   const fail = (ex) => { if (ex.unauthorized) return onSignOut?.(); setErr(ex.message); };
 
-  async function upload(e) {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    if (file.size > MAX_BYTES) { setErr('That file is over 15 MB. Try a smaller photo.'); return; }
-    setBusy('upload'); setErr(''); setDone('');
-    try {
-      const { uploadUrl, key } = await api.poDropoffSign(po.id, file.type);
-      const put = await fetch(uploadUrl, { method: 'PUT', body: file });
-      if (!put.ok) throw new Error('The upload did not go through. Try again.');
-      await api.poDropoffAttach({ poId: po.id, key, name: file.name, contentType: file.type, sizeBytes: file.size });
-      setDone('Receipt saved.');
-      await reload();
-    } catch (ex) { fail(ex); } finally { setBusy(''); }
+  // Boxes are often dropped off over several days (7, then 10, then 13), so an order holds
+  // many receipts — and several can be picked or dropped at once. Each file becomes its own
+  // receipt, one after another; a file that fails says so without losing the others.
+  async function uploadFiles(list) {
+    const files = [...(list || [])];
+    if (!files.length) return;
+    setErr(''); setDone('');
+    let saved = 0;
+    const problems = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (file.size > MAX_BYTES) { problems.push(`${file.name}: over 15 MB — try a smaller photo`); continue; }
+      setBusy(files.length > 1 ? `Uploading ${i + 1} of ${files.length}…` : 'upload');
+      try {
+        const { uploadUrl, key } = await api.poDropoffSign(po.id, file.type);
+        const put = await fetch(uploadUrl, { method: 'PUT', body: file });
+        if (!put.ok) throw new Error('the upload did not go through — try again');
+        await api.poDropoffAttach({ poId: po.id, key, name: file.name, contentType: file.type, sizeBytes: file.size });
+        saved++;
+      } catch (ex) {
+        if (ex.unauthorized) { setBusy(''); return onSignOut?.(); }
+        problems.push(`${file.name}: ${ex.message}`);
+      }
+    }
+    setBusy('');
+    if (saved) setDone(saved === 1 ? 'Receipt saved.' : `${saved} receipts saved.`);
+    if (problems.length) setErr(`Not saved — ${problems.join('; ')}`);
+    await reload();
   }
+  const upload = (e) => { const list = [...(e.target.files || [])]; e.target.value = ''; uploadFiles(list); };
+  const [dragOver, setDragOver] = useState(false);
+  const onDrop = (e) => {
+    e.preventDefault(); setDragOver(false);
+    if (busy) return;
+    uploadFiles(e.dataTransfer?.files);
+  };
+  const uploading = busy === 'upload' || busy.startsWith('Uploading');
 
   async function open(r) {
     setBusy(`view${r.id}`); setErr('');
@@ -81,9 +103,13 @@ export function PoDropoffReceipts({ po, isSupplier = false, onSignOut }) {
   const canRemove = (r) => !isSupplier || r.uploaded_role === 'supplier';
 
   return (
-    <section className="po-dropoff" aria-label="Drop-off receipt">
+    <section className={`po-dropoff${dragOver ? ' drag' : ''}`} aria-label="Drop-off receipt"
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragEnter={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={onDrop}>
       <div className="po-dropoff-h">
-        <b>Drop-off receipt</b>
+        <b>Drop-off receipt{receipts.length > 1 ? `s (${receipts.length})` : ''}</b>
         {!receipts.length && (
           <span className={dropped ? 'po-chip dropoff-missing' : 'muted sm'}>
             {dropped ? (isSupplier ? 'Please upload it' : 'Not in yet') : 'Needed once a box is dropped off'}
@@ -95,10 +121,11 @@ export function PoDropoffReceipts({ po, isSupplier = false, onSignOut }) {
               {busy === 'ask' ? 'Asking…' : 'Ask supplier'}
             </button>
           )}
-          <button type="button" className="btn sm" disabled={busy === 'upload'} onClick={() => input.current?.click()}>
-            {busy === 'upload' ? 'Uploading…' : receipts.length ? 'Add another' : 'Upload receipt'}
+          <button type="button" className="btn sm" disabled={uploading} onClick={() => input.current?.click()}>
+            {uploading ? (busy === 'upload' ? 'Uploading…' : busy) : receipts.length ? 'Add another' : 'Upload receipt'}
           </button>
-          <input ref={input} type="file" accept="image/*,application/pdf" hidden onChange={upload} aria-label="Upload a drop-off receipt" />
+          {/* multiple: one drop-off a day for three days is three receipts, often sent together. */}
+          <input ref={input} type="file" accept="image/*,application/pdf" multiple hidden onChange={upload} aria-label="Upload drop-off receipts" />
         </span>
       </div>
       {receipts.length > 0 && (
@@ -117,6 +144,7 @@ export function PoDropoffReceipts({ po, isSupplier = false, onSignOut }) {
           ))}
         </ul>
       )}
+      <p className="muted xs">One receipt per drop-off — pick several at once, or drop them on this box.</p>
       {done && <p className="muted sm" role="status">{done}</p>}
       {err && <p className="error sm">{err}</p>}
       {view && <ImageZoomModal url={view.url} label={view.label} onClose={() => { URL.revokeObjectURL(view.url); setView(null); }} />}

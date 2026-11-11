@@ -116,6 +116,54 @@ export function groupCardKeyboard(cardId, envName) {
 const photoCache = new Map();
 const CAPTION_MAX = 1024; // Telegram's limit on a photo caption
 
+// "⚠️ Photo unavailable (fetch failed)" — 2026-11-12, Andrew's premium group. `fetch failed`
+// is Node's own TypeError for a connection that broke before any answer came back: not R2
+// saying no, not Telegram saying no. It came from ONE of two calls (read the photo from R2,
+// upload it to Telegram), the code that said which (`e.cause.code`) was thrown away, and
+// nothing tried again, so one dropped connection cost the card its picture for good.
+//
+// Now: the step and the low-level code are named, and a SHORT-LIVED drop is tried again —
+//   · the R2 READ on a drop/reset/timeout (a read twice is harmless);
+//   · the Telegram UPLOAD only when the connection never opened (temporary DNS, refused,
+//     connect timeout). A drop mid-upload may have landed, and a second copy is a second
+//     card with live buttons, so that one still falls back to text — now saying exactly why.
+// Only the codes listed, never an unknown one: a TLS refusal or a host that doesn't exist
+// will say the same thing three times. And the waits are short, because this runs INSIDE
+// the one Telegram queue — every card and every bot reply waits behind it (CI, #401: TLS
+// errors retried for 4.5 s a card starved the cancellations bot's replies past 15 s).
+const NEVER_SENT = new Set(['EAI_AGAIN', 'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT', 'ENETUNREACH', 'EHOSTUNREACH']);
+const DROPPED = new Set([...NEVER_SENT, 'ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNABORTED', 'UND_ERR_SOCKET',
+  'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'timeout']);
+const PHOTO_TRIES = 3;
+export function netCode(e) {
+  const c = e?.cause;
+  return c?.code || c?.errno || (c?.name && c.name !== 'Error' ? c.name : null) || (e?.name === 'TimeoutError' ? 'timeout' : null);
+}
+// A network failure, not an answer: a reply with a status (R2 403, Telegram 400) is never one.
+export function isNetDrop(e) {
+  if (!e || e.status) return false;
+  return (e.name === 'TypeError' && /fetch failed/i.test(e.message)) || e.name === 'TimeoutError' || e.name === 'AbortError';
+}
+export function mayRetryPhoto(step, e) {
+  if (!isNetDrop(e)) return false;
+  return (step === 'read' ? DROPPED : NEVER_SENT).has(netCode(e));
+}
+export function photoWhy(step, e) {
+  const where = step === 'read' ? 'reading it from storage' : 'uploading it to Telegram';
+  const code = netCode(e);
+  return `${e?.message || 'failed'}${code && !String(e?.message).includes(code) ? ` · ${code}` : ''} — ${where}`;
+}
+async function photoStep(step, fn, { tries = PHOTO_TRIES, waitMs = 400 } = {}) {
+  for (let i = 1; ; i += 1) {
+    try { return await fn(); } catch (e) {
+      e.photoStep = step;
+      if (i >= tries || !mayRetryPhoto(step, e)) throw e;
+      console.warn(`[telegram] card photo: ${photoWhy(step, e)} — try ${i + 1} of ${tries}`);
+      await new Promise((r) => setTimeout(r, waitMs * i));
+    }
+  }
+}
+
 /**
  * Send one approval card. With a photo when we have one; when the photo cannot be read,
  * the card still goes — as text, saying why — because the decision matters more than
@@ -196,7 +244,7 @@ export async function sendApprovalCard({ caption, keyboard, photoFileId = null, 
         try {
           const file = await getBuyCartFileById(Number(photoFileId));
           if (!file || file.kind !== 'shoe') throw new Error('no shoe photo with that id');
-          const { bytes, contentType } = await imageForCard(await getObject(file.r2_key));
+          const { bytes, contentType } = await imageForCard(await photoStep('read', () => getObject(file.r2_key)));
           const form = new FormData();
           form.set('chat_id', chatId);
           if (!long) {
@@ -206,14 +254,15 @@ export async function sendApprovalCard({ caption, keyboard, photoFileId = null, 
           }
           const name = `${String(file.sku || 'shoe').replace(/[^A-Za-z0-9._-]/g, '_')}.jpg`;
           form.set('photo', new Blob([bytes], { type: contentType || 'image/jpeg' }), name);
-          const msg = await tg('sendPhoto', {}, { form, timeoutMs: 60_000 });
+          const msg = await photoStep('upload', () => tg('sendPhoto', {}, { form, timeoutMs: 60_000 }));
           const sizes = msg?.photo || [];
           if (sizes.length) photoCache.set(Number(photoFileId), sizes[sizes.length - 1].file_id);
           if (!long) return msg;
           pictureSent = true;
         } catch (e) {
           if (e.status === 429) throw e;
-          why = e.message;
+          why = e.photoStep ? photoWhy(e.photoStep, e) : e.message;
+          console.warn(`[telegram] card photo dropped (file ${photoFileId}): ${why}`, e.cause || '');
         }
       }
     }

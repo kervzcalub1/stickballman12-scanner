@@ -6251,6 +6251,28 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
   .ebo-row.bad { box-shadow: inset 3px 0 0 #ec8f8f; }
   .ebo-row.warn { box-shadow: inset 3px 0 0 #e0b05f; }
 }
+/* Pick list (eBay → Orders, SHEIN → Orders; src/components/PickListBar.jsx): a tick per order, then
+   Download pick list. The tick sits in its own narrow column; on a phone, under the photo. */
+.pk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 6px 0 10px; padding: 10px 12px; border-radius: 10px; background: rgba(79,124,255,0.07); border: 1px solid rgba(79,124,255,0.22); }
+.pk-grow { flex: 1 1 auto; }
+.pk-err, .pk-note { flex: 1 1 100%; margin: 0; }
+.pk-cell { width: 34px; text-align: center; }
+.pk-check { width: 20px; height: 20px; margin: 2px 0 0; cursor: pointer; accent-color: #4f7cff; }
+.pk-check:disabled { cursor: not-allowed; opacity: 0.35; }
+.ebo-row.pk-on td { background: rgba(79,124,255,0.06); }
+@media (max-width: 760px) {
+  .pk-bar > .btn { min-height: 44px; }
+  .pk-bar .btn.primary { flex: 1 1 100%; }
+  .ebo-table tr { min-height: 124px; }
+  .ebo-table td.pk-cell { position: absolute; left: 10px; top: 70px; width: 56px !important; height: 44px; display: flex; align-items: center; justify-content: center; }
+  .ebo-table td.pk-cell .pk-check { width: 24px; height: 24px; }
+  .ebo-row.pk-on { background: rgba(79,124,255,0.06); }
+  .ebo-row.pk-on td { background: none; }
+  .sho-table tr { padding-left: 62px; min-height: 64px; }
+  .sho-table td.pk-cell { top: 8px; left: 4px; width: 52px !important; }
+}
+.sho-line { grid-template-columns: minmax(0, 1fr); }
+.sho-off { opacity: 0.55; text-decoration: line-through; }
 .ebs-period { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .ebs-period .input { width: auto; flex: 0 1 auto; }
 .er-stat.ok b { color: #5fc58a; }
@@ -7261,13 +7283,13 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 
 /* ── SHEIN design pass: one calm rhythm for the whole page (Shein.jsx and every section). Classes are
    shein-* / shl-* (SHEIN-only), so no other screen moves. ───────────────────────────────────────── */
-/* Section tabs: five equal buttons on a desk; on a phone 3 + 2 filling the row, never a ragged pair. */
+/* Section tabs: equal buttons on a desk; on a phone 3 + 3 (six sections) or 3 + 2 (five), filling the row, never a ragged pair. */
 .shein-sections { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; margin: 0 0 12px; }
 .shein-lead { margin: 0 0 12px; color: var(--muted); font-size: 13.5px; line-height: 1.45; }
 @media (max-width: 767px) {
   .shein-sections { grid-auto-flow: row; grid-auto-columns: auto; grid-template-columns: repeat(6, minmax(0, 1fr)); }
   .shein-sections .seg-btn { grid-column: span 2; }
-  .shein-sections:has(> :nth-child(5)) .seg-btn:nth-child(n+4), .shein-sections:not(:has(> :nth-child(3))) .seg-btn,
+  .shein-sections:has(> :nth-child(5):last-child) .seg-btn:nth-child(n+4), .shein-sections:not(:has(> :nth-child(3))) .seg-btn,
   .shein-sections:has(> :nth-child(4):last-child) .seg-btn { grid-column: span 3; }
 }
 /* Advanced / More options / How this works: no blank band above or below a closed one. */

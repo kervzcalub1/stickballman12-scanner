@@ -374,6 +374,7 @@ export const api = {
   sheinLinksClear: (ids) => post('/api/shein/links', { clear: ids }),
   sheinFixAi: (products) => post('/api/shein-fix/ai', { products }),
   sheinLive: () => get('/api/shein/live'),
+  sheinOrders: (from, to) => get(`/api/shein/orders?from=${encodeURIComponent(from || '')}&to=${encodeURIComponent(to || '')}`),
   sheinLiveAllItems: (runId) => get(`/api/shein/live?run=${encodeURIComponent(runId)}&all=1`),
   sheinLiveAction: (body) => post('/api/shein/live', body),
   sheinShoe: (spu) => get(`/api/shein/live?shoe=${encodeURIComponent(spu)}`),

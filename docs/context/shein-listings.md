@@ -7,13 +7,14 @@ Every SHEIN screen is one page with one home card ("SHEIN"), sections in `?secti
 |---|---|---|---|
 | Today | `today` | Health line + counts with a button each. Reads `api/shein/listings` + `api/shein/live`, nothing new; a failed read says "couldn't read this", never 0 | none |
 | Shoes on SHEIN | `listings` | `SheinListings.jsx` | `tab status q brand blocker shop p product job sz pt adv sizeadv` |
+| Orders | `orders` | `SheinOrders.jsx`: every SHEIN order + its state, tick → Download pick list (`shein-live-fix.md` → 1a). PH + admin only | `odays ostate oq` |
 | Fix problems | `check` | `SheinCheck.jsx` (+ Match, Fix) | `chk fixadv` |
 | Prices | `reprice` | `SheinReprice.jsx` | `priceadv` |
 | Automatic sync | `live` | Connect card + `SheinLivePanel.jsx` | `liveadv`, and `shein` / `shein_error` once on return from SHEIN |
 
 - **Kept mounted, hidden.** A section mounts on first visit and stays, so an uploaded file, a reprice and prices being fetched survive a switch. `LivePausedContext` (`src/hooks.js`) pauses every `useLive` inside a hidden section; it catches up when shown. Drawers and sheets are portalled, so a hidden Listings stops rendering them (`visible`).
 - **Moving between sections** is `replaceState` (the app's tab convention), so Back leaves the page. A link passes params through `useSheinNav()`, and `syncQueryParams()` makes the hooks re-read them. It is not a popstate, which would run the routers and the unsaved-changes prompt.
-- **Who sees what** (`sheinSectionsFor`, `src/lib/sheinPage.js`): PH and admin all five; a warehouse account holding `connect_integrations` Fix problems + Automatic sync; anyone else never reaches the page. Each endpoint still enforces its own role.
+- **Who sees what** (`sheinSectionsFor`, `src/lib/sheinPage.js`): PH and admin all six; a warehouse account holding `connect_integrations` Fix problems + Automatic sync; anyone else never reaches the page. Each endpoint still enforces its own role.
 - **Old addresses** (`canonicalSheinUrl`): `/ph/shein-listings`, `/shein-listings`, `/ph/shein-check`, `/shein-check`, `/ph/shein-reprice` land on the right section with their query. `?tab=match` on the old check path becomes `chk=match`. `/shein` and `/ph/shein` move to the person's own workspace, which is why `api/shein/callback.js` can return to `/shein?section=live&…` for every role.
 - **Advanced**: `SheinAdvanced` (`src/components/SheinNav.jsx`) keeps its open state in the URL. Under it: Jobs, Setup, Shopify updates, automatic price update (`adv=1`); Ask SHEIN (`sizeadv=1`); sync switches + the full check (`liveadv=1`, opens by itself while a check runs or the sync is off); orders file, template, AI suggestions (`fixadv=1`); the price template (`priceadv=1`).
 

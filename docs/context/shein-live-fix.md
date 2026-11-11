@@ -61,6 +61,27 @@ its top). The rules are the export fix's (`docs/context/shein-fix.md`), run per 
   refused, never guessed. The store has ONE location (2026-10-16). Location NAMES need
   `read_locations`, which the app lacks — we use ids only.
 
+## 1a. Orders + pick list (SHEIN page → **Orders** section, `?section=orders`; PH + admin; 2026-11-12)
+`src/screens/SheinOrders.jsx` reads `GET /api/shein/orders?from&to` (`api/shein/orders.js`,
+`listSheinOrderUnits`): every pair in `shein_order_units` sold in the EST range (7/30/90 days, this year)
+plus every pair still waiting to go (status 1/2/7, last 60 days). **No SHEIN call per view** — it is what
+the sales sync (webhook, 10-second check, minute poll) already recorded, so it is as fresh as that sync
+(off = nothing new appears; the section says so). Each pair joins Shopify's copy
+(`shopify_listing_variants` by seller SKU → product title, `style`, size).
+- **Order state** (`sheinOrderStateOf`, `src/lib/pickList.js`) from SHEIN's own per-pair `newGoodsStatus`,
+  live pairs only (exchange tag 1/3, not refunded): any 1 → **New order**; any 2 → **To ship**; any 7 →
+  **Waiting for pick-up**; any 8 → Lost in transit; any 9 → Buyer refused it; all 5 → Delivered; else
+  **Shipped**; no live pair → **Cancelled / refunded**; every pair `stockMode ≠ 3` → SHEIN ships it.
+  Each pair also shows its own word (new order / to ship / shipped / refunded / swapped out …).
+- **Size:** Shopify's size for the seller SKU; else **`size_attr`** — the size SHEIN printed on the order
+  line (`skuAttribute`, US wording, `sheinSizeAttr`), now stored by `unitsFromOrders` (column added
+  2026-11-12; older rows fill in when SHEIN next changes the order). A later read without it never
+  wipes it (`COALESCE`).
+- **Pick list:** same strip and PDF as eBay (`docs/context/ebay-orders.md` → "Pick list"): tick orders /
+  Select awaiting shipment (New order + To ship + pick-up) → **Download pick list** →
+  `pick-list-shein-<EST day>.pdf`, one entry per live pair (a refunded or swapped-out pair isn't
+  picked). Name = Shopify's product title (SHEIN's own title is long and SEO-shaped), else SHEIN's.
+
 ## 1b. SHEIN orders in Shopify (`addOrderToShopify` in `shein-orders.js`, table `shein_shopify_orders`)
 Built 2026-11-06. The owner removed the CedCommerce app on purpose; this replaces its order import.
 - **The Channel name comes from the app that creates the order.** So orders are written by a

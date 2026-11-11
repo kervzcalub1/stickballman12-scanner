@@ -47,9 +47,10 @@ export const SUPPLIER_ARTICLES = [
       'Scanning here records what you INTEND to ship. It does not create stock on our side — we scan the box in ourselves when it lands.',
       'If a line says "Entered for you by … Staff", we typed it from a list you sent. Edit it if it is wrong, and it becomes yours.',
       'One list for the whole order, not split by box? On the order’s "Order manifest" card tap "📷 Scan the whole-order manifest" (every scan is one pair; a code we can’t place, or a SKU you type, waits below for its size and quantity while you keep scanning) or "📋 Paste the whole-order manifest". Check the list on that card, then close and ship the boxes with nothing listed on them.',
+      'Scanning at one price? Type it once in "Shelf price ea for next scans" above the scan field (e.g. 41.60) — every pair you scan after that carries it, until you change it or tap "clear" (blank = no price). A pair added to a size that already has a different price keeps the list’s price and says so; change it on the list. On the "Order manifest" card, a shoe with several sizes has a "Shelf price ea — all sizes" box that sets every size at once; each size can still have its own price.',
     ],
     related: ['supplier-close-ship', 'supplier-tracking', 'po-onbehalf'],
-    keywords: ['scan', 'barcode', 'sku', 'size', 'quantity', 'label', 'box', 'pack', 'draft', 'whole order', 'order manifest', 'scan gun'],
+    keywords: ['scan', 'barcode', 'sku', 'size', 'quantity', 'label', 'box', 'pack', 'draft', 'whole order', 'order manifest', 'scan gun', 'price', 'shelf price'],
   },
   {
     id: 'supplier-store-order',

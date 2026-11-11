@@ -12,6 +12,8 @@
 //     manifest") — exactly the gate their whole-order paste has in po/scan-bulk
 //     (`supplierOrderListBlock`: own order, draft, never 'order+box', shoes only), plus
 //     what applies to everyone below; their own line (`entered_on_behalf=false`).
+// Either way a scan onto an existing SKU+size ADDS to its qty and KEEPS that line's price
+// (an unpriced line takes the one sent); `priceKept: { price, sent }` says it was kept.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPo, poHasBoxLines, addPoOrderScan, setPoManifestScope, dbConfigured } from '../_lib/db.js';
 import { money, isBoxesOrder, normalizeDimensions, supplierOrderListBlock } from '../_lib/po-manifest.js';
@@ -76,6 +78,10 @@ export default async function handler(req, res) {
     const uidNum = Number(user.uid);
     const enteredBy = !supplier && Number.isInteger(uidNum) ? uidNum : null;
 
+    // A scan never changes a price already on the list (`keepPrice`): the pair goes on at
+    // the line's own price and the answer says so, so the window can show "already at
+    // $40.00 — kept". An unpriced line takes the scan's price — that isn't a conflict.
+    const unitCost = money(body.unitCost);
     const line = await addPoOrderScan({
       poId, sku, size,
       dimensions: boxesOrder ? dimensions : null,
@@ -84,13 +90,15 @@ export default async function handler(req, res) {
       upc: String(body.upc ?? '').trim().slice(0, 40) || null,
       colorway: String(body.colorway ?? '').trim().slice(0, 120) || null,
       gender: String(body.gender ?? '').trim().slice(0, 20) || null,
-      unitCost: money(body.unitCost),
+      unitCost,
       tip: money(body.tip),
       enteredBy,
       enteredOnBehalf: !supplier,
+      keepPrice: true,
     });
     await setPoManifestScope(poId, 'po');
-    return send(res, 200, { ok: true, line });
+    const kept = unitCost != null && line?.unit_cost != null && Number(line.unit_cost) !== unitCost;
+    return send(res, 200, { ok: true, line, ...(kept ? { priceKept: { price: Number(line.unit_cost), sent: unitCost } } : {}) });
   } catch (e) {
     console.error('[po/scan-order]', e.message);
     return send(res, 500, { ok: false, error: 'Could not add the item.' });

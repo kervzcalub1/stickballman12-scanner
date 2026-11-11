@@ -21,7 +21,7 @@ import { carrierName } from '../lib/carriers.js';
 import { readParam, writeParam } from '../lib/urlstate.js';
 import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
 import { Icon } from '../components/NavIcons.jsx';
-import { PoScanModal, PoLineRow, PoLineHeader } from '../components/PoScanModal.jsx';
+import { PoScanModal, PoLineRow, PoLineHeader, PoOrderLineRows } from '../components/PoScanModal.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 import { PoDropoffReceipts, PoDropoffChip } from '../components/PoDropoffReceipts.jsx';
@@ -852,11 +852,12 @@ export function SupplierApp({ user, onSignOut }) {
                   {orderLines.length > 0 && (canEdit ? (
                     <ul className="po-lines po-lines-edit">
                       <PoLineHeader boxesOrder={boxesOrder} />
-                      {orderLines.map((l) => (
-                        <PoLineRow key={l.id} line={l} disabled={busy || lineBusy === Number(l.id)} boxesOrder={boxesOrder}
-                          onSave={(patch) => patchLine(l, patch)}
-                          attribution={l.entered_on_behalf ? `Entered for you by ${staffLabel}` : null} />
-                      ))}
+                      {/* Grouped by SKU: a shoe with several sizes gets one "Shelf price ea —
+                          all sizes" box above them; each size keeps its own field. */}
+                      <PoOrderLineRows poId={po.id} lines={orderLines} boxesOrder={boxesOrder}
+                        isBusy={(l) => busy || lineBusy === Number(l.id)} onSave={patchLine}
+                        attributionOf={(l) => (l.entered_on_behalf ? `Entered for you by ${staffLabel}` : null)}
+                        onApplied={refreshDetail} onSignOut={onSignOut} />
                     </ul>
                   ) : (
                     <ul className="po-lines">

@@ -1,4 +1,5 @@
 import { hasOrderedList } from '../../src/lib/postatus.js';
+import { isPrivileged } from './util.js';
 
 // "Can this manifest still be edited?" — one answer over two very different lifecycles,
 // shared by `po/scan` (add a line) and `po/line` (edit/remove one).
@@ -112,6 +113,25 @@ export function supplierOrderListBlock({ po, user }) {
   if (isBoxesOrder(po))
     return { code: 409, error: 'This order is for empty shoe boxes — each box needs its dimensions, so add them one at a time.' };
   return null;
+}
+
+// "May THIS USER edit an existing line on this order?" — the whole gate `po/line` applies
+// before it changes a line (qty, size, price…), and `po/line-price` applies before setting
+// one SKU's price on every size of the whole-order list. ONE function, so the per-SKU
+// price can never be open where a single line's price is closed (or the other way round).
+//   · a supplier: their own order only (403); never the order-level list of an order raised
+//     from a buying request — that list is OUR receipt (403);
+//   · a store order's list → `orderListEditBlock`; anything else → `manifestEditBlock`
+//     (staff = on the supplier's behalf).
+// `box` = the line's label, or null for an order-level line. Returns null or { code, error }.
+export function poLineEditBlock({ user, po, box }) {
+  const supplier = user.role === 'supplier' && !isPrivileged(user.role);
+  if (supplier && Number(po.supplier_user_id) !== Number(user.uid))
+    return { code: 403, error: 'You do not have access to this order.' };
+  if (supplier && !box && hasOrderedList(po))
+    return { code: 403, error: 'That list is the order’s receipt — edit the items on your labels instead.' };
+  const onBehalf = user.role !== 'supplier';
+  return (!box && po.by_store) ? orderListEditBlock({ po, onBehalf }) : manifestEditBlock({ po, box, onBehalf });
 }
 
 // Is this box a reship the warehouse raised, rather than one of the supplier's own labels?

@@ -617,7 +617,8 @@ pairs, an editable **Shelf price ea**) → one **Add N pairs** → `POST /api/po
   120/min; a real list is more, and a loop that 429s halfway half-declares a label). Same
   gates (supplier scope, `manifestEditBlock`, per-box vs whole-order scope, a supplier's whole-order
   list through `supplierOrderListBlock`), same attribution, same `addPoScan`/`addPoOrderScan` — an existing SKU+size
-  **adds** to its qty, so pasting again tops up. The whole list is validated first.
+  **adds** to its qty, so pasting again tops up (a price in the paste REPLACES the line's —
+  unlike a scan, which keeps it; see "…or SCANNED in"). The whole list is validated first.
 - Shoes only (a box needs dimensions on every line). **No UPC** is sent — a SKU lookup's
   UPC belongs to one size ([[upc-is-per-size]]).
 - **Prices in the message (2026-11-12).** A PO price is the SHELF price ea only. Read at the
@@ -720,9 +721,42 @@ pairs, an editable **Shelf price ea**) → one **Add N pairs** → `POST /api/po
     **Add N pairs · size X**, ✕ to leave it out. The same barcode again bumps that card's qty.
     A UPC rides along only when the size is the one the barcode itself named.
   - Lookup / write failures (timeout, 409 gate) land in the existing "Not added" list.
+  - **Sticky "Shelf price ea for next scans" (2026-11-12)**, above the scan field (rapid mode
+    only): typed once (e.g. `41.60`, committed on Enter / blur) → every pair added after it
+    carries that `unitCost` — instant UPC hits AND Finish cards, which prefill from it and stay
+    editable (a card whose price nobody typed follows a later change; a typed one keeps its
+    own). Shown plainly: `Price for next scans: $41.60 · clear` / `Next scans: no price`.
+    Clear = blank = no price. Never takes the focus itself and never disables anything; Enter
+    hands the focus back to the scan field, and a barcode / SKU the gun types INTO the price
+    box (it had the focus) is treated as a scan, the price left as it was. Pairs waiting in the
+    queue fold by SKU + size + price, so a price change mid-burst is its own write. The running
+    list shows the line's price (`DZ5485-612 · 10.5 · ×3 · $41.60`).
+  - **The conflict rule — a scan never changes a price already on the list.**
+    `po/scan-order` calls `addPoOrderScan({ keepPrice: true })`: a pair added to an existing
+    SKU + size line that already has a price goes on at THAT price (qty +n), and the answer
+    carries `priceKept: { price, sent }` when the price sent differed → the window lists
+    `DZ5485-612 · 10.5 already at $40.00 — kept; change it on the list` (no beep, the gun
+    isn't stopped). An existing line with NO price takes the sent price — not a conflict.
+    Applies to staff's `po/scan-order` too (their draft window shows the same notice). The
+    paste (`scan-bulk`) and a raised cart PO are unchanged: a price sent replaces the stored
+    one (`keepPrice` defaults false) — the paste preview shows the price being written.
   - **Review** = the Order manifest card: every line editable (size, qty, price, ✕) while the
     order is a draft, plus a total row: `N SKUs · N units · N with no price` and the shelf
-    total of the priced lines (blank is not $0).
+    total of the priced lines (blank is not $0). Rows are grouped by SKU (`PoOrderLineRows`,
+    also used on staff's PO detail whole-order list): a SKU with 2+ sizes gets a **"Shelf price
+    ea — all sizes"** row above them showing its state (`3 sizes · one price · $41.60` /
+    `mixed prices · $40.00–$45.00` / `n unpriced`) and a box → **Set all N sizes** (Enter or the
+    button, never on blur; blank → **Clear all N sizes**). Each size keeps its own field, so one
+    size can still differ. Server: **`POST /api/po/line-price {poId, sku, unitCost}`** →
+    `setPoOrderSkuPrice` — ONE statement over that order's whole-order lines of that SKU
+    (`po_box_id` NULL, `po_store_id` NULL, SKU case-insensitive); lines already at the price
+    aren't touched; changed lines re-stamped with the editor (as `po/line`). Gate =
+    **`poLineEditBlock`** (`api/_lib/po-manifest.js`), the SAME function `po/line` now uses for
+    a single line: supplier own order (403), never `'order+box'` (403), `manifestEditBlock`
+    (open while `draft`/`receiving`, refused once `reconciled`/`closed` — the supplier's card
+    only offers editing while `draft`, as for one row); staff on behalf as today. Store orders
+    → 409 (their list is per store). No history row — `po/line` writes one only for a
+    CONFIRMED store list, which can't reach here. No schema change.
   - **Server**: `po/scan-order` now takes a supplier, gated by `supplierOrderListBlock`
     (`api/_lib/po-manifest.js`) — the ONE gate `scan-bulk {poId}` uses too: own order (403),
     never `'order+box'`, `draft` only, shoes only (409); plus what applies to everyone in both:
@@ -760,6 +794,12 @@ box lands, which locked every label still at the supplier, including one added a
 for the rest of the shipment.
 
 Covered by `e2e/po-manifest-window.spec.js`.
+
+Editing an EXISTING line goes through **`poLineEditBlock({ user, po, box })`**
+(`api/_lib/po-manifest.js`, 2026-11-12): supplier scope + the buying-receipt bar, then
+`orderListEditBlock` for a store line or `manifestEditBlock` for anything else. `po/line` (one
+line) and `po/line-price` (one SKU's price on every size of the whole-order list) both call it,
+so the two can't drift; `e2e/po-order-scan.spec.js` compares them case by case.
 
 ## Raw 1ID on a PO with nothing to tick off (2026-09-03)
 

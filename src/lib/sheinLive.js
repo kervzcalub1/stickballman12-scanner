@@ -320,6 +320,15 @@ export function fromSheinTime(s) {
 const OPEN = new Set([1, 2, 7]);          // pending · to ship · waiting for pick-up: the pair is still here
 const SHIPPED = new Set([4, 5, 8, 9]);    // shipped · signed · lost · rejected: it has left
 
+// The size SHEIN printed on an order line: its skuAttribute in US wording (else English, else the
+// first one given). Only the pick list's fallback when Shopify's copy lacks the seller SKU.
+export function sheinSizeAttr(g) {
+  const list = Array.isArray(g?.skuAttribute) ? g.skuAttribute : [];
+  const pick = list.find((a) => String(a?.language || '').toUpperCase() === 'US') || list.find((a) => /^EN/i.test(String(a?.language || ''))) || list[0];
+  const v = String(pick?.attrName ?? '').trim();
+  return v ? v.slice(0, 60) : null;
+}
+
 // order-detail rows → units. `since` = the switch-on moment: a unit sold before it was not
 // ours to deduct (Shopify either already has it or a person decided). `known` = goodsIds
 // already recorded (their `due` never changes after first sight). `openAtStart` = the person
@@ -339,7 +348,7 @@ export function unitsFromOrders(details, { since = null, known = new Set(), open
         seller_sku: String(g.sellerSku ?? '').trim() || null, shein_sku: String(g.skuCode ?? '').trim() || null,
         title: String(g.goodsTitle ?? '').slice(0, 300) || null, price: g.sellerCurrencyPrice == null ? null : Number(g.sellerCurrencyPrice),
         // order_time = when SHEIN released it to us; buyer_order_time = when the buyer placed it.
-        order_time: orderTime, buyer_order_time: fromSheinTime(o.orderTime), shipped_seen: SHIPPED.has(status),
+        order_time: orderTime, buyer_order_time: fromSheinTime(o.orderTime), size_attr: sheinSizeAttr(g), shipped_seen: SHIPPED.has(status),
         due: known.has(goodsId) ? false : !!(after || (openAtStart && OPEN.has(status))),
       });
     }

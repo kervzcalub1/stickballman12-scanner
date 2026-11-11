@@ -19,6 +19,7 @@ import { SheinListings } from './SheinListings.jsx';
 import { SheinCheck } from './SheinCheck.jsx';
 import { SheinReprice } from './SheinReprice.jsx';
 import { SheinLivePanel } from './SheinLivePanel.jsx';
+import { SheinOrders } from './SheinOrders.jsx';
 
 // Runs before any section's first render, so each one seeds its URL state from the tidy address.
 // Idempotent. replaceState, so Back skips the old address.
@@ -80,6 +81,7 @@ export function Shein({ user, base, onHome, onSignOut }) {
   const body = (k) => {
     if (k === 'today') return <SheinToday onSignOut={onSignOut} />;
     if (k === 'listings') return <SheinListings user={user} visible={section === 'listings'} onSignOut={onSignOut} />;
+    if (k === 'orders') return <SheinOrders onSignOut={onSignOut} />;
     if (k === 'check') return <SheinCheck sheinApi={status} onSignOut={onSignOut} />;
     if (k === 'reprice') return <SheinReprice onSignOut={onSignOut} />;
     return <SheinLiveSection status={status} statusErr={statusErr} canConnect={canConnect} onRetry={loadStatus} onSignOut={onSignOut} />;

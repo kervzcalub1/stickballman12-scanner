@@ -2,13 +2,15 @@
 // buyer, the shoe (photo, SKU, size), ship-by, tracking with the carrier's word — so a
 // shipment that's late (not shipped by eBay's ship-by date, or not delivered by its
 // latest estimate) is impossible to miss. Synced from eBay every 30 min in production,
-// or now with Sync.
+// or now with Sync. Tick orders → Download pick list (a 4 x 6 in PDF, src/lib/pickList.js).
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { estDate, estToday, PH_DATETIME } from '../lib/format.js';
 import { SHIP_STATES, shipState, shippedLate } from '../lib/ebayOrders.js';
+import { ebayPickEntries, EBAY_AWAITING } from '../lib/pickList.js';
+import { PickListBar } from '../components/PickListBar.jsx';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const usd = (c) => (c == null ? '—' : `$${(c / 100).toFixed(2)}`);
@@ -42,6 +44,9 @@ export function EbayOrders({ isAdmin, onSignOut, onConnect }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  // The ticked orders (order ids). Kept across filters and searches, so a person can tick from
+  // several views; a sync that drops an order drops its tick.
+  const [picked, setPicked] = useState(() => new Set());
   const today = estToday();
   const from = range === 'ytd' ? `${today.slice(0, 4)}-01-01` : addDays(today, -Number(range || 30));
 
@@ -78,14 +83,24 @@ export function EbayOrders({ isAdmin, onSignOut, onConnect }) {
     for (const o of orders) c[o.state] = (c[o.state] || 0) + 1;
     return c;
   }, [orders]);
+  // The ones that need someone first: late, then due today, then the rest newest-first.
+  const sorted = useMemo(() => [...orders].sort((a, b) => (rank(a) - rank(b)) || String(b.created_at).localeCompare(String(a.created_at))), [orders]);
   const shown = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    return orders.filter((o) => (filter === 'all' || o.state === filter)
-      && (!words.length || words.every((w) => [o.order_id, o.buyer, ...(o.lines || []).flatMap((l) => [l.title, l.sku, l.size, l.item_id]),
-        ...(o.fulfillments || []).map((f) => f.number)].join(' ').toLowerCase().includes(w))))
-      // The ones that need someone first: late, then due today, then the rest newest-first.
-      .sort((a, b) => (rank(a) - rank(b)) || String(b.created_at).localeCompare(String(a.created_at)));
-  }, [orders, filter, q]);
+    return sorted.filter((o) => (filter === 'all' || o.state === filter)
+      && (!words.length || words.every((w) => [o.order_id, o.buyer, ...(o.lines || []).flatMap((l) => [l.title, l.sku, l.style, l.size, l.item_id]),
+        ...(o.fulfillments || []).map((f) => f.number)].join(' ').toLowerCase().includes(w))));
+  }, [sorted, filter, q]);
+  // Pick list: a cancelled order has nothing to pick, so it can't be ticked.
+  const pickable = (o) => o.state !== 'cancelled';
+  const pickedOrders = useMemo(() => sorted.filter((o) => picked.has(o.order_id) && pickable(o)), [sorted, picked]);
+  const pickedPairs = useMemo(() => ebayPickEntries(pickedOrders).length, [pickedOrders]);
+  // Every order still to ship (late, today, to ship), whatever the filter shows.
+  const awaiting = useMemo(() => sorted.filter((o) => EBAY_AWAITING.has(o.state)), [sorted]);
+  const shownPickable = shown.filter(pickable);
+  const allShownPicked = shownPickable.length > 0 && shownPickable.every((o) => picked.has(o.order_id));
+  const toggle = (id) => setPicked((cur) => { const n = new Set(cur); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const setMany = (list, on) => setPicked((cur) => { const n = new Set(cur); for (const o of list) { if (on) n.add(o.order_id); else n.delete(o.order_id); } return n; });
 
   const s = data?.sync;
   const never = data && !s?.lastOrdersAt && s?.state !== 'running';
@@ -126,15 +141,24 @@ export function EbayOrders({ isAdmin, onSignOut, onConnect }) {
           ) : null)}
         </div>
         <p className="muted xs">Orders placed in the period, plus every order still waiting to ship. Late = past eBay’s ship-by date and not shipped; Delivery late = shipped, past eBay’s latest delivery estimate, and the carrier hasn’t said delivered.</p>
+        {!!orders.length && (
+          <PickListBar platform="ebay" picked={pickedOrders.length} pairs={pickedPairs} awaiting={awaiting.length}
+            onSelectAwaiting={() => setMany(awaiting, true)} onClear={() => setPicked(new Set())} entries={() => ebayPickEntries(pickedOrders)} />
+        )}
         {!data ? <p className="muted">Loading…</p> : !shown.length ? <p className="muted">{orders.length ? 'Nothing matches.' : 'No orders yet — load them from eBay.'}</p> : (
           <div className="ap-tablewrap">
             <table className="table ebo-table">
-              <thead><tr><th aria-label="Photo" /><th>Order</th><th>Buyer</th><th>Shoe</th><th>Ship by</th><th>Tracking</th><th>Status</th></tr></thead>
+              <thead><tr><th className="pk-cell"><input type="checkbox" className="pk-check" aria-label="Select every order shown" checked={allShownPicked}
+                disabled={!shownPickable.length} onChange={(e) => setMany(shownPickable, e.target.checked)} /></th><th aria-label="Photo" /><th>Order</th><th>Buyer</th><th>Shoe</th><th>Ship by</th><th>Tracking</th><th>Status</th></tr></thead>
               <tbody>
                 {shown.map((o) => {
                   const [label, tone] = SHIP_STATES[o.state];
                   return (
-                    <tr key={o.order_id} className={`ebo-row ${tone}`}>
+                    <tr key={o.order_id} className={`ebo-row ${tone}${picked.has(o.order_id) && pickable(o) ? ' pk-on' : ''}`}>
+                      <td className="pk-cell">
+                        <input type="checkbox" className="pk-check" aria-label={`Pick order ${o.order_id}`} checked={picked.has(o.order_id) && pickable(o)}
+                          disabled={!pickable(o)} title={pickable(o) ? undefined : 'Cancelled: nothing to pick'} onChange={() => toggle(o.order_id)} />
+                      </td>
                       <td className="ebl-thumb-cell"><Thumb src={o.lines?.[0]?.image_url} /></td>
                       <td data-label="Order">
                         <a className="ebl-link ebl-sku" href={ORDER_URL(o.order_id)} target="_blank" rel="noreferrer">{o.order_id} ↗</a>

@@ -374,6 +374,7 @@ export const api = {
   sheinLinksClear: (ids) => post('/api/shein/links', { clear: ids }),
   sheinFixAi: (products) => post('/api/shein-fix/ai', { products }),
   sheinLive: () => get('/api/shein/live'),
+  sheinOrders: (from, to) => get(`/api/shein/orders?from=${encodeURIComponent(from || '')}&to=${encodeURIComponent(to || '')}`),
   sheinLiveAllItems: (runId) => get(`/api/shein/live?run=${encodeURIComponent(runId)}&all=1`),
   sheinLiveAction: (body) => post('/api/shein/live', body),
   sheinShoe: (spu) => get(`/api/shein/live?shoe=${encodeURIComponent(spu)}`),
@@ -642,8 +643,12 @@ export const api = {
   // server (never a public URL — these carry an address and a live barcode).
   poLabelsSign: (poId) => post('/api/po/labels-sign', { poId }),
   poLabelsAttach: (payload) => post('/api/po/labels-attach', payload),
-  poLabelDownload: (poId, poBoxId) => downloadBlob(`/api/po/label-download?poId=${encodeURIComponent(poId)}`
-    + (poBoxId ? `&poBoxId=${encodeURIComponent(poBoxId)}` : '')),
+  // An order holds several labels PDFs (labels arrive in parts): no box/file = every label
+  // on the order as one PDF; fileId = one uploaded file; poBoxId = one label's pages.
+  poLabelDownload: (poId, poBoxId, fileId) => downloadBlob(`/api/po/label-download?poId=${encodeURIComponent(poId)}`
+    + (poBoxId ? `&poBoxId=${encodeURIComponent(poBoxId)}` : '')
+    + (fileId ? `&fileId=${encodeURIComponent(fileId)}` : '')),
+  poLabelsRemove: (poId, fileId) => post('/api/po/labels-remove', { poId, fileId }),
 
   poArchived: () => get('/api/po/archived'),
   poUnarchive: (poId) => post('/api/po/unarchive', { poId }),

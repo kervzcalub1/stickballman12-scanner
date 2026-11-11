@@ -23,13 +23,31 @@ export default async function handler(req, res) {
       const row = await getDeletedPo(id);
       if (!row) return send(res, 404, { ok: false, error: 'That deleted order is not in the archive.' });
       if (!params.get('labels')) return send(res, 200, { ok: true, row });
-      // The label PDF outlives the order in storage. Proxied like po/label-download: an
-      // address and a live barcode are never served by public URL.
-      const key = row.po_json?.labels_key || row.recovered?.labels_key;
-      if (!key) return send(res, 404, { ok: false, error: 'No labels file was uploaded for this order.' });
+      // The label PDFs outlive the order in storage. Proxied like po/label-download: an
+      // address and a live barcode are never served by public URL. Since 2026-11-12 an
+      // order can hold several files (children.po_label_files); one comes back as-is,
+      // several are merged oldest-first.
+      const keys = [...new Set([
+        row.po_json?.labels_key || row.recovered?.labels_key,
+        ...(row.children?.po_label_files || []).map((f) => f.key),
+      ].filter(Boolean))];
+      if (!keys.length) return send(res, 404, { ok: false, error: 'No labels file was uploaded for this order.' });
       if (!r2Configured()) return send(res, 503, { ok: false, error: 'File storage is not configured.' });
-      const bytes = await getObject(key);
-      const filename = row.po_json?.labels_name || row.recovered?.labels_name || `${row.po_code}-labels.pdf`;
+      let bytes;
+      let filename;
+      if (keys.length === 1) {
+        bytes = await getObject(keys[0]);
+        filename = row.po_json?.labels_name || row.children?.po_label_files?.[0]?.name || row.recovered?.labels_name || `${row.po_code}-labels.pdf`;
+      } else {
+        const { PDFDocument } = await import('pdf-lib');
+        const out = await PDFDocument.create();
+        for (const k of keys) {
+          const src = await PDFDocument.load(await getObject(k));
+          for (const page of await out.copyPages(src, src.getPageIndices())) out.addPage(page);
+        }
+        bytes = Buffer.from(await out.save());
+        filename = `${row.po_code}-all-labels.pdf`;
+      }
       res.statusCode = 200;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Length', String(bytes.length));

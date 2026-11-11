@@ -428,15 +428,17 @@ particular to adding rather than creating:
 - **A page whose tracking number is already on the order is dropped**, not offered for the
   server to refuse. Re-importing the whole sheet to pick up two new labels is the normal
   way this gets used.
-- **The FILE is a decision, not a side effect.** An order stores ONE labels PDF and a
-  per-label download is a page range into it, so saving this one replaces what's there.
-  The checkbox defaults ON when the order has no sheet (nothing to lose) and OFF when it
-  has (the labels not in this PDF stop being printable). Attached only after the labels
-  exist, because `attachPoLabels` maps pages by tracking number.
-- **`attachPoLabels` now clears every `label_page`/`label_page_end` on the order first.**
-  It didn't, and that was a live bug in the older "Replace labels PDF" button too: the old
-  pointers became indexes into a file that no longer existed, so Label 1 downloaded page 1
-  of the NEW sheet — somebody else's label, which is worse than no label at all.
+- **Several PDFs at once** (2026-11-12): the dropzone takes a multi-select or several files
+  dropped together (labels are bought in parts — 7 of 30 now, 23 next week). Every page of
+  every file goes through the same skip rule, and a number in two of the files is listed once.
+- **Saving the PDFs ADDS files; it never replaces one.** An order holds many labels PDFs
+  (see "The courier's labels PDFs" below), so the "Save … with the order" checkbox defaults
+  ON every time — unticking it only skips storing them. Each file is attached only after the
+  labels exist, because `attachPoLabels` maps pages by tracking number.
+- History: with ONE file per order, a second sheet replaced the first, and `attachPoLabels`
+  had to clear every page pointer first — otherwise Label 1 downloaded page 1 of the NEW
+  sheet, somebody else's label. Pointers now carry their file (`po_boxes.label_file_id`),
+  so that can't happen and nothing is cleared.
 
 Smaller things that matter:
 - **A tracking number can only ever be on one label**, checked across every order:
@@ -520,20 +522,32 @@ A supplier-name mismatch **stops the script** (`--force` to override) — a wron
 writes a false receipt against a real order. The in-app path scopes its candidate list to
 the order's own supplier instead, so the mismatch can't arise.
 
-## The courier's labels PDF (R2)
+## The courier's labels PDFs (R2)
 The sheet PH buys from the courier used to be read for its tracking numbers and thrown
 away — the upload box said so — which left the supplier hunting through email for the
 label belonging to the box in front of them. It's now stored and downloadable.
 
-- **One object per order**, exactly as uploaded (`purchase_orders.labels_key/_name/_pages/
-  _uploaded_at/_uploaded_by`). A per-box download **extracts that page on demand**
-  (`pdf-lib`, `po_boxes.label_page`) rather than storing N split files — the page keeps
-  its vectors, so the barcode prints as the courier made it, and a wrong mapping is a data
-  fix rather than a re-upload.
+- **MANY files per order** (2026-11-12, `po_label_files`: `key`, `name`, `pages`, `page_map`,
+  `uploaded_by/_at`). Labels are bought in parts — a supplier asks for 30 and wants 7 first —
+  so **each upload ADDS a file**, exactly as uploaded. Before this an order held ONE file and
+  the 23 replaced the 7, which then stopped printing.
+- **Each label points at the file it lives in** (`po_boxes.label_file_id` + `label_page` /
+  `label_page_end`). A per-box download **extracts those pages on demand** from that file
+  (`pdf-lib`) rather than storing N split files — the page keeps its vectors, so the barcode
+  prints as the courier made it, and a wrong mapping is a data fix rather than a re-upload.
+- **The remap rule: the NEWEST file that carries a label wins; a label the new file doesn't
+  carry keeps the file it had.** Re-uploading last week's sheet plus three new labels moves
+  those labels onto the new file (same pages) and never takes a label away. A file every
+  label has moved off stays on the order (its whole sheet still downloads) until deleted.
 - **The page↔label map is keyed on the TRACKING NUMBER read off each page**, never page
   order: rows get reordered, edited, or typed by hand before the order is created, and a
   label pointing at someone else's page is worse than none. Pages that matched nothing
-  stay in the full sheet only, and the UI says how many matched.
+  stay in their file only, and the UI says how many matched. Each file's own read is kept
+  in `page_map`.
+- **Deleting one file** (`POST /api/po/labels-remove {poId, fileId}`, PH/admin, the file's
+  Delete button) unmaps only the labels it was serving — and each of those **falls back to
+  the newest remaining file whose `page_map` has it**, so deleting a re-upload can't strand
+  a label an older sheet still holds. The object is deleted from R2 (best-effort).
 - **Sheets interleave a packing slip after every label.** A 9-label request bought from
   UPS CampusShip arrives as **17 pages** — label, slip, label, slip… The slips are
   image-only with no barcode, so they used to import as blank label rows somebody deleted
@@ -542,23 +556,45 @@ label belonging to the box in front of them. It's now stored and downloadable.
   decoded — then a slip can't be told from a label whose barcode simply failed to read, so
   every page comes back for a human (`undecidable`); losing a label silently is far worse
   than showing a blank row.
-- **A label owns the pages up to the NEXT label** (`label_page` → `label_page_end`,
-  computed in `attachPoLabels`), so a per-box download is the label *and its packing
-  slip* — which is the point of interleaving them. The last label runs to the end of the
-  file. The download clamps the range to the real page count, so a stale mapping can't 500.
+- **A label owns the pages up to the NEXT label page in its file** (`labelPageRanges` in
+  `db.js`) — "next" counts every page a tracking number was read off, including labels for
+  some other order, so a stranger's label never rides along in our box. A per-box download
+  is the label *and its packing slip*. The last label runs to the end of the file. The
+  download clamps the range to the real page count, so a stale mapping can't 500.
 - **Downloads are proxied and authorised** (`api/po/label-download.js`), never a public
   bucket URL like listing photos: a label carries the ship-to address and a live courier
-  barcode. `Cache-Control: private, no-store`; a supplier reaches only their own order;
-  `labels_key` is stripped from their `po/get`.
-- **The upload key is minted server-side** from the PO code and validated on attach
-  (`/^po-labels\/[A-Za-z0-9._-]+\.pdf$/`) — a client-chosen key could overwrite another
-  order's labels. Replacing a sheet deletes the previous object.
-- **Archiving the order deletes the file** (`po/close` → `clearPoLabels` + `deleteObject`,
-  best-effort): by then every box has landed and the label is spent, so old addresses
-  don't accumulate.
-- Uploaded at PO creation (`CreatePO`) or later from the order (`PoLabelsFile`); the
-  supplier's portal offers the whole sheet plus their own box's label while filling and
-  once packed. Covered by `e2e/po-labels-file.spec.js`.
+  barcode. `Cache-Control: private, no-store`; a supplier reaches only their own order.
+  `?poBoxId=` = one label's pages; `?fileId=` = one file as uploaded; neither = **every label
+  on the order**: the file as-is when there's one, all files **merged into one PDF oldest
+  first** (pdf-lib) when there are several — every file or a 500, never a sheet silently
+  missing a part. `po/get` returns `labelFiles` (id, name, pages, labels served, uploader,
+  date) with **no storage key in it**; a supplier sees the uploader as "Our team", and
+  `labels_key` is still stripped from their `po`.
+- **The upload key is minted server-side** from the PO code (`po-labels/<code>-<ts>.pdf`) and
+  validated on attach — the shape (`/^po-labels\/[A-Za-z0-9._-]+\.pdf$/`) AND that it starts
+  with this order's code, so a key minted for another order is refused. Re-attaching the same
+  key (a retry) updates its row instead of adding a copy.
+- **Legacy single-file orders keep working.** The old columns (`purchase_orders.labels_key/
+  _name/_pages/_uploaded_at/_uploaded_by`) are copied into `po_label_files` by `db:setup`
+  (idempotent, by key), and every label with a page in it gets that `label_file_id`.
+  `adoptLegacyPoLabels(poId)` runs the same two statements for one order on every labels
+  read/write, so an order db:setup hasn't reached still downloads. The old columns are left
+  in place (rollback-safe); deleting the adopted file clears them so it isn't adopted back.
+  Nothing new writes them.
+- **Archiving the order deletes every file** (`po/close` → `clearPoLabels` returns all keys
+  → `deleteObject` each, best-effort): by then every box has landed and the label is spent,
+  so old addresses don't accumulate. **Deleting** the order archives its files in
+  `deleted_pos.children.po_label_files` (the objects stay in R2); Restore puts them back
+  before the labels, and the Deleted POs page's labels download merges them.
+- Uploaded at PO creation (`CreatePO`, several PDFs at once), when adding labels
+  (`PoAddLabels`), when assigning labels to a supplier-raised order (`PoAssignLabels`), or
+  from the order's **Shipping labels** panel (`PoLabelsFile`: multi-select or drop several on
+  the panel, "Add more labels PDFs", a per-file list with Download / Delete). All four go
+  through `saveLabelsSheet` (`PoLabelsFile.jsx`). The supplier's portal offers Download all
+  labels + each file + their own box's label while filling and once packed. Read live
+  (`po_label_files` is in `LIVE_TABLES`). ⚠ **needs `db:setup`** (new table + column).
+  Covered by `e2e/po-labels-file.spec.js` (7-then-23 sheets, legacy order, multi-select,
+  drag-drop, delete one, archive, restore).
 
 ## Paste a list (2026-10-20)
 Suppliers send orders as a message — a SKU, then `size x qty` (or `size-qty`) lines, many shoes at once:
@@ -1853,3 +1889,8 @@ uploads. They see our uploads as "Our team".
 - **Where:** the order's page for PH, the supplier's order page, and PO Reconciliation for admins, who have no PH app.
 - **On screen:** "No drop-off receipt" on the PO list and "Upload drop-off receipt" on the supplier's, for an open order
   with a box gone and no receipt. That includes orders already on their way when this shipped.
+- **Many at once** (2026-11-12): boxes leave over days (7, then 10, then 13 = three receipts). The panel's file picker
+  takes several files, and files dropped on the panel work too; each becomes its own receipt (one after another, a file
+  that fails is named and the rest still save). The list shows every receipt with uploader + EST date/time, headed
+  "Drop-off receipts (n)". The chip logic is unchanged: any one receipt clears "No drop-off receipt" — it's proof that
+  something was handed over, not a per-box count. A supplier uploading three files sends three `po.dropoff_receipt` alerts.

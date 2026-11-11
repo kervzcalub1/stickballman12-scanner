@@ -8,6 +8,7 @@
 export const SECTION_WORDS = {
   today: 'Today',
   listings: 'Shoes on SHEIN',
+  orders: 'Orders',
   check: 'Fix problems',
   reprice: 'Prices',
   live: 'Automatic sync',
@@ -17,6 +18,7 @@ export const SECTION_WORDS = {
 export const SECTION_LEADS = {
   today: 'What needs you right now. Start at the top and work down.',
   listings: 'Every Shopify shoe and whether it is on SHEIN. Tap a shoe to see its sizes; tick shoes to add or fix them.',
+  orders: 'Every SHEIN order and where it stands. Tick the ones to pick, then download the pick list.',
   live: 'Keeps SHEIN and Shopify stock in step. Normally you only check that everything below says ON.',
 };
 

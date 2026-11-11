@@ -51,6 +51,9 @@ async function mockShein(page, { listings = LISTINGS, live = LIVE, status = { ok
     if (u.pathname.endsWith('/shein/status')) return route.fulfill({ json: status });
     if (u.pathname.endsWith('/shein/live')) { count('live'); const b = live(); return route.fulfill(b.__status ? { status: b.__status, json: { ok: false, error: b.error } } : { json: b }); }
     if (u.pathname.endsWith('/shein/links')) return route.fulfill({ json: { ok: true, links: [] } });
+    if (u.pathname.endsWith('/shein/orders')) return route.fulfill({ json: { ok: true, sync: { orders: 'on', polledAt: AT }, units: [
+      { goods_id: 'g1', order_no: 'GSHNN960700HHA8', unit_status: 1, exchange_tag: 1, stock_mode: 3, seller_sku: '100', title: 'Nike Dunk Low', order_time: AT, shopify_title: 'Nike Dunk Low Retro White Black Panda (DD1391-100)', style: 'DD1391-100', shopify_size: '9' },
+      { goods_id: 'g2', order_no: 'GSHNN960700HHB9', unit_status: 4, exchange_tag: 1, stock_mode: 3, seller_sku: '101', title: 'Nike Dunk Low', order_time: AT, size_attr: 'US10' }] } });
     if (u.pathname.endsWith('/shein/listings')) {
       count('listings');
       if (u.searchParams.get('probe') === '1') return route.fulfill({ json: { ok: true, probe: null, canWrite: true } });
@@ -100,10 +103,10 @@ test.describe('SHEIN page — the rules (pure)', () => {
   });
 
   test('who sees what', () => {
-    const five = ['today', 'listings', 'check', 'reprice', 'live'];
-    expect(sheinSectionsFor({ role: 'ph_team' })).toEqual(five);
-    expect(sheinSectionsFor({ role: 'admin' })).toEqual(five);
-    expect(sheinSectionsFor({ role: 'superadmin' })).toEqual(five);
+    const six = ['today', 'listings', 'orders', 'check', 'reprice', 'live'];
+    expect(sheinSectionsFor({ role: 'ph_team' })).toEqual(six);
+    expect(sheinSectionsFor({ role: 'admin' })).toEqual(six);
+    expect(sheinSectionsFor({ role: 'superadmin' })).toEqual(six);
     expect(sheinSectionsFor({ role: 'warehouse', privileges: ['connect_integrations'] })).toEqual(['check', 'live']);
     expect(sheinSectionsFor({ role: 'warehouse', privileges: ['audit_po'] })).toEqual([]);
     expect(sheinSectionsFor({ role: 'warehouse' })).toEqual([]);
@@ -203,7 +206,7 @@ test.describe('SHEIN page — home cards and who sees what', () => {
     await expect(ph).toContainText('See what’s listed, fix problems, change prices');
     await ph.click();
     await expect(page).toHaveURL(/\/ph\/shein$/);
-    await expect(sectionTabs(page)).toHaveText(['Today', 'Shoes on SHEIN', 'Fix problems', 'Prices', 'Automatic sync']);
+    await expect(sectionTabs(page)).toHaveText(['Today', 'Shoes on SHEIN', 'Orders', 'Fix problems', 'Prices', 'Automatic sync']);
     await expect(page.locator('.brand')).toHaveText('SHEIN');
 
     const admin = await context.newPage();
@@ -214,7 +217,7 @@ test.describe('SHEIN page — home cards and who sees what', () => {
     await expect(card).toHaveCount(1);
     await card.click();
     await expect(admin).toHaveURL(/\/shein$/);
-    await expect(sectionTabs(admin)).toHaveText(['Today', 'Shoes on SHEIN', 'Fix problems', 'Prices', 'Automatic sync']);
+    await expect(sectionTabs(admin)).toHaveText(['Today', 'Shoes on SHEIN', 'Orders', 'Fix problems', 'Prices', 'Automatic sync']);
     await admin.close();
   });
 
@@ -225,7 +228,7 @@ test.describe('SHEIN page — home cards and who sees what', () => {
     await expect(sectionTabs(page)).toHaveText(['Fix problems', 'Automatic sync']);
     await expect(page.getByLabel('SHEIN export file')).toBeAttached();
     // no Listings, Prices or Today, however they ask
-    for (const s of ['listings', 'reprice', 'today']) {
+    for (const s of ['listings', 'reprice', 'today', 'orders']) {
       await page.goto(`/shein?section=${s}`);
       await expect(page).toHaveURL(/section=check/);
       await expect(sectionTabs(page)).toHaveText(['Fix problems', 'Automatic sync']);
@@ -438,6 +441,7 @@ test.describe('SHEIN page — the old words are gone, and phones fit', () => {
     ['reprice', '/ph/shein?section=reprice&priceadv=1'],
     ['live', '/ph/shein?section=live&liveadv=1'],
     ['check', '/ph/shein?section=check'],
+    ['orders', '/ph/shein?section=orders'],
   ];
   for (const [section, url] of VISITS) {
     test(`${url}: no old words, no sideways scroll at 390`, async ({ page }) => {

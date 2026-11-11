@@ -897,6 +897,44 @@ await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS label_page INT`);
 // packing slip after every label, and that slip belongs in that box — so a per-box
 // download is a range (label + its slip), not a single page.
 await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS label_page_end INT`);
+// MANY labels PDFs per order (2026-11-12). Labels arrive in parts — a supplier asks for 30
+// and wants 7 first — and the one-file-per-order shape above made the second upload
+// REPLACE the first, so the first 7 stopped printing. Each upload is now its own row and a
+// label points at the file it lives in (`po_boxes.label_file_id`) plus its page range.
+// `page_map` keeps the file's own tracking → page read, so deleting the file a label was
+// mapped to can fall back to an older file that also carries it. The purchase_orders
+// `labels_*` columns above are the legacy single file: copied in here (idempotently, by
+// key) and still read by the app until they're cleared.
+await sql(`
+  CREATE TABLE IF NOT EXISTS po_label_files (
+    id          BIGSERIAL PRIMARY KEY,
+    po_id       BIGINT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    key         TEXT NOT NULL UNIQUE,
+    name        TEXT,
+    pages       INT,
+    page_map    JSONB NOT NULL DEFAULT '[]'::jsonb,
+    uploaded_by TEXT,
+    uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`);
+await sql(`CREATE INDEX IF NOT EXISTS po_label_files_po_idx ON po_label_files (po_id, id)`);
+await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS label_file_id BIGINT REFERENCES po_label_files(id) ON DELETE SET NULL`);
+// The legacy single file → one po_label_files row, and every label that had a page in it
+// points at that row. Safe to re-run: a key already copied is skipped, and only labels
+// with a page but no file yet are touched.
+await sql(`
+  INSERT INTO po_label_files (po_id, key, name, pages, uploaded_by, uploaded_at)
+  SELECT p.id, p.labels_key, p.labels_name, p.labels_pages, p.labels_uploaded_by, coalesce(p.labels_uploaded_at, p.created_at, now())
+    FROM purchase_orders p
+   WHERE p.labels_key IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM po_label_files f WHERE f.key = p.labels_key)
+  ON CONFLICT (key) DO NOTHING
+`);
+await sql(`
+  UPDATE po_boxes b SET label_file_id = f.id
+    FROM purchase_orders p JOIN po_label_files f ON f.key = p.labels_key
+   WHERE b.po_id = p.id AND f.po_id = p.id AND b.label_page IS NOT NULL AND b.label_file_id IS NULL
+`);
 await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS packed_at TIMESTAMPTZ`);
 // The 17TRACK carrier code (chosen in the New Batch form / auto-detected from the labels
 // PDF) — passed to 17TRACK's register/gettrackinfo so it pulls status from the right
@@ -2865,6 +2903,9 @@ await sql(`
   )`);
 // When the buyer placed it. order_time is when SHEIN released it to us, which is later by an unknown gap.
 await sql(`ALTER TABLE shein_order_units ADD COLUMN IF NOT EXISTS buyer_order_time TIMESTAMPTZ`);
+// The size SHEIN printed on the order line (skuAttribute, US wording), kept for the pick list when
+// Shopify's copy no longer has the seller SKU (docs/context/shein-live-fix.md → "Orders + pick list").
+await sql(`ALTER TABLE shein_order_units ADD COLUMN IF NOT EXISTS size_attr TEXT`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_sku ON shein_order_units (seller_sku)`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_order ON shein_order_units (order_no)`);
 // SHEIN orders written to Shopify by our own "SHEIN via Stickballman12.com" app (replaced the
@@ -3598,6 +3639,8 @@ await sql(`
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS shopify_listing_variants_product_idx ON shopify_listing_variants (product_id)`);
+// The pick lists look a seller SKU up here (eBay + SHEIN orders → style code, size, Shopify's name).
+await sql(`CREATE INDEX IF NOT EXISTS shopify_listing_variants_sku_idx ON shopify_listing_variants (sku)`);
 // Market price per style code + size (Alias, api/_lib/ebay-reprice.js priceStyleSize), checked by
 // the server for every IN-STOCK active size. Only real answers are stored — an error is retried.
 await sql(`
@@ -3619,7 +3662,7 @@ const LIVE_TABLES = [
   'shein_category_map', 'shein_brand_map',
   'app_settings', 'payout_presets', 'shipment_issues', 'shipment_tracking',
   'purchase_orders', 'po_boxes', 'po_lines', 'po_comments', 'po_resolutions', 'deleted_pos',
-  'po_stores', 'po_store_charges', 'po_store_receipts', 'po_dropoff_receipts', 'presell_stock_po', 'presell_box_lines',
+  'po_stores', 'po_store_charges', 'po_store_receipts', 'po_dropoff_receipts', 'po_label_files', 'presell_stock_po', 'presell_box_lines',
   'rescale_requests', 'rescale_request_items',
   'buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_card_reads', 'buy_cart_gift_cards',
   'buy_cart_receipt_lines', 'buy_cart_tasks', 'deleted_buy_carts',

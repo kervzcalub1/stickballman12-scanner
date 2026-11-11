@@ -246,6 +246,14 @@ A Telegram card still goes out as text with "⚠️ Photo unavailable" if the pi
   with the buttons. The card's message id is still what replies attach to.
 - **The screen:** every row fetched the full-size file separately, so a long run could sit on
   "photo…" or fail until a refresh. `shotUrl` now fetches each photo once and retries a failure.
+- **A dropped connection (2026-11-12, "Photo unavailable (fetch failed)"):** `fetch failed` is Node's
+  error for a connection that broke with no answer, on either the R2 read or the Telegram upload.
+  Nothing retried, so one drop lost the picture for good. Now (`photoStep` in `api/_lib/telegram.js`)
+  the **R2 read** is tried up to 3 times on any drop or timeout. The **Telegram upload** is retried
+  only when the connection never opened (DNS, refused, connect timeout): a drop mid-upload may
+  have landed, and a second copy would be a second card with live buttons. The warning now names
+  the step and the code, e.g. `fetch failed · ECONNRESET — reading it from storage`. The full
+  cause is logged as `[telegram] card photo dropped`.
 
 ## The desk's card files are the desk's (2026-11-06)
 The PH team uploads card files, and some are bad. The supplier sees none of it.

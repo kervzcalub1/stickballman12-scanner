@@ -3083,6 +3083,44 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     }
   });
 
+  // "⚠️ Photo unavailable (fetch failed)" in Andrew's premium group, 2026-11-12: one dropped
+  // connection on the R2 read cost the card its picture. A dropped READ is now tried again.
+  test('a dropped connection reading the photo is tried again — the card still gets its picture', async ({ request }) => {
+    test.skip(!process.env.R2_ACCOUNT_ID, 'needs real storage to hold a real photo');
+    const sharp = (await import('sharp')).default;
+    const jpeg = await sharp({ create: { width: 40, height: 40, channels: 3, background: '#363' } }).jpeg().toBuffer();
+    const { sendApprovalCard } = await import('../api/_lib/telegram.js');
+    const cartId = await newRequest(request, { submit: false, lines: [] });
+    const signed = await call(request, 'buyer', 'cart/file-sign', { cartId, kind: 'shoe', contentType: 'image/jpeg', sku: LINE.sku });
+    expect((await fetch(signed.body.uploadUrl, { method: 'PUT', body: jpeg })).ok).toBe(true);
+    const attached = await call(request, 'buyer', 'cart/file-attach', { cartId, kind: 'shoe', key: signed.body.key, sku: LINE.sku, name: 's.jpg', contentType: 'image/jpeg', sizeBytes: jpeg.length });
+    expect(attached.status).toBe(200);
+    const keep = { ...process.env };
+    const realFetch = globalThis.fetch;
+    let dropped = 0;
+    globalThis.fetch = (url, opts) => {
+      if (String(url).includes(signed.body.key.split('/').pop()) && dropped === 0) {
+        dropped += 1;
+        return Promise.reject(Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) }));
+      }
+      return realFetch(url, opts);
+    };
+    process.env.TELEGRAM_BOT_TOKEN = 'test'; process.env.TELEGRAM_CHAT_ID = String(CHAT); process.env.TELEGRAM_API_BASE = 'http://127.0.0.1:5198';
+    const t0 = calls.length;
+    try {
+      await sendApprovalCard({ caption: 'retry me', keyboard: { inline_keyboard: [] }, photoFileId: Number(attached.body.file.id), chatId: CHAT });
+      expect(dropped).toBe(1);
+      const sent = since(t0).filter((c) => ['sendPhoto', 'sendMessage'].includes(c.method));
+      expect(sent.map((c) => c.method)).toEqual(['sendPhoto']); // the picture, with the card on it
+    } finally {
+      globalThis.fetch = realFetch;
+      for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE']) {
+        if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k];
+      }
+      await call(request, 'approver', 'cart/file-delete', { cartId, fileId: Number(attached.body.file.id) });
+    }
+  });
+
   test('a long card whose photo cannot be read says so, and still goes', async ({ request }) => {
     const { sendApprovalCard } = await import('../api/_lib/telegram.js');
     const keep = { ...process.env };
@@ -4363,6 +4401,23 @@ test('a tip answer is read strictly — ok / no / an amount, and nothing else', 
   expect(splitTipReply('tip maybe').error).toMatch(/Couldn't read "tip maybe"/);
   expect(splitTipReply('tip ok\ntip no').error).toMatch(/twice/);
   expect(splitTipReply('9 x 2')).toEqual({ tip: null, rest: '9 x 2' });
+});
+
+test('a photo that could not be sent says which step broke, and only a safe step is tried again', async () => {
+  const { isNetDrop, mayRetryPhoto, photoWhy, netCode } = await import('../api/_lib/telegram.js');
+  const drop = (code) => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('x'), { code }) });
+  const answered = Object.assign(new Error('sendPhoto: Bad Request: IMAGE_PROCESS_FAILED'), { status: 400 });
+  expect(isNetDrop(drop('ECONNRESET'))).toBe(true);
+  expect(isNetDrop(answered)).toBe(false);                      // Telegram said no — not a drop
+  expect(isNetDrop(new Error('R2 GET k failed (403)'))).toBe(false);
+  expect(netCode(drop('UND_ERR_SOCKET'))).toBe('UND_ERR_SOCKET');
+  // Reading is safe to repeat on any drop; an upload only when it never left the building.
+  expect(mayRetryPhoto('read', drop('ECONNRESET'))).toBe(true);
+  expect(mayRetryPhoto('upload', drop('ECONNRESET'))).toBe(false); // may have landed — no second card
+  expect(mayRetryPhoto('upload', drop('ENOTFOUND'))).toBe(true);
+  expect(mayRetryPhoto('read', answered)).toBe(false);
+  expect(photoWhy('read', drop('ECONNRESET'))).toBe('fetch failed · ECONNRESET — reading it from storage');
+  expect(photoWhy('upload', drop('UND_ERR_SOCKET'))).toBe('fetch failed · UND_ERR_SOCKET — uploading it to Telegram');
 });
 
 test('a card link sits exactly on its line, whatever comes before it', async () => {

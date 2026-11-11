@@ -6,7 +6,7 @@
 //   · brand      per Shopify vendor (BrandPicker)
 //   · details    per SHEIN product type (AttrEditor)
 //   · colour     per SHEIN product type → set on every ticked shoe of that type (publish_choices_bulk)
-//   · photos     "Use PH edited photos" on / off for all of them (publish_choices_bulk)
+//   · photos     "Use PH edited photos" on / off for all of them; leave out / put back Shopify's cover photo (publish_choices_bulk)
 //   · titles     a tidy-up preview (tidyTitle) → apply; each title editable inline too
 //   · box        D6 (BoxDefaults — saving stays admin / Connect integrations)
 // Every save is OUR database only; the sheet re-reads after each one. "Preview publish (n ready)" starts
@@ -88,6 +88,7 @@ export function SheinBulkPublish({ ids, leftOut = [], intent = 'edit', active, b
   const live = products.filter((p) => p.syncable);
   const phOn = live.filter((p) => p.usePhPhotos).length;
   const photoNo = live.filter((p) => isNo(p, 'photos')).length;
+  const coverOff = live.filter((p) => p.coverSkipped).length;   // Shopify's photo 1 left out (a branded cover SHEIN calls a watermark)
   const tidy = live.map((p) => { const cur = p.titleOverride || cleanTitle(p.title || ''); const next = tidyTitle(cur, p.titleMax); return { p, cur, next }; }).filter((x) => x.next !== x.cur && x.next.length >= 2);
   const titleMaxKnown = live.some((p) => p.titleMax);
 
@@ -198,6 +199,11 @@ export function SheinBulkPublish({ ids, leftOut = [], intent = 'edit', active, b
                 <div className="shl-pub-acts">
                   <button type="button" className="btn ghost xs" disabled={phOn === 0} onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { usePhPhotos: false } }, `Back to the Shopify photos on ${plural(live.length, 'shoe')}.`)}>Shopify photos on all</button>
                   <button type="button" className="btn xs shl-fix" disabled={phOn === live.length} onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { usePhPhotos: true } }, `PH edited photos on ${plural(live.length, 'shoe')} — checked again by the preview.`)}>Use PH photos on all {fmt(live.length)}</button>
+                </div>
+                <p className="xs" data-cover="">Shopify’s photo 1 (the cover) left out on <b>{fmt(coverOff)}</b> of {fmt(live.length)}. SHEIN rejects a cover with text, a logo or the store name on it as a “watermark”. To pick photo by photo, open the shoe (Choose photos).</p>
+                <div className="shl-pub-acts">
+                  <button type="button" className="btn ghost xs" disabled={coverOff === 0} onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { skipCover: false } }, `Cover photo put back on ${plural(live.length, 'shoe')}.`)}>Put the cover back on all</button>
+                  <button type="button" className="btn xs shl-fix" disabled={coverOff === live.length} onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { skipCover: true } }, `Cover photo left out on ${plural(live.length, 'shoe')} — SHEIN gets the other photos.`)}>Leave out the cover on all {fmt(live.length)}</button>
                 </div>
               </BulkBlock>
 

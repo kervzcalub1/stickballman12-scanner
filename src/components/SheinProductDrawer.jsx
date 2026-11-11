@@ -14,12 +14,13 @@ import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { CopyText, RemoteThumb } from './common.jsx';
 import { fmt, money, when, StatusChip, BlockerSay, FixButton } from './SheinListingsBits.jsx';
-import { itemStatus } from '../lib/sheinListings.js';
+import { itemStatus, isPhotoRejection } from '../lib/sheinListings.js';
 import { plain } from '../lib/sheinWords.js';
 import { NEEDS_PRIV } from './SheinListingsBits.jsx';
 import { useFixes, UPDATE_OPS, isRise } from '../screens/SheinListingsProducts.jsx';
 import { PublishChecklist } from './SheinPublishBits.jsx';
 import { SheinShoeFix } from './SheinShoeFix.jsx';
+import { SheinPhotoPicker } from './SheinPhotoPicker.jsx';
 
 const CHECKS = [
   ['shopify', 'Active on Shopify', ['shopify_inactive']],
@@ -43,12 +44,16 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
   }
   useEffect(() => { setD(null); setErr(''); setSetup(null); }, [id]);
   useLive(['shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_job_items', 'shein_category_map', 'shein_brand_map', 'app_settings'], load);
-  const { onFix, modal } = useFixes({ onAct, onSignOut, reload: load });
+  const { onFix: onFix0, modal } = useFixes({ onAct, onSignOut, reload: load });
+  const [photosOpen, setPhotosOpen] = useState(false);
+  const toPhotos = () => { setPhotosOpen(true); setTimeout(() => document.getElementById('shl-photos-sec')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); };
+  // "Fix photos" (SHEIN rejected the photos) opens this shoe's photo section; the rest as before
+  const onFix = (k, v, b) => (k === 'fix_photos' ? toPhotos() : onFix0(k, v, b));
   const [matchOpen, setMatchOpen] = useState(false);
   const toMatch = () => { setMatchOpen(true); setTimeout(() => document.getElementById('shl-shoe-fix')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); };
   const [fixFirst, setFixFirst] = useState(false);   // "Publish new product" pressed with ✕ lines left → the checklist, not the preview
   const listRef = useRef(null);
-  useEffect(() => { setFixFirst(false); }, [id]);
+  useEffect(() => { setFixFirst(false); setPhotosOpen(false); }, [id]);
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape' && !modal) onClose(); };
     window.addEventListener('keydown', onKey);
@@ -88,6 +93,10 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
   const pubRun = !isNew && isShopify ? (d?.jobItems || []).find((i) => i.op === 'publish' && i.kind === 'run') || null : null;
   const pubRejected = pubRun?.status === 'failed' && (pubRun.blockers || []).some((b) => b.code === 'review_rejected');
   const republish = !!pubRun && pubRun.status === 'failed' && p?.status !== 'synced';
+  // SHEIN rejected an edit / publish of this shoe for its photos (watermark, false promises) — 2026-11-11
+  const photoReason = [...(p?.blockers || []), ...variants.flatMap((v) => v.blockers || []), ...(pubRun?.blockers || [])]
+    .map((b) => (b.code === 'review_rejected' ? b.params?.failedReason || b.sheinSaid : null)).find((x) => isPhotoRejection(x)) || null;
+  const photoRun = (d?.jobItems || []).find((i) => i.op === 'photos' && i.kind === 'run') || null;
 
   return createPortal(
     <>
@@ -132,6 +141,13 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                   {pubRun.status === 'failed'
                     ? <p className="sm shl-pline bad">{pubRejected ? 'SHEIN rejected the new product in its review' : 'SHEIN refused the publish'}{pubRun.error ? <>: “{pubRun.error}”</> : '.'} {pubRejected ? 'Fix it, then an admin presses Publish again and checks a new preview.' : 'Fix it, then preview again.'}</p>
                     : <p className="sm shl-pline violet">Sent {when(pubRun.sent_at || pubRun.updated_at)} — SHEIN is reviewing the new product (hours to days). It shows In review until SHEIN approves it; then automatic sync sets its stock.</p>}
+                  {pubRun.status === 'failed' && (
+                    <div className="shl-pub-photos">
+                      <button type="button" className={`btn xs ${photosOpen ? 'ghost' : 'shl-fix'}`} aria-expanded={photosOpen} data-act="choose-photos" onClick={() => setPhotosOpen(!photosOpen)}>{photosOpen ? 'Close photos' : `Choose photos${p.photo_skip?.length ? ` (${fmt(p.photo_skip.length)} left out)` : ''}`}</button>
+                      {photosOpen && <SheinPhotoPicker productId={p.shopify_product_id} onSignOut={onSignOut} onSaved={load}
+                        lede={<p className="xs">A photo SHEIN called a watermark or a false promise? Leave it out here, then send it again.</p>} />}
+                    </div>
+                  )}
                   <div className="shl-pub-acts">
                     <button type="button" className="btn ghost sm" onClick={() => onOpenJob?.(pubRun.job_id)}>Open the send #{pubRun.job_id}</button>
                     {pubRejected && (
@@ -165,6 +181,35 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
 
               {isShopify && !isNew && variants.some((v) => v.shein_sku) && (
                 <SheinShoeFix p={p} variants={variants} canWrite={!!d.canWrite} connected={connected} open={matchOpen} onSignOut={onSignOut} onReload={load} />
+              )}
+
+              {isShopify && !isNew && !republish && (
+                <section className="shl-d-sec" id="shl-photos-sec" data-photos-sec="">
+                  <h4 className="shl-h4">Photos on SHEIN</h4>
+                  {photoReason && (
+                    <div className="shl-banner warn" role="status" data-photo-rejected="">
+                      <b>SHEIN rejected this shoe for its photos</b>
+                      <span className="xs">SHEIN said: “{photoReason}”. Its live photos have text, a logo or the store name on them, and SHEIN checks them again on every edit — so new sizes and other changes keep being rejected until the photos are replaced.</span>
+                    </div>
+                  )}
+                  {photoRun && ['in_review', 'deferred', 'failed', 'done'].includes(photoRun.status) && (
+                    <p className={`xs shl-pline ${photoRun.status === 'failed' ? 'bad' : photoRun.status === 'done' ? 'ok' : 'violet'}`} data-photo-run={photoRun.status}>
+                      {photoRun.status === 'in_review' ? <>New photos sent {when(photoRun.sent_at || photoRun.updated_at)} — SHEIN is reviewing them; the old ones stay live until it approves.</>
+                        : photoRun.status === 'done' ? <>SHEIN approved the new photos ({when(photoRun.updated_at)}). Sizes SHEIN rejected before can go again: Add missing sizes.</>
+                          : photoRun.status === 'deferred' ? <>New photos wait for an earlier SHEIN review to close — sent by themselves.</>
+                            : <>The photo change didn’t go through{photoRun.error ? <>: “{photoRun.error}”</> : '.'}</>}
+                      {' '}<button type="button" className="shl-linkbtn" onClick={() => onOpenJob?.(photoRun.job_id)}>Open #{photoRun.job_id}</button>
+                    </p>
+                  )}
+                  <p className="muted xs">Pick the photos SHEIN should show (left-out ones are never sent), then preview the change. One edit replaces this shoe’s photos on SHEIN — and each size’s photo — then SHEIN reviews it. Nothing else on the shoe changes.</p>
+                  <div className="shl-pub-acts">
+                    <button type="button" className={`btn sm ${photosOpen ? 'ghost' : ''}`} aria-expanded={photosOpen} data-act="choose-photos-live" onClick={() => setPhotosOpen(!photosOpen)}>{photosOpen ? 'Close photos' : `Choose photos${p.photo_skip?.length ? ` (${fmt(p.photo_skip.length)} left out)` : ''}`}</button>
+                    <button type="button" className={`btn sm ${photoReason ? 'primary' : 'ghost'}`} data-dry="photos" disabled={!!busy || !!why || photoRun?.status === 'in_review'}
+                      title={why || (photoRun?.status === 'in_review' ? 'SHEIN is still reviewing the last photo change' : 'Preview: what SHEIN has now → the photos it would get. Nothing is sent until someone confirms.')}
+                      onClick={() => onDryRun?.([p.shopify_product_id], ['photos'])}>{busy === 'preview' ? 'Starting…' : 'Replace SHEIN photos'}</button>
+                  </div>
+                  {photosOpen && <SheinPhotoPicker productId={p.shopify_product_id} onSignOut={onSignOut} onSaved={load} />}
+                </section>
               )}
 
               {isShopify && (

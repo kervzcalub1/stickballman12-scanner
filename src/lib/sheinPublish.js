@@ -4,7 +4,7 @@
 // server now). Spec: scratchpad plan/phase4-spec.md (API specialist, 2026-10-27); docs/shein-listings-plan.md
 // §3 Phase 4, §4.2 blockers 11–19, D4/D5/D6/D7/D12. No I/O, no clock — it runs in the browser too.
 import { parseSize } from './sheinCheck.js';
-import { blocker, BLOCKERS, listingSyncGate, resolveSize, validateCustomText, customTextConflict, sheinNewSizePrice, templateSizes, sizeSort, renderBlocker } from './sheinListings.js';
+import { withAttrs, blocker, BLOCKERS, listingSyncGate, resolveSize, validateCustomText, customTextConflict, sheinNewSizePrice, templateSizes, sizeSort, renderBlocker } from './sheinListings.js';
 
 const trim = (v) => String(v ?? '').trim();
 // shopify_inactive is a NOTE on the list (the product reads "Not listing"), but it never publishes (2026-10-28).
@@ -169,6 +169,32 @@ export function cleanDescription(html, max = 5000) {
   return t;
 }
 
+// "Leave this photo out" (2026-11-11): a person picks photos SHEIN must not get (a branded cover with
+// text / a logo → "watermark" / "false service promise" rejections). Stored per product as photo KEYS:
+// the URL without its query / hash (Shopify adds ?v=… that changes on re-upload), host lower-cased.
+export const PHOTO_SKIP_MAX = 40;
+export function photoKey(url) {
+  const s = String(url ?? '').trim();
+  if (!s) return '';
+  try { const u = new URL(s); return `${u.protocol}//${u.host.toLowerCase()}${u.pathname}`; } catch { return s.split(/[?#]/)[0]; }
+}
+export const isShopifyPhoto = (url) => /^https:\/\/cdn\.shopify\.com\//i.test(photoKey(url));
+// The photos that go to SHEIN, in order, minus the ones left out → { urls, skipped }.
+export function keepPhotos(urls, skip) {
+  const out = new Set((skip || []).map(photoKey).filter(Boolean));
+  const kept = []; let skipped = 0;
+  for (const u of urls || []) { if (out.has(photoKey(u))) skipped += 1; else kept.push(u); }
+  return { urls: kept, skipped };
+}
+// The readiness has only a COUNT per source (Shopify's imageCount, the PH photo count): left-out photos of
+// the source in use come off it. phKeys = the style's PH edited photo keys; ph = true → they are the source
+// (a skip among them counts), else Shopify's (a skip NOT among them counts).
+export function countAfterSkip(count, skip, ph, phKeys = new Set()) {
+  if (count == null) return count;
+  const n = (skip || []).map(photoKey).filter((k) => k && (ph ? phKeys.has(k) : !phKeys.has(k))).length;
+  return Math.max(0, Number(count) - n);
+}
+
 // fill-in-standard picture_config_list → which photos go as which image type (spec §2.5). The NEW
 // plan only when the list carries `spu_image_detail_show` (since 2026-10).
 export function imagePlan(fill) {
@@ -204,6 +230,81 @@ function imageList(group, converted, photoCount) {
   }
   list.sort((a, b) => ({ 1: 0, 2: 1, 5: 2 }[a.image_type] ?? 3) - ({ 1: 0, 2: 1, 5: 2 }[b.image_type] ?? 3));
   return list.map((x, i) => ({ image_sort: i + 1, image_type: x.image_type, image_url: x.image_url }));
+}
+
+// ------------------------------------------------------------------------------------------------
+// Replace the photos of a product ALREADY on SHEIN (op 'photos', 2026-11-11). SHEIN rejected edits of
+// these shoes because their live photos carry text / a logo ("watermark", "false service promises"),
+// and partialEdit re-judges the whole colour (SKC) on every edit — so nothing else can change on the
+// shoe until its photos are clean. ONE partialEdit (doc 3002047; scratchpad rejected-fix-spec.md):
+//   skc_list[0] = { skc_name, image_info { image_group_code (from spu-info), the FULL new list },
+//                   skc_title / skc_multi_language_name_list as SHEIN has them (left out = cleared),
+//                   sku_list: every SKU's image → the new main photo, only when the SKUs carry images
+//                   (all or none) }
+//   image_info (SPU level) — only when SHEIN already keeps SPU photos for this product (new picture plan).
+// Every photo is NEW (no image_item_id). Never sent: is_spu_pic, prices, stock, sale attributes.
+// In: spu (raw spu-info), fill (the category's fill-in-standard), ip (imagePlan for THIS product:
+// imagePlan(fill) when it has SPU photos, else the old plan), images (convertPhotos) | null, attrs.
+export const asImageList = (x) => (Array.isArray(x) ? x : x ? [x] : []).filter((i) => i && (i.imageUrl || i.groupCode));
+export const spuHasSpuPhotos = (spu) => asImageList(spu?.spuImageInfoList).length > 0;
+export function planPhotoEdit({ spu, fill = null, fillUnread = false, ip, images = null, attrs = null }) {
+  const plan = { op: 'photos', spu: spu?.spuName || null, skc: null, current: [], images: [], spuImages: [], skuImages: 0, sizes: [], skipped: [], relinks: [], blockers: [], notes: [] };
+  if (!spu?.spuName) { plan.blockers.push(blocker('not_on_shein_product')); return { body: null, plan }; }
+  const skcs = spu.skcInfoList || [];
+  if (skcs.length !== 1) plan.blockers.push(blocker('photo_edit_unsupported', { why: 'multi_skc', skcCount: skcs.length }));
+  const skc = skcs[0] || {};
+  const now = asImageList(skc.skcImageInfoList).sort((a, b) => Number(a.sort || 0) - Number(b.sort || 0));
+  plan.current = now.map((x) => ({ type: x.imageType ?? null, url: x.imageMediumUrl || x.imageUrl || null, sort: Number(x.sort) || null }));
+  plan.skc = skc.skcName ? String(skc.skcName) : null;
+  if (fillUnread) plan.blockers.push(blocker('skc_field_uncopyable', { why: 'fill_unread' }));
+  const rule = (k) => (fill?.fill_in_standard_list || []).find((x) => x.field_key === k) || null;
+  const skcNames = (skc.productMultiNameList || []).filter((x) => String(x?.productName || '').trim()).map((x) => ({ language: x.language || 'en', name: String(x.productName).trim() }));
+  const titleRule = rule('skc_title');
+  if (titleRule?.show === true && titleRule.required === true && !skcNames.length) plan.blockers.push(blocker('skc_field_uncopyable', { field: 'skc_title' }));
+  const skus = skc.skuInfoList || [];
+  const skuImgs = skus.map((k) => asImageList(k.skuImageInfoList)[0] || null);
+  const withImg = skuImgs.filter(Boolean).length;
+  // editing a SKU may clear a reference link we can't read back (M5)
+  if (withImg && rule('reference_product_link')?.show === true) plan.blockers.push(blocker('skc_field_uncopyable', { field: 'competing_product_link' }));
+  const group = now.find((x) => x.groupCode)?.groupCode || null;
+  if (!group && skcs.length === 1) plan.blockers.push(blocker('photo_edit_unsupported', { why: 'no_group_code' }));
+  if (withImg && (withImg < skus.length || skuImgs.some((x) => x && !x.groupCode))) plan.blockers.push(blocker('photo_edit_unsupported', { why: 'sku_group_code' }));
+  const spuPhotos = asImageList(spu.spuImageInfoList);
+  const spuGroup = spuPhotos.find((x) => x.groupCode)?.groupCode || null;
+  if (spuPhotos.length && (!spuGroup || !(ip?.spu || []).length)) plan.blockers.push(blocker('photo_edit_unsupported', { why: spuGroup ? 'spu_plan_unclear' : 'no_group_code' }));
+  plan.blockers.push(...(attrs?.problems || []));
+  plan.imagePlan = ip ? { newPlan: ip.newPlan, need: ip.need, spu: spuPhotos.length > 0 } : null;
+  if (images) {
+    for (const e of images.errors || []) plan.blockers.push(blocker('image_rejected', { reason: e.reason, sheinMessage: e.sheinMessage || null, photo: e.photo + 1 }));
+    if ((images.photoCount || 0) < (ip?.need || 1)) plan.blockers.push(blocker('no_image', { count: images.photoCount || 0, need: ip?.need || 1 }));
+    if (images.capReached) plan.blockers.push(blocker('photo_cap_reached', { cap: images.capReached.cap, used: images.capReached.used }));
+  }
+  const isBlocking = (b) => !['note', 'review'].includes(BLOCKERS[b.code]?.level);
+  if (plan.blockers.some(isBlocking) || !images || !ip) return { body: null, plan };
+  const conv = new Map(Object.entries(images.converted || {}));
+  const skcImages = imageList(ip.skc, conv, images.photoCount);
+  const mainUrl = skcImages.find((x) => x.image_type === 1)?.image_url || null;
+  if (!mainUrl) { plan.blockers.push(blocker('no_image', { count: 0, need: ip.need || 1 })); return { body: null, plan }; }
+  const out = { skc_name: plan.skc, image_info: { image_group_code: group, image_info_list: skcImages } };
+  if (titleRule?.show === true && skcNames.length) {
+    out.skc_title = (skcNames.find((x) => /^en/i.test(x.language)) || skcNames[0]).name;
+    out.skc_multi_language_name_list = skcNames;
+    plan.skcTitleCopied = true;
+  }
+  if (withImg) {
+    out.sku_list = skus.map((k, i) => ({ sku_code: String(k.skuCode), image_info: { image_group_code: skuImgs[i].groupCode, image_info_list: [{ image_sort: 1, image_type: 1, image_url: mainUrl }] } }));
+    plan.skuImages = skus.length;
+  }
+  const body = { spu_name: spu.spuName, skc_list: [out] };
+  if (spuPhotos.length) {
+    const list = imageList(ip.spu, conv, images.photoCount);
+    if (!list.length) { plan.blockers.push(blocker('photo_edit_unsupported', { why: 'spu_plan_unclear' })); return { body: null, plan }; }   // S1: never an empty list
+    body.image_info = { image_group_code: spuGroup, image_info_list: list };
+    plan.spuImages = list;
+  }
+  withAttrs(body, plan, attrs);
+  plan.images = skcImages;
+  return { body, plan };
 }
 
 // The template for one product type → its parts (spec §2.4, §3.1).

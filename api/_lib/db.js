@@ -21,6 +21,7 @@ import { requestShipping } from '../../src/lib/costs.js';
 import { NOT_HERE_DAYS } from '../../src/lib/notHere.js';
 import { productAnswered } from '../../src/lib/sheinCutover.js';
 import { BLOCKERS as SHEIN_BLOCKERS } from '../../src/lib/sheinListings.js';
+import { photoKey, PHOTO_SKIP_MAX } from '../../src/lib/sheinPublish.js';
 // Registration now sends the canonical form of a number, so anything that MATCHES a
 // number has to canonicalise too — see normalizeTrackingNumber for why.
 import { normalizeTrackingNumber } from './tracking.js';
@@ -12112,12 +12113,13 @@ export async function listPublishUnconfirmed() {
 }
 export async function deleteBrandMap(vendor) { return (await db()`DELETE FROM shein_brand_map WHERE vendor = ${String(vendor).trim().toLowerCase()} RETURNING 1`).length; }
 // A product's Phase 4 choices (title override, SKC colour, PH photos) — DB only.
-export async function setListingPublishChoices(productId, { titleOverride, skcValueId, usePhPhotos }) {
+export async function setListingPublishChoices(productId, { titleOverride, skcValueId, usePhPhotos, photoSkip }) {
   const has = (v) => v !== undefined;
   const [r] = await db()`UPDATE shein_listing_products SET
       title_override = CASE WHEN ${has(titleOverride)} THEN ${titleOverride ?? null}::text ELSE title_override END,
       skc_value_id = CASE WHEN ${has(skcValueId)} THEN ${skcValueId ?? null}::bigint ELSE skc_value_id END,
-      use_ph_photos = CASE WHEN ${has(usePhPhotos)} THEN ${!!usePhPhotos} ELSE use_ph_photos END, updated_at = now()
+      use_ph_photos = CASE WHEN ${has(usePhPhotos)} THEN ${!!usePhPhotos} ELSE use_ph_photos END,
+      photo_skip = CASE WHEN ${has(photoSkip)} THEN ${photoSkip || []}::text[] ELSE photo_skip END, updated_at = now()
     WHERE shopify_product_id = ${productId} RETURNING *`;
   return r || null;
 }
@@ -12158,9 +12160,11 @@ export async function listingVendorUsage() {
 }
 // How many PH edited photos each style has — the publishing readiness counts these when a product
 // is set to "Use PH edited photos" (the dry run sends them; it fell back to counting Shopify's).
-export async function phPhotoCounts() {
-  const rows = await db()`SELECT sku, count(*)::int AS n FROM product_photos WHERE source = 'ph_edited' GROUP BY sku`;
-  return new Map(rows.map((r) => [String(r.sku).trim().toUpperCase(), r.n]));
+// The PH edited photos per style as photo keys (URL without ?query) — the readiness takes a person's
+// left-out photos off the right source's count.
+export async function phPhotoKeys() {
+  const rows = await db()`SELECT sku, array_agg(url) AS urls FROM product_photos WHERE source = 'ph_edited' GROUP BY sku`;
+  return new Map(rows.map((r) => [String(r.sku).trim().toUpperCase(), new Set((r.urls || []).map(photoKey))]));
 }
 export async function productPhotosForSku(sku, source = 'ph_edited') {
   return await db()`SELECT angle, url, source FROM product_photos WHERE sku = ${String(sku || '').trim()} AND source = ${source}
@@ -12172,7 +12176,7 @@ export async function productPhotosForSku(sku, source = 'ph_edited') {
 export async function loadListingPrev() {
   const [products, variants] = await Promise.all([
     // + the publish choices (title / colour / PH photos): the stored readiness of a new shoe is judged on them too
-    db()`SELECT shopify_product_id, excluded, excluded_by, excluded_at, shopify_hash, shopify_json, computed_hash, spu, review_version, title_override, skc_value_id, use_ph_photos FROM shein_listing_products`,
+    db()`SELECT shopify_product_id, excluded, excluded_by, excluded_at, shopify_hash, shopify_json, computed_hash, spu, review_version, title_override, skc_value_id, use_ph_photos, photo_skip FROM shein_listing_products`,
     db()`SELECT row_key, shein_sku, match, excluded, excluded_by, excluded_at, synced_hash, synced_fields, last_error FROM shein_listing_variants`,
   ]);
   return { products: new Map(products.map((r) => [r.shopify_product_id, r])), variants: new Map(variants.map((r) => [r.row_key, r])) };
@@ -12371,6 +12375,23 @@ export async function setListingPublishChoicesMany(productIds, { skcValueId, use
     for (const r of rows) done.add(r.shopify_product_id);
   }
   return [...done];
+}
+// Bulk "leave out the cover photo" (2026-11-11): each product's stored cover (image_url = Shopify's photo 1)
+// added to / taken off its photo_skip. DB only → the product ids updated.
+export async function setListingCoverSkip(productIds, on) {
+  if (!productIds.length) return [];
+  const sql = db();
+  const rows = await sql`SELECT shopify_product_id, image_url, photo_skip FROM shein_listing_products WHERE shopify_product_id = ANY(${productIds}::text[])`;
+  const done = [];
+  for (const r of rows) {
+    const key = photoKey(r.image_url);
+    if (!key) continue;
+    const cur = (r.photo_skip || []).filter((u) => u !== key);
+    const next = on ? [...cur, key].slice(-PHOTO_SKIP_MAX) : cur;
+    await sql`UPDATE shein_listing_products SET photo_skip = ${next}::text[], updated_at = now() WHERE shopify_product_id = ${r.shopify_product_id}`;
+    done.push(r.shopify_product_id);
+  }
+  return done;
 }
 export async function listingSummary() {
   const sql = db();

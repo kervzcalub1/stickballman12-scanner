@@ -24,8 +24,8 @@ import {
   sheinPublishPermissionLogged, sheinPublishQuotaLogged, sheinShelfQuotaLogged, sheinSiteListLogged, sheinBrandListLogged, sheinCategoryTreeLogged,
   sheinAssocRulesLogged, sheinCategorySuggestLogged, sheinComplianceLogged, sheinTransformPicLogged, sheinPublishLogged,
 } from './shein.js';
-import { buildPublish, publishGates, readPublishAnswer, publishApproved, readBoxDefaults, fetchImage, hostOnR2, templateFor, assocRequired } from './shein-publish.js';
-import { publishReadiness, attributePatch, templateParts } from '../../src/lib/sheinPublish.js';
+import { buildPublish, publishGates, readPublishAnswer, publishApproved, readBoxDefaults, fetchImage, hostOnR2, templateFor, assocRequired, sourcePhotos, convertPhotos } from './shein-publish.js';
+import { publishReadiness, attributePatch, templateParts, countAfterSkip, planPhotoEdit, spuHasSpuPhotos, imagePlan } from '../../src/lib/sheinPublish.js';
 import { shopifyListingCatalogue, shopifyListingProduct, shopifyConfigured, styleFromTitle } from './shopify.js';
 import {
   createListingJob, getListingJob, activeListingJob, claimListingJob, touchListingJob, finishListingJob, markStaleListingJobs, resumeListingJob,
@@ -36,13 +36,13 @@ import {
   getListingProduct, listListingProducts, updateListingItem, markListingItemSending, dueRunItems, runJobsWithDueItems, requeueListingJob,
   setListingJobStatus, listingInflight, markVariantsPublished, setVariantsLastError, verifySizeMap, verifySizeMapById, getPlatformQuotes, listListingJobItems,
   createRunJob, getListingItems, sheinShelfRecords, markVariantsSynced, listingPriceOffProducts, listCategoryMaps, listBrandMaps, setListingPublished, listAttrDefaults,
-  listPublishUnconfirmed, resumeListingJob as resumeJobRow, phPhotoCounts,
+  listPublishUnconfirmed, resumeListingJob as resumeJobRow, phPhotoKeys,
 } from './db.js';
 import { walkActive, pushSpus } from './shein-live.js';
 import {
   spuPayload, templateSizes, computeListings, normalizeWebhookProduct, listingHash, STATUS_ORDER, planAddSizes, summarizePlan, reviewVerdict, stableJson, blocker,
   planPrice, planEdit, sheinNewSizePrice,
-  sizeKey, listingSyncGate,
+  sizeKey, listingSyncGate, BLOCKERS,
 } from '../../src/lib/sheinListings.js';
 import { parseSize } from '../../src/lib/sheinCheck.js';
 import { estDate, PH_DATETIME } from '../../src/lib/format.js';
@@ -112,8 +112,8 @@ export async function startListingJob({ kind, by, scope = {}, io = IO }) {
     if (!(await latestListingJob('snapshot', 'done'))) throw Object.assign(new Error('Re-read Shopify + SHEIN first — a dry run starts from the last read.'), { status: 409 });
     if (!Array.isArray(scope.productIds) || !scope.productIds.length) throw Object.assign(new Error('Pick the products to dry-run.'), { status: 400 });
     const ops = scope.ops || ['add_sku'];
-    if (!ops.length || ops.some((o) => !PREVIEW_OPS.includes(o)) || (ops.includes('add_sku') && ops.length > 1) || (ops.includes('publish') && ops.length > 1)) {
-      throw Object.assign(new Error('A dry run is either “add sizes”, “update” (price and/or edit), or “publish” — never mixed.'), { status: 400 });
+    if (!ops.length || ops.some((o) => !PREVIEW_OPS.includes(o)) || (ops.includes('add_sku') && ops.length > 1) || (ops.includes('publish') && ops.length > 1) || (ops.includes('photos') && ops.length > 1)) {
+      throw Object.assign(new Error('A dry run is either “add sizes”, “update” (price and/or edit), “publish” or “replace photos” — never mixed.'), { status: 400 });
     }
   }
   const st = await io.sheinStatus().catch(() => null);
@@ -324,7 +324,7 @@ async function computeAndSave({ products, payloads, sizes, io, snapshot = false,
 // SHEIN's rules / templates / permissions for the mapped categories, brand maps + list, attr defaults, D6.
 async function publishContext(maps, market) {
   const [categoryMaps, brandMaps, attrDefaults, box, brandsRow, unconf, phCounts] = await Promise.all([listCategoryMaps(), listBrandMaps(), listAttrDefaults(), readBoxDefaults(), getListingCache('brands', 'store'), listPublishUnconfirmed(),
-    phPhotoCounts().catch(() => new Map())]);
+    phPhotoKeys().catch(() => new Map())]);
   // re-review G1: a product with a publish SHEIN never confirmed shows publish_unconfirmed (no new publish)
   const unconfirmed = new Map(); for (const x of unconf) if (!unconfirmed.has(x.shopify_product_id)) unconfirmed.set(x.shopify_product_id, { itemId: Number(x.id), jobId: Number(x.job_id) });
   const cats = [...new Set(categoryMaps.map((m) => Number(m.category_id)))]; const types = [...new Set(categoryMaps.map((m) => Number(m.product_type_id)))];
@@ -337,8 +337,10 @@ async function publishContext(maps, market) {
   // "Use PH edited photos" on: the dry run sends the style's PH photos when it has any (else Shopify's),
   // so the photo count is theirs — and with none, the photo line says so (it read Shopify's count only).
   return (p, pv, excludedVariants) => {
-    const ph = pv?.use_ph_photos ? (phCounts.get(String(p?.style || '').trim().toUpperCase()) || 0) : null;
-    const prod = ph ? { ...p, imageCount: ph, phPhotos: ph } : { ...p, phPhotos: ph };
+    const keys = phCounts.get(String(p?.style || '').trim().toUpperCase()) || new Set();
+    const ph = pv?.use_ph_photos ? keys.size : null;
+    // the photos a person left out come off the count of the source in use
+    const prod = ph ? { ...p, imageCount: countAfterSkip(ph, pv?.photo_skip, true, keys), phPhotos: ph } : { ...p, imageCount: countAfterSkip(p?.imageCount, pv?.photo_skip, false, keys), phPhotos: ph };
     return publishReadiness(prod, { ...ctx, productRow: pv, excludedVariants, market });
   };
 }
@@ -499,7 +501,7 @@ async function runProbe(job, io) {
 //            one stock-only step; rejected → failed (review_rejected, SHEIN's failedReason).
 
 const PREVIEW_MAX = 300;
-export const PREVIEW_OPS = ['add_sku', 'price', 'edit', 'publish'];   // Phase 2: add_sku · Phase 3: price, edit · Phase 4: publish (alone)
+export const PREVIEW_OPS = ['add_sku', 'price', 'edit', 'publish', 'photos'];   // Phase 2: add_sku · Phase 3: price, edit · Phase 4: publish (alone) · 2026-11-11: photos (alone)
 const DEFER_SEC = 30 * 60;                 // SHEIN is reviewing an earlier edit → try again in 30 min
 // No answer: first look after 5 min (SHEIN receives a partialEdit asynchronously, so the seller-SKU
 // check may lag — review S2), then 15 and 30 min.
@@ -518,6 +520,7 @@ export function sendState(op, plan) {
   if (op === 'price') return (plan?.prices || []).map((x) => [x.skuCode, x.site, x.base ?? x.from, x.endsSpecial ?? null]);
   if (op === 'edit') return { v: plan?.preVersion || null, on: (plan?.mallOn || []).map((x) => [x.skuCode, 2]), sku: (plan?.relinks || []).map((x) => [x.skuCode, x.from]) };
   if (op === 'publish') return (plan?.sizes || []).map((z) => z.sku).sort();   // spec 4.2: productId|publish|bodyHash|sha(skus)
+  if (op === 'photos') return { v: plan?.preVersion || null };   // the same photos again after SHEIN moved on = a new send
   return null;   // add_sku: a new seller SKU is never added twice anyway
 }
 const est = (d) => `${PH_DATETIME.format(d instanceof Date ? d : new Date(d))} EST`;
@@ -642,6 +645,7 @@ async function buildItem(it, jctx, io, log) {
   const payload = spuPayload(spu);
   if (!payload) return { body: null, plan: { spu: spuName, blockers: [blocker('not_on_shein_product')], sizes: [], relinks: [], skipped: [], notes: [] } };
   if (it.op === 'price' || it.op === 'edit') return buildResync(it, { d, product, spu, payload, spuName, lg, io, jctx });
+  if (it.op === 'photos') return buildPhotoEdit(it, { d, product, spu, payload, spuName, lg, io, jctx });
   const sizes = await readSizeLists([payload], { io, log: lg, fetch: true });
   const tpl = payload.productTypeId != null ? sizes.templates.get(Number(payload.productTypeId)) || null : null;
   const attr = tpl?.attributeId ?? null;   // the template's size attribute (M2) — the permission is for THAT one
@@ -714,10 +718,12 @@ async function runPreview(job, io) {
     quota_available: ok.find((i) => i.op === 'publish' && i.plan?.quota)?.plan.quota.available ?? null,
     sizes_skipped: items.reduce((n, i) => n + (i.plan?.skipped?.length || 0), 0),
     review_open: ok.filter((i) => i.plan?.reviewOpen).length,
+    photo_edits: ok.filter((i) => i.op === 'photos').length,
+    photos_sent: ok.filter((i) => i.op === 'photos').reduce((n, i) => n + (i.plan?.images?.length || 0), 0),
     ...await countSheinApiLog(job.id).then((c) => ({ shein_calls: c.n, shein_writes: c.writes })),
   };
   await finishListingJob(job.id, PROC_ID, ok.length
-    ? { status: 'awaiting_confirm', phase: (job.scope?.ops || ['add_sku']).includes('add_sku')
+    ? { status: 'awaiting_confirm', phase: (job.scope?.ops || []).includes('photos') ? `Dry run ready — new photos for ${ok.length} product${ok.length === 1 ? '' : 's'}. Nothing was sent.` : (job.scope?.ops || ['add_sku']).includes('add_sku')
       ? `Dry run ready — ${ok.length} product${ok.length === 1 ? '' : 's'}, ${counts.sizes} size${counts.sizes === 1 ? '' : 's'} to add. Nothing was sent.`
       : `Dry run ready — ${ok.length} change${ok.length === 1 ? '' : 's'}: ${counts.prices} price${counts.prices === 1 ? '' : 's'}, ${counts.sizes_on} size${counts.sizes_on === 1 ? '' : 's'} back on, ${counts.relinks} SKU fix${counts.relinks === 1 ? '' : 'es'}, ${counts.titles} title${counts.titles === 1 ? '' : 's'}. Nothing was sent.`, counts }
     : { status: 'done', phase: 'Dry run finished — nothing to send', counts });
@@ -974,6 +980,11 @@ async function didItArrive(it, io, log) {
     const codes = prices.map((x) => ({ skuCode: x.skuCode, site: x.site, to: x.to, variantId: x.variantId, status: shown(x) ? 1 : x.rise ? 2 : 0 }));
     return { arrived: !!prices.length && codes.every((c) => c.status === 1), risesPending: codes.some((c) => c.status === 2), codes };
   }
+  if (it.op === 'photos') {   // a photo edit we can't see: a NEW document version in review since the dry run
+    const doc = (await io.sheinDocStates([it.spu], lg)).get(it.spu);
+    const fresh = doc?.version && doc.version !== it.plan?.preVersion && (doc.skcList || []).some((x) => [1, 5].includes(Number(x.documentState)));
+    return fresh ? { arrived: true, version: doc.version, state: (doc.skcList || [])[0]?.documentState ?? null, skuCodes: [] } : { arrived: false };
+  }
   if (it.op === 'edit') {   // a partialEdit we can't see: a NEW document version in review since the dry run, or our relink targets now in the store
     const doc = (await io.sheinDocStates([it.spu], lg)).get(it.spu);
     const fresh = doc?.version && doc.version !== it.plan?.preVersion && (doc.skcList || []).some((x) => [1, 5].includes(Number(x.documentState)));
@@ -997,6 +1008,40 @@ async function didItArrive(it, io, log) {
 }
 async function recomputeAfter(io = IO) {
   if (await latestListingJob('snapshot', 'done')) await recomputeStored({ io }).catch((e) => console.error('[shein-listing] recompute', e.message));
+}
+
+/* ------------------- 2026-11-11: replace the photos of a product on SHEIN ------------------- */
+// The live photos carry text / a logo SHEIN now rejects — and every later edit of the shoe is rejected
+// with them. The person picks the photos (the same Choose photos as publishing: PH edited or Shopify's,
+// minus the left-out ones); ONE partialEdit replaces the SKC's photos (+ each size's photo, + the SPU's
+// when SHEIN keeps them) → SHEIN's review. The approved version stays live meanwhile.
+async function buildPhotoEdit(it, { d, product, spu, payload, spuName, lg, io, jctx = {} }) {
+  const fill = await fillCache(payload.categoryId, io, lg).catch((e) => { if (fatal(e)) throw e; return null; });
+  const docs = await io.sheinDocStates([spuName], lg);
+  const reviewOpen = (docs.get(spuName)?.skcList || []).some((x) => [1, 5].includes(Number(x.documentState)));
+  const attrs = await editAttrs(spu, { io, log: lg });
+  // the picture plan of THIS product: SHEIN keeps SPU photos → the category's (new) plan, else the old one
+  const pFill = spuHasSpuPhotos(spu) ? fill : {};
+  const ip = imagePlan(pFill);
+  const finish = (r) => {
+    r.plan.reviewOpen = reviewOpen;
+    r.plan.preVersion = docs.get(spuName)?.version || null;
+    r.plan.productTitle = d.product.title || null;
+    return { body: r.body, plan: r.plan, hash: r.body ? bodyHash(r.body) : null, variantIds: [], spuName };
+  };
+  const pre = planPhotoEdit({ spu, fill, fillUnread: !fill, ip, images: null, attrs });
+  if (pre.plan.blockers.some((b) => !['note', 'review'].includes(BLOCKERS[b.code]?.level))) return finish(pre);
+  // Security H2: only a dry run an admin / Connect-integrations holder started converts photos
+  if (!jctx.convertPhotos) {
+    pre.plan.notes.push(blocker('photos_need_priv'));
+    pre.plan.photos = { converted: false, why: 'needs_priv' };
+    return finish(pre);
+  }
+  const src = await sourcePhotos(d.product, product);
+  const images = await convertPhotos({ urls: src.urls.slice(0, 11), fill: pFill, io, log: lg });
+  const r = planPhotoEdit({ spu, fill, fillUnread: !fill, ip, images, attrs });
+  r.plan.photos = { source: src.source, count: src.urls.length, skipped: src.skipped, converted: images.conversions, cached: images.cached };
+  return finish(r);
 }
 
 /* ---------------------- Phase 3: re-sync Needs update (price · edit) ---------------------- */
@@ -1195,6 +1240,11 @@ export async function applyReview(item, verdict, { failedReason = null, code = '
       return { item: item.id, verdict: 'waiting' };
     }
     return { item: item.id, verdict, ...r };
+  }
+  if (item.op === 'photos') {   // the new photos are live: refresh what we know; sizes SHEIN rejected before go again by Add missing sizes
+    await updateListingItem(item.id, { status: 'done', checkedNow: true, documentState: state ?? 2, error: null, blockers: item.blockers || [] });
+    await afterApplied(item, io);
+    return { item: item.id, verdict };
   }
   if (item.op === 'edit' || item.op === 'price') {   // Phase 3: SHEIN took it — refresh what we know, the sizes are in step
     await updateListingItem(item.id, { status: 'done', checkedNow: true, documentState: state ?? 2, error: null, blockers: item.blockers || [] });

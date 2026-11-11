@@ -10,12 +10,12 @@ import { downloadCSV } from '../lib/csv.js';
 import { estToday } from '../lib/format.js';
 import { fmt, when, NEEDS_PRIV } from '../components/SheinListingsBits.jsx';
 import { DryRunView } from '../components/SheinDryRunSheet.jsx';
-import { isUpdateOps, isPublishOps } from '../lib/sheinListings.js';
+import { isUpdateOps, isPublishOps, isPhotoOps } from '../lib/sheinListings.js';
 import { JOB_KIND_WORDS, JOB_WORDS, plain } from '../lib/sheinWords.js';
 
 export const KIND_LABEL = JOB_KIND_WORDS;
 // A preview says which of the two it is (scope.ops: add sizes, or update prices & sizes).
-export const jobLabel = (j) => (j?.kind === 'preview' ? `Preview · ${isPublishOps(j.scope?.ops) ? 'publish new products' : isUpdateOps(j.scope?.ops) ? 'update prices & sizes' : 'add sizes'}` : KIND_LABEL[j?.kind] || j?.kind);
+export const jobLabel = (j) => (j?.kind === 'preview' ? `Preview · ${isPublishOps(j.scope?.ops) ? 'publish new products' : isPhotoOps(j.scope?.ops) ? 'replace SHEIN photos' : isUpdateOps(j.scope?.ops) ? 'update prices & sizes' : 'add sizes'}` : KIND_LABEL[j?.kind] || j?.kind);
 const JOB_CHIP = { done: 'ok', running: 'info', queued: '', stopped: '', failed: 'bad', interrupted: 'warn', awaiting_confirm: 'violet' };
 const JOB_WORD = JOB_WORDS;
 const ITEM_CHIP = { done: 'ok', failed: 'bad', skipped: '', pending: '', sending: 'info', sent: 'info', in_review: 'violet', deferred: 'warn', changed: 'warn' };
@@ -31,6 +31,7 @@ function result(j) {
   if (j.kind === 'snapshot' && c.products != null) return `${fmt(c.products)} products · ${fmt(c.shein_products)} on SHEIN · ${fmt(c.shein_calls)} reads · ${fmt(c.shein_writes)} changes on SHEIN`;
   if (j.kind === 'probe' && c.categories != null) return `${fmt(c.categories)} categories · ${fmt(c.shein_calls)} reads · ${fmt(c.shein_writes)} changes on SHEIN${c.errors ? ` · ${fmt(c.errors)} errors` : ''}`;
   if (j.kind === 'preview' && c.products != null && isPublishOps(j.scope?.ops)) return `${fmt(c.publishable)} of ${fmt(c.products)} ready to publish · ${fmt(c.publish_sizes)} sizes · ${fmt(c.shein_writes)} changes on SHEIN`;
+  if (j.kind === 'preview' && c.products != null && isPhotoOps(j.scope?.ops)) return `${fmt(c.photo_edits ?? c.sendable)} of ${fmt(c.products)} get new photos · ${fmt(c.photos_sent)} photos · ${fmt(c.shein_writes)} changes on SHEIN`;
   if (j.kind === 'preview' && c.products != null && isUpdateOps(j.scope?.ops)) return `${fmt(c.sendable)} changes · ${fmt(c.prices)} prices (${fmt(c.price_rises)} up) · ${fmt(c.sizes_on)} sizes back on · ${fmt(c.relinks)} SKUs · ${fmt(c.shein_writes)} changes on SHEIN`;
   if (j.kind === 'preview' && c.products != null) return `${fmt(c.sendable)} of ${fmt(c.products)} products to send · ${fmt(c.sizes)} sizes · ${fmt(c.shein_writes)} changes on SHEIN`;
   if (j.kind === 'run' && Object.keys(c).length) return ['in_review', 'done', 'deferred', 'changed', 'failed'].filter((k) => c[k]).map((k) => `${fmt(c[k])} ${({ in_review: 'in review', done: 'done', deferred: 'waiting', changed: 'not sent (Shopify changed)', failed: 'error' })[k]}`).join(' · ') || `${fmt(c.shein_writes || 0)} changes on SHEIN`;

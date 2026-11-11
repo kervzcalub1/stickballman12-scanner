@@ -10,6 +10,8 @@
 //        { ok, products:[{ productId, title, titleOverride, style, vendor, productType, imageUrl, shopifyStatus, inStock,
 //          syncable, sizeGroups, category, productTypeId, skcValueId, usePhPhotos, titleMax, checklist, blocking, ready }],
 //          skipped:[{ productId, title, why }], canWrite, isAdmin }
+// GET  /api/shein/listings?photos=<gid>   (PH ok; Shopify + DB reads) the photos a publish would send, each with
+//      skipped → { ok, source, usePhPhotos, shopify:[{url,key,width,height,skipped}], ph:[{url,key,angle,skipped}], sent, max, stale }
 // GET  /api/shein/listings?probe=1         -> { ok, probe, job }   the last Ask-SHEIN answer
 // POST /api/shein/listings { action }:
 //   snapshot                          re-read Shopify + SHEIN (a server job)          -> { ok, job }
@@ -25,10 +27,11 @@
 //   Phase 3 — Needs update → Synced: preview { …, ops: ['price','edit'] } (or one of them) — price via
 //   product/price/save, edit = ONE partialEdit (sizes back on, SKU relinks, title on OUR products only);
 //   auto_price { on }  admin or Connect integrations: D8's "auto re-sync price" switch (default OFF) -> { ok, autoPrice }
+//   2026-11-11 — replace the photos of shoes ON SHEIN: preview { productIds, ops:['photos'] } (alone) → ONE partialEdit each → SHEIN review.
 //   Phase 4 — publish brand-new products: preview { …, ops:['publish'] } (never mixed; filter = products NOT on SHEIN);
 //     photos are converted (R2 + transform-pic) only when the starter is an admin / Connect integrations holder (security H2);
-//   publish_choices { productId, titleOverride?, skcValueId?, usePhPhotos? } (PH, DB only) -> { ok, product };
-//   publish_choices_bulk { productIds (≤ 100), patch: { skcValueId?, usePhPhotos? }, productTypeId?, titles?: { [productId]: title | null } }
+//   publish_choices { productId, titleOverride?, skcValueId?, usePhPhotos?, photoSkip?: [url] } (PH, DB only) -> { ok, product };
+//   publish_choices_bulk { productIds (≤ 100), patch: { skcValueId?, usePhPhotos?, skipCover? }, productTypeId?, titles?: { [productId]: title | null } }
 //     (PH, DB only; the same validation as publish_choices; a colour needs productTypeId and every product must be
 //     mapped to that SHEIN product type) -> { ok, updated, missing };
 //   publish_again { productIds }  admin or Connect integrations: re-publish after SHEIN rejected the first one -> { ok, products }
@@ -46,11 +49,11 @@ import {
   activeListingJob, latestListingJob, markStaleListingJobs, requestListingStop, cancelQueuedListingJob, setListingExcluded, listingVariantProductIds,
   getSetting, setSetting, getListingItems, updateListingItem, requeueListingJob, resumeListingJob,
   lastPreviewItem, markPublishAgain, setListingPublishChoices,
-  listingShopifyCounts, getListingProductsMany, setListingPublishChoicesMany, listCategoryMaps, listListingCache,
+  listingShopifyCounts, getListingProductsMany, setListingPublishChoicesMany, listCategoryMaps, listListingCache, setListingCoverSkip, productPhotosForSku,
 } from '../_lib/db.js';
-import { publishChecklist, cleanTitle, sizeGroupOf, templateParts } from '../../src/lib/sheinPublish.js';
+import { publishChecklist, cleanTitle, sizeGroupOf, templateParts, photoKey, keepPhotos, isShopifyPhoto, PHOTO_SKIP_MAX } from '../../src/lib/sheinPublish.js';
 import { sheinStatus } from '../_lib/shein.js';
-import { shopifyAdminStore, shopifyEnsureWebhooks } from '../_lib/shopify.js';
+import { shopifyAdminStore, shopifyEnsureWebhooks, shopifyListingProduct } from '../_lib/shopify.js';
 import { startListingJob, startRunJob, resumeJob, recomputeStored, kickListingJobs, PREVIEW_OPS, readAutoPrice, setAutoPrice, lookAgainPublish, sendAgainPublish, readinessChecklist, readinessMany, userThrottle } from '../_lib/shein-listing.js';
 import { hasPrivilege } from '../_lib/buycart.js';
 import { renderBlocker, STATUS_CODES, STATUS_ORDER, TILE_STATUSES, BLOCKERS, summarizePlan, rowSyncable } from '../../src/lib/sheinListings.js';
@@ -162,11 +165,33 @@ export default async function handler(req, res) {
         return { productId: p.shopify_product_id, title: p.title, titleOverride: p.title_override || null, style: p.style, vendor: p.vendor, productType: p.product_type || '',
           imageUrl: p.image_url, shopifyStatus: p.shopify_status, inStock, sizes: variants.filter((v) => v.shopify_variant_id && !v.excluded).length, syncable,
           sizeGroups: groupsOf(variants), category: x?.category || null, productTypeId: x?.category?.productTypeId ?? null, skcValueId: p.skc_value_id == null ? null : Number(p.skc_value_id),
-          usePhPhotos: !!p.use_ph_photos, titleMax: x?.titleMax ?? null, checklist, blocking, ready: syncable && !blocking.length, shopifyUrl: adminUrl(p.shopify_product_id) };
+          usePhPhotos: !!p.use_ph_photos, photoSkip: (p.photo_skip || []).length, coverSkipped: !!p.image_url && (p.photo_skip || []).includes(photoKey(p.image_url)), titleMax: x?.titleMax ?? null, checklist, blocking, ready: syncable && !blocking.length, shopifyUrl: adminUrl(p.shopify_product_id) };
       });
       // the shoes that need fixing first (most ✕ first), then the ready ones
       products.sort((a, b) => Number(a.ready) - Number(b.ready) || b.blocking.length - a.blocking.length || String(a.title || '').localeCompare(String(b.title || '')));
       return send(res, 200, { ok: true, products, skipped, canWrite, isAdmin });
+    }
+    if (qs.has('photos')) {
+      // The photos a publish would send (2026-11-11) — Shopify's (live read) and the PH team's edited ones for the
+      // style — each with skipped: true when a person left it out. Reads only (Shopify + our DB), never SHEIN.
+      const ppid = t(qs.get('photos'), 200);
+      if (!ppid || ppid.startsWith('shein:')) return send(res, 400, { ok: false, error: 'Which Shopify product? (photos=<id>)' });
+      const d = await getListingProduct(ppid);
+      if (!d) return send(res, 404, { ok: false, error: 'That product isn’t in SHEIN Listings (yet) — re-read Shopify + SHEIN.' });
+      const shop = await shopifyListingProduct(ppid).catch((e) => ({ error: e.message }));
+      if (shop?.error) return send(res, 503, { ok: false, error: `Shopify didn’t answer: ${shop.error}` });
+      const style = shop?.product?.style || d.product.style || '';
+      const ph = style ? await productPhotosForSku(style).catch(() => []) : [];
+      const skip = new Set(d.product.photo_skip || []);
+      const shopify = (shop?.product?.images || []).map((i) => ({ url: i.url, key: photoKey(i.url), width: i.width ?? null, height: i.height ?? null, skipped: skip.has(photoKey(i.url)) }));
+      const phList = ph.map((x) => ({ url: x.url, key: photoKey(x.url), angle: x.angle || null, skipped: skip.has(photoKey(x.url)) }));
+      const usePh = !!d.product.use_ph_photos && phList.length > 0;
+      const used = usePh ? phList : shopify;
+      const kept = keepPhotos(used.map((x) => x.url), [...skip]);
+      // a left-out photo no longer on Shopify / the PH list (stale) — shown so it can be put back
+      const known = new Set([...shopify, ...phList].map((x) => x.key));
+      return send(res, 200, { ok: true, productId: ppid, style, usePhPhotos: !!d.product.use_ph_photos, source: usePh ? 'ph_edited' : 'shopify',
+        shopify, ph: phList, sent: Math.min(kept.urls.length, 11), max: 11, stale: [...skip].filter((k) => !known.has(k)).map((k) => ({ key: k, shopify: isShopifyPhoto(k) })) });
     }
     const pid = t(qs.get('product'), 200);
     if (pid) {
@@ -259,7 +284,7 @@ export default async function handler(req, res) {
         }
         if (!productIds.length) return send(res, 400, { ok: false, error: 'Pick the products to dry-run (none of these is on SHEIN yet).' });
         const ops = b.ops == null ? ['add_sku'] : (Array.isArray(b.ops) ? [...new Set(b.ops.map(String))] : []);
-        if (!ops.length || ops.some((o) => !PREVIEW_OPS.includes(o)) || (ops.includes('add_sku') && ops.length > 1) || (ops.includes('publish') && ops.length > 1)) return send(res, 400, { ok: false, error: 'ops: ["add_sku"], "price" and/or "edit", or ["publish"] — never mixed.' });
+        if (!ops.length || ops.some((o) => !PREVIEW_OPS.includes(o)) || (ops.includes('add_sku') && ops.length > 1) || (ops.includes('publish') && ops.length > 1) || (ops.includes('photos') && ops.length > 1)) return send(res, 400, { ok: false, error: 'ops: ["add_sku"], "price" and/or "edit", ["publish"] or ["photos"] — never mixed.' });
         // endSpecials: a person chose to END live SHEIN specials on these sizes (sent without specialPrice)
         return send(res, 200, { ok: true, job: jobOut(await startListingJob({ kind: 'preview', by, scope: { productIds, ops, filter: b.filter || null, endSpecials: b.endSpecials === true, convertPhotos: canWrite } })) });
       }
@@ -304,6 +329,13 @@ export default async function handler(req, res) {
         }
         if (b.skcValueId !== undefined) { const v = b.skcValueId == null || b.skcValueId === '' ? null : Number(b.skcValueId); if (v != null && !Number.isSafeInteger(v)) return send(res, 400, { ok: false, error: 'That isn’t a SHEIN value id.' }); patch.skcValueId = v; }
         if (b.usePhPhotos !== undefined) patch.usePhPhotos = b.usePhPhotos === true;
+        if (b.photoSkip !== undefined) {
+          const list = b.photoSkip == null ? [] : b.photoSkip;
+          if (!Array.isArray(list) || list.length > PHOTO_SKIP_MAX) return send(res, 400, { ok: false, error: `photoSkip: a list of at most ${PHOTO_SKIP_MAX} photo links.` });
+          const keys = [...new Set(list.map((u) => (typeof u === 'string' && u.length <= 1000 && /^https:\/\//i.test(u) ? photoKey(u) : null)))];
+          if (keys.some((k) => !k)) return send(res, 400, { ok: false, error: 'That isn’t a photo link (https).' });
+          patch.photoSkip = keys;
+        }
         const row = await setListingPublishChoices(pid, patch);
         if (!row) return send(res, 404, { ok: false, error: 'That product isn’t in SHEIN Listings.' });
         await recountAfterChoices();
@@ -320,6 +352,7 @@ export default async function handler(req, res) {
         if (pa.titleOverride !== undefined) return send(res, 400, { ok: false, error: 'A title is per shoe — send titles: { productId: title }.' });
         if (pa.skcValueId !== undefined) { const v = pa.skcValueId == null || pa.skcValueId === '' ? null : Number(pa.skcValueId); if (v != null && !Number.isSafeInteger(v)) return send(res, 400, { ok: false, error: 'That isn’t a SHEIN value id.' }); patch.skcValueId = v; }
         if (pa.usePhPhotos !== undefined) patch.usePhPhotos = pa.usePhPhotos === true;
+        if (pa.skipCover !== undefined && typeof pa.skipCover !== 'boolean') return send(res, 400, { ok: false, error: 'skipCover: true or false.' });
         const titles = [];
         for (const [id, raw2] of titlesIn) {
           const pid2 = t(id, 200); if (!pid2) return send(res, 400, { ok: false, error: 'Which product is that title for?' });
@@ -327,7 +360,8 @@ export default async function handler(req, res) {
           if (title != null && title.length < 2) return send(res, 400, { ok: false, error: 'A SHEIN title needs at least 2 characters.' });
           titles.push([pid2, title]);
         }
-        const hasPatch = Object.keys(patch).length > 0;
+        const cover = pa.skipCover;   // "leave out the cover photo" on all of them (true) / put it back (false)
+        const hasPatch = Object.keys(patch).length > 0 || cover !== undefined;
         if (!titles.length && !(hasPatch && productIds.length)) return send(res, 400, { ok: false, error: 'Nothing to save — pick the products and what to set.' });
         if (hasPatch && !productIds.length) return send(res, 400, { ok: false, error: 'Which products?' });
         const all = [...new Set([...productIds, ...titles.map((x) => x[0])])];
@@ -345,7 +379,9 @@ export default async function handler(req, res) {
           const vals = tpl ? (templateParts(tpl).main?.attribute_value_info_list || []) : null;
           if (vals && !vals.some((v) => Number(v.attribute_value_id) === patch.skcValueId)) return send(res, 400, { ok: false, error: 'That colour isn’t in SHEIN’s list for this product type.' });
         }
-        const updated = await setListingPublishChoicesMany(hasPatch ? productIds.filter((x) => have.has(x)) : [], patch, titles.filter((x) => have.has(x[0])));
+        const picked = hasPatch ? productIds.filter((x) => have.has(x)) : [];
+        const updated = await setListingPublishChoicesMany(Object.keys(patch).length ? picked : [], patch, titles.filter((x) => have.has(x[0])));
+        if (cover !== undefined) for (const x of await setListingCoverSkip(picked, cover)) if (!updated.includes(x)) updated.push(x);
         if (updated) await recountAfterChoices();
         return send(res, 200, { ok: true, updated, missing });
       }

@@ -6863,6 +6863,18 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .shl-pthumbs { display: flex; flex-wrap: wrap; gap: 8px; }
 .shl-pthumb-w { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
 .shl-pthumb { width: 64px; height: 64px; }
+/* SHEIN Listings → Choose photos (leave a photo out before publishing) */
+.shl-pub-photos { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin: 6px 0 8px; }
+.shl-pub-photos .shl-photos { align-self: stretch; }
+.shl-photo-ask { display: flex; flex-direction: column; gap: 10px; text-align: left; max-width: 520px; }
+.shl-photo-ask .shl-pub-acts { justify-content: flex-end; }
+.shl-photos { display: flex; flex-direction: column; gap: 6px; }
+.shl-photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; margin-top: 4px; }
+.shl-photo { display: flex; flex-direction: column; align-items: stretch; gap: 4px; min-width: 0; }
+.shl-photo .xs { text-align: center; overflow-wrap: anywhere; }
+.shl-photo-img { padding: 0; border: 1px solid var(--border); border-radius: 8px; background: #fff; cursor: zoom-in; overflow: hidden; aspect-ratio: 1 / 1; }
+.shl-photo-thumb { width: 100%; height: 100%; object-fit: contain; display: block; border-radius: 0; }
+.shl-photo.off .shl-photo-img { opacity: 0.35; outline: 2px dashed var(--err); outline-offset: -2px; }
 .shl-rt-panel td { background: rgba(255,255,255,0.015); }
 .shl-setup .card .shl-select { max-width: 100%; margin-bottom: 10px; }
 .shl-co-line { grid-template-columns: 20px minmax(0, 1fr); }

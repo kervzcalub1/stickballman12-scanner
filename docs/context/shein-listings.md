@@ -822,6 +822,21 @@ Nikes), so the model must be typed per shoe; and a shoe SHEIN rejected needs its
   untouched, the preview blocks then sends the shoe's model, the other shoe still asked, a picked detail wins, Remove;
   the page: Change → Only this shoe → "· this shoe only" → shared again; details panel = the shoe's editor first.
 
+## A rejected shoe is never treated as live (fixed 2026-11-11)
+**Bug (owner's video, Samba OG IH6828):** after a Publish again preview + a Replace photos preview, the drawer showed
+the LIVE-shoe tools (Photos on SHEIN → Replace SHEIN photos, Add missing sizes) for a shoe SHEIN never approved —
+it found the rejected send only among the last 5 job items, and previews pushed it out. The list bar also counted
+it for "Add missing sizes (1)" / "Replace SHEIN photos (1)"; the photo preview then failed with SHEIN's raw
+"unable to obtain skc information according to spu".
+- `GET ?product=` returns `lastPublishRun` (`lastPublishRunItem` — the latest publish SEND, any age) and `neverLive`
+  (no size carries a SHEIN SKU); the checklist's "preview older than the send" check uses it too.
+- Drawer: `pubRun` from `lastPublishRun`; the live tools (photo section, details-for-edits, Add missing sizes /
+  Update footer) only when `live` = not new, not a rejected publish, and not `neverLive`.
+- List bar: `isLiveOnShein(p)` = an SPU AND `counts.on_shein + counts.shein_only > 0`; `canAdd` and the photo rows use it.
+- Server: an add-sizes / edit / photos item of a never-live shoe → blocker `never_approved` before any SHEIN call.
+- e2e: 5 previews after the rejected send → `lastPublishRun` + `neverLive` + the 18-line checklist; add / photos
+  previews → `never_approved`, 0 spu-info calls.
+
 ## Phase 5 — 4seller cut-over + go-live (built 2026-10-27)
 - **Where:** Setup tab, on top: **Go-live checklist** then **4seller cut-over**; once "4seller paused" is ticked the
   connection strip shows "4seller cut-over: day N of 30 · n of 5 pass" (or "Ready to cancel 4seller") → Setup.

@@ -90,9 +90,12 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
     onDryRun?.([p.shopify_product_id], ['publish']);
   };
   // A shoe WE published: its latest publish send (in SHEIN's review, or refused / rejected → Publish again)
-  const pubRun = !isNew && isShopify ? (d?.jobItems || []).find((i) => i.op === 'publish' && i.kind === 'run') || null : null;
+  // the latest publish SEND, from the server (never only the last 5 items: previews pushed it out — 2026-11-11)
+  const pubRun = !isNew && isShopify ? d?.lastPublishRun || (d?.jobItems || []).find((i) => i.op === 'publish' && i.kind === 'run') || null : null;
   const pubRejected = pubRun?.status === 'failed' && (pubRun.blockers || []).some((b) => b.code === 'review_rejected');
   const republish = !!pubRun && pubRun.status === 'failed' && p?.status !== 'synced';
+  // the live-shoe tools (add sizes, prices, photo swap, details for edits) only for a shoe SHEIN holds sizes of
+  const live = isShopify && !isNew && !republish && !d?.neverLive;
   // SHEIN rejected an edit / publish of this shoe for its photos (watermark, false promises) — 2026-11-11
   const photoReason = [...(p?.blockers || []), ...variants.flatMap((v) => v.blockers || []), ...(pubRun?.blockers || [])]
     .map((b) => (b.code === 'review_rejected' ? b.params?.failedReason || b.sheinSaid : null)).find((x) => isPhotoRejection(x)) || null;
@@ -183,7 +186,7 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                 )}
               </section>}
 
-              {isShopify && !isNew && !republish && attrNeed.length > 0 && (
+              {live && attrNeed.length > 0 && (
                 <section className="shl-d-sec" data-shoe-details="">
                   <h4 className="shl-h4">SHEIN details for this shoe</h4>
                   <p className="muted xs">SHEIN now requires {attrNeed.map((b) => b.params?.attribute || 'a detail').filter((x, i, a) => a.indexOf(x) === i).join(', ')} on this shoe, and refuses every edit (new sizes, SKU fixes, photos) until it has {attrNeed.length === 1 ? 'it' : 'them'}. Set {attrNeed.length === 1 ? 'it' : 'them'} here; the next edit carries {attrNeed.length === 1 ? 'it' : 'them'}.</p>
@@ -197,7 +200,7 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                 <SheinShoeFix p={p} variants={variants} canWrite={!!d.canWrite} connected={connected} open={matchOpen} onSignOut={onSignOut} onReload={load} />
               )}
 
-              {isShopify && !isNew && !republish && (
+              {live && (
                 <section className="shl-d-sec" id="shl-photos-sec" data-photos-sec="">
                   <h4 className="shl-h4">Photos on SHEIN</h4>
                   {photoReason && (
@@ -292,12 +295,12 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
               data-needs-fix={toFix || undefined}
               onClick={isNew ? publishClick : () => onDryRun?.([p.shopify_product_id], ['publish'])}>{busy === 'preview' ? 'Starting…' : isNew && toFix ? `Fix ${fmt(toFix)} first` : 'Publish new product'}</button>
           )}
-          {p && isShopify && !isNew && !republish && (
+          {p && live && (
             <button type="button" className={`btn ${toUpdate.length && !toAddLive.length ? 'ghost' : 'primary'} sm`} disabled={!!busy || !!why || !toAdd.length} data-dry="add"
               title={why || (!toAdd.length ? 'Every Shopify size is already on SHEIN' : `Preview: add ${fmt(toAdd.length)} size${toAdd.length === 1 ? '' : 's'} SHEIN doesn’t have. Nothing is sent until someone confirms.`)}
               onClick={() => onDryRun?.([p.shopify_product_id])}>{busy === 'preview' ? 'Starting…' : 'Add missing sizes'}</button>
           )}
-          {p && isShopify && !isNew && !republish && (
+          {p && live && (
             <button type="button" className={`btn ${toUpdate.length && !toAddLive.length ? 'primary' : 'ghost'} sm`} disabled={!!busy || !!why || !toUpdate.length} data-dry="update"
               title={why || (!toUpdate.length ? 'Nothing on SHEIN differs — no size needs an update' : `Preview: ${fmt(toUpdate.length)} size${toUpdate.length === 1 ? '' : 's'} with a SHEIN price, a size turned off or a wrong SKU. Nothing is sent until someone confirms.`)}
               onClick={() => onDryRun?.([p.shopify_product_id], UPDATE_OPS)}>{busy === 'preview' ? 'Starting…' : 'Update prices & sizes'}</button>

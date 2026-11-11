@@ -22,7 +22,10 @@ const EMPTY = {
 // The two previews a person can start (they never mix: one partialEdit per product at a time).
 export const UPDATE_OPS = ['price', 'edit'];
 // A shoe on SHEIN with an in-stock size SHEIN doesn't have → "Add missing sizes".
-export const canAdd = (p) => !!p?.spu && Number(p.counts?.sizes || 0) > Number(p.counts?.on_shein || 0);
+// Live on SHEIN = SHEIN holds at least one of its sizes (ours or only SHEIN's). A shoe whose publish SHEIN rejected
+// has an SPU but nothing live — the live-shoe tools (add sizes, photo swap) can't touch it (2026-11-11).
+export const isLiveOnShein = (p) => !!p?.spu && Number(p.counts?.on_shein || 0) + Number(p.counts?.shein_only || 0) > 0;
+export const canAdd = (p) => isLiveOnShein(p) && Number(p.counts?.sizes || 0) > Number(p.counts?.on_shein || 0);
 // A product with a size that needs an update (price, turned off, wrong SKU) → "Update prices & sizes".
 export const needsUpdate = (p) => p?.status === 'out_of_date' || Number(p?.counts?.by?.out_of_date || 0) > 0;
 // A Shopify shoe not on SHEIN at all → "Publish new products" (Phase 4).
@@ -282,7 +285,7 @@ export function SheinListingsProducts({ setStatusAll, d, status, q, setQ, brand,
   const pickedUpd = updRows.length;
   const pickedNew = pubRows.length;
   // 2026-11-11: shoes ON SHEIN whose photos can be replaced (the same Shopify gate as every listing sync)
-  const photoRows = pickedRows.filter((p) => p.spu && !String(p.shopify_product_id).startsWith('shein:') && rowSyncable(p)).slice(0, BULK_MAX);
+  const photoRows = pickedRows.filter((p) => isLiveOnShein(p) && !String(p.shopify_product_id).startsWith('shein:') && rowSyncable(p)).slice(0, BULK_MAX);
   // a ticked new shoe that still has a ✕ to fix → the button opens the fix step first, never the preview
   const pubNeedsFix = pubRows.filter((p) => ['blocked', 'error'].includes(p.status)).length;
   const deadWhy = [...new Set(deadRows.map(rowSyncWhy))].join(' / ');

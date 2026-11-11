@@ -644,6 +644,9 @@ async function buildItem(it, jctx, io, log) {
   // SHEIN call. The stock sync (shein-live.js) is separate and still sets SHEIN to 0.
   const gate = listingSyncGate(product, new Set(d.variants.filter((v) => v.excluded).map((v) => v.shopify_variant_id)));
   if (gate) return { body: null, plan: { ...(it.op === 'add_sku' ? { title: d.product.title || null } : { op: it.op }), spu: spuName, blockers: [gate], sizes: [], relinks: [], skipped: [], notes: [], prices: [], mallOn: [] } };
+  // never live on SHEIN (no size carries a SHEIN SKU — e.g. our publish was rejected): SHEIN has no colour /
+  // SKUs to edit ("unable to obtain skc information"), so say what to do instead of asking it (2026-11-11)
+  if (!d.variants.some((v) => v.shein_sku)) return { body: null, plan: { op: it.op, spu: spuName, blockers: [blocker('never_approved')], sizes: [], relinks: [], skipped: [], notes: [], prices: [], mallOn: [] } };
   const lg = log({ spu: spuName, itemId: it.id });
   const spu = await io.sheinSpuInfo(spuName, lg);
   const payload = spuPayload(spu);

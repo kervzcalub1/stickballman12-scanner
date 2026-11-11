@@ -51,7 +51,7 @@ import {
   dbConfigured, listListingProducts, listingSummary, getListingProduct, listingItemsForProduct, listSheinApiLog, getListingCache, getListingJob,
   activeListingJob, latestListingJob, markStaleListingJobs, requestListingStop, cancelQueuedListingJob, setListingExcluded, listingVariantProductIds,
   getSetting, setSetting, getListingItems, updateListingItem, requeueListingJob, resumeListingJob,
-  lastPreviewItem, markPublishAgain, setListingPublishChoices, setListingCategoryPick, setListingAttrOverride,
+  lastPreviewItem, markPublishAgain, setListingPublishChoices, setListingCategoryPick, setListingAttrOverride, lastPublishRunItem,
   listingShopifyCounts, getListingProductsMany, setListingPublishChoicesMany, listCategoryMaps, listListingCache, setListingCoverSkip, productPhotosForSku,
 } from '../_lib/db.js';
 import { publishChecklist, cleanTitle, sizeGroupOf, templateParts, photoKey, keepPhotos, isShopifyPhoto, PHOTO_SKIP_MAX, shoeCategory, attrValueProblem } from '../../src/lib/sheinPublish.js';
@@ -205,13 +205,13 @@ export default async function handler(req, res) {
     if (pid) {
       const d = await getListingProduct(pid);
       if (!d) return send(res, 404, { ok: false, error: 'That product isn’t in SHEIN Listings (yet) — re-read Shopify + SHEIN.' });
-      const [items, log] = await Promise.all([listingItemsForProduct(pid, d.product.spu, 5), d.product.spu ? listSheinApiLog({ spu: d.product.spu, limit: 20 }) : []]);
+      const [items, log, pubRun] = await Promise.all([listingItemsForProduct(pid, d.product.spu, 5), d.product.spu ? listSheinApiLog({ spu: d.product.spu, limit: 20 }) : [], lastPublishRunItem(pid)]);
       let checklist = null; let checklistFrom = null;
       // + a shoe SHEIN rejected (never live): fixing it (category, details, photos) happens before Publish again (2026-11-11)
       if (!String(pid).startsWith('shein:') && (!d.product.spu || neverLive(d))) {
         const last = await lastPreviewItem(pid, 'publish');
         // a preview from BEFORE the last send judged the rejected publish — read the readiness instead
-        const sentAt = Math.max(0, ...items.filter((i) => i.op === 'publish' && i.kind === 'run').map((i) => new Date(i.sent_at || i.updated_at || 0).getTime()));
+        const sentAt = pubRun ? new Date(pubRun.sent_at || pubRun.updated_at || 0).getTime() : 0;
         if (last?.plan?.checklist && new Date(last.updated_at).getTime() > sentAt) { checklist = last.plan.checklist; checklistFrom = { jobId: Number(last.job_id), at: last.updated_at }; }
         else {
           // the readiness from the cache — a line SHEIN's rules weren't read for is null ("not read yet"), never ✓
@@ -220,7 +220,10 @@ export default async function handler(req, res) {
           checklistFrom = { readiness: true };
         }
       }
+      const itemOut = (i) => ({ ...(isAdmin ? i : { ...i, body: undefined, response: undefined }), summary: summarizePlan(i.plan) || i.error || null });
       return send(res, 200, { ok: true, product: productOut(d.product), variants: d.variants.map(variantOut), canWrite, isAdmin, checklist, checklistFrom,
+        // never live on SHEIN (not on it, or our publish was rejected) → no live-shoe tools (add sizes, photo swap…)
+        neverLive: !String(pid).startsWith('shein:') && neverLive(d), lastPublishRun: pubRun ? itemOut(pubRun) : null,
         jobItems: items.map((i) => ({ ...(isAdmin ? i : { ...i, body: undefined, response: undefined }), summary: summarizePlan(i.plan) || i.error || null })),
         log: log.map((l) => (isAdmin ? l : { ...l, request: undefined, response: undefined })) });
     }

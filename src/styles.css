@@ -3026,6 +3026,22 @@ button.box-existing-size:hover { border-color: var(--primary); }
 .po-scan-failed ul { margin: 6px 0 0; padding-left: 18px; }
 .po-scan-failed-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .po-scan-looking { margin: 6px 0 0; }
+/* Rapid scan (the supplier's whole-order list): scans that wait for a size / a SKU. */
+.po-finish-panel { margin-top: 12px; padding: 10px; border: 1px solid rgba(224,163,63,0.5); border-radius: 10px; background: rgba(224,163,63,0.07); }
+.po-finish-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.po-finish-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.po-finish { padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); min-width: 0; }
+.po-finish-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.po-finish-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.po-finish-why code { overflow-wrap: anywhere; }
+.po-finish-sku { display: flex; gap: 8px; margin: 8px 0; }
+.po-finish-sku input { flex: 1; min-width: 0; }
+.po-finish .size-chips { margin-top: 8px; }
+.po-finish-fields { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.po-finish-fields .sz { width: 116px; padding: 8px 10px; }
+.po-finish-fields .qty-stepper .step { min-width: 40px; min-height: 40px; }
+.po-finish-actions { display: flex; margin-top: 10px; }
+.po-finish-actions .btn { flex: 1; }
 
 .po-list { display: flex; flex-direction: column; gap: 10px; }
 .po-card { text-align: left; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 8px; color: var(--text); }

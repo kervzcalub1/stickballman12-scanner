@@ -46,9 +46,10 @@ export const SUPPLIER_ARTICLES = [
       'You can only add or change items while the order is a draft and that label is still open.',
       'Scanning here records what you INTEND to ship. It does not create stock on our side — we scan the box in ourselves when it lands.',
       'If a line says "Entered for you by … Staff", we typed it from a list you sent. Edit it if it is wrong, and it becomes yours.',
+      'One list for the whole order, not split by box? On the order’s "Order manifest" card tap "📷 Scan the whole-order manifest" (every scan is one pair; a code we can’t place, or a SKU you type, waits below for its size and quantity while you keep scanning) or "📋 Paste the whole-order manifest". Check the list on that card, then close and ship the boxes with nothing listed on them.',
     ],
     related: ['supplier-close-ship', 'supplier-tracking', 'po-onbehalf'],
-    keywords: ['scan', 'barcode', 'sku', 'size', 'quantity', 'label', 'box', 'pack', 'draft'],
+    keywords: ['scan', 'barcode', 'sku', 'size', 'quantity', 'label', 'box', 'pack', 'draft', 'whole order', 'order manifest', 'scan gun'],
   },
   {
     id: 'supplier-store-order',

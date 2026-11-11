@@ -17,8 +17,8 @@
 // the "first scan's code stamped on every size" bug ([[upc-is-per-size]]).
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import { getPoBox, getPo, addPoScan, addPoOrderScan, poHasBoxLines, setPoManifestScope, dbConfigured } from '../_lib/db.js';
-import { manifestEditBlock, isReplacementBox, money, isBoxesOrder } from '../_lib/po-manifest.js';
-import { declaresPerBox, hasOrderedList } from '../../src/lib/postatus.js';
+import { manifestEditBlock, supplierOrderListBlock, isReplacementBox, money, isBoxesOrder } from '../_lib/po-manifest.js';
+import { declaresPerBox } from '../../src/lib/postatus.js';
 
 const MAX_SHOES = 150;
 const MAX_LINES = 1000;
@@ -73,13 +73,10 @@ export default async function handler(req, res) {
       // while it's still a draft (once every label has shipped it's PH's to correct), and
       // never onto an order raised from a buying request — that order-level list is OUR
       // receipt ('order+box'), not the supplier's account of what they sent.
+      // The same gate as the supplier's one-at-a-time scan (po/scan-order).
       if (user.role === 'supplier' && !isPrivileged(user.role)) {
-        if (Number(po.supplier_user_id) !== Number(user.uid))
-          return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
-        if (hasOrderedList(po))
-          return send(res, 409, { ok: false, error: 'This order lists what you send per box — add items to one of your labels.' });
-        if (po.status !== 'draft')
-          return send(res, 409, { ok: false, error: 'Every label on this order has shipped — the manifest can no longer be edited here.' });
+        const blocked = supplierOrderListBlock({ po, user });
+        if (blocked) return send(res, blocked.code, { ok: false, error: blocked.error });
       }
       if (po.by_store)
         return send(res, 409, { ok: false, error: 'This order is split by store — paste it as a store list (one "Store:" line per store).' });

@@ -5463,7 +5463,12 @@ export async function poBoxLineCounts(poId) {
 
 // Whole-order manifest (Path C): add/increment a line against the PO itself (no label).
 // Conflict target is the partial unique index on (po_id, sku, size) WHERE po_box_id IS NULL.
-export async function addPoOrderScan({ poId, sku, size, dimensions = null, qty, name, upc, colorway, gender, unitCost, tip, enteredBy = null, enteredOnBehalf = false }) {
+// `keepPrice` (po/scan-order — a SCAN, 2026-11-12): a pair added to a line that already has a
+// price never changes it; an unpriced line takes the scan's price. A scan carries the
+// window's sticky "price for next scans", which is easy to leave set across shoes — the
+// price is changed on the list, deliberately. Without it (the paste, a raised cart PO) a
+// price sent replaces the stored one, as before.
+export async function addPoOrderScan({ poId, sku, size, dimensions = null, qty, name, upc, colorway, gender, unitCost, tip, enteredBy = null, enteredOnBehalf = false, keepPrice = false }) {
   const sql = db();
   const rows = dimensions
     ? await sql`
@@ -5473,7 +5478,8 @@ export async function addPoOrderScan({ poId, sku, size, dimensions = null, qty, 
               ${enteredBy ?? null}, ${!!enteredOnBehalf})
       ON CONFLICT (po_id, sku, size, dimensions) WHERE po_box_id IS NULL AND dimensions IS NOT NULL DO UPDATE
         SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
-            unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
+            unit_cost         = CASE WHEN ${!!keepPrice}::boolean THEN COALESCE(po_lines.unit_cost, EXCLUDED.unit_cost)
+                                 ELSE COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost) END,
             tip               = COALESCE(EXCLUDED.tip, po_lines.tip),
             name              = COALESCE(EXCLUDED.name, po_lines.name),
             entered_by        = EXCLUDED.entered_by,
@@ -5488,7 +5494,8 @@ export async function addPoOrderScan({ poId, sku, size, dimensions = null, qty, 
               ${enteredBy ?? null}, ${!!enteredOnBehalf})
       ON CONFLICT (po_id, sku, size) WHERE po_box_id IS NULL AND dimensions IS NULL AND po_store_id IS NULL DO UPDATE
         SET qty_expected      = po_lines.qty_expected + EXCLUDED.qty_expected,
-            unit_cost         = COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost),
+            unit_cost         = CASE WHEN ${!!keepPrice}::boolean THEN COALESCE(po_lines.unit_cost, EXCLUDED.unit_cost)
+                                 ELSE COALESCE(EXCLUDED.unit_cost, po_lines.unit_cost) END,
             tip               = COALESCE(EXCLUDED.tip, po_lines.tip),
             name              = COALESCE(EXCLUDED.name, po_lines.name),
             entered_by        = EXCLUDED.entered_by,
@@ -5497,6 +5504,24 @@ export async function addPoOrderScan({ poId, sku, size, dimensions = null, qty, 
       RETURNING *
     `;
   return rows[0];
+}
+
+// "Shelf price ea — all sizes" (po/line-price): one price (or NULL = no price) on every
+// size line of one SKU in the order's whole-order list. One statement, so every size
+// changes or none does. A line already at that price isn't touched (nor re-stamped).
+// Returns { lines: how many lines the SKU has on the list, updated: how many changed }.
+export async function setPoOrderSkuPrice({ poId, sku, unitCost, enteredBy = null, enteredOnBehalf = false }) {
+  const sql = db();
+  const all = await sql`
+    SELECT count(*)::int AS n FROM po_lines
+     WHERE po_id = ${poId} AND po_box_id IS NULL AND po_store_id IS NULL AND upper(sku) = upper(${sku})`;
+  const changed = await sql`
+    UPDATE po_lines SET unit_cost = ${unitCost ?? null}, entered_by = ${enteredBy ?? null},
+           entered_on_behalf = ${!!enteredOnBehalf}, updated_at = now()
+     WHERE po_id = ${poId} AND po_box_id IS NULL AND po_store_id IS NULL AND upper(sku) = upper(${sku})
+       AND unit_cost IS DISTINCT FROM ${unitCost ?? null}::numeric
+    RETURNING id`;
+  return { lines: all[0]?.n || 0, updated: changed.length };
 }
 
 /* ---- Store orders (docs/store-orders-plan.md) ----

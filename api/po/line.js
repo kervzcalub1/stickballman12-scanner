@@ -4,10 +4,9 @@
 // the order is archived (`manifestEditBlock`). Changing the size into an existing
 // SKU+size line on the same label merges the two. The supplier edits their own manifest;
 // PH/admin edit ON THEIR BEHALF (re-stamps entered_by + entered_on_behalf on the surviving row).
-import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
+import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { getPoLine, getPoBox, getPo, updatePoLine, addPoComment, dbConfigured } from '../_lib/db.js';
-import { manifestEditBlock, orderListEditBlock, parseMoney, isBoxesOrder, normalizeDimensions } from '../_lib/po-manifest.js';
-import { hasOrderedList } from '../../src/lib/postatus.js';
+import { poLineEditBlock, parseMoney, isBoxesOrder, normalizeDimensions } from '../_lib/po-manifest.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -49,23 +48,19 @@ export default async function handler(req, res) {
     const box = await getPoBox(line.po_box_id);
     const po = await getPo(line.po_id);
     if (!po) return send(res, 404, { ok: false, error: 'Purchase order not found.' });
-    // A supplier is scoped to their own POs; PH/admin can edit any PO on the team's behalf.
-    if (user.role === 'supplier' && !isPrivileged(user.role) && Number(po.supplier_user_id) !== Number(user.uid))
-      return send(res, 403, { ok: false, error: 'You do not have access to this order.' });
-    // On an order raised from a buying request the order-level list is OUR receipt, not
-    // the supplier's manifest — theirs is per label.
-    if (user.role === 'supplier' && !isPrivileged(user.role) && !box && hasOrderedList(po))
-      return send(res, 403, { ok: false, error: 'That list is the order’s receipt — edit the items on your labels instead.' });
+    // A supplier is scoped to their own POs, and never the order-level list of an order
+    // raised from a buying request (OUR receipt; theirs is per label); PH/admin edit any PO
+    // on the team's behalf. A store order's list is gated on the list (confirmed / audited),
+    // not on any label — stores ship before it's typed, so manifestEditBlock's label window
+    // doesn't fit it. The SAME gate `po/line-price` applies (`poLineEditBlock`).
+    const blocked = poLineEditBlock({ user, po, box });
+    if (blocked) return send(res, blocked.code, { ok: false, error: blocked.error });
     // entered_by references users(id); env admin/superadmin have a non-numeric uid, so
     // stamp the on-behalf flag but leave entered_by NULL for them.
     const onBehalf = user.role !== 'supplier';
     const uidNum = Number(user.uid);
     const enteredBy = onBehalf && Number.isInteger(uidNum) ? uidNum : null;
-    // A store order's list is gated on the list (confirmed / audited), not on any label —
-    // stores ship before it's typed, so manifestEditBlock's label window doesn't fit it.
     const storeLine = !box && po.by_store;
-    const blocked = storeLine ? orderListEditBlock({ po, onBehalf }) : manifestEditBlock({ po, box, onBehalf });
-    if (blocked) return send(res, blocked.code, { ok: false, error: blocked.error });
     // A shoe line has no carton to describe, so dimensions are refused there. A box line
     // carries BOTH — the size it was made for and how big it is — so both are editable.
     if (hasDims && !isBoxesOrder(po))

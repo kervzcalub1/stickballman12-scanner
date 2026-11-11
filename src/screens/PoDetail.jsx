@@ -22,7 +22,7 @@ import { PoManifestImport } from '../components/PoManifestImport.jsx';
 import { carrierName } from '../lib/carriers.js';
 import { TrackingLink } from '../components/TrackingLink.jsx';
 import { DeliveryStatus } from '../components/DeliveryStatus.jsx';
-import { PoScanModal, PoLineRow, PoLineHeader } from '../components/PoScanModal.jsx';
+import { PoScanModal, PoLineRow, PoLineHeader, PoOrderLineRows } from '../components/PoScanModal.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLinkBatchModal } from '../components/PoLinkBatch.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
@@ -381,10 +381,13 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                     <ul className={`po-lines po-ov-lines${canEditLines(po) ? ' editable' : ''}`}>
                       {canEditLines(po) && <PoLineHeader boxesOrder={boxesOrder} />}
                       {canEditLines(po)
-                        ? orderLines.map((l) => (
-                          <PoLineRow key={l.id} line={l} disabled={lineBusy === Number(l.id)} boxesOrder={boxesOrder}
-                            attribution={lineAttribution(l)} onSave={(patch) => patchLine(l, patch)} />
-                        ))
+                        ? (
+                          // Grouped by SKU, with one "Shelf price ea — all sizes" per shoe
+                          // that has several sizes — the same rows the supplier's card shows.
+                          <PoOrderLineRows poId={po.id} lines={orderLines} boxesOrder={boxesOrder}
+                            isBusy={(l) => lineBusy === Number(l.id)} onSave={patchLine}
+                            attributionOf={lineAttribution} onApplied={load} onSignOut={onSignOut} />
+                        )
                         : orderLines.map((l) => (
                           <li key={l.id}>
                             <span className="po-line-name">{l.name || l.sku}</span>

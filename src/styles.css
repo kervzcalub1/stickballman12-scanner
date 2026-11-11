@@ -3042,6 +3042,22 @@ button.box-existing-size:hover { border-color: var(--primary); }
 .po-finish-fields .qty-stepper .step { min-width: 40px; min-height: 40px; }
 .po-finish-actions { display: flex; margin-top: 10px; }
 .po-finish-actions .btn { flex: 1; }
+/* Rapid scan: the sticky "Shelf price ea for next scans", above the scan field. */
+.po-sticky-price { display: flex; align-items: flex-end; gap: 6px 12px; flex-wrap: wrap; margin: 0 0 8px; }
+.po-sticky-state { font-size: 13px; color: var(--muted); padding-bottom: 9px; }
+.po-sticky-state b { color: var(--text); }
+.po-sticky-err { flex-basis: 100%; }
+/* A pair added to a line that already had a different price: the line's price was kept. */
+.po-price-kept { padding: 8px 10px; border: 1px solid rgba(224,163,63,0.5); border-radius: 8px; background: rgba(224,163,63,0.07); }
+.po-price-kept ul { margin: 6px 0 0; padding-left: 18px; }
+/* The whole-order list: one "Shelf price ea — all sizes" row above a SKU's sizes. */
+.po-lines li.po-sku-price { flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 10px 6px;
+  border-top: 1px solid var(--border); background: var(--panel-2); border-radius: 8px 8px 0 0; }
+.po-sku-price-head { display: flex; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }
+.po-sku-price-state { color: var(--muted); margin-left: auto; }
+.po-sku-price-state.warn { color: #e0a878; }
+.po-sku-price-set { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.po-sku-price-set .po-money-input input { width: 74px; }
 
 .po-list { display: flex; flex-direction: column; gap: 10px; }
 .po-card { text-align: left; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 8px; color: var(--text); }

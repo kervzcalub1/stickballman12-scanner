@@ -131,6 +131,88 @@ export function PoLineHeader({ boxesOrder = false }) {
   );
 }
 
+// The whole-order list (Path C) as editable rows, grouped by SKU: a SKU with more than one
+// size gets a "Shelf price ea — all sizes" row above its sizes (`po/line-price`, one
+// request, the same gate as one row's price). Each size keeps its own price field, so one
+// size can still differ. Used by the supplier's order card and staff's PO detail.
+export function PoOrderLineRows({ poId, lines, boxesOrder = false, isBusy, onSave, attributionOf, onApplied, onSignOut }) {
+  const groups = [];
+  const byKey = new Map();
+  for (const l of lines) {
+    const k = String(l.sku || '').toUpperCase();
+    if (!byKey.has(k)) { const g = { key: k, sku: l.sku, name: l.name, lines: [] }; byKey.set(k, g); groups.push(g); }
+    byKey.get(k).lines.push(l);
+  }
+  return groups.flatMap((g) => [
+    g.lines.length > 1
+      ? <PoSkuPriceRow key={`sku:${g.key}`} poId={poId} sku={g.sku} name={g.name} lines={g.lines} boxesOrder={boxesOrder}
+          disabled={g.lines.some((l) => isBusy(l))} onApplied={onApplied} onSignOut={onSignOut} />
+      : null,
+    ...g.lines.map((l) => (
+      <PoLineRow key={l.id} line={l} disabled={isBusy(l)} boxesOrder={boxesOrder}
+        onSave={(patch) => onSave(l, patch)} attribution={attributionOf(l)} />
+    )),
+  ]).filter(Boolean);
+}
+
+// One SKU's price state (one price / mixed / n unpriced) and the box that sets it on every
+// size. Applied on Enter or the button, never on blur: it rewrites several rows at once.
+// Blank + apply = clear every size back to "no price" (never $0).
+function PoSkuPriceRow({ poId, sku, name, lines, boxesOrder, disabled, onApplied, onSignOut }) {
+  const priceOf = (l) => (l.unit_cost == null || l.unit_cost === '' ? null : Number(l.unit_cost));
+  const prices = lines.map(priceOf);
+  const distinct = [...new Set(prices.filter((p) => p != null))].sort((a, b) => a - b);
+  const unpriced = prices.filter((p) => p == null).length;
+  const one = distinct.length === 1 && !unpriced ? distinct[0] : null;
+  const $ = (n) => `$${n.toFixed(2)}`;
+  const state = !distinct.length ? `${unpriced} unpriced`
+    : one != null ? `one price · ${$(one)}`
+    : [distinct.length > 1 ? `mixed prices · ${$(distinct[0])}–${$(distinct[distinct.length - 1])}` : `${$(distinct[0])} on ${lines.length - unpriced}`,
+      unpriced ? `${unpriced} unpriced` : ''].filter(Boolean).join(' · ');
+  const [val, setVal] = useState(one != null ? one.toFixed(2) : '');
+  useEffect(() => { setVal(one != null ? one.toFixed(2) : ''); }, [one]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const v = val.trim().replace(/^\$\s*/, '');
+  const n = v === '' ? null : Number(v);
+  const valid = v === '' || (/^\d+(\.\d{1,2})?$/.test(v) && Number.isFinite(n) && n <= 1e7);
+  const noChange = n == null ? !distinct.length : one != null && Math.abs(one - n) < 0.005;
+  const apply = async () => {
+    if (!valid) { setErr(`“${v}” isn’t a price — type it like 41.60, or leave it blank to clear.`); return; }
+    if (noChange || busy) return;
+    setBusy(true); setErr('');
+    try { await api.poLinePrice(Number(poId), sku, n); onApplied(); }
+    catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+    finally { setBusy(false); }
+    return undefined;
+  };
+  const label = boxesOrder ? 'Cost ea — all sizes' : 'Shelf price ea — all sizes';
+  return (
+    <li className="po-sku-price" data-testid="po-sku-price">
+      <div className="po-sku-price-head">
+        <b>{sku}</b>
+        {name && <span className="muted xs">{name}</span>}
+        <span className={`po-sku-price-state xs${unpriced ? ' warn' : ''}`}>{lines.length} sizes · {state}</span>
+      </div>
+      <div className="po-sku-price-set">
+        <label className="po-size-money">
+          <span className="muted xs">{label}</span>
+          <span className="po-money-input">
+            <span className="po-money-sym">$</span>
+            <input inputMode="decimal" placeholder="—" aria-label={`${label} for ${sku}`} value={val} disabled={disabled || busy}
+              onChange={(e) => { setVal(e.target.value); setErr(''); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); apply(); } }} />
+          </span>
+        </label>
+        <button type="button" className="btn sm" disabled={disabled || busy || noChange} onClick={apply}>
+          {busy ? 'Saving…' : n == null && v === '' ? `Clear all ${lines.length} sizes` : `Set all ${lines.length} sizes`}
+        </button>
+      </div>
+      {err && <div className="error sm">{err}</div>}
+    </li>
+  );
+}
+
 // RAPID SCAN (the supplier's whole-order list): a scan that can't go straight in — the
 // barcode gave the shoe but no size, the code wasn't found, a SKU was typed, or only Alias
 // knew the barcode — waits here while the gun carries on. The supplier finishes it: the SKU
@@ -375,7 +457,8 @@ export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, i
     const what = rapid ? `${line.sku} · ${line.size}`
       : [line.size ? `size ${line.size}` : '', line.dimensions || ''].filter(Boolean).join(' · ');
     const key = `${line.sku}|#|${what}`;
-    return [{ key, name: line.name || fallbackName || line.sku, what, qty: line.qty_expected ?? 1 },
+    const price = rapid && line.unit_cost != null && line.unit_cost !== '' ? Number(line.unit_cost) : null;
+    return [{ key, name: line.name || fallbackName || line.sku, what, qty: line.qty_expected ?? 1, price },
       ...rs.filter((r) => r.key !== key)];
   });
 
@@ -461,6 +544,49 @@ export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, i
   // while the order is a draft. Anything that can't go straight in waits in `toFinish`.
   const [toFinish, setToFinish] = useState([]);       // [{ key, why, code, sku, name, …, size, qty, cost, upc }]
   const [finishBusy, setFinishBusy] = useState(null);  // key of the one being added
+  // STICKY "Shelf price ea" for the next scans: typed once, carried by every pair added after
+  // it (instant hits AND Finish cards, which prefill from it but stay editable) until it's
+  // changed or cleared. Blank = no price, never $0. Read through a ref: scans run from the
+  // queue, in closures made a few renders ago.
+  const [sticky, setStickyState] = useState(null);    // number | null
+  const [stickyText, setStickyText] = useState('');
+  const [stickyErr, setStickyErr] = useState('');
+  const stickyRef = useRef(null);
+  const stickyStr = (n) => (n == null ? '' : n.toFixed(2));
+  const setSticky = (n) => {
+    stickyRef.current = n; setStickyState(n); setStickyText(stickyStr(n)); setStickyErr('');
+    // A card whose price nobody has typed follows the sticky price; one they typed keeps theirs.
+    setToFinish((list) => list.map((x) => (x.costTouched ? x : { ...x, cost: stickyStr(n) })));
+  };
+  // Commit what's in the price box. A gun fired while the price box had focus types a
+  // barcode / SKU into it — that's a scan, not a price: it goes to the scanner and the
+  // price box goes back to what it was.
+  const commitSticky = ({ enter = false } = {}) => {
+    const v = stickyText.trim().replace(/^\$\s*/, '');
+    if (v === '') { setSticky(null); return; }
+    if (isUpcCode(v) || /[a-z]/i.test(v)) {
+      setStickyText(stickyStr(stickyRef.current));
+      if (enter) resolve(v);
+      return;
+    }
+    const n = Number(v);
+    if (!/^\d+(\.\d{1,2})?$/.test(v) || !Number.isFinite(n) || n > 1e7) {
+      setStickyText(stickyStr(stickyRef.current));
+      setStickyErr(`“${v}” isn’t a price — type it like 41.60, or leave it blank for no price.`);
+      return;
+    }
+    setSticky(Math.round(n * 100) / 100);
+  };
+  // A pair that went onto a line already carrying a DIFFERENT price: the server kept the
+  // line's price (po/scan-order never overwrites one), and this says so — the gun isn't
+  // stopped, and the price is changed on the list, deliberately.
+  const [priceNotes, setPriceNotes] = useState([]);   // [{ key, text }]
+  const notePriceKept = (sku, size, kept) => {
+    if (!kept) return;
+    const key = `${String(sku).toUpperCase()}|${String(size).toUpperCase()}`;
+    const text = `${sku} · ${size} already at $${Number(kept.price).toFixed(2)} — kept; change it on the list`;
+    setPriceNotes((ns) => [{ key, text }, ...ns.filter((x) => x.key !== key)].slice(0, 20));
+  };
   // A gun fires the same box code again and again; the catalogue allows 40 lookups a
   // minute. A code already answered this session isn't asked again.
   const lookupCacheRef = useRef(new Map());           // code -> product
@@ -502,10 +628,11 @@ export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, i
     if (!w) return;
     writesRef.current.delete(key);
     try {
-      const { line } = await api.poScanOrder({ poId: Number(po.id), sku: w.sku, size: w.size, qty: w.qty,
+      const { line, priceKept } = await api.poScanOrder({ poId: Number(po.id), sku: w.sku, size: w.size, qty: w.qty,
         name: w.name || '', upc: w.upc || '', colorway: w.colorway || '', gender: w.gender || null,
         ...(w.unitCost != null ? { unitCost: w.unitCost } : {}) });
       recordScan(line, w.name);
+      notePriceKept(w.sku, w.size, priceKept);
       addedSoon();
     } catch (e) {
       if (e.unauthorized) { onSignOut(); return; }
@@ -516,10 +643,12 @@ export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, i
   };
   // One pair (or a finished entry's qty) onto the order. Its write runs in the scan queue,
   // so the order on screen is the order scanned.
+  // The price is part of the key: a pair scanned after the sticky price changed is its own
+  // write, so the server can say the line kept the earlier price instead of it being folded in.
   const addPairs = (l, qty = 1) => {
-    const key = `${String(l.sku).toUpperCase()}|${String(l.size).toUpperCase()}`;
+    const key = `${String(l.sku).toUpperCase()}|${String(l.size).toUpperCase()}|${l.unitCost ?? ''}`;
     const w = writesRef.current.get(key);
-    if (w) { w.qty += qty; if (l.unitCost != null) w.unitCost = l.unitCost; return; }
+    if (w) { w.qty += qty; return; }
     writesRef.current.set(key, { ...l, qty });
     enqueue(() => writeLine(key));
   };
@@ -530,7 +659,7 @@ export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, i
       // The same barcode again is another box of it: one more pair on the entry already waiting.
       const same = list.find((x) => x.code && x.code === entry.code && x.why === entry.why);
       if (same) return list.map((x) => (x === same ? { ...x, qty: Math.min(999, x.qty + 1) } : x));
-      return [...list, { size: '', qty: 1, cost: '', ...entry, key: ++finishKey.current }];
+      return [...list, { size: '', qty: 1, cost: stickyStr(stickyRef.current), ...entry, key: ++finishKey.current }];
     });
     setFlash({ type: 'warn', text: entry.why === 'notfound' ? `Not found · ${entry.code} — finish it below, keep scanning`
       : entry.why === 'check' ? `Check the style code on ${entry.sku} below — keep scanning`
@@ -566,7 +695,7 @@ export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, i
       // A UPC is ONE size's box: it goes on the line for the size it named, and no other.
       beepOk();
       setFlash({ type: 'added', text: `+1 · ${base.sku} · ${size}` });
-      addPairs({ ...base, size, upc: c });
+      addPairs({ ...base, size, upc: c, unitCost: stickyRef.current });
       return undefined;
     }
     return queueFinish({ ...base, why: isUpc ? 'size' : 'typed' });
@@ -581,11 +710,12 @@ export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, i
       // The barcode's own UPC only on the size that barcode named — a size picked by hand
       // for a code that didn't say one isn't that code's ([[upc-is-per-size]]).
       const upc = entry.upc && entry.upcSize && entry.upcSize === size ? entry.upc : '';
-      const { line } = await api.poScanOrder({ poId: Number(po.id), sku: entry.sku, size, qty: entry.qty,
+      const { line, priceKept } = await api.poScanOrder({ poId: Number(po.id), sku: entry.sku, size, qty: entry.qty,
         name: entry.name || '', upc, colorway: entry.colorway || '', gender: entry.gender || null,
         ...(moneyOf(entry.cost) != null ? { unitCost: moneyOf(entry.cost) } : {}) });
       beepOk();
       recordScan(line, entry.name);
+      notePriceKept(entry.sku, size, priceKept);
       setFlash({ type: 'added', text: `Added ${entry.qty} · ${entry.sku} · ${size}` });
       dropFinish(entry.key);
       onAdded();
@@ -682,10 +812,11 @@ export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, i
           ...(boxesOrder ? { dimensions: r.dimensions } : {}),
           name: draft.name, upc: draft.upc, colorway: draft.colorway, gender: draft.gender,
           unitCost: r.unitCost, tip: r.tip };
-        const { line } = orderMode
+        const { line, priceKept } = orderMode
           ? await api.poScanOrder({ poId: Number(po.id), ...common })
           : await api.poScan({ poBoxId: Number(box.id), ...common });
         recordScan(line, draft.name);
+        notePriceKept(draft.sku, r.size, priceKept); // po/scan-order keeps a line's own price
       }
       // Carry the last carton declared into the next shoe — a boxes order is normally a
       // run of SKUs in one box, so this is the difference between typing it once and
@@ -871,6 +1002,35 @@ export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, i
             </div>
           </div>
         ) : (<>
+        {/* The sticky price: typed once, on every pair scanned after it. Never takes the
+            focus by itself and never disables anything — Enter here hands the focus back
+            to the scan field. */}
+        {rapid && (
+          <div className="po-sticky-price">
+            <label className="po-size-money">
+              <span className="muted xs">Shelf price ea for next scans</span>
+              <span className="po-money-input">
+                <span className="po-money-sym">$</span>
+                <input inputMode="decimal" placeholder="—" aria-label="Shelf price ea for next scans" value={stickyText}
+                  onChange={(e) => { setStickyText(e.target.value); setStickyErr(''); }}
+                  onBlur={() => commitSticky()}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return;
+                    e.preventDefault();
+                    commitSticky({ enter: true });
+                    // Blur first so the blur's commit sees the box already settled.
+                    setTimeout(() => { e.target.blur?.(); refocusScan(); }, 0);
+                  }} />
+              </span>
+            </label>
+            <span className="po-sticky-state" data-testid="po-sticky-state">
+              {sticky != null
+                ? <>Price for next scans: <b>${sticky.toFixed(2)}</b> · <button type="button" className="linklike" onClick={() => setSticky(null)}>clear</button></>
+                : 'Next scans: no price'}
+            </span>
+            {stickyErr && <div className="error sm po-sticky-err">{stickyErr}</div>}
+          </div>
+        )}
         {/* Never disabled: a disabled field (or a disabled submit button, which blocks the
             gun's Enter) is what made rapid scanning impossible. Scans queue instead. */}
         <form className="searchrow" onSubmit={(e) => { e.preventDefault(); resolve(code); }}>
@@ -901,11 +1061,20 @@ export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, i
             <ul>{failed.map((f, i) => <li key={i}><code>{f.code}</code> — {f.why}</li>)}</ul>
           </div>
         )}
+        {priceNotes.length > 0 && (
+          <div className="po-price-kept sm mt" role="status" data-testid="po-price-kept">
+            <div className="po-scan-failed-head">
+              <b>Added — at the price already on the list:</b>
+              <button type="button" className="btn sm ghost" onClick={() => setPriceNotes([])}>Clear</button>
+            </div>
+            <ul>{priceNotes.map((n) => <li key={n.key}>{n.text}</li>)}</ul>
+          </div>
+        )}
         {error && !paste && <div className="error sm mt">{error}</div>}
         {!draft && !busy && !looking && !paste && !(rapid && (toFinish.length || recent.length)) && (
           <p className="muted sm mt">{boxesOrder
             ? 'Scan or type the SKU printed on the empty box — the shoe’s name fills in, and a scanned UPC fills the size too. Then tap the size each box is for and give its dimensions; a new row starts at the last carton you typed, so a run of sizes is measured once.'
-            : rapid ? 'Scan each box’s UPC — every scan is one pair on the order, straight away (the same box again = one more). A code we can’t place, or a SKU you type, waits below for its size and quantity while you keep scanning. Check the list on the order before you ship.'
+            : rapid ? 'Scan each box’s UPC — every scan is one pair on the order, straight away (the same box again = one more). A code we can’t place, or a SKU you type, waits below for its size and quantity while you keep scanning. Type a shelf price ea above once and every pair after it carries that price, until you change or clear it. Check the list on the order before you ship.'
             : 'Scan a shoe’s UPC to begin — its size auto-fills. Add other sizes with the chips, or “+ Custom” if a size isn’t listed. Re-scanning the same shoe bumps its size by 1.'}</p>
         )}
 
@@ -918,7 +1087,7 @@ export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, i
             <ul className="po-finish-list">
               {toFinish.map((x) => (
                 <PoFinishCard key={x.key} entry={x} busy={finishBusy === x.key} onSignOut={onSignOut}
-                  onChange={(patch) => patchFinish(x.key, patch)} onDismiss={() => dropFinish(x.key)}
+                  onChange={(patch) => patchFinish(x.key, 'cost' in patch ? { ...patch, costTouched: true } : patch)} onDismiss={() => dropFinish(x.key)}
                   onAdd={() => addFinished(x)} onLookUp={lookUpSku}
                   onCodeConfirm={() => { codeDecisionsRef.current.set(x.code, { fix: null }); patchFinish(x.key, { codeCheck: '' }); }}
                   onCodeFix={({ found, sizes, ...fix }) => {
@@ -937,7 +1106,7 @@ export function PoScanModal({ box, po, boxesOrder = false, startPaste = false, i
               {recent.map((r) => (
                 <li key={r.key}>
                   <span className="po-line-name">{r.name}</span>
-                  <span className="po-line-meta">{r.what} · ×{r.qty}</span>
+                  <span className="po-line-meta">{r.what} · ×{r.qty}{r.price != null ? ` · $${r.price.toFixed(2)}` : ''}</span>
                 </li>
               ))}
             </ul>

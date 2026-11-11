@@ -3253,9 +3253,8 @@ await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS publish_a
 await sql(`ALTER TABLE shein_api_log ADD COLUMN IF NOT EXISTS asset BOOLEAN NOT NULL DEFAULT false`);
 
 // ── Order cancellations (docs/context/cancellations.md) ─────────────────────────────
-// The warehouse sends the bot a picture of an order to cancel; the AI reads the platform +
-// order number off it; PH/admin check every row against the photo, then cancel it on the
-// platform and mark it submitted. One row per ORDER (a screenshot of three orders is three
+// The warehouse sends the bot a picture of an order to cancel; it is read on our server and
+// RECORDED (since 2026-11-12 there is no review step). One row per ORDER (a screenshot of three orders is three
 // rows sharing one photo). order_key = the number with punctuation stripped, upper-cased —
 // the duplicate guard: one live row per number (a rejected row doesn't count).
 await sql(`
@@ -3289,9 +3288,21 @@ await sql(`
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
+// 2026-11-12 (owner: "no verification anymore — just record it"): a row is simply
+// RECORDED. `status` no longer drives anything: new rows keep the old default 'to_review'
+// (deliberately NOT a new value — the check below is one definition, and adding a value an
+// older db-setup doesn't know would make that older script die re-adding its constraint on
+// any rollback / shared dev database: the "old-enum time bomb"). 'rejected' now means
+// REMOVED (not an order to cancel) — never listed, never in a message. details_from = where
+// the shoe name / SKU / size came from (our eBay / SHEIN / pre-sell order, the label, the
+// catalogue); order_match = the source of OUR order the number matched ('ebay' | 'shein' |
+// 'presell'), i.e. the number is confirmed.
+await sql(`ALTER TABLE cancellations ADD COLUMN IF NOT EXISTS details_from TEXT`);
+await sql(`ALTER TABLE cancellations ADD COLUMN IF NOT EXISTS order_match TEXT`);
 await sql(`ALTER TABLE cancellations DROP CONSTRAINT IF EXISTS cancellations_status_check`);
 await sql(`ALTER TABLE cancellations ADD CONSTRAINT cancellations_status_check
              CHECK (status IN ('to_review','verified','submitted','rejected'))`);
+await sql(`CREATE INDEX IF NOT EXISTS cancellations_created_idx ON cancellations (created_at DESC)`);
 await sql(`CREATE UNIQUE INDEX IF NOT EXISTS cancellations_live_key_uq
              ON cancellations (order_key) WHERE order_key IS NOT NULL AND status <> 'rejected'`);
 await sql(`CREATE INDEX IF NOT EXISTS cancellations_status_idx ON cancellations (status, created_at DESC)`);
@@ -3316,6 +3327,19 @@ await sql(`
 `);
 await sql(`CREATE UNIQUE INDEX IF NOT EXISTS cancellation_photos_tg_uq
              ON cancellation_photos (tg_chat_id, tg_message_id) WHERE tg_message_id IS NOT NULL`);
+// One reply per BATCH (2026-11-12): the webhook writes the photo row BEFORE it answers
+// Telegram, with the file id, so a restart mid-read can still fetch and read it; replied_at
+// is claimed compare-and-set by whoever sends the batch's reply (the live batcher, or the
+// recovery sweep after a restart), so a reply is sent once. result = what filing it gave
+// (row ids, duplicates, error) — the reply is built from it. platform = what the sender
+// named for it, kept for a re-read after a restart.
+await sql(`ALTER TABLE cancellation_photos ADD COLUMN IF NOT EXISTS tg_file_id TEXT`);
+await sql(`ALTER TABLE cancellation_photos ADD COLUMN IF NOT EXISTS media_group_id TEXT`);
+await sql(`ALTER TABLE cancellation_photos ADD COLUMN IF NOT EXISTS platform TEXT`);
+await sql(`ALTER TABLE cancellation_photos ADD COLUMN IF NOT EXISTS result JSONB`);
+await sql(`ALTER TABLE cancellation_photos ADD COLUMN IF NOT EXISTS replied_at TIMESTAMPTZ`);
+await sql(`CREATE INDEX IF NOT EXISTS cancellation_photos_unreplied_idx
+             ON cancellation_photos (created_at) WHERE replied_at IS NULL AND tg_file_id IS NOT NULL`);
 await sql(`
   CREATE TABLE IF NOT EXISTS cancellation_events (
     id               BIGSERIAL PRIMARY KEY,

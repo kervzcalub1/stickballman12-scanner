@@ -494,7 +494,7 @@ export const PH_HOME_SECTIONS = [
     { key: 'costs', icon: 'costs', title: 'Costs', sub: 'Fill in what a pair cost when the manifest left it off' },
     { key: 'request', icon: 'rescalereq', title: 'Request Rescale', sub: 'Ask the warehouse to recount / rescan a SKU' },
     { key: 'nobox', icon: 'nobox', title: 'No Box / Not Ready', sub: 'Units without a box — view-only, warehouse resolves' },
-    { key: 'cancellations', icon: 'cancellations', title: 'Order Cancellations', sub: 'Orders the warehouse sent to cancel — check against the photo, verify, cancel' },
+    { key: 'cancellations', icon: 'cancellations', title: 'Order Cancellations', sub: 'Orders the warehouse sent to cancel — order #, shoe, SKU, size, by platform and day' },
     { key: 'inboundissues', icon: 'inbound-issues', title: 'Inbound Issues', sub: 'Damaged, short or wrong deliveries — take a case, claim from the supplier, resolve it' },
   ] },
   { title: 'Purchase Orders', accent: 'orders', cards: [

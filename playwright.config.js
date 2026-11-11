@@ -113,6 +113,9 @@ export default defineConfig({
       // on localhost (e2e/cancellations.spec.js) and keeps the pictures in the database, so
       // a run never spends OpenAI money or writes into the real R2 bucket.
       CANCEL_AI: 'on', CANCEL_AI_URL: 'http://127.0.0.1:5196/v1/chat/completions', CANCEL_PHOTOS_IN_DB: '1',
+      // One reply per batch of photos waits this long after the last read (4 s in real life);
+      // shorter here so the suite doesn't sit in it. The restart sweep never runs under Vite.
+      CANCEL_BATCH_QUIET_MS: '1500', CANCEL_REPLY_WORKER: 'off',
       // Receipt reading (buying requests + store orders) the same way: a fake on localhost,
       // so no test can spend OpenAI money on a receipt (api/_lib/receipt-ai.js).
       RECEIPT_AI_URL: 'http://127.0.0.1:5195/v1/chat/completions',

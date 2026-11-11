@@ -191,7 +191,7 @@ export const HOME_SECTIONS = [
   { title: 'Sell & Ship', accent: 'shipping', cards: [
     { key: 'sold', icon: '💰', title: 'Mark Sold', sub: 'Scan VINs to mark sold (delists from all stores)' },
     { key: 'shipped', icon: '📦', title: 'Mark Shipped', sub: 'Scan VINs to mark shipped' },
-    { key: 'cancellations', icon: '🛑', title: 'Order Cancellations', sub: 'Orders sent to cancel — photo on Telegram, read for you, checked by PH before it is cancelled' },
+    { key: 'cancellations', icon: '🛑', title: 'Order Cancellations', sub: 'Orders sent to cancel — photo on Telegram, recorded with the shoe, by platform and day' },
   ] },
   { title: 'Browse & Listings', accent: 'listing', cards: [
     { key: 'inventory', icon: '🔎', title: 'Inventory', sub: 'Search, scan & print labels' },

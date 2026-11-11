@@ -81,7 +81,7 @@ export async function readCancellationLocally(buf, platform = null) {
     orders: orders.map((o) => ({
       platform: o.platform, order_number: o.order_number,
       sku: o.sku || (orders.length === 1 ? one('sku') : null), size: o.size || (orders.length === 1 ? one('size') : null),
-      product: null,
+      product: o.product || (orders.length === 1 ? one('product') : null),
       // tesseract has no honest "how sure" for a whole number; the two reads ARE the check.
       confidence: o.agreed ? 0.99 : 0.5, unclear: [], agreed: o.agreed, onlySecond: !!o.onlySecond, why: o.why,
     })),

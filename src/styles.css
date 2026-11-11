@@ -6370,7 +6370,15 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .cx-bulk { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
 .cx-row { display: flex; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .cx-row:last-child { border-bottom: 0; }
-.cx-row.cx-rejected { opacity: .6; }
+.cx-row.cx-missing { box-shadow: inset 3px 0 0 #e08f8f; padding-left: 10px; }
+.cx-plat { font-weight: 700; font-size: 13px; }
+.cx-numwrap { display: inline-flex; gap: 6px; align-items: center; }
+.cx-numwrap .cx-num { font-size: 16px; font-weight: 700; }
+.cx-shoe { display: flex; flex-direction: column; gap: 3px; font-size: 14px; min-width: 0; }
+.cx-name { font-weight: 600; overflow-wrap: anywhere; }
+.cx-line { overflow-wrap: anywhere; }
+.cx-span { white-space: nowrap; }
+.cx-filters input[type="date"].input { width: auto; flex: 0 1 auto; }
 /* The photo is what the reviewer checks the row against — shown WHOLE (contain, never
    cropped: a crop hid the order number), big enough to read. */
 .cx-photo { flex: 0 0 240px; width: 240px; height: 260px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border);

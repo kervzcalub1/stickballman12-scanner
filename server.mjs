@@ -220,6 +220,12 @@ import('./api/_lib/inbound-issues-worker.js')
   .then((m) => m.startInboundIssuesWorker())
   .catch((e) => console.error('[inbound-issues-worker] failed to start:', e.message));
 
+// Order cancellations — answers a batch of photos a restart cut off (docs/context/cancellations.md).
+// Production only by default: dev and prod share one Telegram bot.
+import('./api/_lib/cancellations-worker.js')
+  .then((m) => m.startCancellationsWorker())
+  .catch((e) => console.error('[cancellations] worker failed to start:', e.message));
+
 // SHEIN live sync — SHEIN sales off Shopify every minute (behind the webhook) + the live fix
 // walker's heartbeat (docs/context/shein-live-fix.md). Production only by default.
 import('./api/_lib/shein-worker.js')

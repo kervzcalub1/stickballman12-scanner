@@ -837,6 +837,12 @@ it for "Add missing sizes (1)" / "Replace SHEIN photos (1)"; the photo preview t
 - e2e: 5 previews after the rejected send → `lastPublishRun` + `neverLive` + the 18-line checklist; add / photos
   previews → `never_approved`, 0 spu-info calls.
 
+## Photo swap keeps SHEIN's colour-block ("piece") photo (fixed 2026-11-11)
+First live run (#380): 5 of 6 swaps went to review; HQ8717 was refused "The number of pieces with sku is incomplete" —
+its SKC carried a type-6 colour-block (PIECE) photo and the new list dropped it. `planPhotoEdit` now appends every
+PIECE photo SHEIN already has (its own URL, image_type 6, after ours); `plan.piecesKept`. e2e: "replace live photos:
+the planner" + the piece test.
+
 ## Phase 5 — 4seller cut-over + go-live (built 2026-10-27)
 - **Where:** Setup tab, on top: **Go-live checklist** then **4seller cut-over**; once "4seller paused" is ticked the
   connection strip shows "4seller cut-over: day N of 30 · n of 5 pass" (or "Ready to cancel 4seller") → Setup.

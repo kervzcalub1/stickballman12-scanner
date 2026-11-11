@@ -2865,6 +2865,9 @@ await sql(`
   )`);
 // When the buyer placed it. order_time is when SHEIN released it to us, which is later by an unknown gap.
 await sql(`ALTER TABLE shein_order_units ADD COLUMN IF NOT EXISTS buyer_order_time TIMESTAMPTZ`);
+// The size SHEIN printed on the order line (skuAttribute, US wording), kept for the pick list when
+// Shopify's copy no longer has the seller SKU (docs/context/shein-live-fix.md → "Orders + pick list").
+await sql(`ALTER TABLE shein_order_units ADD COLUMN IF NOT EXISTS size_attr TEXT`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_sku ON shein_order_units (seller_sku)`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_order_units_order ON shein_order_units (order_no)`);
 // SHEIN orders written to Shopify by our own "SHEIN via Stickballman12.com" app (replaced the
@@ -3574,6 +3577,8 @@ await sql(`
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS shopify_listing_variants_product_idx ON shopify_listing_variants (product_id)`);
+// The pick lists look a seller SKU up here (eBay + SHEIN orders → style code, size, Shopify's name).
+await sql(`CREATE INDEX IF NOT EXISTS shopify_listing_variants_sku_idx ON shopify_listing_variants (sku)`);
 // Market price per style code + size (Alias, api/_lib/ebay-reprice.js priceStyleSize), checked by
 // the server for every IN-STOCK active size. Only real answers are stored — an error is retried.
 await sql(`

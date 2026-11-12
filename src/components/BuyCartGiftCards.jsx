@@ -13,8 +13,9 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { PriceInput, CopyText, ImageZoomModal, FormModal } from './common.jsx';
-import { cardsIssuable, cardsRefusedBecause, cardsAfterPurchase, fundingBreakdown, cardTailFromFileName } from '../lib/buycartRules.js';
+import { cardsIssuable, cardsRefusedBecause, cardsAfterPurchase, fundingBreakdown, cardTailFromFileName, cardsAskState } from '../lib/buycartRules.js';
 import { merchantLabel } from '../lib/giftCardMerchants.js';
+import { estDate, estTime } from '../lib/format.js';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -91,7 +92,7 @@ function GiftCardRow({ cart, card, canReveal, canVoid, onChanged, onSignOut }) {
   );
 }
 
-export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onChanged, onSignOut }) {
+export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, canAskCards = false, onChanged, onSignOut }) {
   const [code, setCode] = useState('');
   const [pin, setPin] = useState('');
   const [balance, setBalance] = useState('');
@@ -115,6 +116,18 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
   const { shelf, tax: fundTax, target, pct: fundPct } = fundingBreakdown(cart);
   const total = Number(cart.gc_total) || 0;
   const short = Math.max(0, Math.round((target - total) * 100) / 100);
+  // "Ask for $X more" (an approver): a funded request that came up short — a quantity
+  // raised after the cards went out — and the desk not yet asked for THIS amount. Shown
+  // too after somebody chose "Don't ask now", with who and when.
+  const askState = cardsAskState(cart);
+  const askable = canAskCards && cart.status === 'funded' && cardsIssuable(cart) && short > 0;
+  const [askNote, setAskNote] = useState('');
+  async function askForMore() {
+    setBusy('ask'); setErr(''); setAskNote('');
+    try { await api.cartAskCards(cart.id); setAskNote(`The gift card desk was asked for ${money(short)} more.`); onChanged(); }
+    catch (ex) { if (ex.unauthorized) return onSignOut(); setErr(ex.message); }
+    finally { setBusy(''); }
+  }
   // Only against a list the buyer has CLOSED, with every line decided — the same rule
   // the endpoint enforces, so the form never leads to a 409.
   const canAdd = canIssue && cardsIssuable(cart);
@@ -379,8 +392,23 @@ export function BuyCartGiftCards({ cart, role, canIssue, isBuyer, canAudit, onCh
             buyer's to spend; this says how much more to record once the list is closed
             and the new lines decided. */}
         {canIssue && cart.status === 'funded' && short > 0 && (
-          <p className="muted sm">Released {money(total)} so far — {money(short)} more to record for the pairs approved since.</p>
+          <p className="muted sm">Released {money(total)} so far — {money(short)} more to record for the pairs approved or raised since.</p>
         )}
+        {askable && askState.declined && (
+          <p className="muted sm">
+            {askState.declined.actor_name || 'An approver'} chose not to ask the gift card desk for this yet
+            ({estDate(askState.declined.created_at)} {estTime(askState.declined.created_at)} EST).
+          </p>
+        )}
+        {askable && askState.asked && <p className="muted sm">The gift card desk has been asked for {money(short)}.</p>}
+        {askable && !askState.asked && (
+          <div>
+            <button type="button" className="btn sm" disabled={busy === 'ask'} onClick={askForMore}>
+              {busy === 'ask' ? 'Asking…' : `Ask for ${money(short)} more`}
+            </button>
+          </div>
+        )}
+        {askNote && <p className="bc-covered sm">{askNote}</p>}
       </div>
 
       {cards.length > 0 && (

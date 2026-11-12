@@ -422,7 +422,9 @@ export async function decideLines({ cart, action, lineIds, all, qtyById, qtyAll,
   if (!out.decided)
     return {
       error: pendingOnly
-        ? 'Nothing was still awaiting a decision — the cards have already gone out against the lines that were decided, so those are frozen.'
+        // The ONE exception is how many of an approved pair (cart/line-qty) — named here so
+        // the approver knows where it is, never taken through this path.
+        ? 'Nothing was still awaiting a decision — the cards have already gone out against the lines that were decided, so those are frozen. To change how many of an approved pair, use Change qty on its row on the request.'
         : 'Nothing was still awaiting a decision — someone may have got there first.',
       code: 409,
     };

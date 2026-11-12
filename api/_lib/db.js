@@ -8172,6 +8172,15 @@ export async function lastCartEvent(cartId, kind) {
   return rows[0] || null;
 }
 
+// The newest event of ANY of these kinds — "was the desk asked, or did someone choose not
+// to ask" is one question across `cards_requested` and `cards_not_asked`.
+export async function lastCartEventOf(cartId, kinds) {
+  const rows = await db()`
+    SELECT * FROM buy_cart_events WHERE cart_id = ${cartId} AND kind = ANY(${kinds}::text[])
+     ORDER BY id DESC LIMIT 1`;
+  return rows[0] || null;
+}
+
 export async function createBuyCart({ buyerUserId, buyerName, retailer, gcMerchant = null, purpose, restrictions, presetId, costStack, actor }) {
   const sql = db();
   const rows = await sql`
@@ -8564,6 +8573,50 @@ export async function skipBuyCartLine(cartId, lineId, actor, { undo = false } = 
     body: `${r.sku}${r.size ? ` size ${r.size}` : ''}${Number(r.qty) > 0 ? ` ×${r.qty}` : ''} — ${undo ? 'back on: buying it after all' : 'not buying it'}`,
   });
   return { line: lineOut(r), cart: await getBuyCart(cartId) };
+}
+
+/**
+ * HOW MANY of an approved pair, after the cards are out (cart/line-qty, owner 2026-11-13).
+ *
+ * The one narrow exception to "approvals are frozen once funded": the quantity of an
+ * APPROVED line, on a FUNDED request (cards out, no receipt yet), changed by an approver.
+ * Everything is in the WHERE clause — the line still approved, still at the quantity the
+ * person was looking at (`expectQty`, so a stale tab can't overwrite a newer number), the
+ * request still funded — so a race returns no row and the caller answers 409.
+ *
+ * Recorded like the pre-funding "Change": the row carries the new decision under the
+ * changer's name and keeps what it replaced in `overrode_*`. `recalcCartMoney` moves the
+ * funding target by the pairs changed, taxed at the rate of the day (the funded branch);
+ * it never recomputes a released target, and no gift card is touched.
+ */
+export async function changeApprovedLineQty({ cartId, lineId, qty, expectQty, actor }) {
+  const sql = db();
+  const actorId = actor && Number(actor.uid) ? Number(actor.uid) : null;
+  const actorName = actor ? (actor.name || actor.username || null) : null;
+  const [before] = await sql`SELECT funding_target, approved_amount FROM buy_carts WHERE id = ${cartId}`;
+  const rows = await sql`
+    UPDATE buy_cart_lines l SET
+           qty = ${qty},
+           overrode_by = l.decided_by, overrode_status = 'approved', overrode_qty = l.qty,
+           decided_by = ${actorName}, decided_by_id = ${actorId}, decided_role = ${actor?.role || null},
+           decided_at = now(), decided_reason = NULL,
+           updated_at = now()
+      FROM buy_carts c
+     WHERE l.id = ${lineId} AND l.cart_id = ${cartId} AND c.id = l.cart_id
+       AND l.status = 'approved' AND l.qty = ${expectQty} AND l.qty <> ${qty}
+       AND c.status = 'funded'
+    RETURNING l.*`;
+  if (!rows[0]) return null;
+  await recalcCartMoney(sql, cartId);
+  const cart = await getBuyCart(cartId);
+  const r = rows[0];
+  const d = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+  const targetBefore = before?.funding_target ?? before?.approved_amount ?? 0;
+  await logCartEvent({
+    cartId, kind: 'line_qty_changed', lineId: r.id, actor,
+    body: `${r.sku}${r.size ? ` size ${r.size}` : ''} ×${expectQty} → ×${r.qty} after the cards went out · gift cards needed ${d(targetBefore)} → ${d(cart?.funding_target)}`,
+  });
+  return { line: lineOut(r), cart, targetBefore: Number(targetBefore) || 0 };
 }
 
 export async function removeBuyCartLine(cartId, lineId, actor) {

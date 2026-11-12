@@ -26,6 +26,7 @@ import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
 import { notHereLines } from '../lib/notHere.js';
 import { auditTarget, fundingBreakdown, LIST_ADDABLE, decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep, linesByDecision } from '../lib/buycartRules.js';
+import { qtyChangeOpen, qtyChangeMoney } from '../lib/buycartRules.js';
 import { NudgeButton } from '../components/NudgeButton.jsx';
 import { GIFT_CARD_MERCHANTS, merchantLabel, merchantEditable } from '../lib/giftCardMerchants.js';
 
@@ -453,6 +454,102 @@ function NotHere({ cart, onSignOut }) {
   );
 }
 
+// HOW MANY of an approved pair, after the cards are out (owner, 2026-11-13). Not a
+// FormModal: the money below the box moves as the number is typed — "Cards now short by
+// $54.13" has to be read BEFORE saving, and when the cards would come up short the person
+// must pick whether the gift card desk is asked. Same modal classes as FormModal.
+function QtyChangeModal({ cart, line, onClose, onDone }) {
+  const [qty, setQty] = useState(String(line.qty ?? ''));
+  const [ask, setAsk] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !busy) onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, busy]);
+
+  const n = Number(qty);
+  const valid = String(qty).trim() !== '' && Number.isInteger(n) && n >= 1 && n <= 999;
+  const m = valid ? qtyChangeMoney(cart, line, n) : null;
+  const moved = !!m && m.to !== m.from;
+  const giftCards = cart.funding_method !== 'company_card';
+  const needsChoice = giftCards && moved && m.short > 0;
+  const pairs = (k) => `${k} pair${k === 1 ? '' : 's'}`;
+  const name = `${line.sku}${line.size ? ` size ${line.size}` : ''}`;
+
+  async function submit(e) {
+    e?.preventDefault?.();
+    if (busy) return;
+    if (!valid) return setErr('Enter how many to buy — a whole number from 1 to 999.');
+    if (!moved) return onClose();
+    if (needsChoice && !ask) return setErr('Choose whether to ask the gift card desk for the difference.');
+    setErr(''); setBusy(true);
+    try {
+      const r = await api.cartChangeQty(cart.id, line.id, n, Number(line.qty), needsChoice ? ask === 'yes' : undefined);
+      onDone(r, name);
+    } catch (e2) {
+      if (e2?.unauthorized) return onDone(null, name, e2);
+      setErr(e2?.message || 'That did not go through.'); setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={() => (busy ? null : onClose())}>
+      <form className="modal form-modal" role="dialog" aria-modal="true" aria-label={`Change how many of ${name}`}
+        onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+        <h3 className="modal-title">Change how many of {name}</h3>
+        <p className="modal-msg">
+          Approved ×{line.qty}{line.decided_by ? ` by ${line.decided_by}` : ''}. The gift cards are already out, so only
+          the number can change here — the pair stays approved. The change is recorded under your name.
+        </p>
+        <div className="form-modal-fields">
+          <label className="form-modal-label">
+            <span>How many to buy<i className="form-modal-req" aria-hidden="true">*</i></span>
+            <input className="input" type="number" inputMode="numeric" min={1} max={999} value={qty} disabled={busy}
+              onChange={(e) => { setQty(e.target.value); setErr(''); }} />
+            <i className="form-modal-hint">To drop the pair altogether, the buyer marks it as not buying.</i>
+          </label>
+          {moved && (
+            <div className="bc-qty-money" role="status">
+              <div>
+                Gift cards needed <b>{money(m.before)}</b> → <b>{money(m.after)}</b>
+                <span className="muted"> ({m.delta >= 0 ? '+' : '−'}{money(Math.abs(m.delta))}: {pairs(Math.abs(m.to - m.from))} × {money(line.shelf_price)}{m.rate > 0 ? ` + ${m.rate}% tax` : ''})</span>
+              </div>
+              {giftCards && <div className="muted">On the cards already: <b>{money(m.cards)}</b> — they stay as they are.</div>}
+              {giftCards && (m.short > 0
+                ? <div className="bc-short">Cards now short by {money(m.short)}</div>
+                : <div className="bc-covered">{m.cards > m.after ? `The cards cover it — ${money(m.cards - m.after)} will be left on them.` : 'The cards cover it.'}</div>)}
+            </div>
+          )}
+          {needsChoice && (
+            <fieldset className="bc-qty-choice" disabled={busy}>
+              <legend>The {money(m.short)} more</legend>
+              <label className="bc-qty-opt">
+                <input type="radio" name="ask" value="yes" checked={ask === 'yes'} onChange={() => { setAsk('yes'); setErr(''); }} />
+                <span><b>Ask the gift card desk for {money(m.short)} more</b>
+                  <i className="form-modal-hint">They get a Telegram message and record a top-up card.</i></span>
+              </label>
+              <label className="bc-qty-opt">
+                <input type="radio" name="ask" value="no" checked={ask === 'no'} onChange={() => { setAsk('no'); setErr(''); }} />
+                <span><b>Don’t ask now</b>
+                  <i className="form-modal-hint">Nothing is sent. The request shows {money(m.short)} short, with an “Ask for more” button, until the cards cover it — it can’t be closed short.</i></span>
+              </label>
+            </fieldset>
+          )}
+        </div>
+        {err && <div className="error mt">{err}</div>}
+        <div className="modal-actions">
+          <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn primary" disabled={busy || !valid || !moved}>
+            {busy ? 'Working…' : 'Save the new quantity'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, canPrice, isBuyer, autoStock, onChanged, onSignOut }) {
   const [sel, setSel] = useState([]);
   const [busy, setBusy] = useState('');
@@ -520,6 +617,22 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
   // CHANGE A DECISION already made — until the cards go out (`decisionsPendingOnly` from
   // `funded`). A skipped pair is the buyer's call, not ours, so it has no Change.
   const canChange = (l) => canDecide && !decisionsPendingOnly(cart.status) && ['approved', 'rejected'].includes(l.status);
+  // …and once they're out, the ONE exception: HOW MANY of an approved pair, until the
+  // receipt is in (`qtyChangeOpen` = funded). The decision itself stays frozen.
+  const canChangeQty = (l) => canDecide && qtyChangeOpen(cart) && l.status === 'approved';
+  const [changingQty, setChangingQty] = useState(null);
+  function qtyChanged(r, name, failure) {
+    if (failure) return onSignOut();
+    setChangingQty(null);
+    if (r && !r.unchanged) {
+      const a = r.ask || {};
+      setNote(`${name} is now ×${r.line?.qty}. Gift cards needed ${money(r.money?.before)} → ${money(r.money?.after)}.${
+        a.choice === 'asked'
+          ? (a.sent ? ` The gift card desk was asked for ${money(r.money?.short)} more.` : ` Not sent to the gift card desk: ${a.reason || 'unknown reason'}`)
+          : a.choice === 'not_asked' ? ` The desk wasn’t asked — the request reads ${money(r.money?.short)} short until the cards cover it.` : ''}`);
+    }
+    onChanged();
+  }
   // FOUND MORE after sending it, while the list is open: more of this size (an unanswered or
   // approved pair), or ANOTHER size of the same shoe from any row (Andrew, 2026-11-10), so a
   // turned-down or X'd-out row offers it too, with the size box left for them to fill.
@@ -726,6 +839,9 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
           onClose={() => setTipping(null)}
           onSubmit={({ amount }) => api.cartTip(cart.id, tipping.sku, 'approve', Number(amount)).then(() => { setTipping(null); onChanged(); })}
           fields={[{ name: 'amount', label: 'Tip per pair ($)', type: 'number', step: '0.01', min: 0.01, required: true }]} />
+      )}
+      {changingQty && (
+        <QtyChangeModal cart={cart} line={changingQty} onClose={() => setChangingQty(null)} onDone={qtyChanged} />
       )}
       {changing && (
         <FormModal
@@ -957,6 +1073,12 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                       <button type="button" className="btn sm ghost bc-change" disabled={!!busy}
                         onClick={(e) => { e.stopPropagation(); setChanging(l); }}
                         title="Approve or turn it down instead — allowed until the gift cards go out">Change</button>
+                    )}
+                    {canChangeQty(l) && (
+                      <button type="button" className="btn sm ghost bc-change" disabled={!!busy}
+                        onClick={(e) => { e.stopPropagation(); setChangingQty(l); }}
+                        aria-label={`Change how many of ${l.sku}${l.size ? ` size ${l.size}` : ''}`}
+                        title="The cards are out, so the decision stays — change how many to buy">Change qty</button>
                     )}
                   </td>
                   {canFix && (
@@ -1405,6 +1527,12 @@ export function BuyCart({ user, cartId, onBack, onHome = null, onSignOut }) {
           {cart.funding_method === 'company_card'
             ? <span>Card charge <b>{money(cart.card_authorized)}</b></span>
             : <span>Cards <b>{money(cart.gc_total)}</b></span>}
+          {/* Once the cards are out the target can still grow (a pair added since, a
+              quantity raised) — say it's short right here, not only in the cards panel. */}
+          {cart.funding_method !== 'company_card' && cart.status === 'funded'
+            && fundingBreakdown(cart).target - (Number(cart.gc_total) || 0) > 0.004 && (
+            <span className="bc-short">Short <b>{money(fundingBreakdown(cart).target - (Number(cart.gc_total) || 0))}</b></span>
+          )}
           <span>Receipt <b>{money(cart.receipt_total)}</b></span>
           <span>Left over <b>{money(cart.balance_remaining)}</b></span>
           {cart.po && (
@@ -1600,7 +1728,7 @@ export function BuyCart({ user, cartId, onBack, onHome = null, onSignOut }) {
         // request has nothing to approve is noise.
         whyNoDecide={mayDecide ? (decisionsClosedBecause(cart.status)
           || (decisionsPendingOnly(cart.status) && Number(cart.pending_count) > 0
-            ? 'The cards have already gone out against the decided lines, so those are frozen — only the pairs added since can be decided.'
+            ? 'The cards have already gone out against the decided lines, so those are frozen — only the pairs added since can be decided. How many of an approved pair can still change (Change qty).'
             : null)) : null}
         // `mayDecide`, not `canDecide`: correcting a misread shelf ticket is a cost-side
         // act and stays open through draft/submitted/approved. Gating it on the DECISION
@@ -1625,6 +1753,7 @@ export function BuyCart({ user, cartId, onBack, onHome = null, onSignOut }) {
         && (cardsIssuable(cart) || (cart.giftCards || []).length > 0
           || (cart.files || []).some((f) => f.kind === 'gift_card') || !['approved'].includes(cart.status)) && (
         <div id="bc-sec-cards" className="bc-sec"><BuyCartGiftCards cart={cart} role={role} canIssue={canIssue} isBuyer={isBuyer} canAudit={canAudit}
+          canAskCards={mayDecide}
           onChanged={load} onSignOut={onSignOut} /></div>
       )}
 

@@ -871,6 +871,11 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                           : stock[id].we_hold === 0 ? 'none on hand' : `${stock[id].we_hold} on hand`}
                       </span>
                     )}
+                    {/* Past the 25-SKU cap the line was never looked up. Say so on the
+                        line itself — a missing tag reads as "nothing to report". */}
+                    {stock?.[id] && !stock[id].checked && (
+                      <span className="bc-hold" title="This SKU was past the first 25 on the request, so Shopify was not asked">on hand not checked</span>
+                    )}
                   </td>
                   <td data-label="Size">
                     {l.size || '—'}

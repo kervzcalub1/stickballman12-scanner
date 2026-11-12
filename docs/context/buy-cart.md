@@ -1260,6 +1260,12 @@ and re-adding it, while the same SKU prices fine an hour later.
 `api/cart/stock.js` · `stockOnHandBySizeForSku` in `db.js` · `StockPanel` in
 `BuyCart.jsx` · **What do we already hold?** above the lines.
 
+**Capped at 25 SKUs per request** (`MAX_STYLES`). Past that, those SKUs are not looked
+up in Shopify or our records at all. The note under the list names them ("checked for
+the first 25 of N SKUs only. Not checked: …"), and each of those lines gets an **on hand
+not checked** tag, so a missing number is never read as "none on hand". The buy call,
+the profit and the approvals are not affected by the cap.
+
 The request answered what a pair costs and what it would sell for, and said nothing
 about the six already on our own shelves. An approver reading a healthy ROI had no way
 to see that PH is still trying to move last month's, so the same shoe got bought again —

@@ -152,8 +152,13 @@ export default async function handler(req, res) {
       // Said once, for the whole answer, and repeated on screen: this is Shopify's
       // belief plus our own records, not a physical count.
       disclaimer: 'Shopify inventory plus our own unlisted units — not a physical count. For a number to act on, ask the warehouse.',
+      // Says WHAT was checked (Shopify + our unlisted pairs), how many of how many, and
+      // which SKUs were left out — "only the first 25 styles were checked" read as if
+      // the buy call or the approvals had been cut short, which they never are.
       truncated: styles.length > used.length
-        ? `Only the first ${MAX_STYLES} styles on this request were checked.` : null,
+        ? `"On hand" (Shopify stock + our unlisted pairs) was checked for the first ${used.length} of ${styles.length} SKUs on this request only. `
+          + `Not checked: ${styles.slice(MAX_STYLES).join(', ')}. Those lines show "on hand not checked" — that is not the same as none on hand.`
+        : null,
       lines: out,
     });
   } catch (e) {

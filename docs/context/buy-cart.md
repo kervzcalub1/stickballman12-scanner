@@ -308,6 +308,11 @@ The PH team uploads card files, and some are bad. The supplier sees none of it.
   answer · Turned down or not buying), and each one opens and shuts on a tap. Turned down / not buying starts shut;
   the other two start open, because somebody still acts on them. ✕ Not buying opens that group so the pair and its
   Undo stay in view. While the list is open it's one plain list. The open/shut state is per page view, not saved.
+- **Pair and SKU totals** (owner, 2026-11-13): the lines heading says `· Approved: 48 pairs (5 SKUs)`, and the
+  Approved / Waiting group headings add `· N pairs (M SKUs)` (`pairTally` / `pairTallyText` in `buycartRules.js`).
+  Pairs = the decided `qty`; SKUs = distinct style codes (one shoe in six sizes = 1 SKU). A pending line with no
+  quantity yet counts no pairs, so a group with nothing decided shows SKUs only. "Not buying" (`skipped`) is in the
+  bottom group, so it never counts as approved.
 
 ## Cards and notes the auditor adds (2026-11-06)
 The Andrew case: he bought his own 10 pairs with his own gift cards, and the cashier rang everything up together.

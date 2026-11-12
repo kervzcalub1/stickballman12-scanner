@@ -25,7 +25,7 @@ import { estDate, estTime, PH_DATE, estClock } from '../lib/format.js';
 import { PLATFORMS } from '../lib/payout.js';
 import { hasPriv } from '../lib/constants.js';
 import { notHereLines } from '../lib/notHere.js';
-import { auditTarget, fundingBreakdown, LIST_ADDABLE, decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep, linesByDecision } from '../lib/buycartRules.js';
+import { auditTarget, fundingBreakdown, LIST_ADDABLE, decisionsOpen, decisionsClosedBecause, decisionsPendingOnly, buyerCanAdd, buyerCanClose, buyerCanReopen, reopenRefusedBecause, listOpen, cardsIssuable, nextStep, linesByDecision, pairTally, pairTallyText } from '../lib/buycartRules.js';
 import { NudgeButton } from '../components/NudgeButton.jsx';
 import { GIFT_CARD_MERCHANTS, merchantLabel, merchantEditable } from '../lib/giftCardMerchants.js';
 
@@ -79,13 +79,17 @@ function GroupRow({ group, lines, cols, shut, onToggle }) {
     ? [[these.filter((l) => l.status === 'rejected').length, 'turned down'], [these.filter((l) => l.status === 'skipped').length, 'not buying']]
       .filter(([c]) => c > 0).map(([c, w]) => `${c} ${w}`).join(' · ')
     : null;
+  // How much the group adds up to, not just how many rows: "48 pairs (5 SKUs)". A pending
+  // line may have no quantity yet, so a group with nothing decided says SKUs only.
+  const t = group === 'out' ? null : pairTally(these);
+  const sum = !t ? '' : t.pairs > 0 ? ` · ${pairTallyText(t)}` : ` · ${t.skus} SKU${t.skus === 1 ? '' : 's'}`;
   return (
     <tr className={`bc-group-row ${group}`}>
       <td colSpan={cols}>
         <button type="button" className="bc-group-toggle" aria-expanded={!shut} onClick={onToggle}>
           <span className="bc-group-caret" aria-hidden="true">{shut ? '▸' : '▾'}</span>
           <b>{GROUP_LABEL[group]}</b>
-          <span className="muted sm">{n} line{n === 1 ? '' : 's'}{detail && detail !== `${n} turned down` && detail !== `${n} not buying` ? ` · ${detail}` : ''}</span>
+          <span className="muted sm">{n} line{n === 1 ? '' : 's'}{sum}{detail && detail !== `${n} turned down` && detail !== `${n} not buying` ? ` · ${detail}` : ''}</span>
           <span className="muted xs bc-group-hint">{shut ? 'Show' : 'Hide'}</span>
         </button>
       </td>
@@ -491,6 +495,7 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
   // Approved on top, then pending, then turned down / not buying (`linesByDecision`).
   const lines = linesByDecision(cart.lines);
   const pending = lines.filter((l) => l.status === 'pending');
+  const approvedTally = pairTally(lines.filter((l) => l.status === 'approved'));
   // ONCE THE BUYER CLOSES THE LIST the lines split into three groups under headings, each
   // one opens and shuts on a tap (owner, 2026-11-10). What's turned down or not being
   // bought starts SHUT: the list is final and those rows are just noise by then. Approved
@@ -781,6 +786,11 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
       <div className="bc-h-row">
         <h3 className="bc-h">
           What’s being asked for <span className="muted sm">{lines.length} line{lines.length === 1 ? '' : 's'}</span>
+          {/* The one total an approver and the card desk both reach for: how many pairs
+              were said yes to, across how many shoes. */}
+          {approvedTally.lines > 0 && (
+            <span className="bc-approved-total"> · Approved: <b>{pairTallyText(approvedTally)}</b></span>
+          )}
         </h3>
         {lines.length > 0 && (
           <button type="button" className={`btn sm ${stock ? 'ghost' : ''}`} disabled={busy === 'stock'}

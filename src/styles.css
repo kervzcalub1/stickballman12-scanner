@@ -5450,6 +5450,9 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
 .bc-group-hint { margin-left: auto; }
 .bc-group-row.approved b { color: var(--ok, inherit); }
 .bc-group-row.out b { color: var(--muted); }
+/* "· Approved: 48 pairs (5 SKUs)" beside the lines heading. Same green as the Approved group. */
+.bc-approved-total { font-size: 13px; font-weight: 400; color: var(--muted); }
+.bc-approved-total b { color: var(--ok, inherit); font-weight: 700; }
 
 /* Payout Calculator — best platform by size. One row per size; the winning platform's
    cell is tinted so the column of answers reads at a glance down a size run. */

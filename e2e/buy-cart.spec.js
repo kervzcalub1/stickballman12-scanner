@@ -2456,6 +2456,220 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     }
   });
 
+  // HOW MANY of an approved pair, after the cards are out (cart/line-qty, owner 2026-11-13).
+  // The one exception to "approvals are frozen once funded": the number on an approved pair,
+  // never the decision. The target moves by the pairs changed, taxed at the rate of the day;
+  // a shortfall asks the person whether the gift card desk is told.
+  test.describe('changing how many after the cards are out', () => {
+    const ISSUER_TG = 771009003;
+    test.beforeAll(async () => {
+      await pool.query('UPDATE users SET telegram_user_id = $1 WHERE id = $2', [ISSUER_TG, people.issuer.uid]);
+    });
+    test.afterAll(async () => {
+      await pool.query('UPDATE users SET telegram_user_id = NULL WHERE telegram_user_id = $1', [ISSUER_TG]);
+    });
+    const dmTo = (from) => since(from).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(ISSUER_TG));
+    const groupNotes = (from, re) => since(from).filter((c) => c.method === 'sendMessage' && String(c.body.chat_id) === String(CHAT) && re.test(c.body.text || ''));
+    // 2 × $50 approved, $108.25 on one card, released: a funded request.
+    async function fundedRequest(request, card) {
+      const cartId = await newRequest(request, { lines: [LINE] });
+      expect((await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty })).status).toBe(200);
+      expect((await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: card, balance: 108.25 } })).status).toBe(200);
+      expect((await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true })).body.cart.status).toBe('funded');
+      const { body } = await read_(request, 'approver', `cart/get?id=${cartId}`);
+      return { cartId, lineId: Number(body.cart.lines[0].id), code: body.cart.cart_code };
+    }
+    const events = async (cartId, kind) => (await pool.query(
+      'SELECT * FROM buy_cart_events WHERE cart_id = $1 AND kind = $2 ORDER BY id DESC', [cartId, kind])).rows;
+
+    test('raising it moves the target by the taxed delta, and asking the desk sends them the top-up', async ({ request }) => {
+      const { cartId, lineId, code } = await fundedRequest(request, '6161616161616161');
+      // The DM for the first $108.25 goes out on the approval; wait for it so it isn't counted below.
+      await expect.poll(async () => (await events(cartId, 'cards_requested')).length, { timeout: 10_000 }).toBe(1);
+      const t0 = calls.length;
+
+      // Short, and no choice made: refused with the figure, and nothing changed.
+      const noChoice = await call(request, 'approver', 'cart/line-qty', { cartId, lineId, qty: 3, expectQty: 2 });
+      expect(noChoice.status).toBe(400);
+      expect(noChoice.body.needsChoice).toBe(true);
+      expect(noChoice.body.short).toBeCloseTo(54.13, 2);
+      expect((await pool.query('SELECT qty FROM buy_cart_lines WHERE id = $1', [lineId])).rows[0].qty).toBe(2);
+
+      const r = await call(request, 'approver', 'cart/line-qty', { cartId, lineId, qty: 3, expectQty: 2, askCards: true });
+      expect(r.status).toBe(200);
+      expect(r.body.money.before).toBeCloseTo(108.25, 2);
+      expect(r.body.money.after).toBeCloseTo(162.38, 2);          // $108.25 + $50 × 1.0825
+      expect(r.body.money.short).toBeCloseTo(54.13, 2);
+      expect(r.body.ask).toMatchObject({ choice: 'asked', sent: true });
+
+      const { body } = await read_(request, 'approver', `cart/get?id=${cartId}`);
+      expect(body.cart.status).toBe('funded');
+      expect(body.cart.approved_amount).toBe(150);
+      expect(body.cart.funding_target).toBeCloseTo(162.38, 2);
+      expect(body.cart.gc_total).toBeCloseTo(108.25, 2);            // the card is untouched
+      const line = body.cart.lines.find((l) => Number(l.id) === lineId);
+      expect(line).toMatchObject({ status: 'approved', qty: 3, decided_by: people.approver.name, overrode_qty: 2 });
+      // Closing condition 2 still wants the cards to cover the new target.
+      expect(body.cart.checks.find((c) => c.key === 'cards_recorded').ok).toBe(false);
+
+      // The desk is DM'd for the top-up, once; the group hears the change.
+      await expect.poll(() => dmTo(t0).length, { timeout: 10_000 }).toBe(1);
+      expect(dmTo(t0)[0].body.text).toContain(`on ${code} — $54.13`);
+      await expect.poll(() => groupNotes(t0, /×2 → ×3/).length, { timeout: 10_000 }).toBe(1);
+      expect(groupNotes(t0, /×2 → ×3/)[0].body.text).toMatch(/Short \$54\.13 — the gift card desk has been asked/);
+
+      // History: who, which pair, old → new, target before → after.
+      const [ev] = await events(cartId, 'line_qty_changed');
+      expect(ev.actor_name).toBe(people.approver.name);
+      expect(ev.body).toContain(`${LINE.sku} size ${LINE.size} ×2 → ×3`);
+      expect(ev.body).toContain('$108.25 → $162.38');
+      expect((await events(cartId, 'cards_requested'))[0].body).toMatch(/^\$54\.13/);
+
+      // The decision itself is still frozen: no override through cart/decide.
+      const override = await call(request, 'approver', 'cart/decide', { cartId, lineIds: [lineId], action: 'reject', reason: 'no' });
+      expect(override.status).toBe(409);
+      expect(override.body.error).toMatch(/frozen/i);
+
+      // The top-up card covers it.
+      expect((await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6262626262626262', balance: 54.13 } })).body.short).toBe(0);
+    });
+
+    test('“Don’t ask now” sends nothing and says so in History; “Ask for more” sends it later', async ({ request }) => {
+      const { cartId, lineId, code } = await fundedRequest(request, '6363636363636363');
+      await expect.poll(async () => (await events(cartId, 'cards_requested')).length, { timeout: 10_000 }).toBe(1);
+      const t0 = calls.length;
+
+      const r = await call(request, 'approver', 'cart/line-qty', { cartId, lineId, qty: 4, expectQty: 2, askCards: false });
+      expect(r.status).toBe(200);
+      expect(r.body.money.after).toBeCloseTo(216.5, 2);             // $108.25 + $100 × 1.0825
+      expect(r.body.ask).toMatchObject({ choice: 'not_asked' });
+      const [held] = await events(cartId, 'cards_not_asked');
+      // Keyed by what is owed AND what is on the cards: this $108.25 top-up is the same figure
+      // as the first funding, and must not read as "already announced".
+      expect(held.body).toMatch(/^\$108\.25 owed, \$108\.25 on cards — E2E Approver chose not to ask/);
+      expect(held.actor_name).toBe(people.approver.name);
+      // The group note goes out; the desk's DM does not.
+      await expect.poll(() => groupNotes(t0, /×2 → ×4/).length, { timeout: 10_000 }).toBe(1);
+      expect(groupNotes(t0, /×2 → ×4/)[0].body.text).toMatch(/NOT been asked/);
+      expect(dmTo(t0)).toHaveLength(0);
+
+      // An automatic send (any later write) stays quiet for the same amount.
+      const { notifyIssuersIfReady } = await import('../api/_lib/notify.js');
+      const keep = { ...process.env };
+      Object.assign(process.env, { TELEGRAM_BOT_TOKEN: 'e2e-fake-token', TELEGRAM_CHAT_ID: String(CHAT), TELEGRAM_API_BASE: 'http://127.0.0.1:5198' });
+      try {
+        expect((await notifyIssuersIfReady(cartId)).reason).toBe('not asked — held back on purpose');
+      } finally {
+        for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE']) {
+          if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k];
+        }
+      }
+      expect(dmTo(t0)).toHaveLength(0);
+      // Still short wherever the funding shows; closing condition 2 is not weakened.
+      let { body } = await read_(request, 'approver', `cart/get?id=${cartId}`);
+      expect(body.cart.funding_target - body.cart.gc_total).toBeCloseTo(108.25, 2);
+      expect(body.cart.checks.find((c) => c.key === 'cards_recorded').ok).toBe(false);
+
+      // Asked later: the buyer can't; an approver can, once per amount.
+      expect((await call(request, 'buyer', 'cart/ask-cards', { cartId })).status).toBe(403);
+      const ask = await call(request, 'approver', 'cart/ask-cards', { cartId });
+      expect(ask.status).toBe(200);
+      await expect.poll(() => dmTo(t0).length, { timeout: 10_000 }).toBe(1);
+      expect(dmTo(t0)[0].body.text).toContain(`on ${code} — $108.25`);
+      const again = await call(request, 'approver', 'cart/ask-cards', { cartId });
+      expect(again.status).toBe(409);
+      expect(again.body.error).toMatch(/already been asked/);
+      ({ body } = await read_(request, 'approver', `cart/get?id=${cartId}`));
+      expect(body.cart.events[0].kind).toBe('cards_requested');
+      expect(body.cart.events[0].body).toMatch(/^\$108\.25 owed, \$108\.25 on cards — gift card desk told/);
+    });
+
+    test('on the screen: Change qty on an approved row shows the shortfall and asks the question', async ({ page, request }) => {
+      const { cartId } = await fundedRequest(request, '6666666666666666');
+      await as(page, 'approver');
+      await page.goto(`/buy-carts?request=${cartId}`);
+      // Approved rows on a funded request offer only the quantity — no approve/turn down Change.
+      await expect(page.getByRole('button', { name: 'Change', exact: true })).toHaveCount(0);
+      await page.getByRole('button', { name: `Change how many of ${LINE.sku} size ${LINE.size}` }).click();
+      const dlg = page.getByRole('dialog');
+      await expect(dlg).toContainText('The gift cards are already out, so only the number can change here');
+      await dlg.getByRole('spinbutton').fill('3');
+      await expect(dlg).toContainText('Gift cards needed $108.25 → $162.38');
+      await expect(dlg).toContainText('Cards now short by $54.13');
+      // No choice made → it says so and saves nothing.
+      await dlg.getByRole('button', { name: 'Save the new quantity' }).click();
+      await expect(dlg).toContainText('Choose whether to ask the gift card desk');
+      await dlg.getByLabel(/Don’t ask now/).check();
+      await dlg.getByRole('button', { name: 'Save the new quantity' }).click();
+      await expect(dlg).toHaveCount(0);
+      await expect(page.locator('.bc-lines')).toContainText('is now ×3');
+      // Still short, wherever the funding shows, with a way to ask later.
+      await expect(page.locator('.bc-money')).toContainText('Short $54.13');
+      await expect(page.locator('.bc-cards')).toContainText('$54.13 short');
+      await expect(page.locator('.bc-cards')).toContainText(`${people.approver.name} chose not to ask the gift card desk for this yet`);
+      await expect(page.getByRole('button', { name: 'Ask for $54.13 more' })).toBeVisible();
+      // Lowering within the cards: nothing to choose.
+      await page.getByRole('button', { name: `Change how many of ${LINE.sku} size ${LINE.size}` }).click();
+      await dlg.getByRole('spinbutton').fill('1');
+      await expect(dlg).toContainText('The cards cover it');
+      await expect(dlg.locator('.bc-qty-choice')).toHaveCount(0);
+    });
+
+    test('lowering it moves the target down and leaves the cards alone', async ({ request }) => {
+      const { cartId, lineId } = await fundedRequest(request, '6464646464646464');
+      const r = await call(request, 'approver', 'cart/line-qty', { cartId, lineId, qty: 1, expectQty: 2 });
+      expect(r.status).toBe(200);
+      expect(r.body.ask.choice).toBe(null);
+      const { body } = await read_(request, 'approver', `cart/get?id=${cartId}`);
+      expect(body.cart.approved_amount).toBe(50);
+      expect(body.cart.funding_target).toBeCloseTo(54.12, 2);      // $108.25 − $50 × 1.0825
+      expect(body.cart.giftCards).toHaveLength(1);
+      expect(Number(body.cart.giftCards[0].balance)).toBeCloseTo(108.25, 2);
+      expect(body.cart.checks.find((c) => c.key === 'cards_recorded').ok).toBe(true);
+      expect((await events(cartId, 'line_qty_changed'))[0].body).toContain('×2 → ×1');
+      expect(await events(cartId, 'cards_not_asked')).toHaveLength(0);
+    });
+
+    test('refused: for the buyer, before the cards, after the receipt, on a pending pair, on a stale number', async ({ request }) => {
+      const { cartId, lineId } = await fundedRequest(request, '6565656565656565');
+
+      // The buyer cannot change how many — that is the approver's answer.
+      expect((await call(request, 'buyer', 'cart/line-qty', { cartId, lineId, qty: 3, expectQty: 2, askCards: true })).status).toBe(403);
+      expect((await call(request, 'bystander', 'cart/line-qty', { cartId, lineId, qty: 3, expectQty: 2, askCards: true })).status).toBe(403);
+      expect((await call(request, 'approver', 'cart/line-qty', { cartId, lineId, qty: 0, expectQty: 2 })).status).toBe(400);
+
+      // Stale tab: the number moved under it.
+      expect((await call(request, 'approver', 'cart/line-qty', { cartId, lineId, qty: 1, expectQty: 2 })).status).toBe(200);
+      const stale = await call(request, 'approver', 'cart/line-qty', { cartId, lineId, qty: 3, expectQty: 2, askCards: true });
+      expect(stale.status).toBe(409);
+      expect(stale.body.error).toMatch(/approved ×1 now/);
+      expect((await pool.query('SELECT qty FROM buy_cart_lines WHERE id = $1', [lineId])).rows[0].qty).toBe(1);
+
+      // A pending pair (added after re-opening) is an ordinary decision, not this path.
+      expect((await call(request, 'buyer', 'cart/submit', { cartId, reopen: true })).status).toBe(200);
+      expect((await call(request, 'approver', 'cart/line', { cartId, line: { sku: LINE.sku, size: '8', shelfPrice: 50, verdict: 'buy' } })).status).toBe(200);
+      const pendingId = Number((await pool.query(`SELECT id FROM buy_cart_lines WHERE cart_id = $1 AND status = 'pending'`, [cartId])).rows[0].id);
+      await pool.query('UPDATE buy_cart_lines SET qty = 1 WHERE id = $1', [pendingId]);
+      const onPending = await call(request, 'approver', 'cart/line-qty', { cartId, lineId: pendingId, qty: 2, expectQty: 1, askCards: true });
+      expect(onPending.status).toBe(409);
+      expect(onPending.body.error).toMatch(/hasn’t been answered yet/);
+
+      // From the receipt on, the purchase has happened.
+      await pool.query(`UPDATE buy_carts SET status = 'receipted' WHERE id = $1`, [cartId]);
+      const late = await call(request, 'approver', 'cart/line-qty', { cartId, lineId, qty: 2, expectQty: 1, askCards: true });
+      expect(late.status).toBe(409);
+      expect(late.body.error).toMatch(/receipt is already in/i);
+
+      // Before the cards go out, the ordinary Change (cart/decide) is the way.
+      const early = await newRequest(request, { lines: [LINE] });
+      await call(request, 'approver', 'cart/decide', { cartId: early, all: true, action: 'approve', qtyAll: LINE.qty });
+      const earlyLine = Number((await pool.query('SELECT id FROM buy_cart_lines WHERE cart_id = $1', [early])).rows[0].id);
+      const notYet = await call(request, 'approver', 'cart/line-qty', { cartId: early, lineId: earlyLine, qty: 3, expectQty: 2 });
+      expect(notYet.status).toBe(409);
+      expect(notYet.body.error).toMatch(/aren’t out yet/);
+    });
+  });
+
   test('a card goes straight to the group, with the same buttons Make sent', async ({ request }) => {
     const cartId = await newRequest(request, { lines: [LINE] });
     const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];

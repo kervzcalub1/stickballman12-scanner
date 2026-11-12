@@ -169,7 +169,7 @@ the panel, the Telegram summary, the issuer DM. `fundingBreakdown` / `fundingWor
   is told the new amount (`cart/costs` → `notifyIssuersIfReady`, once per amount).
 - **From `funded` on it does NOT follow the rate.** An auditor correcting the tax off the receipt is
   stating what it cost, not asking for more money. The target moves only by what the approved pairs
-  moved (a top-up pair, a pair X'd out), taxed at the rate of the day — that is why the tax printed is
+  moved (a top-up pair, a pair X'd out, a quantity changed after the cards — `cart/line-qty`), taxed at the rate of the day — that is why the tax printed is
   `target − shelf` in dollars, with the % shown only when it really produced those dollars.
 - **`db:setup` brings requests whose cards are not out yet to the rule, and leaves released ones
   alone.** Requests released under the old rule keep their shelf-only figure, so none suddenly reads
@@ -437,8 +437,14 @@ https://stickballman12.com/buy-carts?request=2400
 - **Ready** = `cardsIssuable` (list closed, nothing pending) on an `approved`/`funded`
   request whose recorded cards are short of `fundingTarget`. The amount is what's still
   owed (target − cards already recorded), so a re-opened list announces the **top-up**.
-- **Said once per amount**: a `cards_requested` event (shown in the request's History)
-  records the figure and who was told; the same figure isn't sent again.
+- **Said once per ask**: a `cards_requested` event (shown in the request's History)
+  records the figure and who was told; the same ask isn't sent again. Since 2026-11-13 the
+  key is the amount owed **with the cards already on file** (`cardsAskKey`: "$54.13 owed,
+  $108.25 on cards — …") — keyed on the amount alone, a top-up equal to the first funding
+  read as "already announced" and was never sent. Old "$X — …" rows still match on the
+  amount. A `cards_not_asked` row (an approver's "Don't ask now" after a quantity change)
+  holds the automatic sends back for that same ask; `{ asked: true }` (the person asking)
+  ignores it — see "Change how many after the cards are out".
 - **Telegram won't let a bot message someone first.** Each issuer must open the bot and
   press **Start** once. Until they do, the send fails 403 and the log says so by name. No
   @BotFather setting changes that, and none is needed (group privacy is irrelevant here).
@@ -709,7 +715,9 @@ panel's note). The group is told (`buying_request_closed`, below).
   against are frozen, overrides included — `decideBuyCartLines({ pendingOnly })` filters
   the targets in the query — while a pair added since can be approved or turned down.
   The cart's status stays `funded` (the settle `WHERE status IN (submitted, approved,
-  denied)` leaves it alone). The no-decide note says which.
+  denied)` leaves it alone). The no-decide note says which. **One exception (2026-11-13):**
+  how many of an approved pair, through its own endpoint (`cart/line-qty`, "Change qty") —
+  never through `cart/decide` or Telegram. See "Change how many after the cards are out".
 - **Removing a line** (`cart/line { remove }`): only a **pending** one, ever. The buyer
   may withdraw their own pending pair while the list is open (the × on the row); a desk
   with a cost privilege may remove a pending line too; a decided line is part of an
@@ -1019,9 +1027,54 @@ Tests: `buy-cart.spec.js` § "floor feedback, November".
 The server always took an override while `decisionsOpen` (see "One approver can override
 another"); the screen only drew controls on **pending** rows. Now a decided line shows
 **Change** (`canChange` in `Lines`: `canDecide` and not `decisionsPendingOnly` — so until the
-cards go out) → a `FormModal`: Approve (with qty) / Turn it down (reason required). It posts
+cards go out; after that an approved row shows **Change qty** instead, below) → a `FormModal`: Approve (with qty) / Turn it down (reason required). It posts
 the ordinary `cart/decide` for one line, so `overrode_*` keeps the earlier call on the row.
 On Telegram a new reply already replaced the last one.
+
+### Change how many after the cards are out (owner, 2026-11-13)
+"Edit the quantity even though the gift cards are already issued, and opt in or out of
+requesting more GC when they fall short." The **one narrow exception** to "decisions on a
+funded request are pending-only": the QUANTITY of an **approved** pair, never the decision.
+No `db:setup` — the opt-out is a cart event, no new column.
+- **`POST cart/line-qty { cartId, lineId, qty, expectQty, askCards? }`** — `approve_buying`
+  (admin/superadmin implicit; a supplier can't hold it → 403), request **`funded`** only
+  (`qtyChangeOpen` / `qtyChangeRefusedBecause` in `buycartRules.js`): before the cards it's the
+  ordinary Change; from `receipted` "The receipt is already in — the purchase has happened".
+  Whole number 1–999 on an `approved` line (pending → "approve it with a quantity"; skipped /
+  turned down refused; dropping a pair stays the buyer's ✕). `changeApprovedLineQty` (db.js) is
+  ONE compare-and-set UPDATE — line still approved, still at `expectQty`, request still funded —
+  so a stale tab gets **409** "is approved ×N now — someone changed it". Recorded like a Change:
+  `decided_by` = the changer, `overrode_*` keeps the earlier approval on the row.
+- **Money:** `recalcCartMoney`'s funded branch moves `funding_target` by the pairs changed ×
+  shelf, taxed at the rate of the day — never recomputed from scratch. 2 × $50 at 8.25 %,
+  $108.25 on cards: → ×3 = **$162.38** (+$54.13), short $54.13; → ×1 = **$54.12** (−$54.13),
+  $54.13 left on the cards for the audit. No card is touched. `qtyChangeMoney` is the same
+  arithmetic for the screen (rounded half away from zero, like Postgres `round`).
+- **Short → the person must choose** (`askCards`; missing → 400 `needsChoice` + the figure):
+  - **Ask the gift card desk for $X more** → `notifyIssuersIfReady(cartId, { asked: true })`,
+    awaited so the reply says whether the DM went (`ask.sent` / `ask.reason`).
+  - **Don't ask now** → nothing sent; a **`cards_not_asked`** event ("$X owed, $Y on cards —
+    Name chose not to ask the gift card desk yet (SKU size ×2 → ×3)…"). The automatic sends
+    stay quiet for that same ask (reason `not asked — held back on purpose`); a different
+    amount later (a new pair approved, another change) is a new ask and goes as before.
+  - Lowering, or raising within the cards: nothing to choose.
+  Closing condition 2 is **not** weakened — the cards must still cover the target to close.
+- **`POST cart/ask-cards { cartId }`** — the later "Ask for $X more" (approver): funded/approved,
+  list closed, nothing pending, short; once per ask ("already been asked" 409).
+- **Trail:** `line_qty_changed` ("CW2288-111 size 9 ×2 → ×3 after the cards went out · gift
+  cards needed $108.25 → $162.38"). The buyer gets it as a decision (`alertLinesDecided`); the
+  group (premium → premium chat) gets `notifyLineQtyChanged`: "✏️ BC-#### — Alex changed …:
+  ×2 → ×3 (the cards are already out)" + to fund now + "Short $X — the gift card desk has been
+  asked for it / has NOT been asked yet" (or "The cards already out cover it").
+- **Screen:** approved rows on a funded request get **Change qty** (not Change) →
+  `QtyChangeModal` (BuyCart.jsx): the number box, then live "Gift cards needed $108.25 →
+  $162.38 (+$54.13: 1 pair × $50.00 + 8.25% tax)", "On the cards already", and **"Cards now
+  short by $54.13"** with the two choices as radios (nothing pre-picked). The money strip shows
+  **Short $X** on a funded request; the gift-card panel shows "Name chose not to ask … (date
+  EST)" and an **Ask for $X more** button for approvers until the desk is asked.
+- **Unchanged on purpose:** `cart/decide` / Telegram replies on a funded request still refuse
+  approved pairs (`decideBuyCartLines({ pendingOnly })`); the 409 now points at Change qty.
+- Tests: `buy-cart.spec.js` › Telegram, direct › "changing how many after the cards are out".
 
 ### Market sales per size (Alex)
 What StockX's *Sales* tab shows — sold in 30 days / this week, avg · low · high, the last 5

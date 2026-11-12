@@ -175,6 +175,92 @@ export function cardsRefusedBecause(cart) {
   return 'Gift cards can only go against an approved request.';
 }
 
+// ---------------------------------------------------------------------------
+// HOW MANY of an approved pair, after the cards are out (owner, 2026-11-13).
+//
+// Once a request is `funded` its approvals are frozen (DECISIONS_PENDING_ONLY) — with ONE
+// narrow exception: an approver may change the QUANTITY of a pair that is already
+// approved, while the cards are out and before the receipt is in. Not the decision (no
+// approve/turn down), not a pending pair (that is an ordinary decision), not a pair the
+// buyer X'd out. The server re-checks all of it in the write (`changeApprovedLineQty`).
+export const QTY_CHANGE_STATUSES = ['funded'];
+export const qtyChangeOpen = (cart) => QTY_CHANGE_STATUSES.includes(cart?.status);
+
+/** Why the quantity of an approved pair can't be changed this way, or null when it can. */
+export function qtyChangeRefusedBecause(cart, line) {
+  if (['receipted', 'audited', 'closed'].includes(cart?.status))
+    return 'The receipt is already in — the purchase has happened, so the quantity can’t change now.';
+  if (['cancelled', 'written_off'].includes(cart?.status)) return 'This request is finished.';
+  if (!qtyChangeOpen(cart))
+    return 'The gift cards aren’t out yet — change the decision on the row instead.';
+  if (line && line.status !== 'approved')
+    return line.status === 'pending'
+      ? 'That pair hasn’t been answered yet — approve it with a quantity instead.'
+      : `That pair is ${line.status === 'skipped' ? 'marked as not buying' : 'turned down'} — only an approved pair’s quantity can be changed.`;
+  return null;
+}
+
+// Cents, rounded half away from zero — what Postgres `round(numeric, 2)` does, so the
+// figure the screen shows before saving is the figure `recalcCartMoney` writes.
+const cents2 = (v) => {
+  const c = Number(v) * 100;
+  return (Math.sign(c) * Math.round(Math.abs(c) + 1e-7)) / 100;
+};
+
+/**
+ * What changing one approved pair's quantity does to the money, worked out the way
+ * `recalcCartMoney` does it on a funded request: the target moves by the pairs changed
+ * × shelf price, taxed at the rate of the day — never recomputed from scratch, so the
+ * tax already inside a released target is left alone. The cards already recorded are
+ * untouched; `short` is how much more the desk would have to record.
+ */
+export function qtyChangeMoney(cart, line, newQty) {
+  const from = Number(line?.qty) || 0;
+  const to = Number(newQty) || 0;
+  const rate = Number(cart?.funding_tax_pct ?? cart?.cost_stack?.taxPct) || 0;
+  const shelfDelta = (Number(line?.shelf_price) || 0) * (to - from);
+  // Shelf × (100 + rate) is the delta in CENTS; one rounding, like the SQL.
+  const delta = Math.sign(shelfDelta) * Math.round(Math.abs(shelfDelta * (100 + rate)) + 1e-7) / 100;
+  const before = cents2(cart?.funding_target ?? cart?.approved_amount ?? 0);
+  const after = Math.max(0, cents2(before + delta));
+  const cards = cents2(cart?.gc_total || 0);
+  return { from, to, rate, shelfDelta: cents2(shelfDelta), delta, before, after, cards, short: Math.max(0, cents2(after - cards)) };
+}
+
+/**
+ * WHICH ask a `cards_requested` / `cards_not_asked` row is about: the amount owed AND the
+ * cards already on file — "$108.25 owed, $108.25 on cards". The amount alone is not enough:
+ * a top-up can be the same figure as the first funding (two more pairs on a two-pair
+ * request), and keyed on the amount alone it read as "already announced" and the desk was
+ * never told. Rows written before 2026-11-13 say "$54.13 — …" and still match on the amount.
+ */
+export const cardsAskKey = (owed, issued) => `$${cents2(owed).toFixed(2)} owed, $${cents2(issued).toFixed(2)} on cards`;
+export function cardsAskMatches(body, owed, issued) {
+  const b = String(body || '');
+  if (b.startsWith(cardsAskKey(owed, issued))) return true;
+  return b.startsWith(`$${cents2(owed).toFixed(2)} — `);
+}
+
+/**
+ * Has the gift card desk been asked for what the request is short right now — or did
+ * somebody choose NOT to ask yet? Read off the request's History (`events`, newest first):
+ * a `cards_requested` row (the desk's DM went out) or a `cards_not_asked` row (the
+ * approver's opt-out), each keyed by `cardsAskKey`. Only the newest of the two counts,
+ * and only for what is owed NOW.
+ */
+export function cardsAskState(cart) {
+  const target = Number(cart?.funding_target ?? cart?.approved_amount) || 0;
+  const issued = Number(cart?.gc_total) || 0;
+  const short = Math.max(0, cents2(target - issued));
+  const last = (cart?.events || []).find((e) => e.kind === 'cards_requested' || e.kind === 'cards_not_asked');
+  const forNow = !!last && cardsAskMatches(last.body, short, issued);
+  return {
+    short,
+    asked: forNow && last.kind === 'cards_requested',
+    declined: forNow && last.kind === 'cards_not_asked' ? last : null,
+  };
+}
+
 /**
  * The one sentence at the top of a request: whose turn it is, and — when it is the
  * viewer's — what to do and where on the page to do it.

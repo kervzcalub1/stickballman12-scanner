@@ -464,6 +464,12 @@ export const api = {
   // Approving CARRIES the quantity: the buyer reports what they found, and how many to
   // buy is the decision. `qty` is a { lineId: n } map; `qtyAll` covers an approve-all.
   cartDecide: (cartId, payload) => post('/api/cart/decide', { cartId, ...payload }),
+  // How many of an APPROVED pair, after the cards are out. `expectQty` = the number on
+  // screen (409 if it moved); `askCards` = ask the desk for the shortfall (true) or not (false).
+  cartChangeQty: (cartId, lineId, qty, expectQty, askCards) =>
+    post('/api/cart/line-qty', { cartId, lineId, qty, expectQty, ...(askCards == null ? {} : { askCards }) }),
+  // "Ask for $X more" — DM the gift card desk for what the request is short now.
+  cartAskCards: (cartId) => post('/api/cart/ask-cards', { cartId }),
   // A premium shoe's proposed tip: approve (optionally a different amount) or decline.
   cartTip: (cartId, sku, action, amount = null) => post('/api/cart/tip', { cartId, sku, action, amount }),
   cartAddGiftCard: (cartId, card) => post('/api/cart/gift-card', { cartId, card }),

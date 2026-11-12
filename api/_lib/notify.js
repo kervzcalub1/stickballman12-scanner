@@ -17,13 +17,13 @@
 // seconds later by `priceInBackground`, and a card that goes out first says "not priced"
 // on every pair — which is the one thing the approver most needs and the reason to have
 // a card at all.
-import { getBuyCart, getBuyCartLine, notInWarehouseForSku, lastCartEvent, logCartEvent, createTelegramGroupCard, setTelegramGroupCardMessage, premiumPingPeople, premiumChatForBuyer } from './db.js';
+import { getBuyCart, getBuyCartLine, notInWarehouseForSku, lastCartEvent, lastCartEventOf, logCartEvent, createTelegramGroupCard, setTelegramGroupCardMessage, premiumPingPeople, premiumChatForBuyer } from './db.js';
 import { alertUsers, at } from './alerts.js';
 import { fundingTarget } from './buycart.js';
 import { stockForPair, stockForSizes, stockSentence } from './buyingStock.js';
 import { calcPayout, DEFAULT_FEE_PCT, PLATFORMS } from '../../src/lib/payout.js';
 import { telegramConfigured, telegramChatId, sendApprovalCard, sendNote, cardKeyboard, groupCardKeyboard } from './telegram.js';
-import { cardsIssuable, fundingWords } from '../../src/lib/buycartRules.js';
+import { cardsIssuable, fundingWords, cardsAskKey, cardsAskMatches } from '../../src/lib/buycartRules.js';
 import { compareSizes } from '../../src/lib/codes.js';
 import { stockxConfigured, stockxProductBySku } from './stockx.js';
 import { salesSentence } from './marketSales.js';
@@ -579,6 +579,43 @@ export async function notifyLineSkipped(cartId, line, actor, { undo = false } = 
 }
 
 /**
+ * An approver changed HOW MANY of an approved pair after the cards went out
+ * (cart/line-qty). A plain note to the group, like the X-out one: the buyer in the shop
+ * and the desk holding the cards both need the new number, and what it does to the money.
+ * `ask` = what the approver chose about the shortfall: 'asked' | 'not_asked' | null (none).
+ */
+export async function notifyLineQtyChanged(cartId, line, actor, { from, ask = null } = {}) {
+  if (!telegramConfigured()) {
+    console.log(`[notify] cart ${cartId} line ${line?.id} qty changed — Telegram is not configured, so nothing was sent`);
+    return { sent: false, reason: 'Telegram is not configured' };
+  }
+  try {
+    const cart = await getBuyCart(cartId);
+    if (!cart) return { sent: false, reason: 'cart is gone' };
+    const who = actor?.name || actor?.username || 'An approver';
+    const pair = `${line.sku}${line.size ? ` size ${line.size}` : ''}`;
+    const short = money(fundingTarget(cart) - (Number(cart.gc_total) || 0));
+    const caption = [
+      `✏️ ${cart.cart_code} — ${who} changed ${pair}: ×${from} → ×${line.qty} (the cards are already out)`,
+      `To fund now: ${fundingWords(cart)} · ${dollars(cart.gc_total)} on cards`,
+      short > 0
+        ? (ask === 'asked'
+          ? `Short ${dollars(short)} — the gift card desk has been asked for it.`
+          : `Short ${dollars(short)} — the gift card desk has NOT been asked yet.`)
+        : 'The cards already out cover it.',
+      ...merchantLine(cart),
+      ...(cart.retailer ? [`Store: ${cart.retailer}`] : []),
+    ].join('\n');
+    const msg = await sendNote(caption, await chatFor(cart, !!line.premium));
+    console.log(`[notify] ${cart.cart_code} ${pair} qty ×${from} → ×${line.qty} → Telegram message ${msg?.message_id}`);
+    return { sent: true };
+  } catch (e) {
+    console.error('[notify] could not send the quantity-changed note:', e.message);
+    return { sent: false, reason: e.message };
+  }
+}
+
+/**
  * A REQUEST-level event: the buyer closed their list, or opened it again.
  *
  * Same webhook, same `event` field; the scenario routes on it and posts the caption as
@@ -688,7 +725,24 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
 //
 // A person who never pressed Start on the bot cannot be messaged first (Telegram's
 // rule); every skip and failure is a row in `alert_log`, so "I never got it" has an answer.
-export async function notifyIssuersIfReady(cartId) {
+//
+// …unless an approver CHOSE NOT TO ASK for that amount (`cards_not_asked`, written when a
+// quantity is raised after the cards are out and they press "Don't ask now" —
+// cart/line-qty). Then the automatic sends stay quiet for that same figure; `asked: true`
+// is the person pressing "Ask for $X more" later (cart/ask-cards, or the opt-in on the
+// change itself), which goes through regardless. A different amount (a new pair approved,
+// another change) is a new question and is announced as before.
+// Why `notifyIssuersIfReady` didn't send, in words for the person who asked it to.
+const ISSUER_ASK_WHY = {
+  'Telegram is not configured': 'Telegram isn’t set up on this server, so the desk can’t be messaged from here.',
+  'already announced': 'The gift card desk has already been asked for this amount.',
+  'no DM went through': 'Nobody on the gift card desk could be messaged — they need to link Telegram on Check Access and press Start on the bot.',
+  'not ready for cards': 'The buyer is adding to the list again — the desk is told when they close it.',
+  'already covered': 'The cards recorded already cover it.',
+};
+export const issuerAskWhy = (reason) => ISSUER_ASK_WHY[reason] || `The desk wasn’t messaged: ${reason}.`;
+
+export async function notifyIssuersIfReady(cartId, { asked = false } = {}) {
   if (!telegramConfigured()) return { sent: false, reason: 'Telegram is not configured' };
   try {
     const cart = await getBuyCart(cartId);
@@ -699,9 +753,16 @@ export async function notifyIssuersIfReady(cartId) {
     const owed = money(target - issued);
     if (!(owed > 0)) return { sent: false, reason: 'already covered' };
 
+    // Once per ASK — the amount owed WITH the cards already on file (`cardsAskKey`): a
+    // top-up that happens to equal the first funding is still a new ask.
     const tag = `$${owed.toFixed(2)}`;
     const last = await lastCartEvent(cartId, 'cards_requested');
-    if (last && String(last.body || '').startsWith(tag)) return { sent: false, reason: 'already announced' };
+    if (last && cardsAskMatches(last.body, owed, issued)) return { sent: false, reason: 'already announced' };
+    if (!asked) {
+      const held = await lastCartEventOf(cartId, ['cards_requested', 'cards_not_asked']);
+      if (held?.kind === 'cards_not_asked' && cardsAskMatches(held.body, owed, issued))
+        return { sent: false, reason: 'not asked — held back on purpose' };
+    }
 
     // Through the one alert sender (api/_lib/alerts.js): required for everyone holding
     // issue_gift_cards, logged per person, a 403 marks that person's link broken.
@@ -719,7 +780,7 @@ export async function notifyIssuersIfReady(cartId) {
       path: at('buying', `request=${Number(cart.id)}`),
     });
     if (!sentTo.length) return { sent: false, reason: 'no DM went through' };
-    await logCartEvent({ cartId, kind: 'cards_requested', body: `${tag} — gift card desk told on Telegram: ${sentTo.join(', ')}` });
+    await logCartEvent({ cartId, kind: 'cards_requested', body: `${cardsAskKey(owed, issued)} — gift card desk told on Telegram: ${sentTo.join(', ')}` });
     console.log(`[notify] ${cart.cart_code} waiting for ${tag} in gift cards → DM to ${sentTo.join(', ')}`);
     return { sent: true, to: sentTo };
   } catch (e) {

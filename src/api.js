@@ -173,6 +173,7 @@ export const api = {
   openBatches: () => get('/api/batches/open-list'),
   batchFull: (id) => get(`/api/batches/full?id=${encodeURIComponent(id)}`),
   batchSetStatus: (id, status) => post('/api/batches/set-status', { id, status }),
+  batchSetExpected: (batchId, expectedBoxes) => post('/api/batches/set-expected', { batchId, expectedBoxes }),
   batchDelete: (batchId, reason) => post('/api/batches/delete', { batchId, reason }),
   // v6 — listing photos (per SKU, stored in Cloudflare R2)
   photoList: (sku) => get(`/api/photos/list?sku=${encodeURIComponent(sku)}`),

@@ -1693,6 +1693,51 @@ export async function syncBatchBoxes(batchId, slots, createdBy) {
   return listBatchBoxes(batchId);
 }
 
+// Correct how many boxes a batch expects — "130" typed at Step 1 for a 30-box shipment.
+// The count is what the "received / expected" progress, auto-complete and the Batch page
+// read, so a wrong one leaves the batch looking 23 % done forever.
+//
+// A multi-box batch may already have materialized a slot per expected box (sync-boxes),
+// so lowering the count also removes the EMPTY pending slots above the new number — no
+// pairs, no tracking typed in, no PO label tie. Anything that does hold something is
+// never removed: the count can't go below the boxes that have something in them, and a
+// box with stock numbered above the new count has to be renumbered first (it's usually
+// the mis-numbered one). Returns { ok, from, to, removed, boxes } or { error }.
+export async function setBatchExpectedBoxes(batchId, expected) {
+  const sql = db();
+  const batch = (await sql`SELECT id, expected_boxes FROM batches WHERE id = ${batchId}`)[0];
+  if (!batch) return { error: 'Batch not found.' };
+  const boxes = await sql`
+    SELECT bx.id, bx.box_number, bx.status, bx.tracking_number, bx.po_box_id,
+           (SELECT count(*)::int FROM items i WHERE i.box_id = bx.id) AS item_count
+      FROM batch_boxes bx WHERE bx.batch_id = ${batchId} ORDER BY bx.box_number`;
+  const holds = (b) => b.status === 'received' || b.item_count > 0
+    || String(b.tracking_number || '').trim() !== '' || b.po_box_id != null;
+  const kept = boxes.filter(holds);
+  if (kept.length > expected) {
+    return { error: `${kept.length} boxes on this batch already have pairs, a tracking number or a PO label on them, so it can't expect fewer than ${kept.length}.` };
+  }
+  const above = kept.filter((b) => Number(b.box_number) > expected);
+  if (above.length) {
+    const names = above.map((b) => `box ${b.box_number}`).join(', ');
+    return { error: `${names[0].toUpperCase()}${names.slice(1)} ${above.length === 1 ? 'has' : 'have'} something in ${above.length === 1 ? 'it' : 'them'} and ${above.length === 1 ? 'is' : 'are'} numbered above ${expected}. Change ${above.length === 1 ? 'its number' : 'their numbers'} to ${expected} or lower first (✎ on the box row).` };
+  }
+  const drop = boxes.filter((b) => !holds(b) && Number(b.box_number) > expected).map((b) => Number(b.id));
+  const queries = [];
+  // Re-checked inside the DELETE itself, so a box somebody started scanning into a
+  // second ago is never the one removed.
+  if (drop.length) {
+    queries.push(sql`
+      DELETE FROM batch_boxes bx
+       WHERE bx.batch_id = ${batchId} AND bx.id = ANY(${drop}::bigint[])
+         AND bx.status <> 'received' AND coalesce(bx.tracking_number, '') = '' AND bx.po_box_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM items i WHERE i.box_id = bx.id)`);
+  }
+  queries.push(sql`UPDATE batches SET expected_boxes = ${expected} WHERE id = ${batchId}`);
+  await sql.transaction(queries);
+  return { ok: true, from: batch.expected_boxes == null ? null : Number(batch.expected_boxes), to: expected, removed: drop.length, boxes: await listBatchBoxes(batchId) };
+}
+
 // Correct a box's number. "+ Add box" can only ever append max+1, which is right
 // while boxes arrive in order and wrong the moment they don't: box 6 of 9 turning up
 // a day after the rest gets recorded as "box 10", and from then on the number on the

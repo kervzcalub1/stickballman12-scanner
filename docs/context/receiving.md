@@ -163,6 +163,17 @@ and `purchase-orders.md` → "Scan-first, any order".
    absorbed instead, and the moving box **inherits its tracking number** if it has
    none of its own — that slot is often the only place the label's tracking was
    ever written, and an empty tracking field is what breaks the PO label match.
+   **Correcting "boxes expected"** (2026-11-13, Brent typed 130 for a 30-box shipment):
+   pencil next to the `received/expected boxes` count in the Batch-page header (warehouse /
+   admin; hidden on PH's read-only view) → `POST /api/batches/set-expected` →
+   `setBatchExpectedBoxes`. Lowering it **deletes the empty pending slots numbered above
+   the new count** (no pairs, no tracking, no PO label tie; re-checked inside the DELETE).
+   Refused, with nothing changed, when more boxes than the new count hold something, or
+   when a box that holds something is numbered above it (named — renumber it first). It
+   does **not** finish the batch even when every box is now in: Finish runs the PO
+   reconciliation + alert, which stays a deliberate press (the notice says to press it).
+   No change log table: who changed it is in the server log line.
+   Spec: `e2e/batch-expected-boxes.spec.js`.
 2. **Items — rapid scan** (`rapidScan`, replaced the Add Item modal 2026-08-14).
    The scan field lives **inline on the step** (`.scanbar`, sticky) — no dialog
    between scans, because the warehouse scans box after box and every stop cost

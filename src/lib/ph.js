@@ -477,15 +477,21 @@ export const LIST_POLL_MS = 15_000;       // quietly re-fetch the list (new shoe
 // work first, reference last. One list feeds BOTH the home cards and the top bar's
 // "Pages" menu on every PH sub-page, so the two can't drift. `icon` is a NavIcon key.
 // `priv: true` = drawn only for an account holding a buying privilege.
+// Regrouped 2026-11-13 (owner: the home was hard to read): the marketplace pages left
+// "Pricing & Listing" for their own section, and "Purchase Orders" (9 cards) split into
+// the orders themselves and "On the Way". Cards show their title only; `sub` is the
+// hover text. A section of 3 cards or fewer takes half the width on a wide screen.
 export const PH_HOME_SECTIONS = [
   { title: 'Pricing & Listing', accent: 'listing', cards: [
     { key: 'receiving', icon: 'receiving', title: 'New Inventory', sub: 'Price & list new stock to II, Alias, StockX, Shopify' },
     { key: 'rescale', icon: 'rescale', title: 'Rescale Stock', sub: 'Re-list rescanned units (returns, recounts, transfers)' },
     { key: 'imagefinder', icon: 'image', title: 'Find Image Listings', sub: 'Upload or build a SKU’s listing photos' },
     { key: 'profit', icon: 'profit', title: 'Platform Profit', sub: 'Best platform per size — Alias vs StockX, after fees & cost' },
+  ] },
+  { title: 'Marketplaces', accent: 'listing', cards: [
     { key: 'shopifylistings', icon: 'shopify-reprice', title: 'Shopify Listings', sub: 'Every Shopify listing — search, reprice to market, edit price, title, status' },
-    { key: 'ebayreprice', icon: 'ebay-reprice', title: 'eBay Reprice', sub: 'Cut eBay prices above market + markup — CSV in, CSV out' },
     { key: 'ebaylistings', icon: 'ebay-listings', title: 'eBay', sub: 'Orders & late shipments, listings, reprice, coupons' },
+    { key: 'ebayreprice', icon: 'ebay-reprice', title: 'eBay Reprice', sub: 'Cut eBay prices above market + markup — CSV in, CSV out' },
     { key: 'stockxlistings', icon: 'profit', title: 'StockX Listings', sub: 'Our StockX asks vs the Standard / Direct lowest ask — bulk reprice to the market' },
     { key: 'shein', icon: 'shein', title: CARD_WORDS.title, sub: CARD_WORDS.sub },
     { key: 'presellListings', icon: 'presell-listings', title: 'Pre-sell Listings', sub: 'List pairs straight to Alias + StockX from a scan' },
@@ -493,26 +499,29 @@ export const PH_HOME_SECTIONS = [
   { title: 'Queues & Requests', accent: 'requests', cards: [
     { key: 'costs', icon: 'costs', title: 'Costs', sub: 'Fill in what a pair cost when the manifest left it off' },
     { key: 'request', icon: 'rescalereq', title: 'Request Rescale', sub: 'Ask the warehouse to recount / rescan a SKU' },
-    { key: 'nobox', icon: 'nobox', title: 'No Box / Not Ready', sub: 'Units without a box — view-only, warehouse resolves' },
-    { key: 'cancellations', icon: 'cancellations', title: 'Order Cancellations', sub: 'Orders the warehouse sent to cancel — order #, shoe, SKU, size, by platform and day' },
     { key: 'inboundissues', icon: 'inbound-issues', title: 'Inbound Issues', sub: 'Damaged, short or wrong deliveries — take a case, claim from the supplier, resolve it' },
+    { key: 'cancellations', icon: 'cancellations', title: 'Order Cancellations', sub: 'Orders the warehouse sent to cancel — order #, shoe, SKU, size, by platform and day' },
+    { key: 'nobox', icon: 'nobox', title: 'No Box / Not Ready', sub: 'Units without a box — view-only, warehouse resolves' },
+    // Carries the "Audit" count (no-manifest shipments PH signs off) — a queue, not a lookup.
+    { key: 'batches', icon: 'batches', title: 'Batches', sub: 'Find a shipment by any box’s tracking number' },
   ] },
   { title: 'Purchase Orders', accent: 'orders', cards: [
     { key: 'po', icon: 'po-new', title: 'New Batch (Purchase Order)', sub: 'Open a supplier batch — labels + tracking to scan out' },
     { key: 'postatus', icon: 'inbound', title: 'Purchase Orders', sub: 'Every PO you opened — status & live tracking' },
     { key: 'reconcile', icon: 'reconcile', title: 'PO Reconciliation', sub: 'Received vs. manifest — copy a discrepancy report' },
-    { key: 'online', icon: 'online-orders', title: 'Online Orders', sub: 'Online buys — tracking, real cost per pair, refunds' },
+    { key: 'buycarts', icon: 'buy-carts', title: 'Buying Requests', sub: 'Approve requests, release gift cards, audit spending', priv: true },
+    { key: 'receipts', icon: 'receipts', title: 'Receipts', sub: 'Store receipts from our mailboxes — where & by whom' },
+  ] },
+  { title: 'On the Way', accent: 'shipping', cards: [
     { key: 'expected', icon: 'expected', title: 'Expected This Week', sub: 'What is coming today and this week, by supplier and online store, and what has stopped moving' },
+    { key: 'online', icon: 'online-orders', title: 'Online Orders', sub: 'Online buys — tracking, real cost per pair, refunds' },
     { key: 'undelivered', icon: 'undelivered', title: 'Undelivered Tracking', sub: 'PO + online-order parcels not delivered — export CSV / PDF to chase' },
     { key: 'duptracking', icon: 'dup-tracking', title: 'Duplicate Tracking', sub: 'Packages received under a tracking number we already received — per supplier' },
-    { key: 'receipts', icon: 'receipts', title: 'Receipts', sub: 'Store receipts from our mailboxes — where & by whom' },
-    { key: 'buycarts', icon: 'buy-carts', title: 'Buying Requests', sub: 'Approve requests, release gift cards, audit spending', priv: true },
   ] },
   { title: 'Look Up', accent: 'inventory', cards: [
     { key: 'inventory', icon: 'inventory', title: 'Inventory', sub: 'Search every pair — name, SKU, VIN or shelf' },
     { key: 'inquiry', icon: 'inquiry', title: 'Price Inquiry', sub: 'Live Alias prices for any SKU' },
     { key: 'payout', icon: 'payout', title: 'Payout Calculator', sub: 'Cost vs. Alias/StockX payout — is this pair a buy?' },
-    { key: 'batches', icon: 'batches', title: 'Batches', sub: 'Find a shipment by any box’s tracking number' },
     { key: 'myscans', icon: 'receiving', title: 'Scan History', sub: 'What each warehouse person scanned in, with the shipment — plus their Stock Check scans and counts. CSV and PDF' },
     { key: 'deleted', icon: 'deleted', title: 'Deleted', sub: 'Pairs removed from inventory, with history kept' },
   ] },

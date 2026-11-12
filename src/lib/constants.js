@@ -136,30 +136,60 @@ export function homeCardBadges(key, c) {
   return [];
 }
 
-// Home is grouped by the shoe's lifecycle through the warehouse: Intake →
-// Put-away → Rescale → Sell & Ship → Browse & Reports, with Admin last.
+// Home is grouped by the JOB, daily floor work first: Receiving → Shelves & Stock →
+// Boxes + Sell & Ship → On the way → Buying & In-Store, then the admin sections, with
+// Setup & Help last. Every card shows its title only; `sub` is the hover/long-press
+// text (title attribute) — on 2026-11-13 the owner found the old page (46 cards, a
+// 13-card "Receiving" drawer, a truncated sentence on every card) too hard to read.
 // `adminOnly` sections show for admin + superadmin; `superOnly` for superadmin only.
+// A section of 3 cards or fewer takes half the width on a wide screen, so the short
+// ones are ordered in PAIRS (Boxes | Sell & Ship, Marketplaces | Administration).
 // `accent` picks the section's colour token (see [data-accent] in styles.css) — it only
 // affects the card rail + icon hue, so an unknown/absent value just falls back to blue.
 export const HOME_SECTIONS = [
-  { title: 'Receiving Shipment Orders', accent: 'shipping', cards: [
+  { title: 'Receiving', accent: 'shipping', cards: [
     { key: 'receiving', icon: '📥', title: 'Receive New', sub: 'Scan a new shipment into a batch' },
-    { key: 'expected', icon: '📅', title: 'Expected This Week', sub: 'What is coming today and this week, by supplier and by online store' },
-    { key: 'inbound', icon: '🚚', title: 'Inbound', sub: 'What is coming, from whom, and what has stopped moving — every box still on its way' },
-    { key: 'online-orders', icon: '🛍️', title: 'Online Orders', sub: 'Shoes the PH team bought online — what is on its way, and count each parcel in when it lands' },
-    { key: 'vin-stock', icon: '🏷️', title: '1ID Stickers', sub: 'Print blank 1ID stickers in bulk so intake never waits on a printer' },
     { key: 'batches', icon: '🗃️', title: 'Batches', sub: 'Open & past batches — add boxes, track progress' },
     { key: 'my-scans', icon: '🧾', title: 'My Scans', sub: 'Every pair you received, with the shipment it came in on — or anyone else’s. Stock Check scans and counts too. CSV and PDF reports' },
-    { key: 'presell', icon: '🔖', title: 'Pre-sell', sub: 'Shipments sold before they landed — say how many each order covers, then free the rest for listing' },
+    { key: 'vin-stock', icon: '🏷️', title: '1ID Stickers', sub: 'Print blank 1ID stickers in bulk so intake never waits on a printer' },
     { key: 'reconcile', icon: '✅', title: 'PO Reconciliation', sub: 'Received vs. supplier manifest — flag & report discrepancies' },
+    { key: 'presell', icon: '🔖', title: 'Pre-sell', sub: 'Shipments sold before they landed — say how many each order covers, then free the rest for listing' },
     // A problem recorded at receiving is a CASE the PH team owns until it's resolved
     // (inbound-issues.md) — here so the floor can report one later and see its jobs.
     { key: 'inbound-issues', icon: '⚠️', title: 'Inbound Issues', sub: 'Damaged, short or wrong deliveries — each one a case PH works with the supplier until it is resolved' },
-    { key: 'undelivered', icon: '📭', title: 'Undelivered Tracking', sub: 'PO and online-order parcels not delivered or received — untick the new ones, export CSV / PDF to chase' },
-    { key: 'dup-tracking', icon: '🔁', title: 'Duplicate Tracking', sub: 'Packages received under a tracking number we already received — logged per supplier' },
     { key: 'costs', icon: '💵', title: 'Costs', sub: 'Fill in what a pair cost when the supplier left it off the manifest' },
   ] },
-  { title: 'In-Store Mode', accent: 'inventory', cards: [
+  { title: 'Shelves & Stock', accent: 'orders', cards: [
+    { key: 'shelve', icon: '📍', title: 'Shelve / Put-away', sub: 'Scan a shelf, then scan shoes onto it' },
+    { key: 'locations', icon: '🗺️', title: 'Locate Shoe', sub: 'Find which shelf a shoe is on' },
+    { key: 'inventory', icon: '🔎', title: 'Inventory', sub: 'Search, scan & print labels' },
+    // Scan anything, get one answer — and count a size against Shopify (inventory.md).
+    { key: 'stock-check', icon: '🔢', title: 'Stock Check', sub: 'Scan a box: how many Shopify has in that size. Scan a VIN: is this pair still in inventory. Then count a size' },
+    { key: 'rescale', icon: '♻️', title: 'Rescale Stock', sub: 'Re-scan in-hand stock (no shipment)' },
+    { key: 'rescalereq', icon: '📨', title: 'Rescale Requests', sub: 'PH-flagged SKUs to recount / rescan' },
+    { key: 'report', icon: '📊', title: 'Listings & Sync', sub: 'Store listings & sync status' },
+    { key: 'deleted', icon: '🗑️', title: 'Deleted', sub: 'Pairs removed from inventory — search by SKU, history kept' },
+  ] },
+  { title: 'Boxes', accent: 'requests', cards: [
+    { key: 'nobox', icon: '🚫', title: 'No Box / Not Ready', sub: 'Box swaps, and box labels for pairs bought without a box' },
+    { key: 'box-labels', icon: '🏷️', title: 'Box Labels', sub: 'Replacement box label for a pair with no box — by VIN, UPC or SKU' },
+    // Beside No Box on purpose: "is there a box for this?" is the question you ask
+    // while standing over a pair that hasn't got one.
+    { key: 'box-stock', icon: '🗃️', title: 'Empty Box Stock', sub: 'Spare shoe boxes on hand — find one that fits a pair' },
+  ] },
+  { title: 'Sell & Ship', accent: 'shipping', cards: [
+    { key: 'sold', icon: '💰', title: 'Mark Sold', sub: 'Scan VINs to mark sold (delists from all stores)' },
+    { key: 'shipped', icon: '📦', title: 'Mark Shipped', sub: 'Scan VINs to mark shipped' },
+    { key: 'cancellations', icon: '🛑', title: 'Order Cancellations', sub: 'Orders sent to cancel — photo on Telegram, recorded with the shoe, by platform and day' },
+  ] },
+  { title: 'On the Way', accent: 'listing', cards: [
+    { key: 'expected', icon: '📅', title: 'Expected This Week', sub: 'What is coming today and this week, by supplier and by online store' },
+    { key: 'inbound', icon: '🚚', title: 'Inbound', sub: 'What is coming, from whom, and what has stopped moving — every box still on its way' },
+    { key: 'online-orders', icon: '🛍️', title: 'Online Orders', sub: 'Shoes the PH team bought online — what is on its way, and count each parcel in when it lands' },
+    { key: 'undelivered', icon: '📭', title: 'Undelivered Tracking', sub: 'PO and online-order parcels not delivered or received — untick the new ones, export CSV / PDF to chase' },
+    { key: 'dup-tracking', icon: '🔁', title: 'Duplicate Tracking', sub: 'Packages received under a tracking number we already received — logged per supplier' },
+  ] },
+  { title: 'Buying & In-Store', accent: 'inventory', cards: [
     { key: 'instore', icon: '🛍️', title: 'In-Store Buying', sub: 'Scan pairs as you buy them at the store' },
     { key: 'instore-listing', icon: '🏷️', title: 'In-Store Listing', sub: 'Mark in-store buys listed to Alias/StockX/Shopify' },
     { key: 'payout', icon: '🧮', title: 'Payout Calculator', sub: 'Cost after discounts vs. what Alias/StockX pay out — is this pair a buy?' },
@@ -168,47 +198,8 @@ export const HOME_SECTIONS = [
     // here is buying a gift card. A buyer asks to purchase stock, we approve it, the
     // desk funds them with cards to spend, they ship, we receive and reconcile.
     { key: 'buy-carts', icon: '🛒', title: 'Buying Requests', sub: 'Buyers ask, you approve, the desk funds the cards — then receipt, audit and reconcile', priv: true },
-    { key: 'presell-listings', icon: '⚡', title: 'Pre-sell Listings', sub: 'Scan or type a SKU and list pairs straight to Alias + StockX — own stock, sales deduct, Telegram on every sale' },
     { key: 'receipts', icon: '🧾', title: 'Receipts', sub: 'Store receipts found in our order mailboxes — where each pair was bought, and by whom' },
-  ] },
-  // A one-off migration mode, not part of the daily loop — its own section so it
-  // reads as "the project of getting old stock into the system", not as receiving.
-  { title: 'Existing Stock', accent: 'existing', cards: [
-    { key: 'existing-stock', icon: '📦', title: 'Count Existing Stock', sub: 'Scan a shelf, then the pairs already on it (never reaches the PH team)' },
-  ] },
-  { title: 'Put-away', accent: 'orders', cards: [
-    { key: 'shelve', icon: '📍', title: 'Shelve / Put-away', sub: 'Scan a shelf, then scan shoes onto it' },
-    { key: 'nobox', icon: '🚫', title: 'No Box / Not Ready', sub: 'Box swaps, and box labels for pairs bought without a box' },
-    { key: 'box-labels', icon: '🏷️', title: 'Box Labels', sub: 'Replacement box label for a pair with no box — by VIN, UPC or SKU' },
-    // Sits beside No Box on purpose: "is there a box for this?" is the question you ask
-    // while standing over a pair that hasn't got one.
-    { key: 'box-stock', icon: '🗃️', title: 'Empty Box Stock', sub: 'Spare shoe boxes on hand — find one that fits a pair' },
-  ] },
-  { title: 'Rescale', accent: 'requests', cards: [
-    { key: 'rescale', icon: '♻️', title: 'Rescale Stock', sub: 'Re-scan in-hand stock (no shipment)' },
-    { key: 'rescalereq', icon: '📨', title: 'Rescale Requests', sub: 'PH-flagged SKUs to recount / rescan' },
-  ] },
-  { title: 'Sell & Ship', accent: 'shipping', cards: [
-    { key: 'sold', icon: '💰', title: 'Mark Sold', sub: 'Scan VINs to mark sold (delists from all stores)' },
-    { key: 'shipped', icon: '📦', title: 'Mark Shipped', sub: 'Scan VINs to mark shipped' },
-    { key: 'cancellations', icon: '🛑', title: 'Order Cancellations', sub: 'Orders sent to cancel — photo on Telegram, recorded with the shoe, by platform and day' },
-  ] },
-  { title: 'Browse & Listings', accent: 'listing', cards: [
-    { key: 'inventory', icon: '🔎', title: 'Inventory', sub: 'Search, scan & print labels' },
-    // Scan anything, get one answer — and count a size against Shopify (inventory.md).
-    { key: 'stock-check', icon: '🔢', title: 'Stock Check', sub: 'Scan a box: how many Shopify has in that size. Scan a VIN: is this pair still in inventory. Then count a size' },
-    { key: 'locations', icon: '🗺️', title: 'Locate Shoe', sub: 'Find which shelf a shoe is on' },
-    { key: 'report', icon: '📊', title: 'Listings & Sync', sub: 'Store listings & sync status' },
-    { key: 'deleted', icon: '🗑️', title: 'Deleted', sub: 'Pairs removed from inventory — search by SKU, history kept' },
-  ] },
-  { title: 'PH Team', superOnly: true, accent: 'requests', cards: [
-    { key: 'ph', icon: '🧾', title: 'PH Team Workspace', sub: 'Open the PH pricing / listing pages (New Inventory, Rescale, Photos…)' },
-  ] },
-  // Last, and for everyone: the written procedures are a reference you go to
-  // deliberately, not a queue — so it sits below the work rather than competing
-  // with it. No badge, ever.
-  { title: 'Help', accent: 'help', cards: [
-    { key: 'sop', icon: '📖', title: 'SOP & Help', sub: 'Step-by-step procedures for every screen, searchable, plus FAQ' },
+    { key: 'presell-listings', icon: '⚡', title: 'Pre-sell Listings', sub: 'Scan or type a SKU and list pairs straight to Alias + StockX — own stock, sales deduct, Telegram on every sale' },
   ] },
   // The eBay account (docs/context/ebay-listings.md): the same page the PH workspace has
   // (listings, orders, sales report, reprice, coupons) — here so an ADMIN can reach it and
@@ -223,10 +214,20 @@ export const HOME_SECTIONS = [
     { key: 'access', privKey: 'manage_access', icon: '🔑', title: 'Check Access', sub: 'Approve, change role, reset password, or remove accounts' },
     { key: 'settings', icon: '⚙️', title: 'Settings', sub: 'Price margin % and other app-wide settings' },
   ] },
+  { title: 'PH Team', superOnly: true, accent: 'requests', cards: [
+    { key: 'ph', icon: '🧾', title: 'PH Team Workspace', sub: 'Open the PH pricing / listing pages (New Inventory, Rescale, Photos…)' },
+  ] },
   // Superadmin only: both tools rewrite records other people rely on and neither can be
   // undone from the screen, so they sit a notch above the rest of Administration.
   { title: 'Superadmin', superOnly: true, accent: 'orders', cards: [
     { key: 'merge', icon: '🔗', title: 'Merge duplicates', sub: 'One supplier entered twice, or one inbound received as two batches — fold them together' },
+  ] },
+  // Last, and for everyone: the written procedures are a reference you go to
+  // deliberately, and counting old stock in is a one-off project — neither is a queue,
+  // so they sit below the work rather than competing with it. No badge, ever.
+  { title: 'Setup & Help', accent: 'help', cards: [
+    { key: 'existing-stock', icon: '📦', title: 'Count Existing Stock', sub: 'Scan a shelf, then the pairs already on it (never reaches the PH team)' },
+    { key: 'sop', icon: '📖', title: 'SOP & Help', sub: 'Step-by-step procedures for every screen, searchable, plus FAQ' },
   ] },
 ];
 

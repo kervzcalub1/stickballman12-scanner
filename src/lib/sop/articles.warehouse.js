@@ -15,7 +15,7 @@ export const WAREHOUSE_ARTICLES = [
     diagram: 'receiving-wizard',
     shot: 'receiving-step1',
     steps: [
-      { do: 'Home → Receiving Shipment Orders → Receive New.' },
+      { do: 'Home → Receiving → Receive New.' },
       { do: 'Fill the shipment header: supplier, date, and the tracking number off the courier label.', note: 'Supplier and tracking are required — the server rejects a receiving batch without both, because a batch has to be traceable to the shipment it came from.' },
       { do: 'Did it arrive with no tracking number at all — hand-delivered, picked up locally, or a supplier who never sent one? Tick "No tracking number" under the field and carry on.', note: 'That tick is recorded on the batch, so it reads as "this shipment had none" rather than a field somebody skipped. Only tick it when there really is no number — do not use it to get past a label you have not read yet.' },
       { do: 'Enter the tracking number by typing it, tapping the camera to scan the barcode, or photographing the label so it can be read off the picture.', note: 'UPS 1Z…, FedEx and USPS formats are all recognised and normalised automatically.' },
@@ -128,7 +128,7 @@ export const WAREHOUSE_ARTICLES = [
     when: 'Resuming an interrupted intake, adding a late box, or checking what was in a shipment.',
     shot: 'batches',
     steps: [
-      { do: 'Home → Receiving Shipment Orders → Batches.' },
+      { do: 'Home → Receiving → Batches.' },
       { do: 'Open a batch to see its boxes, each with its tracking number and item count.' },
       { do: 'Expand a box row to see the shoes in it. Tap any VIN to open that unit\'s full detail and history.' },
       { do: 'To CONTINUE a box marked "pending", tap "Add items" on its own row. That drops you into the receiving wizard aimed at that box — its number and tracking come with it, and everything you scan lands in it.', note: 'Pending means the box is recorded but nothing has been scanned into it yet. This is how you pick a batch back up.' },
@@ -203,7 +203,7 @@ export const WAREHOUSE_ARTICLES = [
     summary: 'Scan pairs as you buy them in a retail store. Same intake as receiving, minus everything about shipping.',
     when: 'You are standing in a store buying stock.',
     steps: [
-      { do: 'Home → In-Store Mode → In-Store Buying.' },
+      { do: 'Home → Buying & In-Store → In-Store Buying.' },
       { do: 'Step 1 is short: store/location, date, cost, notes. No supplier, no buyer, no tracking, no boxes.' },
       { do: 'Step 2 — scan each pair by box UPC or SKU exactly as in receiving.' },
       { do: 'Steps 3 and 4 (Review and Issues) work the same as receiving — flag defects per pair here.' },
@@ -226,7 +226,7 @@ export const WAREHOUSE_ARTICLES = [
     summary: 'The worklist that tracks which in-store buys you have listed by hand on Alias, StockX and Shopify.',
     when: 'After you have manually created the listings on the store sites.',
     steps: [
-      { do: 'Home → In-Store Mode → In-Store Listing.' },
+      { do: 'Home → Buying & In-Store → In-Store Listing.' },
       { do: 'Rows are grouped by SKU — you list a SKU once and it covers all its sizes.' },
       { do: 'List the shoe by hand on the store site, then tick the matching toggle here: Alias, StockX, Shopify. The three are independent.' },
       { do: 'Turn on "Needs listing only" to hide SKUs where all three are already ticked.', note: 'It is off by default so the page reads as an overview of everything you bought in store.' },
@@ -348,7 +348,7 @@ export const WAREHOUSE_ARTICLES = [
     when: 'Picking an order, or auditing a shelf.',
     shot: 'locations',
     steps: [
-      { do: 'Home → Browse & Listings → Locate Shoe.' },
+      { do: 'Home → Shelves & Stock → Locate Shoe.' },
       { do: 'Search by name, SKU, VIN or UPC — or tap "📷 Scan" and scan the VIN label or the box UPC.' },
       { do: 'Results group by SKU: a header with the photo and a "SKU · N shelved · M not shelved" summary, then one row per pair — VIN, US size, status, and where.' },
       { do: 'Tap the shelf chip in the "where" column to jump straight to that shelf and see everything else on it.' },
@@ -367,7 +367,7 @@ export const WAREHOUSE_ARTICLES = [
     summary: 'Add, rename, retire and label the physical shelf spots the warehouse scans against.',
     when: 'Setting up a new site or aisle, or replacing damaged shelf tags.',
     steps: [
-      { do: 'Home → Browse & Listings → Locate Shoe, then browse the tiles.' },
+      { do: 'Home → Shelves & Stock → Locate Shoe, then browse the tiles.' },
       { do: 'Add one shelf with "Add", or a whole aisle with bulk-add — one bay per line, e.g. "A1 5" for bay A1 with 5 shelves.' },
       { do: 'For a new site or area, use "＋ Custom…" in the Warehouse and Area pickers. The area picker suggests the selected site\'s existing areas first.' },
       { do: 'To rename, move or remove anything that already exists, see "Rename, move or delete a shelf, bay, row, area or site".' },
@@ -390,7 +390,7 @@ export const WAREHOUSE_ARTICLES = [
     when: 'A rack was renamed or torn out, a site or area changed name, or shelves were set up wrong and need correcting.',
     shot: ['locations-edit', 'locations-edit-modal', 'locations-delete-modal', 'locations-delete-blocked'],
     steps: [
-      { do: 'Home → Browse & Listings → Locate Shoe, then browse the tiles down to the level you want to change — a site, an area, a row, a bay, or a single shelf.' },
+      { do: 'Home → Shelves & Stock → Locate Shoe, then browse the tiles down to the level you want to change — a site, an area, a row, a bay, or a single shelf.' },
       { do: 'Tap the pencil in the corner of that tile.', note: 'A folder tile (site / area / row / bay) opens the group editor. A shelf tile opens the shelf editor, where you can also change its display name and shelf number.' },
       { do: 'Type the new name. Before you save, read the preview panel — it tells you how many shelf locations this touches and lists the barcodes that change, old → new.' },
       { do: 'To relocate rather than rename, use "Move to site" and "Move to area" in the same box. A bay or a row can be moved under a different area or site.' },
@@ -469,7 +469,7 @@ export const WAREHOUSE_ARTICLES = [
     when: 'Any time you need to answer a question about what we hold.',
     shot: 'inventory',
     steps: [
-      { do: 'Home → Browse & Listings → Inventory.' },
+      { do: 'Home → Shelves & Stock → Inventory.' },
       { do: 'Search by typing a VIN, SKU or name — or scan a VIN with a gun or the camera to jump straight to it.' },
       { do: 'Type or scan a shelf code (MNH-WH-A2-04) to list that shelf\'s contents instead.' },
       { do: 'Narrow with the Day/Week/Month or Custom date filter, plus supplier, status and intake filters.', note: 'Intake filters to receiving, rescale or in-store.' },
@@ -609,7 +609,7 @@ export const WAREHOUSE_ARTICLES = [
     when: 'Checking whether stock you received has been listed yet.',
     shot: 'listings',
     steps: [
-      { do: 'Home → Browse & Listings → Listings & Sync.' },
+      { do: 'Home → Shelves & Stock → Listings & Sync.' },
       { do: 'One row per SKU and status, with size chips and the four store badges: II (Intelligent Inventory), AL (Alias), SX (StockX), SH (Shopify).' },
       { do: 'Expand a row for the per-size breakdown — every field is per size, so sizes can legitimately differ.' },
       { do: 'Use the History button on a size to see who changed what and when.' },
@@ -632,7 +632,7 @@ export const WAREHOUSE_ARTICLES = [
     diagram: 'po-reconcile-states',
     shot: 'reconcile',
     steps: [
-      { do: 'Home → Receiving Shipment Orders → PO Reconciliation.' },
+      { do: 'Home → Receiving → PO Reconciliation.' },
       { do: 'Read the chip on each order — it says what is actually true: Reconciled, Receiving, Received blind, N discrepancies, Boxes still out, or Matched · ready to close.' },
       { do: 'Open an order to see the line-by-line table: SKU and size, product name, and a got/expected count.' },
       { do: 'Switch between "By size" and "By SKU" depending on what you are chasing. Matched lines fold away behind "N lines matched ✓ — Show".' },

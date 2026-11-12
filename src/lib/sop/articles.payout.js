@@ -16,7 +16,7 @@ export const PAYOUT_ARTICLES = [
     summary: 'Look up a shoe, tap the size in your hand, fill the cost stack, and read the Buy / Watch / Pass. Nothing is saved — it never touches inventory.',
     when: 'Standing in a store, or reading an offer, and deciding whether the pair is worth taking.',
     steps: [
-      { do: 'Open it: Home → In-Store Mode → Payout Calculator (warehouse/admin), or PH home → Pricing & Listing → Payout Calculator.' },
+      { do: 'Open it: Home → Buying & In-Store → Payout Calculator (warehouse/admin), or PH home → Look Up → Payout Calculator.' },
       { do: 'Type the SKU and press Look up.', note: 'Optional. If you already know the sale price you can type it straight into a platform box and skip the shoe entirely.' },
       { do: 'Tap the size you are holding. Both markets load — Alias on the basis chosen above the sizes, and StockX.' },
       { do: 'Read the call. There is already one: each platform fills its own sale price from its OWN lowest ask, so you do not have to tap a price to get an answer.', note: 'The highlighted cell is the number being used. Tap Highest offer, Last sold or Global indicator to use that instead, or type your own — then no cell is highlighted, because you are not using any of them.' },

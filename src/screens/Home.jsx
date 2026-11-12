@@ -1,5 +1,5 @@
 // Role-aware home screen: a find box, the floor's four daily jobs, what is waiting on
-// somebody, then every tool grouped by the shoe's lifecycle.
+// somebody, then every tool grouped by job (HOME_SECTIONS), daily floor work first.
 import React, { useState } from 'react';
 import { TopBar, CardBadges } from '../components/common.jsx';
 import { NavIcon } from '../components/NavIcons.jsx';
@@ -101,25 +101,30 @@ export function Home({ user, onPick, onSignOut }) {
           )}
         </section>
       )}
-      {/* A section with one or two cards takes half the width on a wide screen, so two
-          short ones (Rescale + Sell & Ship, Help + Administration) share a row instead of
-          each leaving an empty half behind it. DOM order is kept — no dense packing — so
-          the lifecycle still reads top to bottom. */}
-      <div className="home-sections">
+      {/* A section of three cards or fewer takes half the width on a wide screen, so two
+          short ones (Boxes + Sell & Ship, Marketplaces + Administration) share a row
+          instead of each leaving an empty half behind it. DOM order is kept — no dense
+          packing — so the daily work still reads top to bottom. */}
+      <div className="home-sections home-compact">
       {sections.filter((s) => (!s.adminOnly || isAdmin) && (!s.superOnly || isSuper)).map((section) => (
-        <section className={section.cards.length <= 2 ? 'home-section half' : 'home-section'} key={section.title} data-accent={section.accent}>
+        <section className={section.cards.length <= 3 ? 'home-section half' : 'home-section'} key={section.title} data-accent={section.accent}>
           <h2 className="home-section-title">{section.title}</h2>
           <div className="home-grid home-tools">
-            {section.cards.map((c) => (
-              <button className="home-card" key={c.key} onClick={() => onPick(c.key)}>
+            {section.cards.map((c) => {
+              // The card shows its title only (CSS hides the sentence); the sentence is the
+              // hover text, so a new person can still find out what a card is for.
+              const sub = c.key === 'report' && !isAdmin ? `${c.sub} (view-only)` : c.sub;
+              return (
+              <button className="home-card" key={c.key} title={sub} onClick={() => onPick(c.key)}>
                 <span className="home-card-icon"><NavIcon name={c.key} /></span>
                 <span className="home-card-text">
                   <span className="home-card-title">{c.title}</span>
-                  <span className="home-card-sub">{c.key === 'report' && !isAdmin ? `${c.sub} (view-only)` : c.sub}</span>
+                  <span className="home-card-sub">{sub}</span>
                   <CardBadges badges={homeCardBadges(c.key, counts)} />
                 </span>
               </button>
-            ))}
+              );
+            })}
           </div>
         </section>
       ))}

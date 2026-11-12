@@ -164,6 +164,15 @@ there, not as hand-written JSX. Every PH sub-page is wrapped in `PageNavContext`
 attention counts) so PH can jump page-to-page without going Home. The staff app
 provides no context, so its TopBar is unchanged. The menu renders only while open —
 a closed menu would duplicate every page title in the DOM and trip `getByText`.
+**Home layout (2026-11-13, owner: "hard to look at"):** both homes group tools by JOB, daily
+floor work first — staff `HOME_SECTIONS` (`src/lib/constants.js`): Receiving · Shelves & Stock ·
+Boxes | Sell & Ship · On the Way · Buying & In-Store · Marketplaces | Administration (admin) ·
+Setup & Help; PH `PH_HOME_SECTIONS`: Pricing & Listing · Marketplaces · Queues & Requests ·
+Purchase Orders · On the Way · Look Up · Help. Cards are **title-only** (`.home-compact` in
+styles.css hides `.home-card-sub`; the sentence is the card's `title` hover text), a section
+of ≤3 cards is half-width (order short ones in pairs), and on a phone the cards are two a
+row. `.home-compact` is scoped so the supplier home and No Box hub (same classes) are
+untouched. Admin home 2754→1782 px tall on desktop, 4948→2841 px on a phone.
 
 **Page state lives in the query string** (`src/lib/urlstate.js`, `useQueryParam(key)` /
 `useQueryDateRange(defaultMode)` for a DateRangeBar's `{mode, anchor}` as `?dm=&da=`).

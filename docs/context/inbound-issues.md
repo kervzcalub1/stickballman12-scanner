@@ -1,7 +1,7 @@
 # Inbound Issues (a delivery problem → a case PH owns until it is resolved)
 
 Screen `src/screens/InboundIssues.jsx` at **`/inbound-issues`** (warehouse/admin home →
-Receiving Shipment Orders) and **`/ph/inbound-issues`** (PH home → Queues & Requests).
+Receiving) and **`/ph/inbound-issues`** (PH home → Queues & Requests).
 Added 2026-10-24.
 
 ## Why

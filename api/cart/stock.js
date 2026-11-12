@@ -39,10 +39,19 @@ import { cartVisibleTo } from '../_lib/buycart.js';
 // feet, and a fuzzy match would invent stock that does not exist.
 const key = (v) => String(v ?? '').trim().toLowerCase();
 
-// One press must not turn into forty upstream calls. A request with more distinct
-// styles than this gets its stock read for the first 25 and says so, rather than
-// hanging on a Shopify page-through nobody is waiting for.
-const MAX_STYLES = 25;
+// Every SKU on the request is checked — a big request used to stop at 25 and leave the
+// rest blank, which is exactly the request where over-buying hides. To keep one press
+// from becoming dozens of Shopify calls at once, the styles are read a few at a time
+// (Shopify is also cached ten minutes per style, so a re-open is mostly cache hits).
+const CONCURRENCY = 5;
+
+async function mapInBatches(list, size, fn) {
+  const out = [];
+  for (let i = 0; i < list.length; i += size) {
+    out.push(...await Promise.all(list.slice(i, i + size).map(fn)));
+  }
+  return out;
+}
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -65,13 +74,12 @@ export default async function handler(req, res) {
 
     const lines = full.lines || [];
     const styles = [...new Set(lines.map((l) => String(l.sku || '').trim()).filter(Boolean))];
-    const used = styles.slice(0, MAX_STYLES);
 
     // allSettled per style, and the two sources kept independent: a Shopify outage must
     // not cost us the shelf count that came out of our own database, and a style that
     // errors must not blank the other nineteen.
     const configured = shopifyConfigured();
-    const readings = await Promise.all(used.map(async (sku) => {
+    const readings = await mapInBatches(styles, CONCURRENCY, async (sku) => {
       const [oursR, shopR] = await Promise.allSettled([
         stockOnHandBySizeForSku(sku),
         configured ? shopifyInventoryForSku(sku) : Promise.resolve(null),
@@ -81,7 +89,7 @@ export default async function handler(req, res) {
         ours: oursR.status === 'fulfilled' ? (oursR.value || []) : null,
         shop: shopR.status === 'fulfilled' ? shopR.value : null,
       };
-    }));
+    });
     const bySku = new Map(readings.map((r) => [r.sku, r]));
 
     const out = lines.map((l) => {
@@ -152,13 +160,6 @@ export default async function handler(req, res) {
       // Said once, for the whole answer, and repeated on screen: this is Shopify's
       // belief plus our own records, not a physical count.
       disclaimer: 'Shopify inventory plus our own unlisted units — not a physical count. For a number to act on, ask the warehouse.',
-      // Says WHAT was checked (Shopify + our unlisted pairs), how many of how many, and
-      // which SKUs were left out — "only the first 25 styles were checked" read as if
-      // the buy call or the approvals had been cut short, which they never are.
-      truncated: styles.length > used.length
-        ? `"On hand" (Shopify stock + our unlisted pairs) was checked for the first ${used.length} of ${styles.length} SKUs on this request only. `
-          + `Not checked: ${styles.slice(MAX_STYLES).join(', ')}. Those lines show "on hand not checked" — that is not the same as none on hand.`
-        : null,
       lines: out,
     });
   } catch (e) {

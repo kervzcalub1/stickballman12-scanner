@@ -75,7 +75,11 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   // two more pairs in it". Confirmed, it goes straight into scanning that box.
   const [reopenBox, setReopenBox] = useState(null); // { box, err? }
   const [sizeEdit, setSizeEdit] = useState(null); // the pair whose size is being corrected
+  const [expEdit, setExpEdit] = useState(null); // { value, err } while correcting the expected box count
+  const [expNotice, setExpNotice] = useState('');
   const [sizeNotice, setSizeNotice] = useState('');
+  // A notice about one batch must not follow the user to the next one.
+  useEffect(() => { setExpNotice(''); setExpEdit(null); }, [selId]);
   const [deleting, setDeleting] = useState(false);   // the "Delete this batch" modal
   // The box whose number is being corrected, + the number typed for it.
   const [renumber, setRenumber] = useState(null); // { box, value }
@@ -226,7 +230,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   // audited or closed, a pair sold off it — the lists and the open batch re-read with the
   // page's current filters, swapping only what changed. The open box stays open (it is
   // keyed by id). Held while any dialog or write of this person's is up.
-  const dialogUp = busy || deleting || !!renumber || !!reopenBox || !!sizeEdit || !!auditing || auditBusy || !!reopenId || !!linking;
+  const dialogUp = busy || deleting || !!renumber || !!reopenBox || !!sizeEdit || !!expEdit || !!auditing || auditBusy || !!reopenId || !!linking;
   const BATCH_TABLES = ['batches', 'batch_boxes', 'items', 'shipment_issues', 'purchase_orders'];
   useLive(BATCH_TABLES, async () => {
     const seq = ++listSeq.current;
@@ -293,6 +297,28 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
       setRenumber(null);
       await loadDetail(selId);
     } catch (err) { if (err.unauthorized) return onSignOut(); setRenumber((r) => (r ? { ...r, err: err.message } : r)); }
+    finally { setBusy(false); }
+  }
+
+  // "130" typed at Step 1 for a 30-box shipment. The server removes the empty pending
+  // slots above the new count and refuses to drop anything that has stock, tracking or
+  // a PO label on it (api/batches/set-expected.js).
+  async function saveExpected() {
+    const n = Number(expEdit?.value);
+    if (!Number.isInteger(n) || n < 1) { setExpEdit((r) => ({ ...r, err: 'Enter a whole number of boxes, 1 or more.' })); return; }
+    setBusy(true); setExpEdit((r) => ({ ...r, err: '' }));
+    try {
+      const r = await api.batchSetExpected(selId, n);
+      setExpEdit(null);
+      // Not finished for them: Finish batch runs the PO's reconciliation and its alert,
+      // and that should be a deliberate press, not a side effect of fixing a typo.
+      const got = (r.boxes || []).filter((x) => x.status === 'received').length;
+      const allIn = detail?.batch?.status === 'open' && got >= r.to && got === (r.boxes || []).length;
+      setExpNotice(`Boxes expected: ${r.from ?? '—'} → ${r.to}.`
+        + (r.removed ? ` ${r.removed} empty box slot${r.removed === 1 ? '' : 's'} above ${r.to} removed.` : '')
+        + (allIn ? ` All ${got} boxes are in — press Finish batch when you're done.` : ''));
+      await Promise.all([loadDetail(selId), loadLists()]);
+    } catch (err) { if (err.unauthorized) return onSignOut(); setExpEdit((x) => (x ? { ...x, err: err.message } : x)); }
     finally { setBusy(false); }
   }
 
@@ -420,6 +446,15 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
               {boxes.length || expected
                 ? <><b>{received}{expected ? `/${expected}` : ''}</b><span className="muted sm"> boxes</span></>
                 : <><b>{detail.items?.length ?? 0}</b><span className="muted sm"> item{(detail.items?.length ?? 0) === 1 ? '' : 's'}</span></>}
+              {/* The count typed at Step 1 is a guess off the pile at the door — "130"
+                  for 30 happens, and then the batch reads 23 % done forever. */}
+              {!readOnly && (boxes.length > 0 || expected) && (
+                <button type="button" className="btn ghost sm inv-cost-edit" title="Change how many boxes this batch expects"
+                  aria-label="Change how many boxes this batch expects"
+                  onClick={() => { setExpNotice(''); setExpEdit({ value: String(expected || boxes.length || ''), err: '' }); }}>
+                  <Icon name="pencil" />
+                </button>
+              )}
             </div>
           </div>
           {expected ? (
@@ -636,6 +671,29 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
 
         {error && <div className="error mt">{error}</div>}
         {sizeNotice && <div className="notice mt">{sizeNotice}</div>}
+        {expNotice && <div className="notice mt">{expNotice}</div>}
+        {expEdit && (
+          <Modal type="warn" title={`${b.batch_code} — boxes expected`}
+            message={`How many boxes (shipping labels) this shipment really has. ${received} received so far${boxes.length ? `, ${boxes.length} box row${boxes.length === 1 ? '' : 's'} on the batch` : ''}.`}
+            onClose={() => !busy && setExpEdit(null)}>
+            <div className="renum-form">
+              <label>Boxes expected
+                <input type="number" min="1" max="999" step="1" inputMode="numeric" value={expEdit.value} autoFocus
+                  onChange={(e) => setExpEdit((r) => ({ ...r, value: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveExpected(); }} />
+              </label>
+              <p className="muted sm">
+                Lowering it removes the empty <b>pending</b> boxes numbered above the new count.
+                A box with pairs, a tracking number or a PO label in it is never removed.
+              </p>
+              {expEdit.err && <div className="error">{expEdit.err}</div>}
+              <div className="renum-acts">
+                <button className="btn primary" disabled={busy} onClick={saveExpected}>Save</button>
+                <button className="btn ghost" disabled={busy} onClick={() => setExpEdit(null)}>Cancel</button>
+              </div>
+            </div>
+          </Modal>
+        )}
         {sizeEdit && (
           <SizeEditModal item={sizeEdit} onClose={() => setSizeEdit(null)} onSignOut={onSignOut}
             onSaved={async (r) => {

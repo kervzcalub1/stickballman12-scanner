@@ -1260,6 +1260,12 @@ and re-adding it, while the same SKU prices fine an hour later.
 `api/cart/stock.js` · `stockOnHandBySizeForSku` in `db.js` · `StockPanel` in
 `BuyCart.jsx` · **What do we already hold?** above the lines.
 
+**Every SKU on the request is checked** (2026-11-13). It used to stop at 25 and show
+"Only the first 25 styles on this request were checked", leaving the rest of a big
+request with no number. Now the styles are read 5 at a time (`CONCURRENCY`), and
+Shopify is cached ten minutes per style, so a big request is a little slower to fill
+but never partial.
+
 The request answered what a pair costs and what it would sell for, and said nothing
 about the six already on our own shelves. An approver reading a healthy ROI had no way
 to see that PH is still trying to move last month's, so the same shoe got bought again —

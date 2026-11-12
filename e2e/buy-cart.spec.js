@@ -3675,6 +3675,18 @@ test('a supplier not switched on for buying sees no card, and every cart call is
 // request" is what says the list is complete. The gift-card desk funds nothing against a
 // list still growing; the buyer can re-open it (the group is told) until the receipt is
 // in, and a re-opened, funded request keeps its cards and takes a top-up.
+test('pair tally: pairs are the decided quantity, SKUs are distinct style codes (pure)', async () => {
+  const { pairTally, pairTallyText } = await import('../src/lib/buycartRules.js');
+  const t = pairTally([
+    { sku: 'DD1391-100', size: '9', qty: 2 }, { sku: 'dd1391-100 ', size: '10', qty: 1 },
+    { sku: 'FD9082-102', size: '8.5', qty: 3 }, { sku: 'FD9082-102', size: '9', qty: null },
+  ]);
+  expect(t).toEqual({ pairs: 6, skus: 2, lines: 4, undecided: 1 });
+  expect(pairTallyText(t)).toBe('6 pairs (2 SKUs)');
+  expect(pairTallyText(pairTally([{ sku: 'A', qty: 1 }]))).toBe('1 pair (1 SKU)');
+  expect(pairTally([])).toEqual({ pairs: 0, skus: 0, lines: 0, undecided: 0 });
+});
+
 test('a size with no quantity is one pair, and the answer says so (pure)', async () => {
   const { parseApprovalReply } = await import('../src/lib/buyPaste.js');
   const L = ['8', '9', '10', '10.5W'].map((size, i) => ({ id: i + 1, size }));
@@ -4969,6 +4981,11 @@ test.describe('floor feedback, November', () => {
     await expect(heads.nth(1)).toContainText('Waiting on an answer');
     await expect(heads.nth(2)).toContainText('Turned down or not buying');
     await expect(heads.nth(2)).toContainText('1 turned down · 1 not buying');
+    // How much each group adds up to (owner, 2026-11-13): pairs and SKUs, not just rows.
+    // The "not buying" size 12 was approved and then dropped, so it is NOT in the total.
+    await expect(heads.nth(0)).toContainText('2 lines · 2 pairs (1 SKU)');
+    await expect(heads.nth(1)).toContainText('1 line · 1 SKU');
+    await expect(page.locator('.bc-approved-total')).toHaveText(' · Approved: 2 pairs (1 SKU)');
     await expect(order).toHaveText(['10', '11', '9']);
     await heads.nth(2).getByRole('button').click();
     await expect(order).toHaveText(['10', '11', '9', '8', '12']);

@@ -4,7 +4,7 @@ Screen: `src/screens/PayoutCalculator.jsx`. Maths: `src/lib/payout.js` (pure).
 Batch analysis (bottom of the same screen): `src/components/BatchAnalysis.jsx` +
 `src/lib/batchParse.js` + `src/lib/batch.js`. Endpoints: `api/payout/quote.js` (live prices),
 `api/payout/batch.js` (a whole list) + `api/payout/presets.js` (supplier presets). Routes: **`/payout`** (admin + warehouse home,
-In-Store Mode section), **`/ph/payout`** (PH home, Pricing & Listing section), and
+Buying & In-Store section), **`/ph/payout`** (PH home, Look Up section), and
 **`/payout` on the supplier portal** (their own home — see "Suppliers get this screen"
 below).
 E2E: `e2e/payout-calculator.spec.js`.

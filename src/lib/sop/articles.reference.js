@@ -156,12 +156,13 @@ export const REFERENCE_ARTICLES = [
     title: 'Reading the Home screen',
     area: 'start',
     roles: STAFF,
-    summary: 'Home is laid out along the lifecycle of a shoe, with the work that needs a decision pulled to the top.',
+    summary: 'Home puts the work that needs a decision at the top, then every tool grouped by job, daily floor work first.',
     when: 'Start of a shift — this is your worklist.',
     shot: 'home',
     steps: [
       { do: 'Read "Needs attention" first. Cards only appear there when their count is above zero, and each one opens the screen that clears it.' },
-      { do: 'Below that, sections follow the shoe: Receiving → In-Store → Put-away → Rescale → Sell & Ship → Browse & Listings, then Administration.' },
+      { do: 'Below that, tools are grouped by job: Receiving → Shelves & Stock → Boxes and Sell & Ship → On the Way → Buying & In-Store, then Marketplaces and Administration (admins), with Setup & Help last.' },
+      { do: 'Each card shows its name only. Hover over a card (or long-press on a phone) to read what it does.' },
       { do: 'Amber badges want a decision today. Neutral badges are standing work.' },
     ],
     rules: [

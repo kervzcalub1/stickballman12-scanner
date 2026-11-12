@@ -261,7 +261,8 @@ body {
 }
 
 /* Needs attention, two tiers: "now" tiles (amber, above) and the backlog row. */
-.home-attn-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+/* 150px: six tiles fit one row on a laptop (170 left one alone on a second row). */
+.home-attn-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 .home-attn-grid .home-card { padding: 14px 16px 14px 19px; }
 .home-attn-grid .home-card-icon { width: 36px; height: 36px; padding: 8px; margin: 0; }
 .home-attn-grid .home-card-title { font-size: 15px; }
@@ -7396,4 +7397,28 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 @media (max-width: 768px) {
   .shein-page [data-section] details > summary, .shl-drawer details > summary { padding-top: 14px; padding-bottom: 14px; }
   .shl-vtable td.c-todo .btn.shl-fix, .shl-rt-act .btn { min-height: 44px; }
+}
+
+/* Staff + PH homes (Home.jsx, PHTeam.jsx — `.home-compact`), 2026-11-13: title-only tool
+   cards. The owner found the homes hard to read — 46 cards each carrying a sentence that
+   was cut off with "…" on most of them. The sentence is still in the DOM and is the
+   card's hover text (title attribute). Scoped to `.home-compact` so the supplier home
+   and the No Box hub, which share these classes, are untouched. Last in the file so it
+   wins over the `.ph-home` rules above at equal specificity. */
+.home-compact .home-section { margin-bottom: 16px; }
+.home-compact .home-section-title { font-size: 12.5px; color: var(--text); }
+.home-compact .home-tools { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.home-compact .home-tools .home-card { align-items: center; gap: 11px; min-height: 56px; padding: 10px 12px 10px 15px; border-radius: 12px; }
+.home-compact .home-tools .home-card-icon { width: 32px; height: 32px; padding: 7px; border-radius: 9px; }
+.home-compact .home-tools .home-card-title { font-size: 14.5px; line-height: 1.25; }
+.home-compact .home-tools .home-card-sub { display: none; }
+.home-compact .home-tools .card-badges { margin-top: 4px; gap: 4px; }
+.home-compact .home-tools .card-badge { font-size: 10.5px; padding: 1px 7px; }
+/* Phone: two tiles a row, a small icon beside a title that may wrap to two lines —
+   roughly half the old one-card-per-row height. Still a 56px+ tap target. */
+@media (max-width: 560px) {
+  .home-compact .home-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .home-compact .home-tools .home-card { gap: 9px; min-height: 58px; padding: 9px 8px 9px 12px; }
+  .home-compact .home-tools .home-card-icon { width: 28px; height: 28px; padding: 6px; border-radius: 8px; }
+  .home-compact .home-tools .home-card-title { font-size: 13.5px; }
 }

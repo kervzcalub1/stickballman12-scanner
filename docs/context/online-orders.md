@@ -1,7 +1,7 @@
 # Online Orders — shoes the PH team buys online
 
-Screen `src/screens/OnlineOrders.jsx` at **`/ph/online-orders`** (PH home → Purchase
-Orders) and **`/online-orders`** (warehouse home → Receiving Shipment Orders). Endpoints
+Screen `src/screens/OnlineOrders.jsx` at **`/ph/online-orders`** (PH home → On the
+Way) and **`/online-orders`** (warehouse home → On the Way). Endpoints
 `api/online-orders/{list,get,save,line,receive,delete}.js` (+ `_shared.js`, not a route).
 Cost maths + stage: `src/lib/onlineOrders.js` (pure, used by the form AND the server).
 Queries: the "Online orders" section at the end of `api/_lib/db.js`. E2E:

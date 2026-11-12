@@ -691,8 +691,8 @@ checked, `1z 999…` didn't match `1Z999…`, and nothing listed or counted the 
   `check-tracking?exceptBatch=` — the receive's own open batch excluded). Box mode passes
   its batch the same way, so continuing a box no longer warns about itself.
 - **Duplicate Tracking page** (`/dup-tracking`, `src/screens/TrackingDuplicates.jsx`; home
-  → Receiving Shipment Orders, **Open** badge = `pendingCounts.dup_tracking_open`; **PH team:
-  `/ph/duplicate-tracking`**, card under Purchase Orders next to Undelivered Tracking):
+  → On the Way, **Open** badge = `pendingCounts.dup_tracking_open`; **PH team:
+  `/ph/duplicate-tracking`**, card under On the Way next to Undelivered Tracking):
   per-supplier totals (tap to filter), Open / Handled / All, search, links to both batches.
   The warehouse and PH team read; an **admin closes** an entry with a **required note** (told the
   supplier / left it — the Foot Locker call) and can reopen it.

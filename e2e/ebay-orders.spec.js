@@ -149,7 +149,8 @@ test.describe('eBay Orders + Sales report pages', () => {
     await page.route('**/api/ebay/connect', (r) => { body = r.request().postDataJSON(); return r.fulfill({ json: { ok: true, url: '/ebay?ebay=connected&ebay_user=stickballman12' } }); });
     await loginAs(page, 'admin');
     await page.goto('/');
-    await page.getByRole('button', { name: /^eBay Orders & late shipments/ }).click();
+    // Home cards are title-only; the description is the card's hover text (title attribute).
+    await page.locator('.home-card[title^="Orders & late shipments"]').click();
     await expect(page).toHaveURL(/\/ebay$/);
     await page.getByRole('button', { name: 'Connect eBay' }).click();
     await expect.poll(() => body).toEqual({ back: '/ebay' });

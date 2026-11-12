@@ -189,14 +189,14 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
           )}
         </section>
       )}
-      {/* Same compact icon-beside-text cards as the staff home, a little narrower
-          (`ph-home`) so a five-card section is one row on a laptop instead of 4 + 1. */}
-      <div className="ph-home">
+      {/* Same compact title-only cards as the staff home (`ph-home`); a section of three
+          cards or fewer takes half the width, so Administration + Help share a row. */}
+      <div className="ph-home home-sections home-compact">
         {PH_HOME_SECTIONS.map((section) => {
           const cards = section.cards.filter((c) => (!c.priv || canBuy) && (!c.privKey || hasPriv(user, c.privKey)));
           if (!cards.length) return null;
           return (
-            <section className="home-section" key={section.title} data-accent={section.accent}>
+            <section className={cards.length <= 3 ? 'home-section half' : 'home-section'} key={section.title} data-accent={section.accent}>
               <h2 className="home-section-title">{section.title}</h2>
               <div className="home-grid home-tools">
                 {cards.map((c) => (

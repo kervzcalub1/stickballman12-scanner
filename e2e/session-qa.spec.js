@@ -459,10 +459,10 @@ test.describe('Session QA · PH home + status filter empty-state', () => {
   let seeded = [];
   test.beforeAll(async ({ request }) => { seeded = await seedPairs(request, 'PHEMPTY', [{ name: 'QA PH Empty-state Shoe', sku: 'QA-PHEMPTY', size: '10' }]); });
   test.afterAll(async () => { await removePairs(seeded); });
-  test('PH home renders the 5 sections, daily work first and Help last', async ({ page }) => {
+  test('PH home renders its sections, daily work first and Help last', async ({ page }) => {
     await loginAs(page, 'ph_team');
     await page.goto('/ph');
-    const order = ['Pricing & Listing', 'Queues & Requests', 'Purchase Orders', 'Look Up', 'Help'];
+    const order = ['Pricing & Listing', 'Marketplaces', 'Queues & Requests', 'Purchase Orders', 'On the Way', 'Look Up', 'Help'];
     for (const name of order) {
       await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
     }

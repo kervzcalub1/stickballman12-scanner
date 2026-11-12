@@ -1,7 +1,7 @@
 # Inbound feed (what is coming, and what has stopped moving)
 
 `/inbound`, `src/screens/Inbound.jsx`, warehouse + ph_team (admin auto). Home card in
-**Receiving Shipment Orders**. Endpoint `api/inbound.js` → `listInboundBoxes()`.
+**On the Way** (was Receiving Shipment Orders until the 2026-11-13 regroup). Endpoint `api/inbound.js` → `listInboundBoxes()`.
 Classification: `src/lib/inbound.js`. Tests: `e2e/inbound.spec.js`.
 
 ## What it is

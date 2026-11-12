@@ -398,7 +398,7 @@ shelf). A count line above ("42 pairs received · 3 batches · 12 different shoe
   (in-store, existing stock, empty boxes — `listReceivedItems({ phSafe })`); Stock Check
   scans and counts are shown as they are.
 - Live on `items` (already in LIVE_TABLES). No schema change.
-- The home card moved from Browse & Listings to **Receiving Shipment Orders**, next to Batches.
+- The home card moved from Browse & Listings to **Receiving Shipment Orders**, next to Batches (now the **Receiving** section, 2026-11-13).
 
 The Stock Check part (second and third tabs, as before):
 A person's **scan history** (user's call): every Stock Check scan, newest first, then a

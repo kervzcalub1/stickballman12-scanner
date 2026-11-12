@@ -5,7 +5,7 @@
 // a status, so a person can see at a glance whether the thing waiting is theirs. A
 // request sitting for three days because nobody knew it was their turn is the failure
 // mode this screen exists to prevent.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { poHref } from '../lib/poLink.js';
 import { TopBar, FormModal } from '../components/common.jsx';
@@ -16,6 +16,7 @@ import { useQueryParam } from '../lib/urlstate.js';
 import { useLive } from '../hooks.js';
 import { hasPriv } from '../lib/constants.js';
 import { GIFT_CARD_MERCHANTS, merchantLabel } from '../lib/giftCardMerchants.js';
+import { cartSkuSearch, CART_SKU_SEARCH_MIN } from '../lib/buycartRules.js';
 import { BuyCart } from './BuyCart.jsx';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
@@ -80,6 +81,26 @@ export function BuyCarts({ user, onHome, onSignOut }) {
   // inside BC-2400 used to land back on the queue, and a link to one could not be sent.
   const [openRaw, setOpen] = useQueryParam('request');
   const open = /^\d+$/.test(openRaw) ? Number(openRaw) : null;
+  // Opening a request PUSHES a history entry (BatchPage's pattern), so the device/browser Back
+  // button closes it and lands on this list — search and filters still in place — instead of
+  // walking out to the home page. Set when WE pushed, so the in-page "← Buying requests" can
+  // undo that push (history.back()) rather than leaving a dead entry behind it.
+  const pushedOpen = useRef(false);
+  const openCart = (id) => { pushedOpen.current = true; setOpen(String(id), { replace: false }); };
+  const closeCart = () => {
+    if (pushedOpen.current) { pushedOpen.current = false; window.history.back(); return; }
+    setOpen('');   // opened straight from a link or a refresh — there is no entry of ours to pop
+  };
+  // Find the requests with a shoe on them, by SKU, spelt any way. In the URL like the other
+  // filters, so a refresh (or Back out of a request) keeps it. The fetch waits for typing to
+  // pause, and only re-runs when the code itself changes — "dd1391-100" and "DD1391 100" are one search.
+  const [sku, setSku] = useQueryParam('sku');
+  const [skuQ, setSkuQ] = useState(() => cartSkuSearch(sku));
+  useEffect(() => {
+    const t = setTimeout(() => setSkuQ(cartSkuSearch(sku)), 250);
+    return () => clearTimeout(t);
+  }, [sku]);
+  const skuShort = !!String(sku || '').trim() && !skuQ;
   const [view, setView] = useQueryParam('view', 'open');
   // A desk's queue is always open work, so picking one overrides the Open/Finished split
   // rather than being ANDed with it (Finished + "To approve" would always be empty).
@@ -96,19 +117,19 @@ export function BuyCarts({ user, onHome, onSignOut }) {
 
   async function load() {
     try {
-      const { carts: c, counts: n, buyers: b } = await api.cartList(filter || undefined, buyer || undefined, listView);
+      const { carts: c, counts: n, buyers: b } = await api.cartList(filter || undefined, buyer || undefined, listView, skuQ || undefined);
       setCarts(c); setCounts(n); if (b) setBuyers(b); setErr('');
     } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
   }
   // Filtered SERVER-side, not in the browser: the list is capped at 100, so narrowing
   // the loaded page would quietly show a fraction of somebody's requests and read as
   // though that were all of them.
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filter, buyer, view]);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filter, buyer, view, skuQ]);
   // The queue counts and the status chips move when somebody else acts — a buyer closing
   // a list, a tap in the group — so the desk's pile is re-read the moment it changes
   // (live-updates.md) rather than on F5.
   useLive(['buy_carts', 'buy_cart_lines', 'buy_cart_gift_cards', 'buy_cart_tasks'], async () => {
-    const { carts: c, counts: n, buyers: b } = await api.cartList(filter || undefined, buyer || undefined, listView);
+    const { carts: c, counts: n, buyers: b } = await api.cartList(filter || undefined, buyer || undefined, listView, skuQ || undefined);
     setCarts(c); setCounts(n); if (b) setBuyers(b);
   }, { paused: !!asking || !!open, mount: false });
 
@@ -121,13 +142,15 @@ export function BuyCarts({ user, onHome, onSignOut }) {
     try {
       const { cart } = await api.cartCreate({ merchant, retailer: retailer.trim() });
       setAsking(false);
-      setOpen(cart.id);
+      openCart(cart.id);
     } catch (e) { if (e.unauthorized) return onSignOut(); throw e; }
   }
 
   if (open) {
-    return <BuyCart user={user} cartId={open} onSignOut={onSignOut}
-      onBack={() => { setOpen(''); load(); }} />;
+    // Back goes to THIS list, never home: "← Buying requests" in the bar, and the device Back
+    // button through the pushed entry above. Home stays one tap away in the bar too.
+    return <BuyCart user={user} cartId={open} onSignOut={onSignOut} onHome={onHome}
+      onBack={() => { closeCart(); load(); }} />;
   }
 
   return (
@@ -176,9 +199,9 @@ export function BuyCarts({ user, onHome, onSignOut }) {
               {q.priv && hasPriv(user, q.priv) && <span className="bc-queue-mine">Yours</span>}
             </button>
           ))}
-          {(filter || buyer) && (
+          {(filter || buyer || sku) && (
             <button type="button" className="btn sm ghost"
-              onClick={() => { setFilter(''); setBuyer(''); }}>Clear filters</button>
+              onClick={() => { setFilter(''); setBuyer(''); setSku(''); }}>Clear filters</button>
           )}
         </div>
       )}
@@ -187,6 +210,26 @@ export function BuyCarts({ user, onHome, onSignOut }) {
           "supplier". They hold the `supplier` ROLE, but the gift card SUPPLIERS are a
           different set of people entirely — and two different people reading as one is
           how a separation-of-duties control quietly stops being one. */}
+      <div className="bc-filters">
+        {/* Server-side, like the buyer filter: the list is capped at 100, so a search of the
+            loaded page would miss older requests and read as though there were none. A buyer
+            searches only their own — the server scopes them before it searches. */}
+        <label className="bc-filter">
+          <span className="muted sm">SKU</span>
+          <input type="search" className="input bc-sku-search" value={sku} maxLength={60}
+            placeholder="e.g. DD1391-100" aria-label="Search requests by SKU"
+            onChange={(e) => setSku(e.target.value)} />
+        </label>
+        {skuShort && <span className="muted sm">Type at least {CART_SKU_SEARCH_MIN} letters or digits of the SKU.</span>}
+        {/* None found is said once, below, where the list would be. */}
+        {skuQ && carts && carts.length > 0 && (
+          <span className="muted sm bc-sku-found">
+            {`${carts.length}${carts.length >= 100 ? '+' : ''} request${carts.length === 1 ? '' : 's'}`} with
+            {' '}<b>{sku.trim()}</b>{!filter && view !== 'all' ? ` in ${VIEWS.find((v) => v.key === view)?.label || view}` : ''}.
+          </span>
+        )}
+      </div>
+
       {!isBuyer && buyers && buyers.length > 1 && (
         <div className="bc-filters">
           <label className="bc-filter">
@@ -222,7 +265,10 @@ export function BuyCarts({ user, onHome, onSignOut }) {
       {!carts && <p className="muted">Loading…</p>}
       {carts && !carts.length && (
         <p className="muted">
-          {filter && buyer ? 'Nothing in that queue for that buyer.'
+          {skuQ ? (!filter && view !== 'all'
+            ? <>No requests with that SKU here. <button type="button" className="btn sm ghost" onClick={() => setView('all')}>Search All</button></>
+            : 'No requests with that SKU.')
+            : filter && buyer ? 'Nothing in that queue for that buyer.'
             : filter ? 'Nothing in that queue.'
               : buyer ? 'No requests from that buyer.'
                 : view === 'open' ? (isBuyer ? 'Nothing open — start a request when you are heading to a store.' : 'No open buying requests.')
@@ -242,7 +288,7 @@ export function BuyCarts({ user, onHome, onSignOut }) {
             const s = STATUS[c.status] || { label: c.status, cls: 'muted' };
             return (
               <li key={c.id}>
-                <button type="button" className="bc-card" onClick={() => setOpen(c.id)}>
+                <button type="button" className="bc-card" onClick={() => openCart(c.id)}>
                   <span className="bc-card-top">
                     <b>{c.cart_code}</b>
                     <span className={`po-chip ${s.cls}`}>{s.label}</span>
@@ -286,8 +332,8 @@ export function BuyCarts({ user, onHome, onSignOut }) {
               {carts.map((c) => {
                 const s = STATUS[c.status] || { label: c.status, cls: 'muted' };
                 return (
-                  <tr key={c.id} className="bc-row" onClick={() => setOpen(c.id)} tabIndex={0}
-                    onKeyDown={(e) => { if (e.key === 'Enter') setOpen(c.id); }}>
+                  <tr key={c.id} className="bc-row" onClick={() => openCart(c.id)} tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === 'Enter') openCart(c.id); }}>
                     <td><b>{c.cart_code}</b></td>
                     {/* Status second, beside the code: it is what a desk scans the list for,
                         and at the far right it was the column that scrolled out of view. */}

@@ -1278,7 +1278,7 @@ function nudgeTargets(cart, isBuyer) {
   return order.filter((k) => !(isBuyer && k === 'buyer')).map((k) => all[k]);
 }
 
-export function BuyCart({ user, cartId, onBack, onSignOut }) {
+export function BuyCart({ user, cartId, onBack, onHome = null, onSignOut }) {
   // Two questions that used to be native prompts: how many boxes the PO covers, and why
   // a request is being cancelled.
   const [asking, setAsking] = useState(null);
@@ -1338,10 +1338,14 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
     finally { setBusy(''); }
   }
 
+  // Back goes to the buying requests list, not home (the owner's ask, 2026-11-13): the bar's own
+  // button said "← Home" while it went to the list, and the device Back button left the page.
+  const back = onHome ? <button type="button" className="btn ghost sm" onClick={onBack}>← Buying requests</button> : null;
+
   if (!cart) {
     return (
       <div className="app">
-        <TopBar title="Buying request" onHome={onBack} onSignOut={onSignOut} />
+        <TopBar title="Buying request" onHome={onHome || onBack} onSignOut={onSignOut} right={back} />
         {err ? <div className="error mt">{err}</div> : <p className="muted">Loading…</p>}
       </div>
     );
@@ -1354,7 +1358,7 @@ export function BuyCart({ user, cartId, onBack, onSignOut }) {
 
   return (
     <div className="app bc">
-      <TopBar title={cart.cart_code} onHome={onBack} onSignOut={onSignOut} />
+      <TopBar title={cart.cart_code} onHome={onHome || onBack} onSignOut={onSignOut} right={back} />
 
       <section className="card bc-head">
         <div className="bc-head-top">

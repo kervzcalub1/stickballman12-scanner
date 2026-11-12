@@ -707,6 +707,89 @@ test('the queue filters by buyer, and a buyer cannot use it to widen their own s
   expect(asOther.body.buyers ?? null).toBeNull();
 });
 
+test('the list finds requests by SKU, spelt any way, and a buyer only ever searches their own', async ({ request }) => {
+  // One style on two buyers' requests, plus a request of another shoe. Seeded with SQL, like
+  // the filter test above, so it spends none of cart/create's rate limit.
+  const style = `SR${Date.now() % 1e7}-101`;
+  const seed = async (who, sku) => {
+    const id = Number((await pool.query(
+      `INSERT INTO buy_carts (gc_merchant, buyer_user_id, buyer_name, retailer, purpose, status)
+       VALUES ('nike', $1, $2, 'E2E Store', 'E2E: sku search fixture', 'submitted') RETURNING id`,
+      [people[who].uid, people[who].name])).rows[0].id);
+    await pool.query(`INSERT INTO buy_cart_lines (cart_id, sku, size, qty, shelf_price) VALUES ($1, $2, '9', 1, 50)`, [id, sku]);
+    return id;
+  };
+  const mine = await seed('buyer', style);
+  const theirs = await seed('buyer2', style.toLowerCase());
+  const other = await seed('buyer', `XO${Date.now() % 1e7}-001`);
+  const ids = (r) => r.body.carts.map((c) => Number(c.id));
+
+  // Staff find both, however the code is typed — case, dashes and spaces don't matter.
+  for (const typed of [style, style.toLowerCase(), style.replace('-', ' '), style.replace('-', '')]) {
+    const r = await read_(request, 'approver', `cart/list?sku=${encodeURIComponent(typed)}`);
+    expect(r.status).toBe(200);
+    expect(ids(r)).toEqual(expect.arrayContaining([mine, theirs]));
+    expect(ids(r)).not.toContain(other);
+  }
+  // Part of the code is a search too; two characters is not (it would match nearly everything).
+  expect(ids(await read_(request, 'approver', `cart/list?sku=${style.slice(0, 7)}`))).toEqual(expect.arrayContaining([mine, theirs]));
+  expect(ids(await read_(request, 'approver', `cart/list?sku=${style.slice(0, 2)}`))).toContain(other);
+
+  // The buyer's scope is applied BEFORE the search: the other buyer's request never comes back.
+  const asBuyer = await read_(request, 'buyer', `cart/list?sku=${style}`);
+  expect(ids(asBuyer)).toContain(mine);
+  expect(ids(asBuyer)).not.toContain(theirs);
+  expect(ids(await read_(request, 'buyer2', `cart/list?sku=${style}&buyer=${people.buyer.uid}`))).toEqual([theirs]);
+});
+
+test('on screen: Back from inside a request lands on the list, with the SKU search still in it', async ({ page, request }) => {
+  const style = `BK${Date.now() % 1e7}-202`;
+  const cartId = await newRequest(request, { lines: [{ ...LINE, sku: style }] });
+  const code = (await pool.query(`SELECT cart_code FROM buy_carts WHERE id = $1`, [cartId])).rows[0].cart_code;
+  await as(page, 'approver');
+  await page.goto('/buy-carts');
+  await page.getByLabel('Search requests by SKU').fill(style.toLowerCase());
+  await expect(page.locator('.bc-sku-found')).toContainText('1 request with');
+  await expect(page).toHaveURL(new RegExp(`sku=${style.toLowerCase()}`));
+  await page.locator('.bc-table-wrap tr.bc-row', { hasText: code }).click();
+  await expect(page.locator('.bc-code')).toHaveText(code);
+  await expect(page).toHaveURL(new RegExp(`request=${cartId}`));
+
+  // The in-page button goes to the list, not home…
+  await page.getByRole('button', { name: '← Buying requests' }).click();
+  await expect(page.locator('.bc-table-wrap tr.bc-row', { hasText: code })).toBeVisible();
+  await expect(page.getByLabel('Search requests by SKU')).toHaveValue(style.toLowerCase());
+  await expect(page).not.toHaveURL(/request=/);
+
+  // …and so does the browser's Back button.
+  await page.locator('.bc-table-wrap tr.bc-row', { hasText: code }).click();
+  await expect(page.locator('.bc-code')).toHaveText(code);
+  await page.goBack();
+  await expect(page.locator('.bc-table-wrap tr.bc-row', { hasText: code })).toBeVisible();
+  await expect(page).toHaveURL(/\/buy-carts\?/);
+  await expect(page.getByLabel('Search requests by SKU')).toHaveValue(style.toLowerCase());
+
+  // Opened straight from a link, there is no list entry behind it — the button still lands on the list.
+  await page.goto(`/buy-carts?request=${cartId}`);
+  await page.getByRole('button', { name: '← Buying requests' }).click();
+  await expect(page.locator('.bc-list')).toBeVisible();
+  await expect(page).toHaveURL(/\/buy-carts$/);
+});
+
+test('on screen: a buyer searches their own requests, and Back from one goes to their list (supplier app)', async ({ page, request }) => {
+  const style = `BY${Date.now() % 1e7}-303`;
+  const cartId = await newRequest(request, { lines: [{ ...LINE, sku: style }] });
+  const code = (await pool.query(`SELECT cart_code FROM buy_carts WHERE id = $1`, [cartId])).rows[0].cart_code;
+  await as(page, 'buyer');
+  await page.goto(`/buying?sku=${style}`);
+  await page.locator('.bc-table-wrap tr.bc-row', { hasText: code }).click();
+  await expect(page.locator('.bc-code')).toHaveText(code);
+  await page.goBack();
+  await expect(page.locator('.bc-list')).toBeVisible();
+  await expect(page.getByLabel('Search requests by SKU')).toHaveValue(style);
+  await expect(page).toHaveURL(/\/buying\?sku=/);
+});
+
 test('a company card request can actually be funded, and then take a receipt', async ({ request }) => {
   const cartId = await newRequest(request, { lines: [LINE] });
   await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
@@ -2743,10 +2826,13 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     await pool.query(`INSERT INTO online_order_lines (order_id, sku, size, qty, unit_price) VALUES ($1,$2,'9',1,100), ($1,$2,'13',1,100)`, [order, sku]);
     await pool.query(`UPDATE online_order_lines SET cancelled_at = now() WHERE order_id = $1 AND size = '13'`, [order]);
 
+    // The approved pairs name the request they are on, the way everyone calls it ("BC-13").
+    const code = (await pool.query(`SELECT cart_code FROM buy_carts WHERE id = $1`, [first])).rows[0].cart_code;
+    expect(code).toMatch(/^BC-\d+$/);
     const { card } = await groupCard(request, [{ ...shoe, size: '8' }, { ...shoe, size: '9' }]);
     expect(card.text).toContain([
       'Not in warehouse yet: 8 ×3, 9 ×3, 10 ×1',
-      'Approved, not bought yet: 8 ×2, 9 ×2',
+      `Approved, not bought yet: 8 ×2, 9 ×2 (From ${code})`,
       'Bought, not shipped yet: 10 ×1',
       'Shipped: 8 ×1',
       'Online orders: 9 ×1',
@@ -2758,6 +2844,9 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     const { card: next } = await groupCard(request, [{ ...shoe, size: '8' }, { ...shoe, size: '9' }]);
     expect(next.text).toContain('Not in warehouse yet: 8 ×2, 9 ×1, 10 ×1');
     expect(next.text).not.toContain('Approved, not bought yet');
+    // The receipt's pair names its request; the order's unpacked pair is said to be beside it.
+    expect(next.text).toContain(`Bought, not shipped yet: 8 ×1, 10 ×1 (From ${code} + a purchase order)`);
+    expect(next.text).toContain('Shipped: 8 ×1\n');
 
     // Older than 30 days is stuck rather than coming.
     await pool.query(`UPDATE online_orders SET created_at = now() - interval '31 days' WHERE id = $1`, [order]);
@@ -3402,6 +3491,27 @@ test('each pair not here yet is counted once, at the furthest point it has reach
   expect(words({})).toEqual(['Not in warehouse yet: none.']);
   expect(words({ approved: [{ size: '9', qty: 2 }, { size: '8', qty: 2 }] })).toEqual([
     'Not in warehouse yet: 8 ×2, 9 ×2', 'Approved, not bought yet: 8 ×2, 9 ×2',
+  ]);
+  // Which request(s) the pairs are on: each once, oldest first, whatever order the rows came in.
+  expect(words({ approved: [
+    { size: '11', qty: 2, cart_id: 14, cart_code: 'BC-14' },
+    { size: '9.5', qty: 1, cart_id: 13, cart_code: 'BC-13' },
+    { size: '11', qty: 1, cart_id: 13, cart_code: 'BC-13' },
+  ] })).toEqual([
+    'Not in warehouse yet: 9.5 ×1, 11 ×3', 'Approved, not bought yet: 9.5 ×1, 11 ×3 (From BC-13, BC-14)',
+  ]);
+  expect(words({ approved: [{ size: '9.5', qty: 1, cart_id: 13 }] })[1]).toBe('Approved, not bought yet: 9.5 ×1 (From BC-13)');
+  // A receipt names its request too; an order's pairs in the same stage are counted beside it,
+  // and the stages an order or an online buy fills name no request.
+  expect(words({
+    receipts: [{ size: '11', qty: 1, cart_id: 13, cart_code: 'BC-13' }],
+    poLines: [line(1, '10', 1), line(2, '12', 2, 21, 'shipped')],
+    online: [{ size: '9', qty: 1 }],
+  })).toEqual([
+    'Not in warehouse yet: 9 ×1, 10 ×1, 11 ×1, 12 ×2',
+    'Bought, not shipped yet: 10 ×1, 11 ×1 (From BC-13 + a purchase order)',
+    'Shipped: 12 ×2',
+    'Online orders: 9 ×1',
   ]);
   // The order's list is what was paid for, so its boxes aren't added on top of it.
   expect(words({ poLines: [line(1, '9', 5), line(1, '9', 2, 11, 'in_transit')] })).toEqual([

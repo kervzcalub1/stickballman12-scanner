@@ -279,6 +279,13 @@ The PH team uploads card files, and some are bad. The supplier sees none of it.
   (`NOT_HERE_DAYS`, the owner's number), because older ones are stuck rather than coming. Also on the request page
   above the lines, in the card's words (`cart/not-here`, `NotHere`), for staff only: it crosses every supplier, so a
   supplier gets a 403 and sees only their own Qty column.
+  - **Names the request(s)** (owner, 2026-11-13): `Approved, not bought yet: 9.5 ×1, 11 ×2 (From BC-13, BC-14)`. The
+    label is the request's own `cart_code` (`BC-<seq>`, the column default — NOT `BC-<id>`; `BC-<id>` is only a
+    fallback if a row ever had none), each request once, oldest (lowest id) first. `notInWarehouseForSku` returns
+    `cart_id` + `cart_code` on the approved and receipt rows; `notHereSummary` puts `requests` (+ `orders`) on each
+    stage. **Bought, not shipped yet** names the receipt's request too, and when a PO's unpacked pairs share that
+    stage it says so — `(From BC-13 + a purchase order)` — so the order's pairs aren't claimed for the request. The
+    PO-only stages (Shipped, and Bought with no receipt) and Online orders name no request.
 - **No quantity means 1.** `8`, `8, 9`, `8 9`, `8 and 9` and `8-10` in a reply are one pair each, and the answer says
   so. A dash with falling numbers (`9-3`) is still size 9, three pairs. On a one-size card a bare number is still how
   many, except the card's own size (`9` on a size 9 card is one pair; `9 pairs` is nine). On the screen, an empty Qty
@@ -2052,6 +2059,27 @@ money screen it invites somebody to keep clicking.
   not `canDecide`). A misread shelf ticket stays fixable through draft / submitted /
   approved — draft is the state where the typo is most likely still there, and gating the
   ✎ on the decision window would have taken it away exactly there.
+
+## Searching the queue by SKU (2026-11-13)
+A **SKU** box on the list (every viewer, buyers included) → `?sku=` in the URL → `cart/list?sku=`
+→ `listBuyCarts({ sku })`: requests with a line whose SKU **contains** the typed code, both sides
+normalised by `cartSkuSearch` (`src/lib/buycartRules.js`: upper case, letters/digits only — the same
+`regexp_replace(upper(sku), '[^A-Z0-9]', '', 'g')` the stock queries use), so `dd1391-100`, `DD1391 100`
+and `DD1391` all find `DD1391-100`. Under 3 characters is no search (the screen says so).
+- **Server-side** for the same reason as the buyer filter (the 100 cap). The buyer's **scope is
+  ANDed in first**, so a buyer's search never reaches another buyer's requests.
+- ANDed with the Open / Finished / All tab (and a queue count, which overrides the tab as before);
+  an empty search in Open offers **Search All**. Typing writes the URL on every key (replace, no
+  history noise); the fetch waits 250 ms and only re-runs when the normalised code changes.
+
+## Back from a request goes to the list (2026-11-13)
+Opening a request **pushes** a history entry for `?request=` (BatchPage's `?b=` pattern), so the
+device / browser **Back** closes it and lands on the list with `?sku=` / `?view=` / `?buyer=` (and the
+in-memory queue filter) still in place — before, the open was a `replaceState` and Back walked out to
+home. Inside a request the bar has **← Buying requests** (undoes our push with `history.back()`, or
+clears `?request=` when the request was opened from a link / refresh) beside **← Home**, which now
+really goes home (it used to be wired to the list while labelled Home). Same `BuyCarts` component on
+all three routes: `/buy-carts`, PH `/ph/gift-card-buying`, supplier `/buying`.
 
 ## Filtering the queue by buyer
 `/buy-carts` takes `?buyer=<user id>`, filtered **server-side** in `listBuyCarts` and

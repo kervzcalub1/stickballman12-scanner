@@ -280,3 +280,13 @@ export function nextStep(cart, who) {
 export function cardTailFromFileName(name) {
   return (/(?:^|[-_ ])(\d{4})\.(?:png|jpe?g|webp)$/i.exec(String(name || '')) || [])[1] || null;
 }
+
+// The buying-request list's SKU search, as the server compares it: upper case, letters and
+// digits only, so "dd1391-100", "DD1391 100" and "DD1391100" are one search (the same
+// regexp_replace the stock queries use on a style code). Fewer than 3 characters is no search —
+// it would match nearly every request. The screen reads it too, to say when a search is too short.
+export const CART_SKU_SEARCH_MIN = 3;
+export function cartSkuSearch(raw) {
+  const q = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 40);
+  return q.length >= CART_SKU_SEARCH_MIN ? q : null;
+}

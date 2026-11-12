@@ -35,7 +35,7 @@ function fromOrders({ poLines = [], received = [], receivedBoxIds = [] }) {
   const orders = new Map();
   const rowFor = (po, size) => {
     const k = `${po}|${orderSize(size)}`;
-    if (!orders.has(k)) orders.set(k, { size, listed: 0, boxed: 0, out: 0, inLandedBoxes: 0, counted: 0 });
+    if (!orders.has(k)) orders.set(k, { po, size, listed: 0, boxed: 0, out: 0, inLandedBoxes: 0, counted: 0 });
     return orders.get(k);
   };
   for (const l of poLines) {
@@ -58,17 +58,37 @@ function fromOrders({ poLines = [], received = [], receivedBoxIds = [] }) {
     // Two records of the same arrival, so the larger one, never the sum of them.
     const left = Math.max(0, expected - Math.max(o.counted, o.inLandedBoxes));
     const shipped = Math.min(left, o.out);
-    if (shipped > 0) rows.push({ stage: 'shipped', size: o.size, qty: shipped });
-    if (left > shipped) rows.push({ stage: 'bought', size: o.size, qty: left - shipped });
+    if (shipped > 0) rows.push({ stage: 'shipped', size: o.size, qty: shipped, po: o.po });
+    if (left > shipped) rows.push({ stage: 'bought', size: o.size, qty: left - shipped, po: o.po });
   }
   return rows;
 }
 
-/** @returns {{ total:number, sizes:Array<{size,qty}>, stages:Array<{key,label,sizes,qty}> }} */
+// The buying request a pair is on, as everyone already calls it ("BC-13"). Only the approved and
+// receipt stages come from a request; an order or an online buy has its own number elsewhere.
+const fromCart = (r) => {
+  const id = Number(r.cart_id);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  return { id, code: String(r.cart_code || '').trim() || `BC-${id}` };
+};
+
+/** The distinct requests behind a stage's pairs, oldest first. */
+function requestsOf(list) {
+  const m = new Map();
+  for (const r of list) if (r.cart && !m.has(r.cart.id)) m.set(r.cart.id, r.cart);
+  return [...m.values()].sort((a, b) => a.id - b.id).map((c) => c.code);
+}
+
+// How many purchase orders also hold pairs of a stage that names requests. "Bought, not shipped
+// yet" mixes receipts with orders not yet packed, and "(From BC-13)" alone would claim the
+// order's pairs for the request too.
+const ordersOf = (list) => new Set(list.filter((r) => !r.cart && r.po != null).map((r) => String(r.po))).size;
+
+/** @returns {{ total:number, sizes:Array<{size,qty}>, stages:Array<{key,label,sizes,qty,requests:string[],orders:number}> }} */
 export function notHereSummary({ approved = [], receipts = [], poLines = [], received = [], receivedBoxIds = [], online = [] } = {}) {
   const rows = [
-    ...approved.map((r) => ({ stage: 'approved', size: r.size, qty: n(r.qty) })),
-    ...receipts.map((r) => ({ stage: 'bought', size: r.size, qty: n(r.qty) })),
+    ...approved.map((r) => ({ stage: 'approved', size: r.size, qty: n(r.qty), cart: fromCart(r) })),
+    ...receipts.map((r) => ({ stage: 'bought', size: r.size, qty: n(r.qty), cart: fromCart(r) })),
     ...fromOrders({ poLines, received, receivedBoxIds }),
     ...online.map((r) => ({ stage: 'online', size: r.size, qty: n(r.qty) })),
   ].filter((r) => r.qty > 0);
@@ -87,12 +107,21 @@ export function notHereSummary({ approved = [], receipts = [], poLines = [], rec
     sizes: tally(rows),
     stages: NOT_HERE_STAGES.flatMap(({ key, label }) => {
       const list = rows.filter((r) => r.stage === key);
-      return list.length ? [{ key, label, qty: list.reduce((t, r) => t + r.qty, 0), sizes: tally(list) }] : [];
+      return list.length
+        ? [{ key, label, qty: list.reduce((t, r) => t + r.qty, 0), sizes: tally(list), requests: requestsOf(list), orders: ordersOf(list) }]
+        : [];
     }),
   };
 }
 
 const sizesText = (sizes) => sizes.map((s) => `${s.size} ×${s.qty}`).join(', ');
+// "(From BC-13, BC-14)": which requests those pairs are on, so the approver can open them. Only
+// a stage that names a request says where it came from; an order's pairs are counted beside it.
+const fromText = ({ requests = [], orders = 0 }) => {
+  if (!requests.length) return '';
+  const also = orders ? ` + ${orders === 1 ? 'a purchase order' : `${orders} purchase orders`}` : '';
+  return ` (From ${requests.join(', ')}${also})`;
+};
 
 /** The card's lines. A count that couldn't be read says so: it is not the same as none. */
 export function notHereLines(summary) {
@@ -100,6 +129,6 @@ export function notHereLines(summary) {
   if (!summary.total) return ['Not in warehouse yet: none.'];
   return [
     `Not in warehouse yet: ${sizesText(summary.sizes)}`,
-    ...summary.stages.map((s) => `${s.label}: ${sizesText(s.sizes)}`),
+    ...summary.stages.map((s) => `${s.label}: ${sizesText(s.sizes)}${fromText(s)}`),
   ];
 }

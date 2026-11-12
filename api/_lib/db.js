@@ -16,7 +16,7 @@ import { ROLL_VIN_RE, VIN_RE } from './vins.js';
 // box. Since 2026-10-23 that is the same alphanumeric rule (store-orders-plan §8b).
 import { trackKey as searchTrackKey, expectsAtOrderLevel, declaresPerBox, hasOrderedList } from '../../src/lib/postatus.js';
 import { presellUnitCost } from '../../src/lib/presellDetails.js';
-import { fundingWords, receiptAfterRemoval } from '../../src/lib/buycartRules.js';
+import { fundingWords, receiptAfterRemoval, cartSkuSearch } from '../../src/lib/buycartRules.js';
 import { requestShipping } from '../../src/lib/costs.js';
 import { NOT_HERE_DAYS } from '../../src/lib/notHere.js';
 import { productAnswered } from '../../src/lib/sheinCutover.js';
@@ -5170,7 +5170,8 @@ export async function notInWarehouseForSku(sku, days = NOT_HERE_DAYS) {
   const sql = db();
   const [approved, receipts, poLines, online] = await Promise.all([
     // Approved, on a request that has neither a purchase order nor a receipt read in yet.
-    sql`SELECT l.size, l.qty
+    // The request's id and code come back too: the card names the request(s) they're on.
+    sql`SELECT l.size, l.qty, c.id AS cart_id, c.cart_code
           FROM buy_cart_lines l JOIN buy_carts c ON c.id = l.cart_id
          WHERE l.status = 'approved' AND l.qty > 0 AND c.po_id IS NULL
            AND c.status IN ('submitted', 'approved', 'funded', 'receipted', 'audited')
@@ -5179,7 +5180,7 @@ export async function notInWarehouseForSku(sku, days = NOT_HERE_DAYS) {
            AND NOT EXISTS (SELECT 1 FROM buy_cart_receipt_lines r WHERE r.cart_id = c.id AND r.removed_at IS NULL)`,
     // On a receipt, with no purchase order raised for them yet. A receipt line matched to an
     // approved pair goes by that pair's code, since a receipt prints the store's own.
-    sql`SELECT coalesce(m.size, r.size) AS size, r.qty
+    sql`SELECT coalesce(m.size, r.size) AS size, r.qty, c.id AS cart_id, c.cart_code
           FROM buy_cart_receipt_lines r
           JOIN buy_carts c ON c.id = r.cart_id
           LEFT JOIN buy_cart_lines m ON m.id = r.matched_line_id
@@ -8226,8 +8227,11 @@ export async function getBuyCartFull(id) {
 // buyer's next step after a denial is a new request, not this one.
 export const BUY_CART_DONE = ['closed', 'cancelled', 'written_off', 'denied'];
 
-export async function listBuyCarts({ buyerUserId = null, status = null, buyerId = null, view = null, limit = 100 } = {}) {
+export async function listBuyCarts({ buyerUserId = null, status = null, buyerId = null, view = null, sku = null, limit = 100 } = {}) {
   const sql = db();
+  // `sku` finds the requests with a line of that style, spelt any way (see cartSkuSearch).
+  // A part of a code matches too: a search box is typed into, and "DD1391" should find them all.
+  const skuQ = cartSkuSearch(sku);
   // `view` splits the list into what is still moving and what has ended. The list is
   // capped at 100 and the endings pile up forever, so without it the open requests —
   // the only ones anybody acts on — were a thin stripe among closed and denied ones.
@@ -8246,6 +8250,9 @@ export async function listBuyCarts({ buyerUserId = null, status = null, buyerId 
            AND (${status}::text IS NULL OR c.status = ${status})
            AND (${onlyIn}::text[] IS NULL OR c.status = ANY(${onlyIn}::text[]))
            AND (${notIn}::text[] IS NULL OR c.status <> ALL(${notIn}::text[]))
+           AND (${skuQ}::text IS NULL OR EXISTS (
+                 SELECT 1 FROM buy_cart_lines l WHERE l.cart_id = c.id
+                    AND strpos(regexp_replace(upper(l.sku), '[^A-Z0-9]', '', 'g'), ${skuQ}::text) > 0))
          ORDER BY c.id DESC LIMIT ${limit}`
     : await sql`
         SELECT c.*, (SELECT po_code FROM purchase_orders p WHERE p.id = c.po_id) AS po_code
@@ -8254,6 +8261,9 @@ export async function listBuyCarts({ buyerUserId = null, status = null, buyerId 
            AND (${buyerId}::bigint IS NULL OR c.buyer_user_id = ${buyerId})
            AND (${onlyIn}::text[] IS NULL OR c.status = ANY(${onlyIn}::text[]))
            AND (${notIn}::text[] IS NULL OR c.status <> ALL(${notIn}::text[]))
+           AND (${skuQ}::text IS NULL OR EXISTS (
+                 SELECT 1 FROM buy_cart_lines l WHERE l.cart_id = c.id
+                    AND strpos(regexp_replace(upper(l.sku), '[^A-Z0-9]', '', 'g'), ${skuQ}::text) > 0))
          ORDER BY c.id DESC LIMIT ${limit}`;
   return rows.map(cartOut);
 }

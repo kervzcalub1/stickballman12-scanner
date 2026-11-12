@@ -1,4 +1,4 @@
-// GET /api/cart/list[?status=][&buyer=<id>]  -> { ok, carts:[…], counts:{…}, buyers:[…] }
+// GET /api/cart/list[?status=][&buyer=<id>][&sku=]  -> { ok, carts:[…], counts:{…}, buyers:[…] }
 //
 // The queue screen for every desk, and the buyer's own list. A BUYER is scoped to their
 // own requests off the token — never off a query parameter, which would turn one
@@ -36,12 +36,16 @@ export default async function handler(req, res) {
   const buyerParam = Number(params.get('buyer'));
   const buyerId = !isBuyer && Number.isInteger(buyerParam) && buyerParam > 0 ? buyerParam : null;
 
+  // A SKU search narrows whatever the caller may already see — the buyer's scope above is
+  // ANDed in by `listBuyCarts`, so a search never reaches another buyer's requests.
+  const sku = params.get('sku') || null;
+
   try {
     // Every row goes through the same redaction as `cart/get`: `listBuyCarts` selects
     // `c.*`, which includes the cost stack (discounts, cashback, tip, shipping). A buyer's
     // row keeps `funding_tax_pct` / `funding_target` for the Needed column; the stack never
     // leaves the server for them. A no-op for staff.
-    const carts = (await listBuyCarts({ buyerUserId, status, buyerId, view }))
+    const carts = (await listBuyCarts({ buyerUserId, status, buyerId, view, sku }))
       .map((c) => redactCartForViewer(c, user));
     // Desk counts are a staff thing — a buyer has no queue to hold up.
     const counts = isBuyer ? null : await buyCartPendingCounts();

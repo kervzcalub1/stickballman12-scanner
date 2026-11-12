@@ -290,3 +290,18 @@ export function cartSkuSearch(raw) {
   const q = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 40);
   return q.length >= CART_SKU_SEARCH_MIN ? q : null;
 }
+
+// "48 pairs (5 SKUs)": how much a group of lines adds up to. Pairs are the decided
+// quantity (`qty`) — on a pending line nobody has said how many yet, so it counts 0 and
+// `undecided` says how many lines that was rather than letting it pass as none. SKUs are
+// distinct style codes, so one shoe in six sizes is one SKU.
+export function pairTally(lines) {
+  const list = Array.isArray(lines) ? lines : [];
+  const skus = new Set(list.map((l) => String(l?.sku || '').trim().toUpperCase()).filter(Boolean));
+  const pairs = list.reduce((n, l) => n + (Number(l?.qty) > 0 ? Number(l.qty) : 0), 0);
+  const undecided = list.filter((l) => !(Number(l?.qty) > 0)).length;
+  return { pairs, skus: skus.size, lines: list.length, undecided };
+}
+
+export const pairTallyText = ({ pairs, skus }) =>
+  `${pairs} pair${pairs === 1 ? '' : 's'} (${skus} SKU${skus === 1 ? '' : 's'})`;

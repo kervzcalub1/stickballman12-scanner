@@ -11202,6 +11202,43 @@ export async function listPresellSales({ limit = 300, from = null, to = null, sk
        AND (${to}::date IS NULL OR (COALESCE(x.sold_at, x.created_at) AT TIME ZONE 'America/New_York')::date <= ${to}::date)
      ORDER BY COALESCE(x.sold_at, x.created_at) DESC LIMIT ${limit}`;
 }
+// ---- History (owner, 2026-11-13): when pairs were entered, which shoes and sizes ----
+// One row per create call / Pairs… raise. Best effort for the caller: never undo a listing
+// because the record failed — callers catch.
+export async function insertPresellEntry(e, actor) {
+  await db()`
+    INSERT INTO presell_entries (run_id, kind, activate, in_transit, transit_note, expected_on, supplier, po_id, lines, created_by)
+    VALUES (${e.runId || null}, ${e.kind || 'new'}, ${e.activate ?? null}, ${!!e.inTransit}, ${e.transitNote || null},
+            ${e.expectedOn || null}::date, ${e.supplier || null}, ${e.poId || null}, ${JSON.stringify(e.lines || [])}::jsonb, ${actor})`;
+}
+// → { entries, listings }: history rows in the range, plus the listing rows from BEFORE the
+// first history row (rebuilt into runs by src/lib/presellHistory.js). from / to = EST days;
+// sku = part of a SKU, any case.
+export async function listPresellHistory({ from = null, to = null, sku = null, limit = 1000 } = {}) {
+  const like = sku ? `%${sku}%` : null;
+  const entries = await db()`
+    SELECT e.id, e.run_id, e.kind, e.activate, e.in_transit, e.transit_note, to_char(e.expected_on, 'YYYY-MM-DD') AS expected_on,
+           e.supplier, e.lines, e.created_by, e.created_at, po.po_code
+      FROM presell_entries e LEFT JOIN purchase_orders po ON po.id = e.po_id
+     WHERE (${from}::date IS NULL OR (e.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+       AND (${to}::date IS NULL OR (e.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+       AND (${like}::text IS NULL OR EXISTS (SELECT 1 FROM jsonb_array_elements(e.lines) x WHERE x->>'sku' ILIKE ${like}))
+     ORDER BY e.created_at DESC LIMIT ${limit}`;
+  const first = await db()`SELECT min(created_at) AS at FROM presell_entries`;
+  const cutoff = first[0]?.at || null;
+  const listings = await db()`
+    SELECT l.id, l.stock_id, l.platform, l.price_cents, l.created_by, l.created_at,
+           s.sku, s.name, s.image, s.size, s.shelf_price, s.in_transit, s.transit_note,
+           to_char(s.expected_on, 'YYYY-MM-DD') AS expected_on, s.supplier, po.po_code
+      FROM presell_listings l JOIN presell_stock s ON s.id = l.stock_id
+      LEFT JOIN purchase_orders po ON po.id = s.po_id
+     WHERE (${cutoff}::timestamptz IS NULL OR l.created_at < ${cutoff}::timestamptz)
+       AND (${from}::date IS NULL OR (l.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+       AND (${to}::date IS NULL OR (l.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+       AND (${like}::text IS NULL OR s.sku ILIKE ${like})
+     ORDER BY l.created_at DESC LIMIT ${Math.min(limit * 20, 20000)}`;
+  return { entries, listings };
+}
 // ---- Fulfilment (docs/context/presell-fulfillment.md) ----
 // Sales whose order still needs reading: never read (ship_state NULL) or still to ship.
 // Newest-due first so a short pass (a 429) spends itself on what matters.

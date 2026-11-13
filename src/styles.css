@@ -7434,3 +7434,16 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
   .home-compact .home-tools .home-card-icon { width: 28px; height: 28px; padding: 6px; border-radius: 8px; }
   .home-compact .home-tools .home-card-title { font-size: 13.5px; }
 }
+
+/* Pre-sell Listings → 🕘 History (owner, 2026-11-13): one card per time pairs were entered. */
+.ap-hist-by { display: inline-flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.ap-hist-by select { min-width: 160px; }
+.ap-hist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.ap-hist-run { padding: 10px 12px; border: 1px solid var(--border, rgba(255,255,255,0.08)); border-radius: 10px; display: flex; flex-direction: column; gap: 6px; }
+.ap-hist-h { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.ap-hist-shoe { display: flex; gap: 10px; align-items: flex-start; padding-top: 6px; border-top: 1px dashed var(--border, rgba(255,255,255,0.08)); }
+.ap-hist-body { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ap-hist-sizes { display: flex; flex-wrap: wrap; gap: 4px; }
+.ap-hist-size { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: rgba(139, 92, 246, 0.14); border: 1px solid rgba(139, 92, 246, 0.35); white-space: nowrap; }
+.ap-hist-plat + .ap-hist-plat::before { content: ' · '; }
+.badge.ap-hist-muted { background: rgba(148, 163, 184, 0.12); color: var(--muted, #9aa3b2); border: 1px solid rgba(148, 163, 184, 0.35); }

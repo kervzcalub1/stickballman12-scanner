@@ -419,3 +419,40 @@ export async function pickListPdf(rows, { generatedAt, scope = '', now = Date.no
   doc.text(ascii('Labels: print each order\'s label from the Fulfill tab (Alias PDF, StockX 4x6). Ship by = the platform cancels after it. Tick the box once packed and labelled.'), M, y + 4, { maxWidth: R - M });
   return doc;
 }
+
+/* -------------------------------- HISTORY -------------------------------- */
+// History tab (owner, 2026-11-13): every time pairs were entered — one row per size of each
+// run (src/lib/presellHistory.js), newest run first.
+const priceRange = (p) => (!p || p.min == null ? '' : p.min === p.max ? n2(cents(p.min)) : `${n2(cents(p.min))}-${n2(cents(p.max))}`);
+export const HISTORY_KIND = { new: 'Listed new', pairs: 'Pairs added' };
+export function historyReportRows(runs) {
+  return (runs || []).flatMap((r) => r.shoes.flatMap((s) => s.sizes.map((z) => ({
+    at: r.at, date: estDate(r.at), time: estClock(r.at), by: r.by || '', kind: HISTORY_KIND[r.kind] || r.kind,
+    sku: s.sku, name: s.name || '', size: z.size, qty: z.qty,
+    alias: priceRange(z.alias), stockx: priceRange(z.stockx),
+    aliasListed: z.alias ? z.alias.created : '', stockxListed: z.stockx ? z.stockx.created : '',
+    inTransit: r.in_transit ? 'yes' : '', supplier: r.supplier || '', po: r.po_code || '', note: r.transit_note || '',
+    expected: r.expected_on || '', shelf: n2(z.shelf), source: r.source === 'rebuilt' ? 'rebuilt from listings' : '',
+  }))));
+}
+export function historyReportCsv(runs) {
+  return toCsv([
+    ['date', 'Entered (EST)'], ['time', 'Time'], ['by', 'By'], ['kind', 'What'], ['sku', 'SKU'], ['name', 'Name'], ['size', 'Size'], ['qty', 'Pairs'],
+    ['alias', 'Alias price $'], ['stockx', 'StockX price $'], ['aliasListed', 'Alias listed'], ['stockxListed', 'StockX listed'], ['shelf', 'Shelf $'],
+    ['inTransit', 'In transit'], ['supplier', 'Supplier'], ['po', 'PO'], ['note', 'Shipment note'], ['expected', 'Expected'], ['source', 'Source'],
+  ], historyReportRows(runs));
+}
+export async function historyReportPdf(runs, { from, to, generatedAt, scope = '' }) {
+  const rs = historyReportRows(runs);
+  const pairs = rs.reduce((n, r) => n + (Number(r.qty) || 0), 0);
+  return tablePdf({
+    title: 'Pre-sell history',
+    subtitle: `Entered ${rangeLabel(from, to)} (EST)${scope ? `  |  ${scope}` : ''}  |  ${generatedAt}`,
+    summary: [['Entries', String((runs || []).length)], ['Pairs', String(pairs)], ['Shoes', String(new Set(rs.map((r) => r.sku)).size)]],
+    cols: [['Entered (EST)', 30], ['By', 24], ['What', 20], ['SKU', 26], ['Name', 0], ['Size', 12], ['Pairs', 12, true],
+      ['Alias $', 22, true], ['StockX $', 22, true], ['Supplier / PO', 34]],
+    cells: rs.map((r) => [`${r.date} ${r.time}`, r.by || '-', r.kind, r.sku, r.name, r.size, String(r.qty),
+      r.alias || '-', r.stockx || '-', [r.supplier, r.po].filter(Boolean).join(' / ') || '-']),
+    footer: 'One row per size of each entry. Entries from before the history started are rebuilt from the listing records (marked in the CSV).',
+  });
+}

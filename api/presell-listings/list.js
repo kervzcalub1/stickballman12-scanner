@@ -1,4 +1,4 @@
-// GET /api/presell-listings/list?tab=stock|listings|sales|pos|boxgrid&view=&platform=&q=&stock=&from=&to=&sku=
+// GET /api/presell-listings/list?tab=stock|listings|sales|history|pos|boxgrid&view=&platform=&q=&stock=&from=&to=&sku=
 //   tab=boxgrid&po=&sku=  → the 📦 Box contents grid for one SKU on one PO
 //   (docs/presell-box-tracking-plan.md)
 // from / to = YYYY-MM-DD (EST): Stock by the day first listed, Listings by the day created,
@@ -6,7 +6,8 @@
 // Pre-sell Listings (docs/context/presell-listings.md) — the three read views.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { dbConfigured, listPresellStock, listPresellListings, listPresellSales, presellPoOptions, presellPoStatus,
-  presellBoxesFor, presellPoBoxGrid, withPresellCost } from '../_lib/db.js';
+  presellBoxesFor, presellPoBoxGrid, withPresellCost, listPresellHistory } from '../_lib/db.js';
+import { presellHistory } from '../../src/lib/presellHistory.js';
 
 const VIEWS = new Set(['all', 'live', 'off', 'pending', 'sold', 'deleted', 'failed']);
 
@@ -53,6 +54,12 @@ export default async function handler(req, res) {
       const sku = String(p.get('sku') || '').trim().slice(0, 60) || null;
       const rows = await listPresellSales({ from, to, sku, limit: from || to || sku ? 5000 : 300 });
       return send(res, 200, { ok: true, rows: await withPresellCost(rows) });
+    }
+    // History (owner, 2026-11-13): every time pairs were entered — when, who, shoes, sizes.
+    if (tab === 'history') {
+      const sku = String(p.get('sku') || '').trim().slice(0, 60) || null;
+      const h = await listPresellHistory({ from, to, sku, limit: from || to || sku ? 5000 : 500 });
+      return send(res, 200, { ok: true, rows: presellHistory(h.entries, h.listings) });
     }
     if (tab === 'pos') return send(res, 200, { ok: true, pos: await presellPoOptions() });
     const platform = ['alias', 'stockx'].includes(p.get('platform')) ? p.get('platform') : null;

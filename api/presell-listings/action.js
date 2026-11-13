@@ -15,6 +15,7 @@ import {
   dbConfigured, getPresellListing, getPresellStock, setPresellStockQty, upsertPresellStock, updatePresellListing, movePresellListing,
   updatePresellStockDetails, getPoBrief, setPresellCompBase, setPresellLock, presellPoCap, bumpPresellStockPo, movePresellStockPo,
   getPoBoxBrief, setPresellBoxLines, addPresellBoxUnknown, presellPoBoxGrid, createPo, linkPresellToNewPo, poCodesByTracking, deleteEmptyPo,
+  insertPresellEntry,
 } from '../_lib/db.js';
 import { registerTracking } from '../_lib/tracking.js';
 import { cleanCostStack, cleanShelf, parseTrackingList, presellUnitCost } from '../../src/lib/presellDetails.js';
@@ -224,6 +225,12 @@ async function stockAction(res, b, actor) {
     }
     await setPresellStockQty(id, qty, actor);
     if (stock.po_id && delta) await bumpPresellStockPo(id, Number(stock.po_id), delta);
+    // History: more pairs entered on an existing size (a cut isn't an entry). Best effort.
+    if (delta > 0) {
+      await insertPresellEntry({ kind: 'pairs', inTransit: !!stock.in_transit, supplier: stock.supplier, poId: stock.po_id ? Number(stock.po_id) : null,
+        lines: [{ stock_id: id, sku: stock.sku, name: stock.name, image: stock.image, size: stock.size, qty: delta, from: Number(stock.qty), to: qty }] }, actor)
+        .catch((e) => console.error('[presell-listings/action] history', e.message));
+    }
     // Fewer pairs than open listings → the extras come down now.
     const removed = await reconcileStock(id, actor, 'qty_cut');
     return send(res, 200, { ok: true, stock: await getPresellStock(id), removed });

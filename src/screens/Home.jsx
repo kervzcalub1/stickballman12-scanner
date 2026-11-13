@@ -25,6 +25,8 @@ export function Home({ user, onPick, onSignOut }) {
   // (`privKey`: Check Access for "Manage user access", eBay + SHEIN for "Connect integrations").
   const sections = HOME_SECTIONS
     .map((s) => (s.cards.some((c) => c.priv) ? { ...s, cards: s.cards.filter((c) => !c.priv || canBuy) } : s))
+    // A single admin-only CARD in a shared section (Lost Package Tracker Tool in On the Way).
+    .map((s) => (s.cards.some((c) => c.adminOnly) && !isAdmin ? { ...s, cards: s.cards.filter((c) => !c.adminOnly) } : s))
     .map((s) => (s.adminOnly && !isAdmin ? { ...s, adminOnly: false, cards: s.cards.filter((c) => c.privKey && hasPriv(user, c.privKey)) } : s))
     .filter((s) => s.cards.length);
   const attention = counts

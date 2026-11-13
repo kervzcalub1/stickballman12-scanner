@@ -5,7 +5,7 @@ import { CARD_WORDS } from './sheinWords.js';
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'expected', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'shein', 'cancellations', 'inbound-issues', 'stock-check', 'my-scans'];
+export const ROUTES = ['receiving', 'inbound', 'expected', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'shein', 'cancellations', 'inbound-issues', 'stock-check', 'my-scans', 'lost-packages'];
 // No Box lives at /no-box (and /no-box/box-swap, /no-box/print-box-labels — no-box.md);
 // the old /nobox still opens it.
 const PATH_ALIAS = { nobox: 'no-box' };
@@ -188,6 +188,8 @@ export const HOME_SECTIONS = [
     { key: 'online-orders', icon: '🛍️', title: 'Online Orders', sub: 'Shoes the PH team bought online — what is on its way, and count each parcel in when it lands' },
     { key: 'undelivered', icon: '📭', title: 'Undelivered Tracking', sub: 'PO and online-order parcels not delivered or received — untick the new ones, export CSV / PDF to chase' },
     { key: 'dup-tracking', icon: '🔁', title: 'Duplicate Tracking', sub: 'Packages received under a tracking number we already received — logged per supplier' },
+    // `adminOnly` on a CARD: this section is shared with the warehouse, the tool is admin + PH.
+    { key: 'lost-packages', icon: '🔎', title: 'Lost Package Tracker Tool', sub: 'Scan a month’s Order Updates sheet for orders never delivered, then ask FedEx / EasyPost about them', adminOnly: true },
   ] },
   { title: 'Buying & In-Store', accent: 'inventory', cards: [
     { key: 'instore', icon: '🛍️', title: 'In-Store Buying', sub: 'Scan pairs as you buy them at the store' },

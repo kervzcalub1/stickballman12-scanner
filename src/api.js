@@ -140,6 +140,12 @@ export const api = {
   undelivered: (days = '90') => get(`/api/undelivered?days=${encodeURIComponent(days)}`),
   markDelivered: (number, on, note) => post('/api/undelivered/mark', { number, on, note }),
   unmarkDelivered: (number) => post('/api/undelivered/mark', { number, undo: true }),
+  // Lost Package Tracker Tool (docs/context/lost-packages.md).
+  lostRuns: () => get('/api/lost-packages/runs'),
+  lostCreateRun: (body) => post('/api/lost-packages/runs', body),
+  lostAddOrders: (runId, orders) => post('/api/lost-packages/orders', { runId, orders }),
+  lostRun: (runId) => get(`/api/lost-packages/orders?run=${encodeURIComponent(runId)}`),
+  lostPhase2: (runId, action) => post('/api/lost-packages/phase2', { runId, action }),
   cancellations: ({ from = null, to = null } = {}) => get(`/api/cancellations/list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) })}`),
   cancellation: (id) => get(`/api/cancellations/get?id=${encodeURIComponent(id)}`),
   saveCancellation: (row) => post('/api/cancellations/save', row),

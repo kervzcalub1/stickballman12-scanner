@@ -14504,3 +14504,187 @@ export async function saveMarketPrices(results) {
   }
   return ok.length;
 }
+
+// ---- Lost Package Tracker Tool (docs/context/lost-packages.md) --------------------------
+// A run = one month's Order Updates workbook. Phase 1 is worked out in the browser
+// (src/lib/lostPackage.js) and saved here; Phase 2 is api/_lib/lostpkg-worker.js asking the
+// couriers about the run's Lost orders, one row at a time.
+
+const LOST_RUN_COLS = `r.id, r.month_label, r.source_name, r.created_by, r.created_at, r.sheets_scanned, r.rows_scanned,
+  r.rows_skipped, r.counts, r.order_count, r.uploaded, r.p2_status, r.p2_by, r.p2_started_at, r.p2_finished_at,
+  r.p2_total, r.p2_checked, r.p2_last, r.updated_at`;
+
+export async function createLostRun({ monthLabel, sourceName, actor, sheetsScanned, rowsScanned, rowsSkipped, counts, orderCount }) {
+  const [row] = await db()`
+    INSERT INTO lost_pkg_runs (month_label, source_name, created_by, created_by_id, sheets_scanned, rows_scanned,
+                               rows_skipped, counts, order_count)
+    VALUES (${monthLabel}, ${sourceName || null}, ${actor?.name || actor?.username || null},
+            ${Number(actor?.uid) || null}, ${sheetsScanned | 0}, ${rowsScanned | 0}, ${rowsSkipped | 0},
+            ${JSON.stringify(counts || {})}::jsonb, ${orderCount | 0})
+    RETURNING id`;
+  return Number(row.id);
+}
+
+// One chunk of a run's orders. Re-sending a chunk is harmless (UNIQUE run_id + key).
+export async function addLostOrders(runId, orders) {
+  const sql = db();
+  const json = JSON.stringify(orders.map((o) => ({
+    key: String(o.key), tracking: o.tracking || '', order_number: o.order_number || '', tracking_fallback: o.tracking_fallback || '',
+    store: o.store || '', product: o.product || '', sku: o.sku || '', qty: o.qty == null ? '' : String(o.qty),
+    courier: o.courier || '', order_date: o.order_date || '', eta: o.eta || '', status_written: o.status_written || '',
+    first_sheet: o.first_sheet || '', evidence: o.evidence || '', p1_class: o.p1_class,
+  })));
+  await sql`
+    INSERT INTO lost_pkg_orders (run_id, key, tracking, order_number, tracking_fallback, store, product, sku, qty, courier,
+                                 order_date, eta, status_written, first_sheet, evidence, p1_class)
+    SELECT ${runId}, x.key, x.tracking, x.order_number, x.tracking_fallback, x.store, x.product, x.sku, x.qty, x.courier,
+           x.order_date, x.eta, x.status_written, x.first_sheet, x.evidence, x.p1_class
+      FROM jsonb_to_recordset(${json}::jsonb) AS x(key text, tracking text, order_number text, tracking_fallback text,
+           store text, product text, sku text, qty text, courier text, order_date text, eta text, status_written text,
+           first_sheet text, evidence text, p1_class text)
+    ON CONFLICT (run_id, key) DO NOTHING`;
+  const [r] = await sql`
+    UPDATE lost_pkg_runs SET uploaded = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = ${runId}), updated_at = now()
+     WHERE id = ${runId} RETURNING uploaded, order_count`;
+  return { uploaded: Number(r?.uploaded || 0), orderCount: Number(r?.order_count || 0) };
+}
+
+// Phase 2's tally per run: what the couriers said about its Lost orders so far.
+const P2_TALLY = `(SELECT jsonb_build_object(
+    'lost', count(*) FILTER (WHERE o.p2_class = 'lost'),
+    'delivered', count(*) FILTER (WHERE o.p2_class = 'delivered'),
+    'cancelled', count(*) FILTER (WHERE o.p2_class = 'cancelled'),
+    'refunded', count(*) FILTER (WHERE o.p2_class = 'refunded'),
+    'failed', count(*) FILTER (WHERE o.p2_class = 'failed'))
+  FROM lost_pkg_orders o WHERE o.run_id = r.id) AS p2_counts`;
+
+// The shared column list is spliced in as TEXT (the tag can't nest fragments), so these two
+// build their statement directly; db() still guards DATABASE_URL.
+export async function listLostRuns(limit = 100) {
+  db();
+  return new Query(`SELECT ${LOST_RUN_COLS}, ${P2_TALLY} FROM lost_pkg_runs r ORDER BY r.created_at DESC, r.id DESC LIMIT $1`, [limit]);
+}
+
+export async function getLostRun(id) {
+  db();
+  const rows = await new Query(`SELECT ${LOST_RUN_COLS}, ${P2_TALLY} FROM lost_pkg_runs r WHERE r.id = $1`, [id]);
+  return rows[0] || null;
+}
+
+export async function listLostOrders(runId) {
+  return db()`
+    SELECT id, key, tracking, order_number, tracking_fallback, store, product, sku, qty, courier, order_date, eta,
+           status_written, first_sheet, evidence, p1_class, p2_state, p2_class, p2_courier, p2_primary, p2_fallback,
+           p2_raw, p2_error, p2_checked_at,
+           to_char(p2_checked_at AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI') AS p2_checked_est
+      FROM lost_pkg_orders WHERE run_id = ${runId} ORDER BY id`;
+}
+
+export async function deleteLostRun(id) {
+  const rows = await db()`DELETE FROM lost_pkg_runs WHERE id = ${id} RETURNING id`;
+  return rows.length > 0;
+}
+
+/**
+ * Phase 2's buttons. start (none → running, queues every Lost order), pause, resume
+ * (paused / stopped → running), stop, recheck (done / stopped → every Lost order asked again).
+ * Returns the run's new status, or null when that move isn't allowed from where it is.
+ */
+export async function setLostPhase2(runId, action, by) {
+  const sql = db();
+  const [run] = await sql`SELECT id, p2_status, uploaded, order_count FROM lost_pkg_runs WHERE id = ${runId}`;
+  if (!run) return null;
+  const from = run.p2_status;
+  if (action === 'start' || action === 'recheck') {
+    if (action === 'start' && from !== 'none') return null;
+    if (action === 'recheck' && !['done', 'stopped'].includes(from)) return null;
+    // A recheck asks again about every Lost order; a start queues the ones never asked.
+    if (action === 'recheck') {
+      await sql`UPDATE lost_pkg_orders SET p2_state = 'queued', p2_class = NULL, p2_courier = NULL, p2_primary = NULL,
+                       p2_fallback = NULL, p2_raw = NULL, p2_error = NULL, p2_attempts = 0, p2_checked_at = NULL
+                 WHERE run_id = ${runId} AND p1_class = 'Lost'`;
+    } else {
+      await sql`UPDATE lost_pkg_orders SET p2_state = 'queued' WHERE run_id = ${runId} AND p1_class = 'Lost' AND p2_state = 'none'`;
+    }
+    const [r] = await sql`
+      UPDATE lost_pkg_runs SET p2_status = 'running', p2_by = ${by}, p2_started_at = now(), p2_finished_at = NULL,
+             p2_total = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = ${runId} AND p1_class = 'Lost'),
+             p2_checked = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = ${runId} AND p2_state = 'done'),
+             p2_last = NULL, updated_at = now()
+       WHERE id = ${runId} RETURNING p2_status`;
+    return r.p2_status;
+  }
+  const next = { pause: ['running', 'paused'], resume: ['paused|stopped', 'running'], stop: ['running|paused', 'stopped'] }[action];
+  if (!next || !next[0].split('|').includes(from)) return null;
+  const [r] = await sql`UPDATE lost_pkg_runs SET p2_status = ${next[1]}, updated_at = now()
+                         WHERE id = ${runId} AND p2_status = ${from} RETURNING p2_status`;
+  return r ? r.p2_status : null;
+}
+
+// The next order to ask a courier about, from a RUNNING run only (pause / stop just stop
+// handing out work). Oldest run first, then sheet order.
+export async function claimLostOrder() {
+  const rows = await db()`
+    UPDATE lost_pkg_orders o SET p2_state = 'checking', p2_started_at = now(), p2_attempts = o.p2_attempts + 1
+     WHERE o.id = (SELECT q.id FROM lost_pkg_orders q JOIN lost_pkg_runs r ON r.id = q.run_id
+                    WHERE q.p2_state = 'queued' AND r.p2_status = 'running'
+                    ORDER BY r.p2_started_at, q.id LIMIT 1 FOR UPDATE OF q SKIP LOCKED)
+     RETURNING o.id, o.run_id, o.key, o.tracking, o.order_number, o.tracking_fallback, o.courier, o.p2_attempts`;
+  return rows[0] || null;
+}
+
+// The original's per-tracking cache: a number already answered in this run isn't asked twice.
+export async function lostAnswerFor(runId, tracking) {
+  const rows = await db()`
+    SELECT p2_class, p2_courier, p2_primary, p2_fallback, p2_raw, p2_error FROM lost_pkg_orders
+     WHERE run_id = ${runId} AND p2_state = 'done' AND p2_class IS NOT NULL
+       AND upper(coalesce(nullif(tracking, ''), tracking_fallback)) = upper(${tracking})
+     LIMIT 1`;
+  return rows[0] || null;
+}
+
+export async function finishLostOrder(order, r) {
+  const sql = db();
+  await sql`
+    UPDATE lost_pkg_orders SET p2_state = 'done', p2_class = ${r.class}, p2_courier = ${r.courier || null},
+           p2_primary = ${r.primary || null}, p2_fallback = ${r.fallback || null}, p2_raw = ${r.raw || null},
+           p2_error = ${r.error || null}, p2_checked_at = now()
+     WHERE id = ${order.id}`;
+  // The run moves with every answer (the page streams it: lost_pkg_runs is live). The last one
+  // in a running run finishes it.
+  await sql`
+    UPDATE lost_pkg_runs r SET
+           p2_checked = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = r.id AND p2_state = 'done'),
+           p2_last = ${r.label || null},
+           p2_status = CASE WHEN r.p2_status = 'running' AND NOT EXISTS (
+                         SELECT 1 FROM lost_pkg_orders WHERE run_id = r.id AND p2_state IN ('queued', 'checking'))
+                       THEN 'done' ELSE r.p2_status END,
+           p2_finished_at = CASE WHEN r.p2_status = 'running' AND NOT EXISTS (
+                         SELECT 1 FROM lost_pkg_orders WHERE run_id = r.id AND p2_state IN ('queued', 'checking'))
+                       THEN now() ELSE r.p2_finished_at END,
+           updated_at = now()
+     WHERE r.id = ${order.run_id}`;
+}
+
+// After a restart: an order left mid-check goes back in the queue; one that took the
+// server down three times is failed-to-scan rather than retried forever.
+export async function requeueStuckLostOrders(olderThanMinutes) {
+  const sql = db();
+  const cutoff = new Date(Date.now() - olderThanMinutes * 60_000).toISOString();
+  await sql`
+    UPDATE lost_pkg_orders SET p2_state = 'done', p2_class = 'failed', p2_error = 'Checking this one kept failing.', p2_checked_at = now()
+     WHERE p2_state = 'checking' AND p2_attempts >= 3 AND p2_started_at <= ${cutoff}`;
+  await sql`UPDATE lost_pkg_orders SET p2_state = 'queued' WHERE p2_state = 'checking' AND p2_started_at <= ${cutoff}`;
+}
+
+// A RUNNING run with nothing left to ask is done. finishLostOrder only closes a run when an
+// answer lands while it's running — so a Pause / Stop while the LAST order was in flight, then
+// Resume, left it "Checking…" at 100% forever (QA 2026-11-13). The worker calls this whenever
+// the queue is empty.
+export async function finishIdleLostRuns() {
+  await db()`
+    UPDATE lost_pkg_runs r SET p2_status = 'done', p2_finished_at = now(), updated_at = now(),
+           p2_checked = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = r.id AND p2_state = 'done')
+     WHERE r.p2_status = 'running'
+       AND NOT EXISTS (SELECT 1 FROM lost_pkg_orders WHERE run_id = r.id AND p2_state IN ('queued', 'checking'))`;
+}

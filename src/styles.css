@@ -7536,3 +7536,70 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .ap-hist-size { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: rgba(139, 92, 246, 0.14); border: 1px solid rgba(139, 92, 246, 0.35); white-space: nowrap; }
 .ap-hist-plat + .ap-hist-plat::before { content: ' · '; }
 .badge.ap-hist-muted { background: rgba(148, 163, 184, 0.12); color: var(--muted, #9aa3b2); border: 1px solid rgba(148, 163, 184, 0.35); }
+
+/* Lost Package Tracker Tool (src/screens/LostPackages.jsx, 2026-11-14). */
+.lp-lede { margin: 0; line-height: 1.5; }
+.lp-h { margin: 0 0 10px; font-size: 15px; }
+.lp-drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 96px;
+  padding: 16px; border: 2px dashed var(--border); border-radius: 12px; cursor: pointer; text-align: center; }
+.lp-drop.drag, .lp-drop:hover { border-color: var(--primary); background: rgba(90, 140, 255, 0.06); }
+.lp-drop.has { border-style: solid; }
+.lp-drop-main { font-weight: 600; overflow-wrap: anywhere; }
+.lp-file { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.lp-p1-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 12px; }
+.lp-month { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); flex: 1 1 220px; max-width: 320px; }
+.lp-run-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.lp-run-actions, .lp-p2-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.lp-p2-actions { margin: 10px 0 6px; }
+.lp-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 8px 0; }
+.lp-tile { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; text-align: left; }
+.lp-tile.on { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.lp-tile-n { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lp-tile-l { font-size: 12px; color: var(--muted); }
+.lp-tile.lost .lp-tile-n { color: #f08c6c; }
+.lp-tile.delivered .lp-tile-n { color: var(--ok, #6fd49a); }
+.lp-tile.refunded .lp-tile-n { color: #e9c46a; }
+.lp-tile.failed .lp-tile-n { color: var(--err); }
+.lp-bar { height: 10px; border-radius: 999px; background: var(--panel-2); overflow: hidden; margin: 4px 0 6px; }
+.lp-bar > span { display: block; height: 100%; background: var(--primary); transition: width 0.4s ease; }
+.lp-p2-line { margin: 0; }
+.lp-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.lp-filter .input { flex: 1 1 220px; }
+.lp-scroll { overflow-x: auto; }
+.lp-runs tbody tr { cursor: pointer; }
+.lp-runs tbody tr.on > td { background: rgba(90, 140, 255, 0.08); }
+.lp-file-cell { max-width: 280px; overflow-wrap: anywhere; font-size: 12px; color: var(--muted); }
+.lp-orders td { vertical-align: top; }
+.lp-trk { white-space: nowrap; }
+.lp-raw { max-width: 260px; overflow-wrap: anywhere; }
+.lp-err { color: var(--err); max-width: 260px; overflow-wrap: anywhere; }
+.lp-chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap;
+  border: 1px solid var(--border); color: var(--muted); }
+.lp-chip.lost { color: #f08c6c; border-color: rgba(240, 140, 108, 0.5); background: rgba(240, 140, 108, 0.12); }
+.lp-chip.delivered { color: var(--ok, #6fd49a); border-color: rgba(90, 200, 140, 0.45); background: rgba(90, 200, 140, 0.12); }
+.lp-chip.refunded { color: #e9c46a; border-color: rgba(233, 196, 106, 0.45); background: rgba(233, 196, 106, 0.12); }
+.lp-chip.failed { color: var(--err); border-color: rgba(230, 90, 90, 0.45); background: rgba(230, 90, 90, 0.1); }
+/* Narrow screens: both tables become one card per row (as Undelivered does) — a sideways-
+   scrolling table squeezed every cell into a narrow column, ~150px-tall rows (mobile QA 11-14).
+   The label sits in a fixed left gutter; a cell's own lines (link + courier, shoe + SKU) stack
+   to its right. */
+@media (max-width: 760px) {
+  .lp-orders thead, .lp-runs thead { display: none; }
+  .lp-orders tr, .lp-runs tr { display: block; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .lp-orders tbody tr:last-child, .lp-runs tbody tr:last-child { border-bottom: 0; }
+  .lp-orders td, .lp-runs td { display: block; position: relative; border: 0; padding: 3px 0 3px 104px; min-height: 20px; }
+  .lp-orders td::before, .lp-runs td::before { content: attr(data-label); position: absolute; left: 0; top: 4px; width: 96px;
+    font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.3px; }
+  .table.lp-runs td.num, .table.lp-orders td.num { text-align: left; }   /* beats the global right-aligned .num */
+  .lp-trk, .lp-raw, .lp-err { white-space: normal; overflow-wrap: anywhere; max-width: none; }
+  .lp-runs td.lp-file-cell { max-width: none; }
+}
+@media (max-width: 560px) {
+  .lp-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* 44px tap targets, and Delete set apart from the Excel download beside it. */
+  .lp-run-actions .btn, .lp-run-head .btn { min-height: 44px; }
+  .lp-run-actions { gap: 12px; }
+  /* Room under the last row for the round keypad / advisor buttons that float at the bottom. */
+  .lp-page { padding-bottom: 88px; }
+}

@@ -61,18 +61,47 @@ const queued = (fn) => { const run = queue.then(fn, fn); queue = run.catch(() =>
  * text it read (kept on the row, so a miss can be turned into a new rule). Throws only when
  * tesseract itself fails; "no order found" is orders: [].
  */
+/**
+ * The two reads' orders → one list. A number both reads found is "agreed"; one only the second
+ * read found is filed too (never dropped), flagged "only one read found it" — EXCEPT a number
+ * ONE CHARACTER away from a first-read number the second read did NOT find: that is the same
+ * label misread ("#991138546" / "#091138546", 2026-11-13 — one photo became two cancellations),
+ * so it is one order, flagged "reads disagree" with the other reading on the row (`other`). If
+ * the second read found BOTH numbers, they are two real orders (consecutive numbers on one
+ * photo) and both are filed. Pure, so it can be tested without tesseract.
+ */
+export function mergeReads(first, second) {
+  const keysB = new Set((second || []).map((o) => orderKey(o.order_number)));
+  const keysA = new Set(first.map((o) => orderKey(o.order_number)));
+  const agreed = (k) => (second == null ? null : keysB.has(k));
+  const oneOff = (x, y) => x.length === y.length && [...x].filter((c, i) => c !== y[i]).length === 1;
+  const misreadOf = new Map();   // first-read key → what the second read said instead
+  const onlySecond = [];
+  for (const o of (second || []).filter((s) => !keysA.has(orderKey(s.order_number)))) {
+    const k = orderKey(o.order_number);
+    const twin = first.find((f) => {
+      const fk = orderKey(f.order_number);
+      return !keysB.has(fk) && !misreadOf.has(fk) && oneOff(fk, k);
+    });
+    if (twin) misreadOf.set(orderKey(twin.order_number), o.order_number);
+    else onlySecond.push(o);
+  }
+  return [
+    ...first.map((o) => {
+      const k = orderKey(o.order_number);
+      const other = misreadOf.get(k);
+      return other ? { ...o, agreed: false, other } : { ...o, agreed: agreed(k) };
+    }),
+    // Only the second read saw it: filed too (never dropped), flagged for a closer look.
+    ...onlySecond.map((o) => ({ ...o, agreed: false, onlySecond: true })),
+  ];
+}
+
 export async function readCancellationLocally(buf, platform = null) {
   const { a, b } = await queued(() => readOnce(buf));
   const first = ordersFromText(a, platform);
   const second = b == null ? null : ordersFromText(b, platform);
-  const keysB = new Set((second || []).map((o) => orderKey(o.order_number)));
-  const keysA = new Set(first.map((o) => orderKey(o.order_number)));
-  const agreed = (k) => (second == null ? null : keysB.has(k));
-  const orders = [
-    ...first.map((o) => ({ ...o, agreed: agreed(orderKey(o.order_number)) })),
-    // Only the second read saw it: filed too (never dropped), flagged for a closer look.
-    ...(second || []).filter((o) => !keysA.has(orderKey(o.order_number))).map((o) => ({ ...o, agreed: false, onlySecond: true })),
-  ];
+  const orders = mergeReads(first, second);
   // The style code / size from whichever read found them.
   const one = (k) => first.find((o) => o[k])?.[k] || second?.find((o) => o[k])?.[k] || null;
   return {
@@ -84,6 +113,8 @@ export async function readCancellationLocally(buf, platform = null) {
       product: o.product || (orders.length === 1 ? one('product') : null),
       // tesseract has no honest "how sure" for a whole number; the two reads ARE the check.
       confidence: o.agreed ? 0.99 : 0.5, unclear: [], agreed: o.agreed, onlySecond: !!o.onlySecond, why: o.why,
+      // The second read's version of a one-character misread (the row says "Second read said …").
+      ...(o.other ? { other: o.other } : {}),
     })),
   };
 }

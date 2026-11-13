@@ -405,7 +405,11 @@ test('a printed Alias label is read on our own server — number, SKU, size and 
   expect(row).toMatchObject({ platform: 'alias', sku: 'DQ4071-001', size: 'US M 9.5', reason: 'customer asked', details_from: 'label' });
   expect(prompts).toHaveLength(0);
   const [raw] = await q('SELECT ai_raw FROM cancellations WHERE id = $1', [row.id]);
-  expect(raw.ai_raw).toMatchObject({ by: 'ocr', agreed: true });
+  // One label = one order whatever tesseract does: both reads agree, or the second misread ONE
+  // digit (CI read "#991…" as "#091…", 2026-11-13) and that is kept as "Second read said …" on
+  // this row instead of filing a second cancellation (mergeReads in api/_lib/cancelOcr.js).
+  expect(raw.ai_raw).toMatchObject({ by: 'ocr' });
+  if (raw.ai_raw.agreed !== true) expect(raw.ai_raw.other).toMatch(/^\d+$/);
   expect(raw.ai_raw.text).toContain(num);
   await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
 });
@@ -645,4 +649,23 @@ test.describe('the page, seen from PH time', () => {
     await expect(page.locator('.cx-row')).toHaveCount(1);
     await q(`DELETE FROM cancellations WHERE sent_by = 'E2E Cx page'`);
   });
+});
+
+test('two reads: a one-digit misread is the same order; two real numbers both read stay two (pure)', async () => {
+  const { mergeReads } = await import('../api/_lib/cancelOcr.js');
+  const o = (n) => ({ platform: 'alias', order_number: n });
+  // The misread CI hit: one order, flagged, the other reading kept.
+  const one = mergeReads([o('991138546')], [o('091138546')]);
+  expect(one).toHaveLength(1);
+  expect(one[0]).toMatchObject({ order_number: '991138546', agreed: false, other: '091138546' });
+  // Both reads agree.
+  expect(mergeReads([o('991138546')], [o('991138546')])).toEqual([expect.objectContaining({ agreed: true })]);
+  // Consecutive orders on one photo, the second read saw both: both filed.
+  const two = mergeReads([o('991138546')], [o('991138546'), o('991138547')]);
+  expect(two.map((x) => x.order_number)).toEqual(['991138546', '991138547']);
+  expect(two[1]).toMatchObject({ onlySecond: true, agreed: false });
+  // Two characters apart is not a misread: filed separately.
+  expect(mergeReads([o('991138546')], [o('091138547')])).toHaveLength(2);
+  // No second read at all.
+  expect(mergeReads([o('991138546')], null)).toEqual([expect.objectContaining({ agreed: null })]);
 });

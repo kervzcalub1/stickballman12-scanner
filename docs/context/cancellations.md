@@ -120,7 +120,12 @@ tested) picks the numbers out of each text:
   that line is a 7 — measured: two of eight preparations of the real 2026-10-20 label read
   176889923 as `1/6889923`;
 - never a tracking number (1Z…, 92-95… USPS, any TRK#/TRACKING/UPS line), phone or ZIP.
-A number both reads found = `agreed`; one read only = still recorded, noted. 25 s cap. The
+A number both reads found = `agreed`; one read only = still recorded, noted. **Except a ONE-
+character misread** (`mergeReads`, 2026-11-13: the second read turned `#991138546` into
+`#091138546` and one label became two cancellations): a second-read number one character away
+from a first-read number the second read did NOT find is the SAME order — one row, flagged, the
+note says "Second read said #…". If the second read found both numbers they are two orders
+(consecutive numbers on one photo) and both are recorded. 25 s cap. The
 read text is kept on the row (`ai_raw.text`) so a miss can become a rule + a test line.
 Measured on the real Alias labels of 2026-10-20 (WhatsApp copies, 471 px): order #, SKU, size
 right on both reads, ~1 s each; the ITEM name line is too small at that resolution to read

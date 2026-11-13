@@ -1,11 +1,11 @@
 // POST /api/presell-listings/create
-//   { activate, inTransit?, transitNote?, expectedOn?, supplier?, poId?, trackingNumbers?, costStack?, items:[{ sku, size, qty, name?, image?, upc?, alias?:{ price }, stockx?:{ price } }] }
+//   { activate, runId?, inTransit?, transitNote?, expectedOn?, supplier?, poId?, trackingNumbers?, costStack?, items:[{ sku, size, qty, name?, image?, upc?, alias?:{ price }, stockx?:{ price } }] }
 //   -> { ok, lines:[{ sku, size, stockId, alias?:{wanted,created,results}, stockx?:{…} }], created, failed }
 // Pre-sell Listings (docs/context/presell-listings.md): `qty` pairs are ADDED to the
 // SKU + size stock row, then each ticked platform is listed up to the pairs left.
 // Nothing touches inventory or Shopify. Prices are whole US dollars per platform.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, upsertPresellStock, getPoBrief, presellPoCap, bumpPresellStockPo, presellStockBySkuSize } from '../_lib/db.js';
+import { dbConfigured, upsertPresellStock, getPoBrief, presellPoCap, bumpPresellStockPo, presellStockBySkuSize, insertPresellEntry } from '../_lib/db.js';
 import { topUp } from '../_lib/presell-create.js';
 import { aliasListingKey } from '../_lib/alias.js';
 import { stockxConfigured } from '../_lib/stockx.js';
@@ -100,21 +100,37 @@ export default async function handler(req, res) {
   const actor = user.name || user.username || null;
   const cache = {};
   const out = [];
+  // History (owner, 2026-11-13): what was entered, by whom, when — written for whatever got
+  // into Stock, even when the run stops part-way. Never fails the listing.
+  const runId = text(b.runId, 64);
+  const record = () => (!out.length ? null : insertPresellEntry({
+    runId, kind: 'new', activate, inTransit, transitNote, expectedOn, supplier, poId,
+    lines: out.map((r, i) => {
+      const l = lines[i];
+      const x = { stock_id: r.stockId, sku: l.sku, name: l.name, image: l.image, size: l.size, qty: l.qty, shelf: l.shelfPrice };
+      for (const [p, cents] of Object.entries(l.want)) {
+        x[p] = { price_cents: cents, created: r[p]?.created || 0, failed: (r[p]?.results || []).filter((y) => !y.ok).length };
+      }
+      return x;
+    }),
+  }, actor).catch((e) => console.error('[presell-listings/create] history', e.message)));
   try {
     for (const l of lines) {
       const stock = await upsertPresellStock({ sku: l.sku, size: l.size, name: l.name, image: l.image, upc: l.upc, addQty: l.qty, inTransit, transitNote, expectedOn,
         shelfPrice: l.shelfPrice, unitCost: l.unitCost, costStack: l.shelfPrice != null ? costStack : null, supplier, poId, trackingNumbers }, actor);
       if (l.poId) await bumpPresellStockPo(Number(stock.id), l.poId, l.qty);
       const row = { sku: l.sku, size: l.size, stockId: Number(stock.id) };
+      out.push(row); // pushed first: its pairs are in Stock now, so the history keeps it even if a listing call throws
       for (const [platform, priceCents] of Object.entries(l.want)) {
         row[platform] = await topUp(stock, platform, { priceCents, active: activate }, actor, cache);
       }
-      out.push(row);
     }
   } catch (e) {
     console.error('[presell-listings/create]', e.message);
+    await record();
     return send(res, 500, { ok: false, error: 'Could not finish listing — check the Listings tab for what went through.', lines: out });
   }
+  await record();
   const all = out.flatMap((r) => ['alias', 'stockx'].flatMap((p) => r[p]?.results || []));
   return send(res, 200, { ok: true, lines: out, created: all.filter((x) => x.ok).length, failed: all.filter((x) => !x.ok).length, warnings });
 }

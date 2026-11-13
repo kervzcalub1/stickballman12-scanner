@@ -2579,6 +2579,28 @@ await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS ship_state_at TIME
 // "sold 8, arrived 5 → 3 orders at risk" can be counted per order (docs/store-orders-plan.md).
 await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS po_id BIGINT REFERENCES purchase_orders(id) ON DELETE SET NULL`);
 await sql(`CREATE INDEX IF NOT EXISTS presell_sales_to_ship_idx ON presell_sales (ship_by) WHERE ship_state IS NULL OR ship_state = 'to_ship'`);
+// Pre-sell HISTORY (owner, 2026-11-13: "when did I enter a pre-sale, what shoes and sizes"):
+// one row per time pairs were ENTERED — a List new call (kind 'new'; one paste can be several
+// calls, tied together by run_id) or a Stock → Pairs… raise (kind 'pairs'). `lines` = what was
+// entered: [{ stock_id, sku, name, image, size, qty, alias:{ price_cents, created, failed }, stockx }].
+// A snapshot — later price edits, sales and deletions never rewrite it. Entries from before
+// this table are rebuilt at read time from presell_listings (listPresellHistory).
+await sql(`
+  CREATE TABLE IF NOT EXISTS presell_entries (
+    id           BIGSERIAL PRIMARY KEY,
+    run_id       TEXT,
+    kind         TEXT NOT NULL DEFAULT 'new' CHECK (kind IN ('new', 'pairs')),
+    activate     BOOLEAN,
+    in_transit   BOOLEAN NOT NULL DEFAULT false,
+    transit_note TEXT,
+    expected_on  DATE,
+    supplier     TEXT,
+    po_id        BIGINT REFERENCES purchase_orders(id) ON DELETE SET NULL,
+    lines        JSONB NOT NULL DEFAULT '[]',
+    created_by   TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS presell_entries_at_idx ON presell_entries (created_at DESC)`);
 // Regular (non-pre-sell) sale alerts — a TEST switch (app_settings.sales_alert_all_since,
 // flipped on the Sales tab). One row per marketplace order the watcher has alerted on (or
 // decided not to), so every order posts once at most.
@@ -3669,7 +3691,7 @@ const LIVE_TABLES = [
   'online_orders', 'online_order_lines', 'online_order_events',
   'tracking_duplicates',
   'email_receipts', 'user_purchase_emails',
-  'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log',
+  'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log', 'presell_entries',
   'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_price_locks', 'stockx_listings', 'stockx_price_locks', 'stockx_price_edits', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
   'shein_order_units', 'shein_shopify_orders', 'shein_live_runs', 'shein_live_items',
   'shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_jobs', 'shein_listing_job_items',

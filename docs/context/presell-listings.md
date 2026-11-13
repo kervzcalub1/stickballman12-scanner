@@ -39,7 +39,32 @@ holds back units of a shipment we own. Here a pair is **never an inventory unit*
   that size's stock row), re-read, copy id, Delete. **More…** = the row: switch both
   on/off, re-read both, delete both. Grouping is client-side (`ListingsTab` `pairs`).
 - **Sales**: every sale, price, payout, order #, whether the Telegram post went out.
+- **🕘 History** (owner, 2026-11-13: "when did I enter a pre-sale, what shoes and sizes?"): every
+  time pairs were ENTERED, newest first — one card per entry: date + time (EST, with the year), who,
+  N pairs · N shoes, 🚚 In transit / ＋ Pairs added / Listed not live, supplier · PO · note ·
+  expected, then per shoe the sizes as `9 × 3` chips and the Alias / StockX price (range), plus
+  "N didn't list". Filters: dates (EST day entered), SKU (part, any case), **Entered by**; 📄
+  PDF / CSV (one row per size, `historyReportCsv/Pdf`). → see "History" below.
 - **📦 Fulfill**: the sold orders still to ship — label, tracking, ship-by, where the pair is, pick list → `presell-fulfillment.md`.
+
+## History — when pairs were entered (owner, 2026-11-13)
+- **`presell_entries`** = one row per create call (`kind 'new'`) or Stock → **Pairs…** RAISE
+  (`kind 'pairs'`, line carries `from`/`to`; a cut is not an entry): who, when, activate, in
+  transit + note + expected, supplier, PO, `lines` JSONB `[{ stock_id, sku, name, image, size,
+  qty, shelf, alias:{ price_cents, created, failed }, stockx }]`. A SNAPSHOT — later price edits,
+  sales and deletions never rewrite it. Written AFTER the work, for whatever reached Stock even
+  when the run stops part-way (the row is pushed to `out` before its listing calls); best effort,
+  never fails the listing.
+- **One paste = one entry**: List new sends a `runId` with every batch of a run; the read groups
+  rows by `run_id` (`runsFromEntries`, sizes summed, price min–max).
+- **Before the table existed** (everything listed up to the deploy): rebuilt at READ time from
+  `presell_listings` created before the first `presell_entries` row (`runsFromListings`): one
+  person's listings with no gap over 15 min = one entry, a size's pairs = the most listings it got
+  on either platform. Tagged **rebuilt**; supplier / PO are as the row reads NOW, and an old
+  re-list (List N / ↺ Restore) shows as its own entry. Nothing is backfilled.
+- Read: `GET list?tab=history&from=&to=&sku=` → `rows` = runs (`listPresellHistory` +
+  `presellHistory`, `src/lib/presellHistory.js`, pure). 500 newest entries (5,000 with a filter).
+  `presell_entries` is in `LIVE_TABLES`. Tests: `e2e/presell-history.spec.js`.
 
 ## In transit — list it before it lands (Alex, 2026-10-10; BY THE PAIR since 2026-10-11)
 For a hyped shoe still on the truck: list it now; as the real pairs arrive and PH lists them,

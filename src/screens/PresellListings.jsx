@@ -38,7 +38,7 @@ const stackToSend = (stack, id, preset, edited, fallbackName = null) => (!stack 
   ? { ...stack, preset: null, presetId: null, edited: false, own: true }
   : { ...stack, preset: preset?.name || fallbackName, presetId: preset?.id || null, edited });
 const money2 = (n) => (n == null || !Number.isFinite(n) ? '—' : `${n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2)}`);
-import { PH_DATE, PH_DATETIME, estToday, estDate, estTime } from '../lib/format.js';
+import { PH_DATE, PH_DATETIME, estToday, estDate, estTime, estClock } from '../lib/format.js';
 
 const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
 
@@ -165,6 +165,8 @@ const REPORTS = {
     csv: 'listingsReportCsv', pdf: 'listingsReportPdf' },
   sales: { tab: 'sales', file: 'presell-sales', label: 'Sold from', blurb: 'what sold — price, payout, cost, net',
     csv: 'salesReportCsv', pdf: 'salesReportPdf' },
+  history: { tab: 'history', file: 'presell-history', label: 'Entered from', blurb: 'every time pairs were entered — when, who, shoes, sizes, prices',
+    csv: 'historyReportCsv', pdf: 'historyReportPdf' },
 };
 // 📄 Report — each tab its own (owner, 2026-10-10): Stock = the pairs we have / sold / left,
 // Listings = every listing (the tab's platform + status filters apply), Sales = what sold.
@@ -197,7 +199,7 @@ function ReportBar({ kind, from, to, setFrom, setTo, onSignOut, filtersList = fa
   }
   return (
     <div className="ap-report">
-      <span className="ap-report-title"><b>📄 {kind === 'stock' ? 'Stock' : kind === 'listings' ? 'Listings' : 'Sales'} report</b> <span className="muted xs">{R.blurb}{scope ? ` · ${scope}` : ''}</span></span>
+      <span className="ap-report-title"><b>📄 {{ stock: 'Stock', listings: 'Listings', sales: 'Sales', history: 'History' }[kind]} report</b> <span className="muted xs">{R.blurb}{scope ? ` · ${scope}` : ''}</span></span>
       <label><span className="muted xs">{R.label}</span>
         <input className="input" type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} aria-label="From date" /></label>
       <label><span className="muted xs">to</span>
@@ -229,13 +231,14 @@ export function PresellListings({ onHome, onSignOut }) {
           (Not the shipment <b>Pre-sell</b> screen.)
         </p>
         <div className="ap-sections"><Seg label="Section" value={tab} onChange={setTab}
-          options={[['new', 'List new'], ['stock', 'Stock'], ['listings', 'Listings'], ['compete', '⚔ Compete'], ['sales', 'Sales'], ['fulfill', '📦 Fulfill']]} /></div>
+          options={[['new', 'List new'], ['stock', 'Stock'], ['listings', 'Listings'], ['compete', '⚔ Compete'], ['sales', 'Sales'], ['fulfill', '📦 Fulfill'], ['history', '🕘 History']]} /></div>
       </div>
       {tab === 'stock' ? <StockTab onSignOut={onSignOut} />
         : tab === 'listings' ? <ListingsTab onSignOut={onSignOut} />
           : tab === 'sales' ? <SalesTab onSignOut={onSignOut} />
           : tab === 'compete' ? <CompeteTab onSignOut={onSignOut} />
           : tab === 'fulfill' ? <FulfillTab onSignOut={onSignOut} />
+          : tab === 'history' ? <HistoryTab onSignOut={onSignOut} />
             : <ListNew onSignOut={onSignOut} onListed={() => setTab('listings')} />}
     </div>
   );
@@ -353,6 +356,8 @@ function ListNew({ onSignOut, onListed }) {
     const sentQty = {};
     const total = { created: 0, failed: 0, warnings: [] };
     const runStart = new Date().toISOString();
+    // One id for the whole run, so the History tab shows a paste sent in batches as ONE entry.
+    const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     const stockIds = new Set();
     let unsure = false;
     try {
@@ -362,7 +367,7 @@ function ListNew({ onSignOut, onListed }) {
         let r;
         try {
           r = await api.presellListingsCreate({
-            activate,
+            activate, runId,
             inTransit, transitNote: inTransit ? transitNote.trim() : '', expectedOn: inTransit ? expectedOn : '',
             supplier: source.supplier.trim(), poId: source.poId ? Number(source.poId) : null, trackingNumbers: parseTrackingList(source.tracking),
             costStack: stackToSend(stack, presetId, preset, stackEdited),
@@ -1930,6 +1935,116 @@ function SalesTab({ onSignOut }) {
             </table>
           </div>
         )}
+      </div>
+    </>
+  );
+}
+
+/* -------------------------------- 🕘 History -------------------------------- */
+// Owner, 2026-11-13: "when did I enter a pre-sale and what kind of shoes and sizes?" — every
+// time pairs were entered (List new, or more pairs on a size from Stock → Pairs…), newest first:
+// when, who, the shoes with their sizes × pairs and the prices. A snapshot of the moment —
+// later price edits, sales and deletions don't change it. Entries from before the history
+// started are rebuilt from the listing records (src/lib/presellHistory.js).
+const priceSpan = (p) => (!p || p.min == null ? null : p.min === p.max ? money(p.min) : `${money(p.min)}–${money(p.max)}`);
+function shoePrice(sizes, platform) {
+  const all = { min: null, max: null, created: 0, failed: 0, any: false };
+  for (const z of sizes) {
+    const p = z[platform];
+    if (!p) continue;
+    all.any = true; all.created += p.created; all.failed += p.failed;
+    if (p.min != null) { all.min = all.min == null ? p.min : Math.min(all.min, p.min); all.max = all.max == null ? p.max : Math.max(all.max, p.max); }
+  }
+  return all.any ? all : null;
+}
+
+function HistoryTab({ onSignOut }) {
+  const [from, setFrom] = useQueryParam('from', '');
+  const [to, setTo] = useQueryParam('to', '');
+  const [sku, setSku] = useQueryParam('sku', '');
+  const [by, setBy] = useQueryParam('by', '');
+  const skuQ = sku.trim();
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState('');
+  async function load() {
+    try { const r = await api.presellListingsList({ tab: 'history', from, to, sku: skuQ }); setRows(r.rows || []); setError(''); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+  }
+  useEffect(() => { const t = setTimeout(load, skuQ ? 300 : 0); return () => clearTimeout(t); }, [from, to, skuQ]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLive(['presell_entries'], load, { mount: false });
+  const people = useMemo(() => [...new Set((rows || []).map((r) => r.by).filter(Boolean))].sort(), [rows]);
+  const shown = useMemo(() => (rows && by ? rows.filter((r) => r.by === by) : rows), [rows, by]);
+  const tot = useMemo(() => ({ runs: shown?.length || 0, pairs: (shown || []).reduce((n, r) => n + r.pairs, 0) }), [shown]);
+  const scope = [skuQ && `SKU contains: ${skuQ}`, by && `By: ${by}`].filter(Boolean).join('  |  ');
+  return (
+    <>
+      <div className="card">
+        <ReportBar kind="history" from={from} to={to} setFrom={setFrom} setTo={setTo} onSignOut={onSignOut} filtersList
+          skuFilter={{ value: sku, set: setSku }} extra={{ sku: skuQ }} scope={scope} />
+        {people.length > 0 && (
+          <label className="ap-hist-by"><span className="muted xs">Entered by</span>
+            <select className="input" value={by} onChange={(e) => setBy(e.target.value)} aria-label="Entered by">
+              <option value="">Everyone</option>
+              {people.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select></label>
+        )}
+        {shown?.length > 0 && (
+          <div className="ap-sales-tot">
+            <span><b>{tot.runs}</b> <span className="muted xs">entr{tot.runs === 1 ? 'y' : 'ies'}</span></span>
+            <span><b>{tot.pairs}</b> <span className="muted xs">pair{tot.pairs === 1 ? '' : 's'} entered</span></span>
+          </div>
+        )}
+      </div>
+      {error && <div className="error mt">{error}</div>}
+      <div className="card">
+        {shown == null ? <p className="muted">Loading…</p> : !shown.length
+          ? <p className="muted">{from || to || skuQ || by ? 'Nothing entered matches those filters.' : 'Nothing entered yet — every List new (and every Pairs… raise on Stock) shows up here.'}</p>
+          : (
+            <ul className="ap-hist">
+              {shown.map((r) => (
+                <li key={r.key} className="ap-hist-run">
+                  <div className="ap-hist-h">
+                    <b>{PH_DATE.format(new Date(r.at))} {estClock(r.at)} EST</b>
+                    <span className="muted sm">{r.by ? `by ${r.by}` : 'by —'}</span>
+                    <span className="sm"><b>{r.pairs}</b> pair{r.pairs === 1 ? '' : 's'} · {r.shoes.length} shoe{r.shoes.length === 1 ? '' : 's'}</span>
+                    {r.kind === 'pairs' && <span className="badge open">＋ Pairs added</span>}
+                    {r.in_transit && <span className="badge warn">🚚 In transit</span>}
+                    {r.activate === false && <span className="badge ap-hist-muted">Listed not live</span>}
+                    {r.source === 'rebuilt' && <span className="badge ap-hist-muted" title="From before the history started: rebuilt from the listing records. Supplier / PO are as the size reads now, and a later re-list can show as its own entry.">rebuilt</span>}
+                  </div>
+                  {(r.supplier || r.po_code || r.transit_note || r.expected_on) && (
+                    <div className="muted xs">{[r.supplier, r.po_code, r.transit_note, r.expected_on && `expected ${r.expected_on}`].filter(Boolean).join(' · ')}</div>
+                  )}
+                  {r.shoes.map((s) => {
+                    const al = shoePrice(s.sizes, 'alias'); const sx = shoePrice(s.sizes, 'stockx');
+                    return (
+                      <div key={s.sku} className="ap-hist-shoe">
+                        <ShoeThumb url={s.image} size={40} />
+                        <div className="ap-hist-body">
+                          <div><b>{s.sku}</b> <span className="muted xs">{s.name}</span></div>
+                          <div className="ap-hist-sizes">
+                            {s.sizes.map((z) => (
+                              <span key={z.size} className="ap-hist-size" title={z.from != null ? `${z.from} → ${z.to} pairs` : undefined}>
+                                <b>{z.size}</b> × {z.qty}
+                              </span>
+                            ))}
+                          </div>
+                          {(al || sx) && (
+                            <div className="muted xs">
+                              {[[al, 'Alias'], [sx, 'StockX']].filter(([p]) => p).map(([p, name]) => (
+                                <span key={name} className="ap-hist-plat">{name} {priceSpan(p) || ''}
+                                  {r.source === 'entry' && p.failed > 0 && <span className="error"> · {p.failed} didn’t list</span>}</span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </li>
+              ))}
+            </ul>
+          )}
       </div>
     </>
   );

@@ -3552,7 +3552,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await expect(line(page, 'box')).toHaveAttribute('data-ok', 'no');
     await expect(line(page, 'box')).toContainText('placeholders nobody confirmed');
     await expect(line(page, 'box').getByRole('button', { name: 'Confirm box sizes' })).toBeVisible();
-    await expect(line(page, 'photos').getByRole('checkbox', { name: /Use PH edited photos/ })).not.toBeChecked();
+    await expect(line(page, 'photos').locator('[data-photo-source]')).toContainText('SHEIN gets Shopify’s photos.');   // no clean / PH photos for this style (2026-11-14)
     // the safety net (2026-10-28): ✕ lines left → the button says so (it shows them, never a preview)
     await expect(dr.locator('[data-dry="publish"]')).toHaveText(/^Fix \d+ first$/, { timeout: 10_000 });
     await expect(dr.getByRole('button', { name: 'Add missing sizes' })).toHaveCount(0);
@@ -3758,6 +3758,27 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await expect(box.locator('[data-box-save]')).toBeDisabled();
     const { status } = await page.request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'publish_again', productIds: [gidP(7708)] } }).then((r) => ({ status: r.status() }));
     expect(status).toBe(403);
+  });
+
+  // 2026-11-14 (owner): on a rejected shoe, Requirements → “Fix photos” opened the picker in “Published from this page” but
+  // scrolled to the LIVE shoe's photo section, which a rejected shoe doesn't have — the drawer never moved.
+  test('a rejected shoe: Requirements → Fix photos scrolls to (and focuses) the picker that is open — “Published from this page”', async ({ page }) => {
+    await page.route('**/api/shein/listings?photos=*', (route) => route.fulfill({ json: { ok: true, productId: gidP(7708), style: 'CW2288-111', usePhPhotos: false, cleanPhotos: null, source: 'shopify',
+      max: 11, stale: [], ph: [], clean: [], slidesOnFile: 0, copiesChecked: true, sent: 3, shopify: img(7708).map((x) => ({ ...x, key: x.url, skipped: false, phCopy: null })) } }));
+    await loginAs(page, 'ph_team');
+    await page.setViewportSize({ width: 1320, height: 700 });
+    await page.goto(`/ph/shein-listings?product=${encodeURIComponent(gidP(7708))}`);
+    const dr = drawer(page);
+    await expect(dr.locator('[data-published="failed"]')).toBeVisible();
+    await expect(dr.locator('#shl-photos-sec')).toHaveCount(0);                  // never live: no “Photos on SHEIN” section
+    const fix = dr.locator('.shl-req').getByRole('button', { name: 'Fix photos' }).first();
+    await expect(fix).toBeVisible();
+    await dr.locator('.shl-d-body').evaluate((el) => { el.scrollTop = el.scrollHeight; });   // far from the picker
+    await fix.click();
+    const target = dr.locator('#shl-pub-photos');
+    await expect(target.locator('[data-photos-picker]')).toBeVisible();
+    await expect(target).toBeFocused();
+    await expect(target).toBeInViewport();
   });
 
   test('box sizes are shown and typed in inches / pounds, and saved for SHEIN in cm / grams', async ({ page }) => {
@@ -3991,6 +4012,130 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
       await expect(picker).toContainText('Photo 2 put back.');
     } finally {
       await pool.query(`UPDATE shein_listing_products SET photo_skip = '{}' WHERE shopify_product_id = $1`, [gidP(7709)]);
+    }
+  });
+
+  // 2026-11-14 (owner): every PH / Shopify photo of many shoes is branded, so leaving photos out left 0–1. The CLEAN photos
+  // (the brand tool's cutouts, on white) are SHEIN's default when the style has them; the spec / welcome slides never go.
+  test('clean photos: publish_choices photoSource (PH ok, DB only); the readiness counts the clean photos; switched off → ✕ with “Use clean photos”; the bulk sheet’s cleanPhotos + skipSlides', async ({ request }) => {
+    const style = 'DD1391-100';
+    const pid = gidP(7709);
+    const act = (data) => request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'publish_choices', productId: pid, ...data } });
+    const bulk = async (data) => { const r = await request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'publish_choices_bulk', ...data } }); return { status: r.status(), body: await r.json() }; };
+    const row = async () => (await pool.query(`SELECT clean_photos, use_ph_photos, photo_skip, blockers FROM shein_listing_products WHERE shopify_product_id = $1`, [pid])).rows[0];
+    const setup = async () => (await (await request.get(`/api/shein/listings?publishSetup=${encodeURIComponent(pid)}`, { headers: auth.ph })).json()).products[0];
+    const photos = (p) => p.checklist.find((l) => l.key === 'photos');
+    const was = (await pool.query(`SELECT shopify_json FROM shein_listing_products WHERE shopify_product_id = $1`, [pid])).rows[0].shopify_json;
+    const w0 = fake.writes.length;
+    await pool.query(`UPDATE shein_listing_products SET shopify_json = jsonb_set(shopify_json, '{imageCount}', '1') WHERE shopify_product_id = $1`, [pid]);
+    await pool.query(`DELETE FROM product_photos WHERE sku = $1`, [style]);
+    await pool.query(`DELETE FROM product_cutouts WHERE sku = $1`, [style]);
+    try {
+      expect((await act({ photoSource: 'branded' })).status()).toBe(400);
+      expect((await act({ photoSource: 'shopify' })).status()).toBe(200);
+      expect(await row()).toMatchObject({ clean_photos: false, use_ph_photos: false });
+      expect((await act({ usePhPhotos: true })).status()).toBe(200);                 // an explicit PH choice switches clean off too
+      expect(await row()).toMatchObject({ clean_photos: false, use_ph_photos: true });
+      expect((await act({ photoSource: 'auto' })).status()).toBe(200);
+      expect((await row()).clean_photos).toBe(null);
+      // no clean photos on file: Shopify's 1 photo counted → ✕
+      let p = await setup();
+      expect(p).toMatchObject({ cleanCount: 0, cleanOn: false });
+      expect(photos(p).ok).toBe(false);
+      // 3 cutouts recorded (as the brand tool's Upload does) → automatic: the clean photos are counted, ✓
+      for (const [i, a] of ['side', 'diagonal', 'top'].entries()) await pool.query(`INSERT INTO product_cutouts (sku, angle, url, origin, how) VALUES ($1, $2, $3, 'brand', 'upload')`, [style, a, `https://r2.e2e.test/listings/${style}/_cut/179000000000${i}-e2eaa${i}.png`]);
+      p = await setup();
+      expect(p).toMatchObject({ cleanCount: 3, cleanOn: true, cleanPhotos: null });
+      expect(photos(p).ok).not.toBe(false);
+      expect(p.blocking).not.toContain('photos');
+      // switched off → Shopify's 1 photo again: ✕, and the fix is “Use clean photos”
+      expect((await act({ photoSource: 'shopify' })).status()).toBe(200);
+      p = await setup();
+      expect(p.cleanOn).toBe(false);
+      const no = photos(p).blockers.find((b) => b.code === 'no_image');
+      expect(no.action).toEqual({ kind: 'use_clean_photos', label: 'Use clean photos' });
+      expect(no.fix).toContain('3 clean photos');
+      // the bulk sheet: “Use clean photos on all”
+      expect((await bulk({ productIds: [pid], patch: { cleanPhotos: 'yes' } })).status).toBe(400);
+      const on = await bulk({ productIds: [pid], patch: { cleanPhotos: true } });
+      expect(on).toMatchObject({ status: 200, body: { updated: [pid] } });
+      expect((await row()).clean_photos).toBe(true);
+      expect(JSON.stringify((await row()).blockers || [])).not.toContain('no_image');    // the list row follows at once
+      // a left-out clean photo comes off the count (1 of 3 left out → 2 = enough; 2 left out → ✕ “Only 1 clean photo”)
+      expect((await act({ photoSkip: [`https://r2.e2e.test/listings/${style}/_cut/1790000000000-e2eaa0.png`, `https://r2.e2e.test/listings/${style}/_cut/1790000000001-e2eaa1.png`] })).status()).toBe(200);
+      p = await setup();
+      expect(photos(p).blockers.find((b) => b.code === 'no_image').title).toMatch(/^Only 1 clean photo, SHEIN needs/);
+      await act({ photoSkip: [] });
+      // “Leave out the spec + welcome slides on all”: Shopify photos 2 + 3 are copies of the PH spec + welcome slides (by picture —
+      // the signatures are pre-seeded, as an earlier read would have cached them; nothing is downloaded here)
+      expect((await bulk({ productIds: [pid], patch: { skipSlides: false } })).status).toBe(400);
+      await pool.query(`INSERT INTO product_photos (sku, angle, url, source, created_by) VALUES ($1, 'extra1', 'https://r2.e2e.test/ph-spec.jpg', 'ph_edited', 'e2e'), ($1, 'extra2', 'https://r2.e2e.test/ph-welcome.jpg', 'ph_edited', 'e2e')`, [style]);
+      const sig = (v) => Array.from({ length: 256 }, (_, i) => (i % 2 ? v : 255 - v));
+      const seed = { 'https://r2.e2e.test/ph-spec.jpg': sig(40), 'https://r2.e2e.test/ph-welcome.jpg': sig(120), 'https://cdn.e2e.test/7709-1.png': sig(200), 'https://cdn.e2e.test/7709-2.png': sig(40.5), 'https://cdn.e2e.test/7709-3.png': sig(119) };
+      for (const [k, v] of Object.entries(seed)) await pool.query(`INSERT INTO shein_listing_cache (kind, key, payload) VALUES ('photo_sig', $1, $2) ON CONFLICT (kind, key) DO UPDATE SET payload = EXCLUDED.payload`, [k, JSON.stringify({ sig: v })]);
+      const out = await bulk({ productIds: [pid], patch: { skipSlides: true } });
+      expect(out).toMatchObject({ status: 200, body: { updated: [pid], slides: { shoes: 1, photos: 2, unchecked: 0, noSlides: 0 } } });
+      expect((await row()).photo_skip.sort()).toEqual(['https://cdn.e2e.test/7709-2.png', 'https://cdn.e2e.test/7709-3.png']);
+      expect((await bulk({ productIds: [pid], patch: { skipSlides: true } })).body.slides).toMatchObject({ shoes: 0, photos: 2 });   // twice = once
+      // Find clean photos: a shein: id → 400, unknown → 404 (the R2 look itself is covered with stubs below)
+      expect((await request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'find_clean_photos', productId: 'shein:E2ESPU5' } })).status()).toBe(400);
+      expect((await request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'find_clean_photos', productId: gidP(1) } })).status()).toBe(404);
+      expect(fake.writes.length).toBe(w0);
+    } finally {
+      await pool.query(`DELETE FROM product_photos WHERE sku = $1`, [style]);
+      await pool.query(`DELETE FROM product_cutouts WHERE sku = $1`, [style]);
+      await pool.query(`DELETE FROM shein_listing_cache WHERE kind = 'photo_sig' AND key LIKE 'https://%e2e.test/%'`);
+      await pool.query(`UPDATE shein_listing_products SET shopify_json = $2, clean_photos = NULL, use_ph_photos = false, photo_skip = '{}' WHERE shopify_product_id = $1`, [pid, JSON.stringify(was)]);
+      await act({ photoSource: 'auto' });
+    }
+  });
+
+  test('Choose photos (drawer): the clean photos are the default (labelled by angle, “angle by order” flagged); switch to Shopify → its copies of the PH slides are named, “Leave out the spec + welcome slides”; 390 px', async ({ page }) => {
+    const pid = gidP(7709);
+    const clean = ['side', 'diagonal', 'top'].map((a, i) => ({ url: `https://cdn.e2e.test/cut-${a}.png`, key: `https://cdn.e2e.test/cut-${a}.png`, angle: a, how: i === 2 ? 'timestamp' : 'checked', origin: 'recovered' }));
+    const shop = [1, 2, 3].map((i) => `https://cdn.e2e.test/7709-${i}.png`);
+    const phCopy = [{ angle: 'side', slide: null }, { angle: 'extra1', slide: 'spec' }, { angle: 'extra2', slide: 'welcome' }];
+    // Shopify's photo read is a live call — stubbed; the saves go to the real endpoint (DB only) and the stub follows the DB
+    await page.route('**/api/shein/listings?photos=*', async (route) => {
+      const r = (await pool.query(`SELECT photo_skip, clean_photos FROM shein_listing_products WHERE shopify_product_id = $1`, [pid])).rows[0];
+      const skip = new Set(r.photo_skip);
+      const source = r.clean_photos === false ? 'shopify' : 'clean';
+      await route.fulfill({ json: { ok: true, productId: pid, style: 'DD1391-100', usePhPhotos: false, cleanPhotos: r.clean_photos, source, max: 11, stale: [], ph: [], slidesOnFile: 2, copiesChecked: true,
+        clean: clean.map((x) => ({ ...x, skipped: skip.has(x.key) })), shopify: shop.map((u, i) => ({ url: u, key: u, width: 1400, height: 1400, skipped: skip.has(u), phCopy: phCopy[i] })), sent: 3 } });
+    });
+    await loginAs(page, 'ph_team');
+    await page.setViewportSize({ width: 1320, height: 1000 });
+    try {
+      await page.goto(`/ph/shein-listings?product=${encodeURIComponent(pid)}`);
+      await line(page, 'photos').getByRole('button', { name: 'Choose photos' }).click();
+      const picker = drawer(page).locator('[data-photos-picker]');
+      await expect(picker).toHaveAttribute('data-source', 'clean');
+      await expect(picker.locator('[data-src="clean"]')).toHaveAttribute('aria-checked', 'true');
+      await expect(picker).toContainText('3 of 3 photos go to SHEIN: the clean photos of DD1391-100');
+      await expect(picker).toContainText('Chosen automatically');
+      await expect(picker.locator('[data-photo="1"]')).toContainText('1 · main · side');
+      await expect(picker.locator('[data-photo="2"]')).toContainText('3/4');
+      await expect(picker.locator('[data-photo="3"]')).toContainText('(angle by order)');
+      await expect(picker).toContainText('The spec and welcome slides are never sent to SHEIN.');
+      await expect(picker.locator('[data-no-clean]')).toHaveCount(0);
+      // switch to Shopify's photos: saved (clean off), and the branded ones are called out
+      await picker.locator('[data-src="shopify"]').click();
+      await expect(picker).toHaveAttribute('data-source', 'shopify');
+      expect((await pool.query(`SELECT clean_photos FROM shein_listing_products WHERE shopify_product_id = $1`, [pid])).rows[0].clean_photos).toBe(false);
+      await expect(picker.locator('[data-branded]')).toContainText('3 of these carry the PH brand template');
+      await expect(picker.locator('[data-photo="2"]')).toContainText('PH spec slide');
+      await expect(picker.locator('[data-photo="3"]')).toContainText('PH welcome slide');
+      await picker.locator('[data-act="skip-slides"]').click();
+      await expect(picker.locator('[data-photo="2"]')).toHaveAttribute('data-skipped', 'yes');
+      await expect(picker.locator('[data-photo="3"]')).toHaveAttribute('data-skipped', 'yes');
+      expect((await pool.query(`SELECT photo_skip FROM shein_listing_products WHERE shopify_product_id = $1`, [pid])).rows[0].photo_skip.sort()).toEqual([shop[1], shop[2]]);
+      await expect(picker.locator('[data-slides]')).toHaveCount(0);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await noSideScroll(page, 'photo picker');
+      await picker.locator('[data-src="clean"]').click();
+      await expect(picker).toHaveAttribute('data-source', 'clean');
+    } finally {
+      await pool.query(`UPDATE shein_listing_products SET photo_skip = '{}', clean_photos = NULL WHERE shopify_product_id = $1`, [pid]);
     }
   });
 
@@ -4652,5 +4797,212 @@ test.describe.serial('SHEIN Listings Phase 5 — the switch-over + go-live cards
     expect(btn.height).toBeGreaterThanOrEqual(44);
     await shot(page, 'phone-cutover');
     if (process.env.SHL_SHOTS) await card(page, 'cutover').screenshot({ path: `${process.env.SHL_SHOTS}/shein-listings-phone-cutover-card.png` });
+  });
+});
+
+/* ------------------- Clean photos (2026-11-14): the brand tool's cutouts, on white ------------------- */
+// Pure: the cutout key time, recovering the angles from R2 timestamps, the source choice, the picture match.
+// Server half with every network read stubbed (never R2, never SHEIN): the white render, signatures,
+// finding a style's cutouts by picture (timestamps only as a fallback that must agree), recording them,
+// the photos a publish sends (clean first, never the spec / welcome slides), the conversion path.
+test.describe('SHEIN Listings — clean photos (pure)', () => {
+  test('cutout keys, the R2 folder, the source choice, the listing order', async () => {
+    const C = await import('../src/lib/sheinCleanPhotos.js');
+    expect(C.cutoutKeyTime('https://cdn.x/listings/HF2886-001/_cut/1793954827728-tw54gu.png?v=1')).toBe(1793954827728);
+    expect(C.cutoutKeyTime('listings/HF2886-001/ph_edited/HF2886-001-1-lateral-1793954865528.jpg')).toBe(null);
+    expect(C.isCutoutUrl('https://cdn.x/listings/A/_cut/1793954827728-ab12cd.png')).toBe(true);
+    expect(C.cutoutPrefix(' FD 1234/001 ')).toBe('listings/FD-1234_001/_cut/');
+    expect(C.photoSourceOf({ cleanCount: 3 })).toBe('clean');
+    expect(C.photoSourceOf({ cleanPhotos: false, cleanCount: 3, usePhPhotos: true, phCount: 5 })).toBe('ph_edited');
+    expect(C.photoSourceOf({ cleanPhotos: true, cleanCount: 0, usePhPhotos: true, phCount: 0 })).toBe('shopify');   // nothing to use → Shopify's
+    expect(C.orderClean([{ angle: 'rear', takenAt: 1 }, { angle: 'side', takenAt: 5 }, { angle: 'x', takenAt: 0 }, { angle: 'top', takenAt: 2 }]).map((x) => x.angle)).toEqual(['side', 'top', 'rear', 'x']);
+    expect(C.isSlideAngle('extra1') && C.isSlideAngle('extra2') && !C.isSlideAngle('side')).toBe(true);
+  });
+
+  test('recoverCutouts: one session of one cutout per uploaded angle = exact; a re-cut / re-render = guess (last n); nothing before the upload = none', async () => {
+    const { recoverCutouts } = await import('../src/lib/sheinCleanPhotos.js');
+    const T = 1_800_000_000_000; const s = 1000;
+    const ph = ['side', 'diagonal', 'top', 'outsole', 'rear', 'extra1', 'extra2'].map((angle, i) => ({ angle, at: T + 60 * s + i * 2 * s }));
+    const cut = (sec) => ({ url: `u${sec}`, ts: T + sec * s });
+    const exact = recoverCutouts({ cutouts: [cut(0), cut(5), cut(10), cut(15), cut(20)], ph });
+    expect(exact).toMatchObject({ confidence: 'exact', why: 'one_session' });
+    expect(exact.photos.map((p) => `${p.angle}:${p.url}`)).toEqual(['side:u0', 'diagonal:u5', 'top:u10', 'outsole:u15', 'rear:u20']);
+    const rerender = recoverCutouts({ cutouts: [0, 5, 10, 15, 20, 30, 35, 40, 45, 50].map(cut), ph });
+    expect(rerender).toMatchObject({ confidence: 'guess', why: 'extra_cutouts' });
+    expect(rerender.photos.map((p) => p.url)).toEqual(['u30', 'u35', 'u40', 'u45', 'u50']);
+    // an old session > 15 min earlier is not this upload's
+    expect(recoverCutouts({ cutouts: [cut(-3600), cut(0), cut(5), cut(10), cut(15), cut(20)], ph }).confidence).toBe('exact');
+    // four angles uploaded (no side), five cut → the last four
+    const four = recoverCutouts({ cutouts: [0, 5, 10, 15, 20].map(cut), ph: ph.filter((x) => x.angle !== 'side') });
+    expect(four.photos.map((p) => `${p.angle}:${p.url}`)).toEqual(['diagonal:u5', 'top:u10', 'outsole:u15', 'rear:u20']);
+    expect(recoverCutouts({ cutouts: [cut(100)], ph }).confidence).toBe('none');    // staged after the upload
+    expect(recoverCutouts({ cutouts: [cut(0)], ph: [] })).toMatchObject({ confidence: 'none', why: 'no_upload' });
+    // the upload spread over > 10 min (angles re-uploaded one by one) → guess
+    const spread = ph.map((x, i) => ({ ...x, at: T + 60 * s + i * 300 * s }));
+    expect(recoverCutouts({ cutouts: [0, 5, 10, 15, 20].map(cut), ph: spread }).confidence).toBe('guess');
+  });
+
+  test('pictures: the nearest PH copy within the limit; assignCutouts trusts the picture, the timestamps only where they agree', async () => {
+    const C = await import('../src/lib/sheinCleanPhotos.js');
+    const { assignCutouts, MATCH_MAX } = await import('../api/_lib/shein-clean-photos.js');
+    const sig = (v) => Array.from({ length: 256 }, () => v);
+    expect(C.sigDistance(sig(10), sig(11.5))).toBe(1.5);
+    expect(C.sigDistance(sig(1), [1])).toBe(Infinity);
+    const m = C.matchPhCopies([{ key: 'a', sig: sig(10) }, { key: 'b', sig: sig(51) }, { key: 'c', sig: sig(200) }], [{ angle: 'side', sig: sig(11) }, { angle: 'extra1', sig: sig(50) }, { angle: 'extra2', sig: sig(52) }]);
+    expect(m.get('a')).toMatchObject({ angle: 'side', slide: null });
+    expect(m.get('b')).toMatchObject({ angle: 'extra1', slide: 'spec' });          // nearest wins (50 vs 52)
+    expect(m.has('c')).toBe(false);
+    const cuts = [{ url: 'c0', ts: 0 }, { url: 'c1', ts: 1 }, { url: 'c2', ts: 2 }];
+    const X = 99;
+    // the pictures say side = c2, diagonal = c0; top matches nothing
+    const scores = [[X, X, 4], [3, X, X], [X, X, X]];
+    const ts = { confidence: 'exact', photos: [{ url: 'c0', angle: 'side', takenAt: 0 }, { url: 'c1', angle: 'diagonal', takenAt: 1 }, { url: 'c2', angle: 'top', takenAt: 2 }] };
+    expect(assignCutouts(['side', 'diagonal', 'top'], cuts, scores, ts)).toEqual([{ url: 'c2', angle: 'side', takenAt: 2, how: 'checked' }, { url: 'c0', angle: 'diagonal', takenAt: 0, how: 'checked' }]);
+    // timestamps that agree with every picture fill the gap
+    const agree = [[2, X, X], [X, 3, X], [X, X, MATCH_MAX + 1]];
+    expect(assignCutouts(['side', 'diagonal', 'top'], cuts, agree, ts).map((x) => `${x.angle}:${x.url}:${x.how}`)).toEqual(['side:c0:checked', 'diagonal:c1:checked', 'top:c2:timestamp']);
+    expect(assignCutouts(['side', 'diagonal', 'top'], cuts, agree, { ...ts, confidence: 'guess' })).toHaveLength(2);
+  });
+});
+
+test.describe.serial('SHEIN Listings — clean photos (server, every read stubbed)', () => {
+  const SKU = 'E2E-CLEAN-1';
+  let CP; let PUB; let D; let canvas; const imgs = new Map(); const made = [];
+  // a "shoe": an opaque blob on a transparent canvas, different per angle
+  const SHAPES = { side: ['#d22', 1100, 380], diagonal: ['#2a2', 900, 520], top: ['#22d', 380, 1000], outsole: ['#222', 1050, 360], rear: ['#dd2', 420, 640] };
+  async function cutout(angle, { w = 1400, h = 1000 } = {}) {
+    const [col, sw, sh] = SHAPES[angle];
+    const c = canvas.createCanvas(w, h); const g = c.getContext('2d');
+    g.fillStyle = col; g.beginPath(); g.ellipse(w / 2, h / 2, sw / 2, sh / 2, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#fff'; g.fillRect(w / 2 - sw / 6, h / 2 - sh / 6, sw / 3, sh / 12);   // a "swoosh", so colour alone doesn't decide
+    return c.encode('png');
+  }
+  // a "branded" photo: a brick-ish template + the cutout where Brand & Fill puts it (or moved, as PH may do)
+  async function branded(cutBuf, { moved = false } = {}) {
+    const { alphaBbox, fitShoeBox } = await import('../api/_lib/branding.js');
+    const c = canvas.createCanvas(1600, 1600); const g = c.getContext('2d');
+    g.fillStyle = '#9b4a2c'; g.fillRect(0, 0, 1600, 1600);
+    g.fillStyle = '#b5603a'; for (let y = 0; y < 1600; y += 40) g.fillRect((y / 40) % 2 ? 0 : 60, y, 1600, 18);
+    const im = await canvas.loadImage(cutBuf); const bb = alphaBbox(im); const pl = fitShoeBox(bb);
+    const k = moved ? 0.55 : 1;
+    g.drawImage(im, bb.x, bb.y, bb.w, bb.h, pl.dx + (moved ? 260 : 0), pl.dy + (moved ? -200 : 0), pl.dw * k, pl.dh * k);
+    g.fillStyle = '#fff'; g.font = 'bold 60px sans-serif'; g.fillText('E2E Shoe', 600, 200); g.fillText(SKU, 600, 1450);
+    return c.encode('jpeg', 88);
+  }
+  const url = (path) => `https://r2.e2e.test/${path}`;
+  const load = async (u) => { const b = imgs.get(u); if (!b) throw new Error(`no stub for ${u}`); return b; };
+
+  test.beforeAll(async () => {
+    if (!pool) return;
+    canvas = await import('@napi-rs/canvas');
+    CP = await import('../api/_lib/shein-clean-photos.js'); PUB = await import('../api/_lib/shein-publish.js'); D = await import('../api/_lib/db.js');
+    await pool.query(`DELETE FROM product_cutouts WHERE sku LIKE 'E2E-CLEAN%'`);
+    await pool.query(`DELETE FROM product_photos WHERE sku LIKE 'E2E-CLEAN%'`);
+  });
+  test.beforeEach(() => { test.skip(!pool, 'needs the database'); });
+  test.afterAll(async () => {
+    if (!pool) return;
+    await pool.query(`DELETE FROM product_cutouts WHERE sku LIKE 'E2E-CLEAN%'`);
+    await pool.query(`DELETE FROM product_photos WHERE sku LIKE 'E2E-CLEAN%'`);
+    await pool.query(`DELETE FROM shein_listing_cache WHERE kind IN ('photo_sig', 'pic') AND (key LIKE 'https://r2.e2e.test/%' OR payload->>'source' LIKE 'https://r2.e2e.test/%')`);
+  });
+
+  test('renderClean: the shoe trimmed and centred on a white 1500 × 1500 (86 % of the long side), never the transparent background', async () => {
+    const out = await CP.renderClean(await cutout('side'));
+    const im = await canvas.loadImage(out);
+    expect([im.width, im.height]).toEqual([1500, 1500]);
+    const c = canvas.createCanvas(1500, 1500); const g = c.getContext('2d'); g.drawImage(im, 0, 0);
+    const px = (x, y) => Array.from(g.getImageData(x, y, 1, 1).data.slice(0, 3));
+    for (const [x, y] of [[3, 3], [1496, 3], [3, 1496], [1496, 1496]]) for (const v of px(x, y)) expect(v).toBeGreaterThan(245);   // white, not black
+    const row = g.getImageData(0, 750, 1500, 1).data; let first = -1; let last = -1;
+    for (let x = 0; x < 1500; x++) if (row[x * 4] < 245 || row[x * 4 + 1] < 245) { if (first < 0) first = x; last = x; }
+    expect(last - first).toBeGreaterThan(1500 * 0.83); expect(last - first).toBeLessThan(1500 * 0.89);   // trimmed to the shoe, then fitted
+    expect(Math.abs((first + last) / 2 - 750)).toBeLessThan(6);
+    await expect(CP.renderClean(await (async () => { const t = canvas.createCanvas(1000, 1000); const tg = t.getContext('2d'); tg.fillStyle = '#000'; tg.fillRect(500, 500, 40, 40); return t.encode('png'); })())).rejects.toThrow(/too small/);
+  });
+
+  test('imageSig: a re-encoded, resized copy is within the limit of its original; another angle is not', async () => {
+    const { sigDistance, SAME_PHOTO_MAX } = await import('../src/lib/sheinCleanPhotos.js');
+    const a = await branded(await cutout('side')); const b = await branded(await cutout('top'));
+    const small = await (async () => { const im = await canvas.loadImage(a); const c = canvas.createCanvas(400, 400); c.getContext('2d').drawImage(im, 0, 0, 400, 400); return c.encode('jpeg', 70); })();
+    const [sa, sb, ss] = [await CP.imageSig(a), await CP.imageSig(b), await CP.imageSig(small)];
+    expect(sigDistance(sa, ss)).toBeLessThan(SAME_PHOTO_MAX);
+    expect(sigDistance(sa, sb)).toBeGreaterThan(SAME_PHOTO_MAX);
+  });
+
+  test('findCleanPhotos: every cutout matched to its angle by picture (staged out of order, an extra re-cut); a moved shoe falls back to the timestamps only when they agree; --apply records them, a brand-tool cutout is never replaced', async () => {
+    const T = Date.now() - 3600_000;
+    const angles = ['side', 'diagonal', 'top', 'outsole', 'rear'];
+    // staged: diagonal, side, top, an extra side re-cut, outsole, rear — one session
+    const order = ['diagonal', 'side', 'top', 'side', 'outsole', 'rear'];
+    const keys = [];
+    for (const [i, a] of order.entries()) {
+      const key = `listings/${SKU}/_cut/${T + i * 5000}-e2e${i}ab.png`; keys.push({ key, url: url(key) });
+      imgs.set(url(key), await cutout(a, i === 3 ? { w: 1500, h: 1100 } : {}));   // the re-cut: the same shoe, a different canvas
+    }
+    await pool.query(`DELETE FROM product_photos WHERE sku = $1`, [SKU]);
+    for (const [i, a] of angles.entries()) {
+      const u = url(`listings/${SKU}/ph_edited/${a}.jpg`);
+      const src = keys[order.indexOf(a)].url;   // branded from the first cutout of that angle
+      imgs.set(u, await branded(imgs.get(src), { moved: a === 'rear' }));
+      await pool.query(`INSERT INTO product_photos (sku, angle, url, source, created_by, created_at) VALUES ($1, $2, $3, 'ph_edited', 'e2e', $4)`, [SKU, a, u, new Date(T + 120_000 + i * 2000)]);
+    }
+    await pool.query(`INSERT INTO product_photos (sku, angle, url, source, created_by, created_at) VALUES ($1, 'extra1', $2, 'ph_edited', 'e2e', $3)`, [SKU, url('spec.jpg'), new Date(T + 130_000)]);
+    const list = async (prefix) => { expect(prefix).toBe(`listings/${SKU}/_cut/`); return keys; };
+    const r = await CP.findCleanPhotos(SKU, { list, load });
+    const got = Object.fromEntries(r.found.map((f) => [f.angle, [order[keys.findIndex((k) => k.url === f.url)], f.how]]));
+    expect(got).toEqual({ side: ['side', 'checked'], diagonal: ['diagonal', 'checked'], top: ['top', 'checked'], outsole: ['outsole', 'checked'] });   // rear (moved) not guessed: the order isn't one cutout per angle
+    expect(r).toMatchObject({ cutouts: 6, angles: 5, recorded: 0, confidence: 'checked' });
+    expect((await pool.query(`SELECT count(*)::int AS n FROM product_cutouts WHERE sku = $1`, [SKU])).rows[0].n).toBe(0);   // not written without write
+    // a clean session (one cutout per angle, in order) + the moved rear → the rear by timestamp (it agrees with every picture)
+    const clean = angles.map((a, i) => ({ key: `listings/${SKU}/_cut/${T + 60_000 + i * 5000}-e2ecl${i}.png`, url: url(`listings/${SKU}/_cut/${T + 60_000 + i * 5000}-e2ecl${i}.png`) }));
+    for (const [i, a] of angles.entries()) imgs.set(clean[i].url, imgs.get(keys[order.indexOf(a)].url));
+    for (const [i, a] of angles.entries()) imgs.set(url(`listings/${SKU}/ph_edited/${a}.jpg`), await branded(imgs.get(clean[i].url), { moved: a === 'rear' }));
+    const r2 = await CP.findCleanPhotos(SKU, { list: async () => clean, load, write: true, by: 'e2e' });
+    expect(r2.found.map((f) => `${f.angle}:${f.how}`)).toEqual(['side:checked', 'diagonal:checked', 'top:checked', 'outsole:checked', 'rear:timestamp']);
+    expect(r2.found.map((f) => f.url)).toEqual(clean.map((c) => c.url));
+    expect(r2).toMatchObject({ recorded: 5, confidence: 'mixed' });
+    const rows = (await pool.query(`SELECT angle, url, origin, how FROM product_cutouts WHERE sku = $1 ORDER BY angle`, [SKU])).rows;
+    expect(rows).toHaveLength(5);
+    expect(rows.every((x) => x.origin === 'recovered')).toBe(true);
+    // the brand tool's own record wins: a later recovery never replaces it; a brand record replaces a recovered one
+    await D.recordCutout({ sku: SKU, angle: 'side', url: url('brand-side.png'), origin: 'brand', how: 'upload', takenAt: T, createdBy: 'e2e' });
+    await D.recordCutout({ sku: SKU, angle: 'side', url: url('recovered-again.png'), origin: 'recovered', how: 'checked' });
+    expect((await pool.query(`SELECT url, origin FROM product_cutouts WHERE sku = $1 AND angle = 'side'`, [SKU])).rows[0]).toEqual({ url: url('brand-side.png'), origin: 'brand' });
+    expect((await D.cleanPhotoKeys()).get(SKU).size).toBe(5);
+    // nothing on R2 / nothing uploaded → none, nothing read
+    expect(await CP.findCleanPhotos('E2E-CLEAN-NONE', { list: async () => [], load })).toMatchObject({ cutouts: 0, found: [], confidence: 'none' });
+  });
+
+  test('sourcePhotos: the clean photos first (side = main), unless switched off; the PH set never sends the spec / welcome slides; a left-out photo stays out', async () => {
+    const product = { style: SKU, images: [{ url: 'https://cdn.shopify.com/e2e-1.jpg' }, { url: 'https://cdn.shopify.com/e2e-2.jpg' }] };
+    const auto = await PUB.sourcePhotos({ clean_photos: null, use_ph_photos: true, photo_skip: [] }, product);
+    expect(auto.source).toBe('clean');
+    expect(auto.urls[0]).toBe(url('brand-side.png'));
+    expect(auto.urls).toHaveLength(5);
+    const ph = await PUB.sourcePhotos({ clean_photos: false, use_ph_photos: true, photo_skip: [url(`listings/${SKU}/ph_edited/top.jpg`)] }, product);
+    expect(ph).toMatchObject({ source: 'ph_edited', skipped: 1 });
+    expect(ph.urls).toEqual(['side', 'diagonal', 'outsole', 'rear'].map((a) => url(`listings/${SKU}/ph_edited/${a}.jpg`)));   // no extra1 (spec)
+    expect((await PUB.sourcePhotos({ clean_photos: false, use_ph_photos: false, photo_skip: [] }, product))).toMatchObject({ source: 'shopify', urls: product.images.map((i) => i.url) });
+  });
+
+  test('convertPhotos: a clean photo is rendered on white (trimmed), a Shopify photo padded as before — each hosted once, its own cache key', async () => {
+    const hosted = [];
+    const side = url(`listings/${SKU}/_cut/${Date.now() - 1000}-e2econ.png`);
+    imgs.set(side, await cutout('side'));
+    imgs.set('https://r2.e2e.test/plain.png', await (async () => { const c = canvas.createCanvas(1200, 800); const g = c.getContext('2d'); g.fillStyle = '#c33'; g.fillRect(0, 0, 1200, 800); return c.encode('png'); })());
+    const io = { fetchImage: load, hostImage: async (key, buf) => { hosted.push({ key, buf }); return `https://r2.e2e.test/${key}`; },
+      sheinTransformPic: async (type, u) => ({ transformed: `https://img.shein.e2e/${type}/${u.split('/').pop()}` }) };
+    const out = await PUB.convertPhotos({ urls: [side, 'https://r2.e2e.test/plain.png'], fill: {}, io, log: () => ({}) });
+    expect(out.errors).toEqual([]);
+    expect(hosted).toHaveLength(2);
+    const look = async (buf) => { const im = await canvas.loadImage(buf); const c = canvas.createCanvas(im.width, im.height); const g = c.getContext('2d'); g.drawImage(im, 0, 0);
+      const mid = g.getImageData(0, 750, 1500, 1).data; let n = 0; for (let x = 0; x < 1500; x++) if (mid[x * 4] < 245) n += 1; return { w: im.width, h: im.height, wide: n }; };
+    const a = await look(hosted[0].buf); const b = await look(hosted[1].buf);
+    expect([a.w, a.h, b.w, b.h]).toEqual([1500, 1500, 1500, 1500]);
+    expect(a.wide).toBeGreaterThan(1500 * 0.8);                                     // the shoe trimmed + fitted (not the 1400-wide canvas padded)
+    expect(b.wide).toBe(1500);                                                       // the opaque photo padded edge to edge, as before
+    const again = await PUB.convertPhotos({ urls: [side], fill: {}, io, log: () => ({}) });
+    expect(again.cached).toBeGreaterThan(0); expect(hosted).toHaveLength(2);         // cached by its own key
   });
 });

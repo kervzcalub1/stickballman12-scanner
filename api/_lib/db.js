@@ -12452,12 +12452,13 @@ export async function listPublishUnconfirmed() {
 }
 export async function deleteBrandMap(vendor) { return (await db()`DELETE FROM shein_brand_map WHERE vendor = ${String(vendor).trim().toLowerCase()} RETURNING 1`).length; }
 // A product's Phase 4 choices (title override, SKC colour, PH photos) — DB only.
-export async function setListingPublishChoices(productId, { titleOverride, skcValueId, usePhPhotos, photoSkip }) {
+export async function setListingPublishChoices(productId, { titleOverride, skcValueId, usePhPhotos, cleanPhotos, photoSkip }) {
   const has = (v) => v !== undefined;
   const [r] = await db()`UPDATE shein_listing_products SET
       title_override = CASE WHEN ${has(titleOverride)} THEN ${titleOverride ?? null}::text ELSE title_override END,
       skc_value_id = CASE WHEN ${has(skcValueId)} THEN ${skcValueId ?? null}::bigint ELSE skc_value_id END,
       use_ph_photos = CASE WHEN ${has(usePhPhotos)} THEN ${!!usePhPhotos} ELSE use_ph_photos END,
+      clean_photos = CASE WHEN ${has(cleanPhotos)} THEN ${cleanPhotos ?? null}::boolean ELSE clean_photos END,
       photo_skip = CASE WHEN ${has(photoSkip)} THEN ${photoSkip || []}::text[] ELSE photo_skip END, updated_at = now()
     WHERE shopify_product_id = ${productId} RETURNING *`;
   return r || null;
@@ -12526,12 +12527,67 @@ export async function listingVendorUsage() {
 // is set to "Use PH edited photos" (the dry run sends them; it fell back to counting Shopify's).
 // The PH edited photos per style as photo keys (URL without ?query) — the readiness takes a person's
 // left-out photos off the right source's count.
+// The spec / welcome slides (extra1 / extra2) are never sent to SHEIN (2026-11-14), so they never count.
 export async function phPhotoKeys() {
-  const rows = await db()`SELECT sku, array_agg(url) AS urls FROM product_photos WHERE source = 'ph_edited' GROUP BY sku`;
+  const rows = await db()`SELECT sku, array_agg(url) AS urls FROM product_photos WHERE source = 'ph_edited' AND angle NOT IN ('extra1', 'extra2') GROUP BY sku`;
   return new Map(rows.map((r) => [String(r.sku).trim().toUpperCase(), new Set((r.urls || []).map(photoKey))]));
 }
+// Clean photos (2026-11-14): the brand tool's transparent cutouts per style (product_cutouts), as photo keys.
+export async function cleanPhotoKeys() {
+  const rows = await db()`SELECT sku, array_agg(url) AS urls FROM product_cutouts GROUP BY sku`;
+  return new Map(rows.map((r) => [String(r.sku).trim().toUpperCase(), new Set((r.urls || []).map(photoKey))]));
+}
+// A style's cutouts in listing order (side first).
+export async function productCutoutsForSku(sku) {
+  return await db()`SELECT angle, url, origin, how, taken_at FROM product_cutouts WHERE upper(sku) = upper(${String(sku || '').trim()})
+    ORDER BY CASE angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, taken_at NULLS LAST`;
+}
+// One cutout per (sku, angle): the brand tool's Upload replaces an angle's cutout ('brand' / 'upload'); a
+// recovered one (origin 'recovered') never replaces a cutout the brand tool recorded.
+export async function recordCutout({ sku, angle, url, origin = 'brand', how = 'upload', takenAt = null, createdBy = null }) {
+  const s = String(sku || '').trim();
+  if (!s || !angle || !url) return null;
+  const at = takenAt == null ? null : new Date(Number(takenAt) || takenAt).toISOString();
+  const [r] = origin === 'brand'
+    ? await db()`INSERT INTO product_cutouts (sku, angle, url, origin, how, taken_at, created_by) VALUES (${s}, ${angle}, ${url}, 'brand', ${how}, ${at}::timestamptz, ${createdBy})
+        ON CONFLICT (sku, angle) DO UPDATE SET url = EXCLUDED.url, origin = 'brand', how = EXCLUDED.how, taken_at = EXCLUDED.taken_at, created_by = EXCLUDED.created_by, created_at = now() RETURNING *`
+    : await db()`INSERT INTO product_cutouts (sku, angle, url, origin, how, taken_at, created_by) VALUES (${s}, ${angle}, ${url}, ${origin}, ${how}, ${at}::timestamptz, ${createdBy})
+        ON CONFLICT (sku, angle) DO UPDATE SET url = EXCLUDED.url, how = EXCLUDED.how, taken_at = EXCLUDED.taken_at, created_by = EXCLUDED.created_by, created_at = now()
+        WHERE product_cutouts.origin <> 'brand' RETURNING *`;
+  return r || null;
+}
+// The clean-photos backfill (scripts/shein-clean-photos.mjs): styles with PH edited photos (all, or only those
+// on SHEIN Listings), and the styles that already have clean photos recorded.
+export async function cleanBackfillStyles({ all = false } = {}) {
+  const rows = all
+    ? await db()`SELECT DISTINCT sku FROM product_photos WHERE source = 'ph_edited' ORDER BY sku`
+    : await db()`SELECT DISTINCT p.sku FROM product_photos p JOIN shein_listing_products l ON upper(l.style) = upper(p.sku)
+        WHERE p.source = 'ph_edited' AND l.shopify_product_id NOT LIKE 'shein:%' ORDER BY p.sku`;
+  return rows.map((r) => r.sku);
+}
+export async function stylesWithCutouts() {
+  return new Set((await db()`SELECT DISTINCT upper(sku) AS s FROM product_cutouts`).map((r) => r.s));
+}
+export async function deleteCutoutsForSku(sku) {
+  return (await db()`DELETE FROM product_cutouts WHERE upper(sku) = upper(${String(sku || '').trim()}) RETURNING 1`).length;
+}
+// Bulk "leave out the spec + welcome slides": add photo keys to each product's photo_skip. [[productId, keys[]]] → ids updated.
+export async function addListingPhotoSkips(pairs) {
+  const sql = db(); const done = [];
+  for (const [pid, keys] of pairs) {
+    if (!keys.length) continue;
+    const [r] = await sql`SELECT photo_skip FROM shein_listing_products WHERE shopify_product_id = ${pid}`;
+    if (!r) continue;
+    const cur = r.photo_skip || [];
+    const next = [...cur, ...keys.filter((k) => !cur.includes(k))].slice(-PHOTO_SKIP_MAX);
+    if (next.length === cur.length) continue;
+    await sql`UPDATE shein_listing_products SET photo_skip = ${next}::text[], updated_at = now() WHERE shopify_product_id = ${pid}`;
+    done.push(pid);
+  }
+  return done;
+}
 export async function productPhotosForSku(sku, source = 'ph_edited') {
-  return await db()`SELECT angle, url, source FROM product_photos WHERE sku = ${String(sku || '').trim()} AND source = ${source}
+  return await db()`SELECT angle, url, source, created_at FROM product_photos WHERE sku = ${String(sku || '').trim()} AND source = ${source}
     ORDER BY CASE angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, created_at`;
 }
 
@@ -12540,7 +12596,7 @@ export async function productPhotosForSku(sku, source = 'ph_edited') {
 export async function loadListingPrev() {
   const [products, variants] = await Promise.all([
     // + the publish choices (title / colour / PH photos): the stored readiness of a new shoe is judged on them too
-    db()`SELECT shopify_product_id, excluded, excluded_by, excluded_at, shopify_hash, shopify_json, computed_hash, spu, review_version, title_override, skc_value_id, use_ph_photos, photo_skip, category_pick_id, category_pick_ptid, category_pick_path, attr_overrides FROM shein_listing_products`,
+    db()`SELECT shopify_product_id, excluded, excluded_by, excluded_at, shopify_hash, shopify_json, computed_hash, spu, review_version, title_override, skc_value_id, use_ph_photos, clean_photos, photo_skip, category_pick_id, category_pick_ptid, category_pick_path, attr_overrides FROM shein_listing_products`,
     db()`SELECT row_key, shein_sku, match, excluded, excluded_by, excluded_at, synced_hash, synced_fields, last_error FROM shein_listing_variants`,
   ]);
   return { products: new Map(products.map((r) => [r.shopify_product_id, r])), variants: new Map(variants.map((r) => [r.row_key, r])) };
@@ -12721,14 +12777,15 @@ export async function getListingProductsMany(ids) {
 }
 // Bulk publish choices (DB only): colour / PH photos the same on every product; titles one per product
 // (titles: [[productId, title | null]]). → the product ids updated.
-export async function setListingPublishChoicesMany(productIds, { skcValueId, usePhPhotos } = {}, titles = []) {
+export async function setListingPublishChoicesMany(productIds, { skcValueId, usePhPhotos, cleanPhotos } = {}, titles = []) {
   const sql = db();
   const has = (v) => v !== undefined;
   const done = new Set();
-  if (productIds.length && (has(skcValueId) || has(usePhPhotos))) {
+  if (productIds.length && (has(skcValueId) || has(usePhPhotos) || has(cleanPhotos))) {
     const rows = await sql`UPDATE shein_listing_products SET
         skc_value_id = CASE WHEN ${has(skcValueId)} THEN ${skcValueId ?? null}::bigint ELSE skc_value_id END,
-        use_ph_photos = CASE WHEN ${has(usePhPhotos)} THEN ${!!usePhPhotos} ELSE use_ph_photos END, updated_at = now()
+        use_ph_photos = CASE WHEN ${has(usePhPhotos)} THEN ${!!usePhPhotos} ELSE use_ph_photos END,
+        clean_photos = CASE WHEN ${has(cleanPhotos)} THEN ${cleanPhotos ?? null}::boolean ELSE clean_photos END, updated_at = now()
       WHERE shopify_product_id = ANY(${productIds}::text[]) RETURNING shopify_product_id`;
     for (const r of rows) done.add(r.shopify_product_id);
   }

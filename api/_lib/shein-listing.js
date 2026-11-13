@@ -26,6 +26,7 @@ import {
 } from './shein.js';
 import { buildPublish, publishGates, readPublishAnswer, publishApproved, readBoxDefaults, fetchImage, hostOnR2, templateFor, assocRequired, sourcePhotos, convertPhotos } from './shein-publish.js';
 import { publishReadiness, attributePatch, templateParts, shoeAttrDefaults, countAfterSkip, planPhotoEdit, spuHasSpuPhotos, imagePlan } from '../../src/lib/sheinPublish.js';
+import { photoSourceOf } from '../../src/lib/sheinCleanPhotos.js';
 import { shopifyListingCatalogue, shopifyListingProduct, shopifyConfigured, styleFromTitle } from './shopify.js';
 import {
   createListingJob, getListingJob, activeListingJob, claimListingJob, touchListingJob, finishListingJob, markStaleListingJobs, resumeListingJob,
@@ -36,7 +37,7 @@ import {
   getListingProduct, listListingProducts, updateListingItem, markListingItemSending, dueRunItems, runJobsWithDueItems, requeueListingJob,
   setListingJobStatus, listingInflight, markVariantsPublished, setVariantsLastError, verifySizeMap, verifySizeMapById, getPlatformQuotes, listListingJobItems,
   createRunJob, getListingItems, sheinShelfRecords, markVariantsSynced, listingPriceOffProducts, listCategoryMaps, listBrandMaps, setListingPublished, listAttrDefaults, listingAttrOverridesBySpu, listListingCategoryPicks,
-  listPublishUnconfirmed, resumeListingJob as resumeJobRow, phPhotoKeys,
+  listPublishUnconfirmed, resumeListingJob as resumeJobRow, phPhotoKeys, cleanPhotoKeys,
 } from './db.js';
 import { walkActive, pushSpus } from './shein-live.js';
 import {
@@ -323,8 +324,8 @@ async function computeAndSave({ products, payloads, sizes, io, snapshot = false,
 // Phase 4's readiness for products not on SHEIN — from what is CACHED (no SHEIN call): category maps,
 // SHEIN's rules / templates / permissions for the mapped categories, brand maps + list, attr defaults, D6.
 async function publishContext(maps, market) {
-  const [categoryMaps, brandMaps, attrDefaults, box, brandsRow, unconf, phCounts] = await Promise.all([listCategoryMaps(), listBrandMaps(), listAttrDefaults(), readBoxDefaults(), getListingCache('brands', 'store'), listPublishUnconfirmed(),
-    phPhotoKeys().catch(() => new Map())]);
+  const [categoryMaps, brandMaps, attrDefaults, box, brandsRow, unconf, phCounts, cleanCounts] = await Promise.all([listCategoryMaps(), listBrandMaps(), listAttrDefaults(), readBoxDefaults(), getListingCache('brands', 'store'), listPublishUnconfirmed(),
+    phPhotoKeys().catch(() => new Map()), cleanPhotoKeys().catch(() => new Map())]);
   // re-review G1: a product with a publish SHEIN never confirmed shows publish_unconfirmed (no new publish)
   const unconfirmed = new Map(); for (const x of unconf) if (!unconfirmed.has(x.shopify_product_id)) unconfirmed.set(x.shopify_product_id, { itemId: Number(x.id), jobId: Number(x.job_id) });
   const picks = await listListingCategoryPicks().catch(() => []);   // the shoes' own categories (2026-11-11)
@@ -338,11 +339,18 @@ async function publishContext(maps, market) {
   const ctx = { categoryMaps, brandMaps, attrDefaults, box, brands: brandsRow?.payload || null, fills, templates, permissions, maps, unconfirmed };
   // "Use PH edited photos" on: the dry run sends the style's PH photos when it has any (else Shopify's),
   // so the photo count is theirs — and with none, the photo line says so (it read Shopify's count only).
+  // Clean photos (2026-11-14): the style's cutouts are the source when it has any (unless switched off) —
+  // the same choice the dry run makes (sourcePhotos → photoSourceOf).
   return (p, pv, excludedVariants) => {
-    const keys = phCounts.get(String(p?.style || '').trim().toUpperCase()) || new Set();
-    const ph = pv?.use_ph_photos ? keys.size : null;
+    const st = String(p?.style || '').trim().toUpperCase();
+    const keys = phCounts.get(st) || new Set();
+    const cleanKeys = cleanCounts.get(st) || new Set();
+    const source = photoSourceOf({ cleanPhotos: pv?.clean_photos ?? null, usePhPhotos: !!pv?.use_ph_photos, cleanCount: cleanKeys.size, phCount: keys.size });
+    const ph = source === 'clean' ? null : pv?.use_ph_photos ? keys.size : null;
     // the photos a person left out come off the count of the source in use
-    const prod = ph ? { ...p, imageCount: countAfterSkip(ph, pv?.photo_skip, true, keys), phPhotos: ph } : { ...p, imageCount: countAfterSkip(p?.imageCount, pv?.photo_skip, false, keys), phPhotos: ph };
+    const prod = source === 'clean' ? { ...p, imageCount: countAfterSkip(cleanKeys.size, pv?.photo_skip, true, cleanKeys), phPhotos: null, photoSource: 'clean', cleanPhotos: cleanKeys.size }
+      : ph ? { ...p, imageCount: countAfterSkip(ph, pv?.photo_skip, true, keys), phPhotos: ph, photoSource: 'ph_edited', cleanPhotos: cleanKeys.size }
+        : { ...p, imageCount: countAfterSkip(p?.imageCount, pv?.photo_skip, false, keys), phPhotos: ph, photoSource: 'shopify', cleanPhotos: cleanKeys.size };
     return publishReadiness(prod, { ...ctx, productRow: pv, excludedVariants, market });
   };
 }

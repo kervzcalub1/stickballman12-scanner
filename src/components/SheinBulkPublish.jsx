@@ -89,6 +89,10 @@ export function SheinBulkPublish({ ids, leftOut = [], intent = 'edit', active, b
   const phOn = live.filter((p) => p.usePhPhotos).length;
   const photoNo = live.filter((p) => isNo(p, 'photos')).length;
   const coverOff = live.filter((p) => p.coverSkipped).length;   // Shopify's photo 1 left out (a branded cover SHEIN calls a watermark)
+  // clean photos (2026-11-14): the brand tool's cutouts on white — on by default when a style has them
+  const cleanHave = live.filter((p) => p.cleanCount > 0);
+  const cleanOn = live.filter((p) => p.cleanOn).length;
+  const onShopify = live.filter((p) => !p.cleanOn && !p.usePhPhotos).length;
   const tidy = live.map((p) => { const cur = p.titleOverride || cleanTitle(p.title || ''); const next = tidyTitle(cur, p.titleMax); return { p, cur, next }; }).filter((x) => x.next !== x.cur && x.next.length >= 2);
   const titleMaxKnown = live.some((p) => p.titleMax);
 
@@ -194,14 +198,26 @@ export function SheinBulkPublish({ ids, leftOut = [], intent = 'edit', active, b
                 {groups.colour.length > 1 && <p className="muted xs">One colour list per SHEIN product type — so each type is set on its own (a colour from one type can’t go on another).</p>}
               </BulkBlock>
 
-              <BulkBlock k="photos" title="Photos" ok={!photoNo} okText={`${fmt(phOn)} of ${fmt(live.length)} use the PH edited photos.`}>
-                <p className="xs">{fmt(phOn)} of {fmt(live.length)} use the PH edited photos{photoNo ? <> · <span className="shl-bad-text">{fmt(photoNo)} short of photos</span></> : ''}. The PH team’s photos for each style are used when there are any, else Shopify’s.</p>
+              <BulkBlock k="photos" title="Photos" ok={!photoNo && cleanOn === cleanHave.length} okText={`${fmt(cleanOn)} of ${fmt(live.length)} get the clean photos (the shoe on white, no text).`}>
+                <p className="xs" data-clean-count=""><b>{fmt(cleanOn)}</b> of {fmt(live.length)} get the <b>clean photos</b> — the shoe cut out of its catalogue photo, on white, no text (what SHEIN wants).
+                  {live.length - cleanHave.length > 0 ? <> {fmt(live.length - cleanHave.length)} {live.length - cleanHave.length === 1 ? 'has' : 'have'} none on file yet — open the shoe → Choose photos → Find clean photos.</> : ''}
+                  {photoNo ? <> · <span className="shl-bad-text">{fmt(photoNo)} short of photos</span></> : ''}</p>
                 <div className="shl-pub-acts">
-                  <button type="button" className="btn ghost xs" disabled={phOn === 0} onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { usePhPhotos: false } }, `Back to the Shopify photos on ${plural(live.length, 'shoe')}.`)}>Shopify photos on all</button>
-                  <button type="button" className="btn xs shl-fix" disabled={phOn === live.length} onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { usePhPhotos: true } }, `PH edited photos on ${plural(live.length, 'shoe')} — checked again by the preview.`)}>Use PH photos on all {fmt(live.length)}</button>
+                  <button type="button" className="btn xs shl-fix" data-act="clean-all" disabled={!cleanHave.length || cleanOn === cleanHave.length}
+                    onClick={() => bulk({ productIds: cleanHave.map((p) => p.productId), patch: { cleanPhotos: true } }, `Clean photos on ${plural(cleanHave.length, 'shoe')} — checked again by the preview.`)}>Use clean photos on all {fmt(cleanHave.length)}</button>
                 </div>
-                <p className="xs" data-cover="">Shopify’s photo 1 (the cover) left out on <b>{fmt(coverOff)}</b> of {fmt(live.length)}. SHEIN rejects a cover with text, a logo or the store name on it as a “watermark”. To pick photo by photo, open the shoe (Choose photos).</p>
+                <p className="xs">The rest: {fmt(phOn)} use the PH edited photos (branded — SHEIN usually rejects them; the spec and welcome slides are never sent), {fmt(onShopify)} use Shopify’s.</p>
                 <div className="shl-pub-acts">
+                  <button type="button" className="btn ghost xs" disabled={onShopify === live.length} title="Turns the clean photos off on these shoes" onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { usePhPhotos: false } }, `Shopify’s photos on ${plural(live.length, 'shoe')} (clean photos off).`)}>Shopify photos on all</button>
+                  <button type="button" className="btn ghost xs" disabled={phOn === live.length} title="Turns the clean photos off on these shoes" onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { usePhPhotos: true } }, `PH edited photos on ${plural(live.length, 'shoe')} (clean photos off) — checked again by the preview.`)}>Use PH photos on all {fmt(live.length)}</button>
+                </div>
+                <p className="xs" data-cover="">On Shopify’s photos: the cover (photo 1) is left out on <b>{fmt(coverOff)}</b> of {fmt(live.length)}. SHEIN rejects a cover with text, a logo or the store name on it as a “watermark”, and the PH spec + welcome slides outright. To pick photo by photo, open the shoe (Choose photos).</p>
+                <div className="shl-pub-acts">
+                  <button type="button" className="btn xs shl-fix" data-act="skip-slides-all" disabled={!live.length}
+                    onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { skipSlides: true } }, (r) => {
+                      const x = r?.slides || {};
+                      return `${x.photos ? `Left out ${plural(x.photos, 'slide photo')} on ${plural(x.shoes, 'shoe')}` : 'No spec or welcome slide found among Shopify’s photos'}${x.unchecked ? ` · ${plural(x.unchecked, 'shoe')} not fully checked yet — press again` : ''}${x.noSlides ? ` · ${plural(x.noSlides, 'shoe')} without PH slides on file` : ''}.`;
+                    })}>Leave out the spec + welcome slides on all {fmt(live.length)}</button>
                   <button type="button" className="btn ghost xs" disabled={coverOff === 0} onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { skipCover: false } }, `Cover photo put back on ${plural(live.length, 'shoe')}.`)}>Put the cover back on all</button>
                   <button type="button" className="btn xs shl-fix" disabled={coverOff === live.length} onClick={() => bulk({ productIds: live.map((p) => p.productId), patch: { skipCover: true } }, `Cover photo left out on ${plural(live.length, 'shoe')} — SHEIN gets the other photos.`)}>Leave out the cover on all {fmt(live.length)}</button>
                 </div>

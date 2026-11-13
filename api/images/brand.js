@@ -6,11 +6,13 @@
 //     as a data-URI PREVIEW plus its cutoutUrl + bbox. Nothing is persisted to the photo set.
 //   • mode:'commit' — the picks now carry the staged cutoutUrl (precut) + the size the PH
 //     dialed in on the canvas; re-render at full resolution (NO re-cut) and persist to R2 +
-//     product_photos(source='ph_edited').
+//     product_photos(source='ph_edited') — and the cutout each angle was made from goes to product_cutouts
+//     (the CLEAN photo SHEIN Listings sends: the shoe on white, no text; docs/context/shein-listings.md).
 // Flow: find image → angles → Brand & Fill (preview) → adjust on canvas → Upload (commit) →
 // Download. See docs/context/ph-report.md.
 import { send, applySecurity, rateLimit, requireRole, getJsonBody, cleanSku, fetchWithTimeout } from '../_lib/util.js';
-import { setProductPhoto, dbConfigured } from '../_lib/db.js';
+import { setProductPhoto, recordCutout, dbConfigured } from '../_lib/db.js';
+import { cutoutKeyTime } from '../../src/lib/sheinCleanPhotos.js';
 import { r2Configured, presignPutUrl, publicUrl, isAllowedPhotoUrl } from '../_lib/r2.js';
 import { kicksdbSpecData } from '../_lib/kicksdb.js';
 import { nikeSpecData } from '../_lib/nike.js';
@@ -140,7 +142,14 @@ export default async function handler(req, res) {
           cutoutUrl = await stageCutout(cut.pngBuffer);
         }
         const branded = await brandPhoto({ templateNum: ANGLE_TEMPLATE[angle], shoeBuffer, title, sku, outSize: renderSize, precut: true, transform });
-        if (commit) return { slot: angle, ok: true, url: await storeFinal(angle, branded) };
+        if (commit) {
+          const finalUrl = await storeFinal(angle, branded);
+          // The clean photo SHEIN gets (2026-11-14): the cutout this angle was made from, recorded with its angle
+          // (product_cutouts). Never fails the upload — the branded photo is already saved.
+          if (cutoutUrl) await recordCutout({ sku, angle, url: cutoutUrl, origin: 'brand', how: 'upload', takenAt: cutoutKeyTime(cutoutUrl), createdBy })
+            .catch((e) => console.error('[images/brand] record cutout', angle, e.message));
+          return { slot: angle, ok: true, url: finalUrl };
+        }
         return { slot: angle, ok: true, preview: toDataUri(branded), cutoutUrl, bbox };
       } catch (e) {
         const provider = cutoutProvider();

@@ -6984,6 +6984,14 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .shl-photo-img { padding: 0; border: 1px solid var(--border); border-radius: 8px; background: #fff; cursor: zoom-in; overflow: hidden; aspect-ratio: 1 / 1; }
 .shl-photo-thumb { width: 100%; height: 100%; object-fit: contain; display: block; border-radius: 0; }
 .shl-photo.off .shl-photo-img { opacity: 0.35; outline: 2px dashed var(--err); outline-offset: -2px; }
+/* Clean photos (2026-11-14): which set SHEIN gets — Clean · PH edited · Shopify */
+.shl-photo-src { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.shl-photo-src .seg { flex-wrap: wrap; max-width: 100%; }
+.shl-photo-src .seg-btn { flex: 0 0 auto; }
+.shl-photo-src .seg-btn.on .seg-n { opacity: 1; }
+.shl-photo-src .seg-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+/* the picker the drawer scrolls to + focuses ("Fix photos") */
+.shl-photo-target:focus { outline: 2px solid var(--primary); outline-offset: 4px; border-radius: 8px; }
 .shl-rt-panel td { background: rgba(255,255,255,0.015); }
 .shl-setup .card .shl-select { max-width: 100%; margin-bottom: 10px; }
 .shl-co-line { grid-template-columns: 20px minmax(0, 1fr); }

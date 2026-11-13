@@ -43,12 +43,28 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
     } catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); }
   }
   useEffect(() => { setD(null); setErr(''); setSetup(null); }, [id]);
-  useLive(['shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_job_items', 'shein_category_map', 'shein_brand_map', 'app_settings'], load);
+  useLive(['shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_job_items', 'shein_category_map', 'shein_brand_map', 'app_settings', 'product_cutouts'], load);
   const { onFix: onFix0, modal } = useFixes({ onAct, onSignOut, reload: load });
   const [photosOpen, setPhotosOpen] = useState(false);
-  const toPhotos = () => { setPhotosOpen(true); setTimeout(() => document.getElementById('shl-photos-sec')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); };
-  // "Fix photos" (SHEIN rejected the photos) opens this shoe's photo section; the rest as before
-  const onFix = (k, v, b) => (k === 'fix_photos' ? toPhotos() : onFix0(k, v, b));
+  // "Fix photos" opens the photo picker that this shoe actually shows and brings it into view + focus (2026-11-14):
+  // a LIVE shoe's "Photos on SHEIN" section, else a rejected / refused publish's "Published from this page" picker,
+  // else the checklist's photo line. (It used to scroll only to the live section — a rejected shoe never moved.)
+  const toPhotos = () => {
+    setPhotosOpen(true);
+    let tries = 0;
+    const go = () => {
+      const el = ['shl-photos-sec', 'shl-pub-photos'].map((x) => document.getElementById(x)).find(Boolean)
+        || document.querySelector('.shl-drawer [data-line="photos"]');
+      if (!el) { if (++tries < 10) setTimeout(go, 50); return; }
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      (el.matches('[tabindex]') ? el : el.querySelector('button'))?.focus({ preventScroll: true });
+    };
+    setTimeout(go, 50);
+  };
+  // "Fix photos" (SHEIN rejected the photos) opens this shoe's photo section; "Use clean photos" switches them on; the rest as before
+  const onFix = (k, v, b) => (k === 'fix_photos' ? toPhotos()
+    : k === 'use_clean_photos' ? onAct?.('publish_choices', { productId: id, photoSource: 'clean' }, 'SHEIN gets the clean photos — checked again by the next preview.')
+      : onFix0(k, v, b));
   const [matchOpen, setMatchOpen] = useState(false);
   const toMatch = () => { setMatchOpen(true); setTimeout(() => document.getElementById('shl-shoe-fix')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); };
   const [fixFirst, setFixFirst] = useState(false);   // "Publish new product" pressed with ✕ lines left → the checklist, not the preview
@@ -149,7 +165,7 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                     ? <p className="sm shl-pline bad">{pubRejected ? 'SHEIN rejected the new product in its review' : 'SHEIN refused the publish'}{pubRun.error ? <>: “{pubRun.error}”</> : '.'} {pubRejected ? 'Fix it, then an admin presses Publish again and checks a new preview.' : 'Fix it, then preview again.'}</p>
                     : <p className="sm shl-pline violet">Sent {when(pubRun.sent_at || pubRun.updated_at)} — SHEIN is reviewing the new product (hours to days). It shows In review until SHEIN approves it; then automatic sync sets its stock.</p>}
                   {pubRun.status === 'failed' && (
-                    <div className="shl-pub-photos">
+                    <div className="shl-pub-photos shl-photo-target" id="shl-pub-photos" tabIndex={-1}>
                       <button type="button" className={`btn xs ${photosOpen ? 'ghost' : 'shl-fix'}`} aria-expanded={photosOpen} data-act="choose-photos" onClick={() => setPhotosOpen(!photosOpen)}>{photosOpen ? 'Close photos' : `Choose photos${p.photo_skip?.length ? ` (${fmt(p.photo_skip.length)} left out)` : ''}`}</button>
                       {photosOpen && <SheinPhotoPicker productId={p.shopify_product_id} onSignOut={onSignOut} onSaved={load}
                         lede={<p className="xs">A photo SHEIN called a watermark or a false promise? Leave it out here, then send it again.</p>} />}
@@ -201,7 +217,7 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
               )}
 
               {live && (
-                <section className="shl-d-sec" id="shl-photos-sec" data-photos-sec="">
+                <section className="shl-d-sec shl-photo-target" id="shl-photos-sec" data-photos-sec="" tabIndex={-1}>
                   <h4 className="shl-h4">Photos on SHEIN</h4>
                   {photoReason && (
                     <div className="shl-banner warn" role="status" data-photo-rejected="">

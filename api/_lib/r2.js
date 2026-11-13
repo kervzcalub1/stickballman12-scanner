@@ -108,6 +108,40 @@ export function presignUrl({ key, method = 'GET', expiresIn = 120 }) {
   return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
+// List the keys under a prefix (ListObjectsV2, read only) → [{ key, size, lastModified }], ≤ `max`.
+// Used to find the brand tool's staged cutouts (listings/<sku>/_cut/) that were never recorded.
+export async function listObjects(prefix, { max = 1000, fetchFn = fetch } = {}) {
+  const host = endpointHost();
+  const bucket = process.env.R2_BUCKET;
+  const out = []; let token = null;
+  do {
+    const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
+    const dateStamp = amzDate.slice(0, 8);
+    const scope = `${dateStamp}/${REGION}/${SERVICE}/aws4_request`;
+    const params = {
+      'X-Amz-Algorithm': 'AWS4-HMAC-SHA256', 'X-Amz-Credential': `${process.env.R2_ACCESS_KEY_ID}/${scope}`,
+      'X-Amz-Date': amzDate, 'X-Amz-Expires': '120', 'X-Amz-SignedHeaders': 'host',
+      'list-type': '2', prefix: String(prefix), 'max-keys': String(Math.min(1000, max)),
+      ...(token ? { 'continuation-token': token } : {}),
+    };
+    const canonicalQuery = Object.keys(params).sort().map((k) => `${enc(k)}=${enc(params[k])}`).join('&');
+    const canonicalRequest = ['GET', `/${bucket}`, canonicalQuery, `host:${host}\n`, 'host', 'UNSIGNED-PAYLOAD'].join('\n');
+    const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256hex(canonicalRequest)].join('\n');
+    const kSigning = hmac(hmac(hmac(hmac(`AWS4${process.env.R2_SECRET_ACCESS_KEY}`, dateStamp), REGION), SERVICE), 'aws4_request');
+    const signature = crypto.createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex');
+    const res = await fetchFn(`https://${host}/${bucket}?${canonicalQuery}&X-Amz-Signature=${signature}`, { signal: AbortSignal.timeout(15_000) });
+    const xml = await res.text();
+    if (!res.ok) throw new Error(`R2 LIST ${prefix} failed (${res.status})`);
+    for (const c of xml.split('<Contents>').slice(1)) {
+      const tag = (n) => (c.match(new RegExp(`<${n}>([^<]*)</${n}>`)) || [])[1];
+      const key = tag('Key');
+      if (key) out.push({ key: key.replace(/&amp;/g, '&'), size: Number(tag('Size')) || 0, lastModified: tag('LastModified') || null });
+    }
+    token = /<IsTruncated>true<\/IsTruncated>/.test(xml) ? (xml.match(/<NextContinuationToken>([^<]*)<\/NextContinuationToken>/) || [])[1] : null;
+  } while (token && out.length < max);
+  return out.slice(0, max);
+}
+
 // Read an object's bytes server-side. Throws on a non-2xx so a caller never hands a
 // caller an XML error body as if it were a PDF.
 export async function getObject(key) {

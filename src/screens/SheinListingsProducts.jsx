@@ -420,7 +420,7 @@ export function SheinListingsProducts({ setStatusAll, d, status, q, setQ, brand,
         <div className="modal-overlay" onClick={() => setPhotoAsk(null)}>
           <div className="modal form-modal shl-photo-ask" role="dialog" aria-modal="true" aria-label="Replace SHEIN photos" data-photo-ask="" onClick={(e) => e.stopPropagation()}>
             <h3 className="modal-title">Replace the SHEIN photos of {fmt(photoAsk.ids.length)} shoe{photoAsk.ids.length === 1 ? '' : 's'}</h3>
-            <p className="sm">Each shoe gets the photos picked for it (its own “Choose photos” in Details; the PH edited photos when that is on, else Shopify’s). The preview shows what SHEIN has now next to what it would get — nothing is sent until someone confirms.</p>
+            <p className="sm">Each shoe gets the photos picked for it (its own “Choose photos” in Details: the clean photos — the shoe on white — when its style has them, else the PH edited photos when that is on, else Shopify’s). The preview shows what SHEIN has now next to what it would get — nothing is sent until someone confirms.</p>
             <label className="shl-pub-ph"><input type="checkbox" checked={photoAsk.cover} onChange={(e) => setPhotoAsk({ ...photoAsk, cover: e.target.checked })} />
               <span>First leave out Shopify’s cover photo (photo 1) on all {fmt(photoAsk.ids.length)} <span className="muted xs shl-block">The branded cover — text, a logo or the store name on it — is what SHEIN calls a watermark. Our records only; Shopify isn’t changed.</span></span></label>
             {photoAsk.err && <p className="error xs" role="alert">{photoAsk.err}</p>}

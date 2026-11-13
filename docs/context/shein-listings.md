@@ -740,6 +740,63 @@ the photos SHEIN must not get.
 - e2e (`shein-listings.spec.js`): pure helpers; publish_choices photoSkip validation + the preview never converts the
   left-out photo + readiness `no_image` at once; bulk `skipCover`; the drawer picker (Shopify read stubbed) + 390 px.
 
+## Clean photos — the shoe on white, no text (built 2026-11-14)
+**Why (owner, 2026-11-13):** on many shoes EVERY photo — Shopify's and the PH edited set — carries the PH brand
+template (brick wall, name + style code, logo), plus the spec list (photo 6) and the welcome card (photo 7). SHEIN
+rejects them ("Image contains promotional information", "watermark"); leaving them out left 0–1 photos.
+- **Where clean photos come from:** the brand tool (Image Finder → Brand & Fill, `api/images/brand.js`) cuts every
+  shoe out of its catalogue photo and stages the transparent PNG on R2 at `listings/<sku>/_cut/<ms>-<rand>.png`.
+  Since 2026-11-14 its **Upload** records the cutout behind each angle in **`product_cutouts`** (sku, angle, url,
+  origin `brand`, how `upload`, taken_at) — one per (sku, angle), replaced when the angle is re-branded. Kept OUT of
+  `product_photos` on purpose: every thumbnail / `photo_count` / receiving query reads that table with no source filter.
+- **Older shoes (recovered):** `findCleanPhotos` (`api/_lib/shein-clean-photos.js`) lists the R2 folder (`listObjects`
+  in `r2.js`, read only), then matches each cutout to the uploaded branded photo of each angle **by picture**: the cutout
+  placed where Brand & Fill puts it by default (`fitShoeBox`), compared over the shoe's own pixels at 200 px (the right
+  one scores 2–14, any other angle ≥ 25; `MATCH_MAX` 18) → how `checked`. A shoe PH moved / resized on the canvas
+  matches nothing; then the R2 timestamps (`recoverCutouts`, pure: the last session of cutouts before the upload, one
+  per uploaded angle in `SHOE_ANGLES` order) fill it — only when that session is exactly one cutout per angle AND agrees
+  with every picture match → how `timestamp` (the picker says "angle by order"). Otherwise the angle is left out.
+  Measured 2026-11-14 on the 1,086 PH-edited styles: timestamps alone are exact for 1,027 (94.6 %), 53 have extra
+  cutouts (re-cuts / re-renders), 6 none; the picture check resolved the extra-cutout ones (where timestamps picked the
+  WRONG cutouts for at least 2 of 4 sampled styles).
+- **Run it:** per shoe — drawer → Choose photos → **Find clean photos** (`find_clean_photos`, PH ok, writes
+  `product_cutouts` only); in bulk — `node scripts/shein-clean-photos.mjs` (dry run; `--apply` records; `--all` = every
+  PH-edited style, default = the styles on SHEIN Listings; `--sku X`; `--redo`). ~10 MB of photos read per style. Never
+  writes or deletes on R2; a recovered cutout never replaces one the brand tool recorded.
+- **Which photos SHEIN gets** (`photoSourceOf`, `src/lib/sheinCleanPhotos.js`; shared by `sourcePhotos`, the readiness
+  and the picker): `shein_listing_products.clean_photos` NULL = automatic → **clean** whenever the style has any; true =
+  on; false = a person switched them off → `use_ph_photos` picks PH edited vs Shopify. An explicit "Use PH photos" /
+  "Shopify photos" (`usePhPhotos`) switches clean off. The **spec / welcome slides (`extra1` / `extra2`) are never sent**
+  (filtered from the PH source and from `phPhotoKeys`).
+- **The render:** a clean photo (`isCutoutUrl`) is trimmed to the shoe and centred on a white 1500 × 1500, the shoe 86 %
+  of the long side (`renderClean`, cache key `CLEAN_RENDER_VERSION`); every other photo is padded as before.
+- **Shopify's copies of the PH slides:** `imageSig` = a grey 16 × 16 box average (cached per photo, cache kind
+  `photo_sig`); a Shopify photo within `SAME_PHOTO_MAX` (2) of a PH photo is a copy of it (measured: copies ~0.7,
+  other angles ≥ 3.6). GET `?photos=` marks each Shopify photo `phCopy { angle, slide }` (≤ 6 s of reading, the rest
+  next time); bulk `skipSlides` compares Shopify's photos (from `shopify_json`) with each style's extra1 / extra2 (≤ 25 s,
+  4 a minute per user) and adds the matches to `photo_skip`.
+- **Endpoints:** `publish_choices { photoSource: clean | ph_edited | shopify | auto }`; `publish_choices_bulk { patch:
+  { cleanPhotos: true|false|null, skipSlides: true } }` → `slides { shoes, photos, unchecked, noSlides }`;
+  `find_clean_photos { productId }`; `publishSetup` rows + `cleanPhotos, cleanCount, cleanOn`; GET `?product=` →
+  `product.clean_count`.
+- **Readiness:** `publishContext` counts the clean photos when they are the source (`cleanPhotoKeys`); `no_image` params
+  `src` / `clean` → "Only n clean photos" or, when clean ones exist but are off, the action **Use clean photos**
+  (`use_clean_photos`, in `PUBLISH_FIX_KINDS`; the drawer saves `photoSource: 'clean'`).
+- **Page:** `SheinPhotoPicker` — "Photos SHEIN gets": Clean · PH edited · Shopify (with counts), clean photos labelled by
+  angle, a warning when the set in use is PH-branded, **Find clean photos** when there are none, Shopify's copies of the
+  spec / welcome slides named + **Leave out the spec + welcome slides**. Checklist photo line says which set SHEIN gets
+  (the "Use PH edited photos" checkbox is gone — the picker switches). Bulk sheet Photos block: **Use clean photos on all
+  n**, **Leave out the spec + welcome slides on all n**, the cover and PH / Shopify buttons as before.
+- **Fix photos scroll (bug):** on a never-live / rejected shoe the drawer's "Fix photos" now scrolls to and focuses the
+  picker that is open (`#shl-pub-photos` in "Published from this page"; `#shl-photos-sec` for a live shoe; else the
+  checklist's photo line). It used to scroll only to the live section.
+- **DB:** `product_cutouts` (+ `LIVE_TABLES`), `shein_listing_products.clean_photos`. **Prod needs `db:setup`**, then the
+  backfill (`--apply`).
+- e2e (`shein-listings.spec.js` → "clean photos"): pure (keys, recovery, source, picture match + assign); server with
+  every read stubbed (white render, signatures, findCleanPhotos incl. a moved shoe + brand-record precedence,
+  sourcePhotos, convertPhotos); endpoints (photoSource, readiness + Use clean photos, bulk cleanPhotos / skipSlides with
+  seeded signatures, find_clean_photos 400/404); the drawer picker + 390 px; the rejected shoe's Fix photos scroll.
+
 ## Replace the photos of a shoe already on SHEIN — op `photos` (built 2026-11-11)
 **Why:** live shoes (4seller's or ours) carry PH-branded photos. partialEdit re-judges the WHOLE colour (SKC) on every
 edit, so once SHEIN started rejecting those photos ("watermark", "false service promises") every later edit of the

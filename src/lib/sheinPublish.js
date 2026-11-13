@@ -324,7 +324,11 @@ export function templateParts(template) {
   return { main, size, product, sizeTable, mainStatus: Number(template?.main_attribute_status) || 2 };
 }
 const valueLabel = (v) => trim(v?.attribute_value_en || v?.attribute_value);
-const isDefault = (v) => /^(default|默认)$/i.test(valueLabel(v));
+// SHEIN's placeholder colour. Not only "Default" / "默认": in category 8824 (men's) it is labelled
+// "Color default" — that spelling passed a real-colour check and a picker offered it as a colour
+// (teammate pilot, 2026-11-13, HF2886-001). One rule for the planner and both pickers.
+export const isDefaultLabel = (label) => /^(?:colou?r[\s_-]*)?default$/i.test(String(label || '').trim()) || /默认/.test(String(label || ''));
+const isDefault = (v) => isDefaultLabel(valueLabel(v));
 
 // A product type's attribute rows from the person's defaults (never automatic). required = status 3 ∪
 // the associated rules' ids (`assoc`: [{attribute_id, allowed:[ids]}]). → { rows, problems }.

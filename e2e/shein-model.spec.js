@@ -160,3 +160,12 @@ test.describe('SHEIN Product Model from the title (pure)', () => {
     expect(out[2].guess).toBe('Motive');
   });
 });
+
+// Teammate pilot 2026-11-13 (HF2886-001, men's 8824): SHEIN's placeholder colour is labelled
+// "Color default" there — it passed the real-colour check (main_attribute_status 3) and the pickers
+// offered it. One rule now (isDefaultLabel) for the planner and both colour pickers.
+test('SHEIN placeholder colour: "Color default" counts as the default, real colours do not (pure)', async () => {
+  const { isDefaultLabel } = await import('../src/lib/sheinPublish.js');
+  for (const l of ['Default', 'default', 'Color default', 'Colour Default', 'color_default', '默认', '颜色默认']) expect(isDefaultLabel(l)).toBe(true);
+  for (const l of ['Black', 'Default Grey', 'White/Default', 'Multicolor', '', null]) expect(isDefaultLabel(l)).toBe(false);
+});

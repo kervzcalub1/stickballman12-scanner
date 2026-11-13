@@ -20,7 +20,7 @@ import { useLive } from '../hooks.js';
 import { fmt, when, NEEDS_PRIV, BlockerSay, FixButton } from './SheinListingsBits.jsx';
 import { plain } from '../lib/sheinWords.js';
 import { SheinPhotoPicker } from './SheinPhotoPicker.jsx';
-import { BOX_PLACEHOLDERS, sizeGroupOf, validateImperialBox, boxToImperial, boxFromImperial, cleanTitle, isKnownBrand, favouriteLeaves } from '../lib/sheinPublish.js';
+import { BOX_PLACEHOLDERS, sizeGroupOf, validateImperialBox, boxToImperial, boxFromImperial, cleanTitle, isKnownBrand, favouriteLeaves, isDefaultLabel } from '../lib/sheinPublish.js';
 import { modelFromTitle, PRODUCT_MODEL_ATTR_ID } from '../lib/sheinModel.js';
 
 export const GROUP_LABEL = {
@@ -533,7 +533,7 @@ export function ColourPicker({ productId, productTypeId, current, onSaved, onSig
   const [e2, setE2] = useState('');
   const main = d?.template?.main || null;
   const status = d?.template?.mainStatus;
-  const values = (main?.values || []).filter((v) => status !== 3 || !/^(default|默认)$/i.test(v.label));
+  const values = (main?.values || []).filter((v) => status !== 3 || !isDefaultLabel(v.label));
   async function save(v) {
     setBusy(true); setE2('');
     try { await choose(productId, { skcValueId: v === '' ? null : Number(v) }); onSaved?.(); } catch (e) { if (e.unauthorized) onSignOut?.(); else setE2(plain(e.message)); } finally { setBusy(false); }

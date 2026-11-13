@@ -2,7 +2,7 @@
 // somebody, then every tool grouped by job (HOME_SECTIONS), daily floor work first.
 import React, { useState } from 'react';
 import { TopBar } from '../components/common.jsx';
-import { HomeToolCard, HomeDescToggle, useHomeDescriptions } from '../components/HomeTools.jsx';
+import { HomeToolCard, HomeDescToggle, HomeSectionTitle, useHomeDescriptions } from '../components/HomeTools.jsx';
 import { NavIcon } from '../components/NavIcons.jsx';
 import { usePendingCounts } from '../hooks.js';
 import { InboundToday } from '../components/InboundToday.jsx';
@@ -107,11 +107,12 @@ export function Home({ user, onPick, onSignOut }) {
           short ones (Boxes + Sell & Ship, Marketplaces + Administration) share a row
           instead of each leaving an empty half behind it. DOM order is kept — no dense
           packing — so the daily work still reads top to bottom. */}
-      <HomeDescToggle on={describe} onChange={setDescribe} />
       <div className={`home-sections home-compact${describe ? ' home-describe' : ''}`}>
-      {sections.filter((s) => (!s.adminOnly || isAdmin) && (!s.superOnly || isSuper)).map((section) => (
+      {sections.filter((s) => (!s.adminOnly || isAdmin) && (!s.superOnly || isSuper)).map((section, i) => (
         <section className={section.cards.length <= 3 ? 'home-section half' : 'home-section'} key={section.title} data-accent={section.accent}>
-          <h2 className="home-section-title">{section.title}</h2>
+          <HomeSectionTitle title={section.title}>
+            {i === 0 && <HomeDescToggle on={describe} onChange={setDescribe} />}
+          </HomeSectionTitle>
           <div className="home-grid home-tools">
             {section.cards.map((c) => (
               <HomeToolCard key={c.key} icon={c.key} title={c.title}

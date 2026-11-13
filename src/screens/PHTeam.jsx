@@ -15,7 +15,7 @@ import { usePendingCounts, useUnsavedGuard, useMediaQuery, useLive } from '../ho
 import { skuCodes } from '../lib/sku.js';
 import { roleLabel, SYNC_BADGES, homeCardBadges, hasAnyPriv, hasPriv } from '../lib/constants.js';
 import { CheckAccess } from './CheckAccess.jsx';
-import { HomeToolCard, HomeDescToggle, useHomeDescriptions } from '../components/HomeTools.jsx';
+import { HomeToolCard, HomeDescToggle, HomeSectionTitle, useHomeDescriptions } from '../components/HomeTools.jsx';
 import { markupSuffix } from '../lib/config.js';
 import { rangeOf, ymd, estCivil, estCivilFromYmd, PH_DATE, PH_DATETIME, fmtPrice, estDate, estToday } from '../lib/format.js';
 import {
@@ -193,14 +193,16 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
       )}
       {/* Same compact cards as the staff home (`ph-home`, HomeTools.jsx); a section of three
           cards or fewer takes half the width, so Administration + Help share a row. */}
-      <HomeDescToggle on={describe} onChange={setDescribe} />
       <div className={`ph-home home-sections home-compact${describe ? ' home-describe' : ''}`}>
-        {PH_HOME_SECTIONS.map((section) => {
+        {(() => { let shown = 0; return PH_HOME_SECTIONS.map((section) => {
           const cards = section.cards.filter((c) => (!c.priv || canBuy) && (!c.privKey || hasPriv(user, c.privKey)));
           if (!cards.length) return null;
+          const first = shown++ === 0;   // the switch rides on the first section SHOWN
           return (
             <section className={cards.length <= 3 ? 'home-section half' : 'home-section'} key={section.title} data-accent={section.accent}>
-              <h2 className="home-section-title">{section.title}</h2>
+              <HomeSectionTitle title={section.title}>
+                {first && <HomeDescToggle on={describe} onChange={setDescribe} />}
+              </HomeSectionTitle>
               <div className="home-grid home-tools">
                 {cards.map((c) => (
                   <HomeToolCard key={c.key} icon={c.icon} title={c.title} sub={c.sub}
@@ -209,7 +211,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
               </div>
             </section>
           );
-        })}
+        }); })()}
       </div>
     </div>
   );

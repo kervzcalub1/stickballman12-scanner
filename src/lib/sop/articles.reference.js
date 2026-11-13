@@ -162,7 +162,7 @@ export const REFERENCE_ARTICLES = [
     steps: [
       { do: 'Read "Needs attention" first. Cards only appear there when their count is above zero, and each one opens the screen that clears it.' },
       { do: 'Below that, tools are grouped by job: Receiving → Shelves & Stock → Boxes and Sell & Ship → On the Way → Buying & In-Store, then Marketplaces and Administration (admins), with Setup & Help last.' },
-      { do: 'Each card shows its name only. To read what a card does: on a computer, rest the mouse on it; on a phone, tap the small ⓘ in its corner. To see it on every card, turn on "Show descriptions" above the tools (it stays the way you left it).' },
+      { do: 'Each card shows its name only. To read what a card does: on a computer, rest the mouse on it; on a phone, tap the small ⓘ in its corner. To see it on every card, turn on "Show descriptions" at the right end of the first section heading (it stays the way you left it).' },
       { do: 'Amber badges want a decision today. Neutral badges are standing work.' },
     ],
     rules: [

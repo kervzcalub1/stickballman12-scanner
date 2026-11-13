@@ -9,7 +9,7 @@
 // The ten conditions come from the server (`cart.checks`) rather than being worked out
 // here, so the list a person reads is byte-for-byte the list `cart/close` will enforce.
 // A gate that lives in the UI is a gate a stale tab walks straight through.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { poHref } from '../lib/poLink.js';
@@ -68,16 +68,20 @@ function ListChip({ cart }) {
     : <span className="po-chip muted bc-list-chip" title={`Closed by ${cart.list_closed_by || 'the buyer'} ${estDate(cart.list_closed_at)} EST`}>List closed</span>;
 }
 
-// The three groups the lines fall into once the list is closed, and the heading row above
-// each one. The heading is a button spanning the table: tap to show or hide that group.
+// The three groups the lines fall into, and the heading row above the last two. Since
+// 2026-11-14 (owner: "change the what's being asked for section into an approved list of
+// shoes") the section IS the approved list: approved pairs sit straight under its
+// "Approved shoes" heading with no group row of their own; "Waiting for a decision" (open,
+// only while something waits) and "Declined or not buying" (shut) follow. The heading is a
+// button spanning the table: tap to show or hide that group.
 const lineGroup = (l) => (l.status === 'approved' ? 'approved' : l.status === 'pending' ? 'pending' : 'out');
-const GROUP_LABEL = { approved: 'Approved', pending: 'Waiting on an answer', out: 'Turned down or not buying' };
+const GROUP_LABEL = { approved: 'Approved shoes', pending: 'Waiting for a decision', out: 'Declined or not buying' };
 function GroupRow({ group, lines, cols, shut, onToggle }) {
   const these = lines.filter((l) => lineGroup(l) === group);
   const n = these.length;
-  // "2 turned down · 1 not buying": the out group holds two different endings.
+  // "2 declined · 1 not buying": the out group holds two different endings.
   const detail = group === 'out'
-    ? [[these.filter((l) => l.status === 'rejected').length, 'turned down'], [these.filter((l) => l.status === 'skipped').length, 'not buying']]
+    ? [[these.filter((l) => l.status === 'rejected').length, 'declined'], [these.filter((l) => l.status === 'skipped').length, 'not buying']]
       .filter(([c]) => c > 0).map(([c, w]) => `${c} ${w}`).join(' · ')
     : null;
   // How much the group adds up to, not just how many rows: "48 pairs (5 SKUs)". A pending
@@ -90,7 +94,7 @@ function GroupRow({ group, lines, cols, shut, onToggle }) {
         <button type="button" className="bc-group-toggle" aria-expanded={!shut} onClick={onToggle}>
           <span className="bc-group-caret" aria-hidden="true">{shut ? '▸' : '▾'}</span>
           <b>{GROUP_LABEL[group]}</b>
-          <span className="muted sm">{n} line{n === 1 ? '' : 's'}{sum}{detail && detail !== `${n} turned down` && detail !== `${n} not buying` ? ` · ${detail}` : ''}</span>
+          <span className="muted sm">{n} line{n === 1 ? '' : 's'}{sum}{detail && detail !== `${n} declined` && detail !== `${n} not buying` ? ` · ${detail}` : ''}</span>
           <span className="muted xs bc-group-hint">{shut ? 'Show' : 'Hide'}</span>
         </button>
       </td>
@@ -446,6 +450,8 @@ function NotHere({ cart, onSignOut }) {
   if (!coming.length) return <p className="muted sm bc-not-here">Not in warehouse yet: none.</p>;
   return (
     <div className="bc-not-here">
+      <h4 className="bc-not-here-h">Not in warehouse yet
+        <span className="muted sm"> · these shoes on every request, receipt and PO, not only this one</span></h4>
       {coming.map((s) => (
         <div key={s.sku} className="bc-not-here-shoe">
           <div className="bc-not-here-sku">{s.name ? `${s.name} · ` : ''}{s.sku}</div>
@@ -593,14 +599,29 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
   const lines = linesByDecision(cart.lines);
   const pending = lines.filter((l) => l.status === 'pending');
   const approvedTally = pairTally(lines.filter((l) => l.status === 'approved'));
-  // ONCE THE BUYER CLOSES THE LIST the lines split into three groups under headings, each
-  // one opens and shuts on a tap (owner, 2026-11-10). What's turned down or not being
-  // bought starts SHUT: the list is final and those rows are just noise by then. Approved
-  // and still-waiting start open, because those are what somebody still acts on (the
-  // buyer buys the approved ones, the approver answers the waiting ones). While the list
-  // is open it stays one plain list, because the buyer is still adding to it.
-  const grouped = !!cart.list_closed_at && lines.length > 0;
+  // The lines are ALWAYS grouped (owner 2026-11-14; until then only once the list was
+  // closed): the approved pairs first, as the section itself, then "Waiting for a
+  // decision" (open: the approver answers those; it disappears by itself once nothing
+  // waits), then "Declined or not buying", SHUT: just noise to the people buying.
+  const grouped = lines.length > 0;
   const [shut, setShut] = useState({ approved: false, pending: false, out: true });
+  // A pair that turns approved while the page is open (a tap on Telegram, another
+  // approver) arrives by the live update; it is lit for a few seconds so the new arrival
+  // is seen, not just silently added. The first read lights nothing.
+  const approvedIds = lines.filter((l) => l.status === 'approved').map((l) => Number(l.id));
+  const seenApproved = useRef(null);
+  const [fresh, setFresh] = useState(() => new Set());
+  useEffect(() => {
+    const before = seenApproved.current;
+    seenApproved.current = new Set(approvedIds);
+    if (!before) return undefined;
+    const added = approvedIds.filter((id) => !before.has(id));
+    if (!added.length) return undefined;
+    setFresh((f) => new Set([...f, ...added]));
+    const t = setTimeout(() => setFresh((f) => new Set([...f].filter((id) => !added.includes(id)))), 4000);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approvedIds.join(',')]);
   const toggleGroup = (g) => setShut((s) => ({ ...s, [g]: !s[g] }));
   // The buyer's ✎ only ever made sense on a draft — after the first add the pair is in
   // front of the desk with its price written into a Telegram card, and a price that is
@@ -901,12 +922,12 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
           seat a button here would re-space every one of them. */}
       <div className="bc-h-row">
         <h3 className="bc-h">
-          What’s being asked for <span className="muted sm">{lines.length} line{lines.length === 1 ? '' : 's'}</span>
-          {/* The one total an approver and the card desk both reach for: how many pairs
-              were said yes to, across how many shoes. */}
-          {approvedTally.lines > 0 && (
-            <span className="bc-approved-total"> · Approved: <b>{pairTallyText(approvedTally)}</b></span>
-          )}
+          {/* The section is the APPROVED list (owner 2026-11-14), headed by the one total an
+              approver and the card desk both reach for: pairs said yes to, across how many
+              shoes. What was asked in all is the small print beside it. */}
+          Approved shoes
+          <span className="bc-approved-total"> · {approvedTally.lines > 0 ? <b>{pairTallyText(approvedTally)}</b> : 'none yet'}</span>
+          <span className="muted sm"> · of {lines.length} line{lines.length === 1 ? '' : 's'} asked</span>
         </h3>
         {lines.length > 0 && (
           <button type="button" className={`btn sm ${stock ? 'ghost' : ''}`} disabled={busy === 'stock'}
@@ -917,7 +938,6 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
         )}
       </div>
       {!lines.length && <p className="muted sm">Nothing on the request yet.</p>}
-      {!isBuyer && lines.length > 0 && <NotHere cart={cart} onSignOut={onSignOut} />}
       {lines.length > 0 && (
         <div className="bc-scroll">
           <table className="table bc-table">
@@ -938,14 +958,23 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                 const id = Number(l.id);
                 const shown = open === id;
                 const g = lineGroup(l);
-                const head = grouped && (i === 0 || lineGroup(lines[i - 1]) !== g);
-                if (grouped && shut[g]) {
-                  return head ? <GroupRow key={`g-${g}`} group={g} lines={lines} cols={cols} shut onToggle={() => toggleGroup(g)} /> : null;
+                // No group row for the approved pairs — the section heading IS theirs.
+                const head = grouped && g !== 'approved' && (i === 0 || lineGroup(lines[i - 1]) !== g);
+                // Nothing approved yet: say so where the approved pairs would be.
+                const none = grouped && i === 0 && g !== 'approved';
+                if (grouped && g !== 'approved' && shut[g]) {
+                  return head ? (
+                    <React.Fragment key={`g-${g}`}>
+                      {none && <tr className="bc-none-approved"><td colSpan={cols} className="muted sm">No shoes approved yet.</td></tr>}
+                      <GroupRow group={g} lines={lines} cols={cols} shut onToggle={() => toggleGroup(g)} />
+                    </React.Fragment>
+                  ) : null;
                 }
                 return (
                 <React.Fragment key={l.id}>
+                {none && <tr className="bc-none-approved"><td colSpan={cols} className="muted sm">No shoes approved yet.</td></tr>}
                 {head && <GroupRow group={g} lines={lines} cols={cols} shut={false} onToggle={() => toggleGroup(g)} />}
-                <tr className={`bc-line ${l.status}${shown ? ' open' : ''}`}
+                <tr className={`bc-line ${l.status}${shown ? ' open' : ''}${fresh.has(id) ? ' bc-fresh' : ''}`}
                   onClick={() => canExpand(id) && setOpen(shown ? null : id)}
                   tabIndex={canExpand(id) ? 0 : -1}
                   aria-expanded={canExpand(id) ? shown : undefined}
@@ -1065,7 +1094,7 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
                     </td>
                   )}
                   <td className="bc-td-status">
-                    <span className={`bc-line-status ${l.status}`}>{l.status === 'skipped' ? 'not buying' : l.status}</span>
+                    <span className={`bc-line-status ${l.status}`}>{l.status === 'skipped' ? 'not buying' : l.status === 'rejected' ? 'declined' : l.status}</span>
                     {l.status === 'skipped'
                       ? <div className="muted xs">{l.skipped_by || 'the buyer'} X’d it out · was approved{l.qty ? ` ×${l.qty}` : ''}{l.decided_by ? ` by ${l.decided_by}` : ''}</div>
                       : l.decided_by && <div className="muted xs">{l.decided_by}</div>}
@@ -1138,6 +1167,11 @@ function Lines({ cart, canDecide, canTip = false, whyNoDecide, canEditLines, can
           </table>
         </div>
       )}
+      {/* BELOW the pairs, under its own heading (2026-11-14): straight under "Approved shoes"
+          and untitled, it read as the approved list — and it counts every request, receipt and
+          PO, so a pair bought off a DECLINED line ("Bought, not shipped yet … From BC-19")
+          looked like an approval. */}
+      {!isBuyer && lines.length > 0 && <NotHere cart={cart} onSignOut={onSignOut} />}
 
       {/* Says which of the two it is: "wait" and "too late" are not interchangeable,
           and an approver told the wrong one goes and does the wrong thing about it. */}

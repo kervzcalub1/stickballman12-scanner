@@ -1515,7 +1515,9 @@ button.ph-plat-chip { cursor: pointer; }
    goes above it. Amber, not red — over-approving is allowed on purpose (stock moves),
    so this is something to notice, not an error. */
 .bc-avail { margin-top: 2px; }
-.bc-not-here { margin: 0 0 12px; display: grid; gap: 10px; }
+.bc-not-here { margin: 16px 0 12px; padding-top: 12px; border-top: 1px solid var(--border); display: grid; gap: 10px; }
+.bc-not-here-h { margin: 0; font-size: 13px; font-weight: 700; }
+.bc-not-here-h .muted { font-weight: 400; }
 .bc-not-here-sku { font-weight: 700; font-size: 13px; overflow-wrap: anywhere; }
 .bc-not-here-total { font-size: 13px; font-weight: 600; }
 .bc-over-avail { margin-top: 3px; font-size: 11px; font-weight: 600; line-height: 1.2; color: #e0a458; }
@@ -5466,6 +5468,13 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
 /* "· Approved: 48 pairs (5 SKUs)" beside the lines heading. Same green as the Approved group. */
 .bc-approved-total { font-size: 13px; font-weight: 400; color: var(--muted); }
 .bc-approved-total b { color: var(--ok, inherit); font-weight: 700; }
+/* Buying request = an APPROVED list (2026-11-14). A pair approved while the page is open
+   (Telegram, another approver) lights up for a few seconds as it arrives; the empty
+   approved list says so instead of starting with "Waiting for a decision". */
+@keyframes bc-fresh { from { background: rgba(90, 200, 140, 0.22); } to { background: transparent; } }
+.bc-lines .bc-table tr.bc-line.bc-fresh > td { animation: bc-fresh 4s ease-out; }
+@media (prefers-reduced-motion: reduce) { .bc-lines .bc-table tr.bc-line.bc-fresh > td { animation: none; background: rgba(90, 200, 140, 0.14); } }
+.bc-lines .bc-table tr.bc-none-approved > td { padding: 10px 2px; font-style: italic; }
 
 /* Payout Calculator — best platform by size. One row per size; the winning platform's
    cell is tinted so the column of answers reads at a glance down a size run. */

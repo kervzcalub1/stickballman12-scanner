@@ -975,7 +975,7 @@ test('the buyer builds a request, sees no call on it, and the desk sees both', a
   await as(page, 'buyer');
   await page.goto('/buying');
   await page.locator('.bc-row').first().click();
-  await expect(page.locator('.bc-lines tbody tr')).toHaveCount(2);
+  await expect(page.locator('.bc-lines tbody tr.bc-line')).toHaveCount(2);
   // Not one verdict chip anywhere on the buyer's screen, and no column claiming to
   // hold one. The payload has none either — that half is asserted below.
   await expect(page.locator('.bc-verdict')).toHaveCount(0);
@@ -4973,30 +4973,39 @@ test.describe('floor feedback, November', () => {
     await page.goto(`/buying?request=${cartId}`);
     const order = page.locator('tr.bc-line td[data-label="Size"]');
 
-    // The list is closed, so the lines sit under three headings and the turned-down /
-    // not-buying group starts shut (owner, 2026-11-10). A tap shows it, at the bottom.
+    // The section is the APPROVED list (owner, 2026-11-14): approved pairs straight under
+    // "Approved shoes" (no group row of their own), then "Waiting for a decision" (open),
+    // then "Declined or not buying" (shut). A tap shows it, at the bottom.
     const heads = page.locator('tr.bc-group-row');
-    await expect(heads).toHaveCount(3);
-    await expect(heads.nth(0)).toContainText('Approved');
-    await expect(heads.nth(1)).toContainText('Waiting on an answer');
-    await expect(heads.nth(2)).toContainText('Turned down or not buying');
-    await expect(heads.nth(2)).toContainText('1 turned down · 1 not buying');
+    await expect(page.locator('.bc-lines h3.bc-h').first()).toContainText('Approved shoes');
+    await expect(heads).toHaveCount(2);
+    await expect(heads.nth(0)).toContainText('Waiting for a decision');
+    await expect(heads.nth(1)).toContainText('Declined or not buying');
+    await expect(heads.nth(1)).toContainText('1 declined · 1 not buying');
     // How much each group adds up to (owner, 2026-11-13): pairs and SKUs, not just rows.
     // The "not buying" size 12 was approved and then dropped, so it is NOT in the total.
-    await expect(heads.nth(0)).toContainText('2 lines · 2 pairs (1 SKU)');
-    await expect(heads.nth(1)).toContainText('1 line · 1 SKU');
-    await expect(page.locator('.bc-approved-total')).toHaveText(' · Approved: 2 pairs (1 SKU)');
+    await expect(heads.nth(0)).toContainText('1 line · 1 SKU');
+    await expect(page.locator('.bc-approved-total')).toHaveText(' · 2 pairs (1 SKU)');
     await expect(order).toHaveText(['10', '11', '9']);
-    await heads.nth(2).getByRole('button').click();
+    await heads.nth(1).getByRole('button').click();
     await expect(order).toHaveText(['10', '11', '9', '8', '12']);
-    await heads.nth(0).getByRole('button').click();          // and any group can be hidden
-    await expect(order).toHaveText(['9', '8', '12']);
+    await heads.nth(0).getByRole('button').click();          // waiting can be hidden too
+    await expect(order).toHaveText(['10', '11', '8', '12']);
 
-    // While the buyer is still adding, it's one plain list in the same order, no headings.
+    // Grouped while the buyer is still adding too (owner, 2026-11-14) — same order.
     await pool.query('UPDATE buy_carts SET list_closed_at = NULL WHERE id = $1', [cartId]);
     await page.reload();
-    await expect(order).toHaveText(['10', '11', '9', '8', '12']);
-    await expect(heads).toHaveCount(0);
+    await expect(heads).toHaveCount(2);
+    await expect(order).toHaveText(['10', '11', '9']);
+
+    // A pair approved while the page is open arrives by itself (live update) and is lit;
+    // once nothing waits, "Waiting for a decision" is gone.
+    await call(request, 'approver', 'cart/decide', { cartId, lineIds: [ids['9']], action: 'approve', qty: { [ids['9']]: 2 } });
+    await expect(order).toHaveText(['9', '10', '11'], { timeout: 15000 });
+    await expect(page.locator('tr.bc-line.bc-fresh')).toContainText('9');
+    await expect(page.locator('.bc-approved-total')).toHaveText(' · 4 pairs (1 SKU)');
+    await expect(heads).toHaveCount(1);
+    await expect(heads.nth(0)).toContainText('Declined or not buying');
   });
 
   test('on screen: the approver has Change on a decided pair, the buyer ✕ Not buying', async ({ page, request }) => {

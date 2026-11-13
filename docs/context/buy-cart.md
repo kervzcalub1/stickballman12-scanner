@@ -304,12 +304,17 @@ The PH team uploads card files, and some are bad. The supplier sees none of it.
 - **Line order on the request page** (Andrew, 2026-11-10): approved first, then waiting on an answer, then turned down,
   then not buying (`linesByDecision` in `src/lib/buycartRules.js`). The sort is stable, so the server's shoe/size order
   holds inside each group. Display only.
-- **Groups once the list is closed** (owner, same day): the lines sit under three headings (Approved · Waiting on an
-  answer · Turned down or not buying), and each one opens and shuts on a tap. Turned down / not buying starts shut;
-  the other two start open, because somebody still acts on them. ✕ Not buying opens that group so the pair and its
-  Undo stay in view. While the list is open it's one plain list. The open/shut state is per page view, not saved.
-- **Pair and SKU totals** (owner, 2026-11-13): the lines heading says `· Approved: 48 pairs (5 SKUs)`, and the
-  Approved / Waiting group headings add `· N pairs (M SKUs)` (`pairTally` / `pairTallyText` in `buycartRules.js`).
+- **The section is the APPROVED list** (owner, 2026-11-14; replaced "Groups once the list is closed", 11-10): the
+  lines heading is **`Approved shoes · 48 pairs (5 SKUs) · of N lines asked`** (`none yet` when nothing is approved),
+  and the approved pairs sit straight under it with no group row of their own. Then **Waiting for a decision** (open;
+  approvers tick / type qty / approve there; it disappears by itself once nothing waits) and **Declined or not
+  buying** (shut). ALWAYS grouped now, list open or closed. ✕ Not buying opens the declined group so the pair and its
+  Undo stay in view. The open/shut state is per page view, not saved. A turned-down line's Approval column says
+  **declined** (the DB status is still `rejected`). **Live:** the page re-reads on `buy_cart_lines` (`useLive`), so a
+  pair approved on Telegram or by another approver appears within seconds; it is lit green for 4 s (`.bc-fresh`) —
+  never on the first read of the page. With nothing approved yet, a "No shoes approved yet." row holds the place.
+- **Pair and SKU totals** (owner, 2026-11-13): the lines heading says `Approved shoes · 48 pairs (5 SKUs)`, and the
+  Waiting group heading adds `· N pairs (M SKUs)` (`pairTally` / `pairTallyText` in `buycartRules.js`).
   Pairs = the decided `qty`; SKUs = distinct style codes (one shoe in six sizes = 1 SKU). A pending line with no
   quantity yet counts no pairs, so a group with nothing decided shows SKUs only. "Not buying" (`skipped`) is in the
   bottom group, so it never counts as approved.

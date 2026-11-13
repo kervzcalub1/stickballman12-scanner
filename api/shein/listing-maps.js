@@ -216,6 +216,8 @@ async function phase4Maps(req, res, user, type, qs) {
     if (!parts) return send(res, 409, { ok: false, error: 'SHEIN’s attribute template for this product type hasn’t been read yet (listing-meta ?category=… or a publish dry run).' });
     const a = parts.product.find((x) => Number(x.attribute_id) === Number(body.attributeId));
     if (!a) return send(res, 400, { ok: false, error: 'That isn’t a product attribute of this SHEIN product type.' });
+    // 2026-11-14 (owner): a TYPED detail (Product Model, Series) differs per shoe — never a default for every shoe of a type
+    if (Number(a.attribute_mode) === 0) return send(res, 400, { ok: false, error: `${a.attribute_name_en || a.attribute_name || 'This detail'} is typed per shoe — every shoe has its own, so it can’t be a default for every shoe of this type. Type it on the shoe: open the shoe’s Details → SHEIN details.`, perShoe: true });
     const valueIds = (Array.isArray(body.valueIds) ? body.valueIds : []).map(Number).filter(Number.isSafeInteger);
     const extraValues = (Array.isArray(body.extraValues) ? body.extraValues : []).map((x) => String(x).trim().slice(0, 100)).filter(Boolean);
     const bad = attrValueProblem(a, valueIds, extraValues);   // one check, shared with the per-shoe save (listings.js publish_choices attr)

@@ -252,7 +252,8 @@ export async function buildPublish(it, { jctx, io, log, fatal }) {
   const fill = category ? await fillFor(category.categoryId, io, lg).catch((e) => { if (fatal(e)) throw e; return null; }) : null;
   const template = category ? await templateFor(category.productTypeId, io, lg).catch((e) => { if (fatal(e)) throw e; return null; }) : null;
   const parts = template ? templateParts(template) : null;
-  const attrDefaults = category ? shoeAttrDefaults(await listAttrDefaults(category.productTypeId), d.product.attr_overrides, category.productTypeId) : [];
+  // the shoe's typed details, else its Product Model from the title (sure only); Setup's typed rows are ignored (2026-11-14)
+  const attrDefaults = category ? shoeAttrDefaults(await listAttrDefaults(category.productTypeId), d.product.attr_overrides, category.productTypeId, { title: product?.title || d.product.title || null, template }) : [];
   const assoc = category && template ? await assocRequired({ categoryId: category.categoryId, productTypeId: category.productTypeId, defaults: attrDefaults, parts, io, log: lg }).catch((e) => { if (fatal(e)) throw e; return []; }) : [];
   const permission = category && parts?.size ? await permissionFor(category.categoryId, parts.size.attributeId, io, lg).catch(() => null) : null;
   // brand (D5)
@@ -278,7 +279,9 @@ export async function buildPublish(it, { jctx, io, log, fatal }) {
   const last = await lastPublishItem(it.shopify_product_id);
   const rejectedAt = last && last.id !== it.id && last.status === 'failed' && (last.blockers || []).some((b) => b.code === 'review_rejected') ? new Date(last.updated_at) : null;
   const rejected = rejectedAt && !(d.product.publish_again_at && new Date(d.product.publish_again_at) > rejectedAt) ? { failedReason: (last.blockers || []).find((b) => b.code === 'review_rejected')?.params?.failedReason || null } : null;
-  const input = { product, productRow: d.product, gates: jctx.gates || {}, category, suggestion, fill, template, assoc, attrDefaults, brand, brandQuota, maps: sizeMaps, permission, customValues, market, box, taken, takenChecked: true, inFlight, unconfirmed, rejected, skuCounts };
+  // Bug 4 (2026-11-14): the sizes a person left off ("Don't list on SHEIN") go to the planner too — it filters by
+  // productRow.excludedVariants, and without them an excluded impossible size (5.5W in 4455) still blocked the publish
+  const input = { product, productRow: { ...d.product, excludedVariants: excluded }, gates: jctx.gates || {}, category, suggestion, fill, template, assoc, attrDefaults, brand, brandQuota, maps: sizeMaps, permission, customValues, market, box, taken, takenChecked: true, inFlight, unconfirmed, rejected, skuCounts };
   // Photos only when nothing else blocks (conversions are SHEIN asset calls)
   const pre = planPublish({ ...input, images: null, unknown: ['photos'] });
   const hard = pre.plan.blockers.filter((b) => !['note', 'review'].includes(BLOCKERS[b.code]?.level));

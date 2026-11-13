@@ -6,7 +6,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { getUser, clearAuth, api } from './api.js';
 import { isUnsavedDirty } from './hooks.js';
-import { pathForView, viewForPath, hasPriv } from './lib/constants.js';
+import { pathForView, viewForPath, hasPriv, isAdminRole } from './lib/constants.js';
 import { sheinSectionsFor } from './lib/sheinPage.js';
 import { clearQuery, writeParam } from './lib/urlstate.js';
 import { setMarkupPct } from './lib/config.js';
@@ -50,6 +50,7 @@ import { OnlineOrders } from './screens/OnlineOrders.jsx';
 import { Expected } from './screens/Expected.jsx';
 import { TrackingDuplicates } from './screens/TrackingDuplicates.jsx';
 import { Undelivered } from './screens/Undelivered.jsx';
+import { LostPackages } from './screens/LostPackages.jsx';
 import { Cancellations } from './screens/Cancellations.jsx';
 import { InboundIssues } from './screens/InboundIssues.jsx';
 import { Receipts } from './screens/Receipts.jsx';
@@ -229,6 +230,10 @@ export default function App() {
   if (view === 'online-orders') return withAdvisor(<OnlineOrders user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // The duplicate tracking number log — warehouse reads, admin closes entries.
   if (view === 'undelivered') return withAdvisor(<Undelivered onHome={() => go('home')} onSignOut={signOut} />);
+  // Lost Package Tracker Tool — admins here (ph_team has it at /ph/lost-packages); the API refuses anyone else.
+  if (view === 'lost-packages') return isAdminRole(user.role)
+    ? withAdvisor(<LostPackages onHome={() => go('home')} onSignOut={signOut} />)
+    : <Home user={user} onPick={go} onSignOut={signOut} />;
   if (view === 'cancellations') return withAdvisor(<Cancellations onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'inbound-issues') return withAdvisor(<InboundIssues onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'dup-tracking') return withAdvisor(<TrackingDuplicates user={user} onHome={() => go('home')} onSignOut={signOut} />);

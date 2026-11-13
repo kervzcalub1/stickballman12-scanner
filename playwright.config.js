@@ -119,6 +119,12 @@ export default defineConfig({
       // Receipt reading (buying requests + store orders) the same way: a fake on localhost,
       // so no test can spend OpenAI money on a receipt (api/_lib/receipt-ai.js).
       RECEIPT_AI_URL: 'http://127.0.0.1:5195/v1/chat/completions',
+      // Lost Package Tracker Phase 2: FedEx + EasyPost both go to a FAKE courier on localhost
+      // (e2e/lost-packages.spec.js), with fake keys — EasyPost bills per tracker created, so no
+      // run may ever reach the real one. Its "unknown" re-polls are 100× faster here.
+      EASYPOST_API_KEY: 'e2e-easypost', FEDEX_CLIENT_ID: 'e2e-fedex', FEDEX_CLIENT_SECRET: 'e2e-fedex-secret',
+      FEDEX_API_BASE: 'http://127.0.0.1:5193/fedex', EASYPOST_API_BASE: 'http://127.0.0.1:5193/easypost',
+      LOSTPKG_POLL_SCALE: '0.01',
       TELEGRAM_CANCEL_CHAT_ID: '-100555',
       // SHEIN: every call from the test server goes to a FAKE SHEIN on localhost
       // (e2e/shein-listings.spec.js starts it; it refuses any write path), so no run can reach

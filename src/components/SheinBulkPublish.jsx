@@ -20,7 +20,7 @@ import { useLive } from '../hooks.js';
 import { RemoteThumb, CopyText } from './common.jsx';
 import { fmt, NEEDS_PRIV } from './SheinListingsBits.jsx';
 import { CategoryPicker, BrandPicker, AttrEditor, BoxDefaults, GROUP_LABEL } from './SheinPublishBits.jsx';
-import { tidyTitle, cleanTitle } from '../lib/sheinPublish.js';
+import { tidyTitle, cleanTitle, isDefaultLabel } from '../lib/sheinPublish.js';
 import { plain } from '../lib/sheinWords.js';
 
 const saveChoices = (body) => api.sheinListingAction({ action: 'publish_choices_bulk', ...body });
@@ -334,7 +334,7 @@ function BulkColour({ g, onSave, onSignOut }) {
   }, [g.ptid]); // eslint-disable-line react-hooks/exhaustive-deps
   const main = t?.template?.main || null;
   const status = t?.template?.mainStatus;
-  const values = (main?.values || []).filter((v) => status !== 3 || !/^(default|默认)$/i.test(v.label));
+  const values = (main?.values || []).filter((v) => status !== 3 || !isDefaultLabel(v.label));
   const missing = g.list.filter((p) => isNo(p, 'colour') || p.skcValueId == null).length;
   const set = new Set(g.list.map((p) => p.skcValueId).filter((v) => v != null));
   return (

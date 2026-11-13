@@ -216,6 +216,14 @@ const PATHS = {
     <path d="M10 10.2a2 2 0 1 1 2.6 1.9c-.4.2-.6.5-.6.9v.5" />
     <path d="M12 16h.01" />
   </>),
+  // Lost Package Tracker Tool — a parcel and a magnifying glass (looking for one in transit)
+  'lost-packages': (<>
+    <path d="M3 7 10 3.5 17 7v6" />
+    <path d="M3 7v8l7 3.5" />
+    <path d="M3 7l7 3.5L17 7M10 10.5v3" />
+    <circle cx="16.5" cy="16.5" r="3.2" />
+    <path d="m19 19 2.2 2.2" />
+  </>),
   // Duplicate Tracking — two parcels stacked, one behind the other (the same number twice)
   'dup-tracking': (<>
     <path d="M7 6.5 13 3.5l6 3v6.5l-6 3-6-3z" />

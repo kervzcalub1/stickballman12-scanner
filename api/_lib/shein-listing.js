@@ -36,7 +36,7 @@ import {
   countSheinApiLog, getSetting, setSetting,
   getListingProduct, listListingProducts, updateListingItem, markListingItemSending, dueRunItems, runJobsWithDueItems, requeueListingJob,
   setListingJobStatus, listingInflight, markVariantsPublished, setVariantsLastError, verifySizeMap, verifySizeMapById, getPlatformQuotes, listListingJobItems,
-  createRunJob, getListingItems, sheinShelfRecords, markVariantsSynced, listingPriceOffProducts, listCategoryMaps, listBrandMaps, setListingPublished, listAttrDefaults, listingAttrOverridesBySpu, listListingCategoryPicks,
+  createRunJob, getListingItems, sheinShelfRecords, markVariantsSynced, listingPriceOffProducts, listCategoryMaps, listBrandMaps, setListingPublished, listAttrDefaults, listingShoeBySpu, listListingCategoryPicks,
   listPublishUnconfirmed, resumeListingJob as resumeJobRow, phPhotoKeys, cleanPhotoKeys,
 } from './db.js';
 import { walkActive, pushSpus } from './shein-live.js';
@@ -619,8 +619,9 @@ export async function editAttrs(spu, { io = IO, log = null } = {}) {
   if (!template?.attribute_infos) return null;
   const parts = templateParts(template);
   // + the shoe's own details (Product Model typed while fixing it, 2026-11-11) on top of Setup's
-  const own = spu?.spuName ? await listingAttrOverridesBySpu(String(spu.spuName)).catch(() => null) : null;
-  const defaults = shoeAttrDefaults(await listAttrDefaults(ptid), own, ptid);
+  // + its Product Model from the Shopify title when none is typed and the title is sure (2026-11-14); Setup's typed rows are ignored
+  const shoe = spu?.spuName ? await listingShoeBySpu(String(spu.spuName)).catch(() => null) : null;
+  const defaults = shoeAttrDefaults(await listAttrDefaults(ptid), shoe?.attr_overrides || null, ptid, { title: shoe?.title || null, template });
   const product = new Map(parts.product.map((a) => [Number(a.attribute_id), a]));
   const cur = new Map();
   for (const x of spu?.productAttributeInfoList || []) {

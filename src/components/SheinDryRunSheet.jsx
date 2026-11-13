@@ -121,7 +121,8 @@ function PublishPlan({ plan }) {
         {plan.skcValue && <><dt>Colour</dt><dd>{plan.skcValue.label}</dd></>}
         {plan.sizeGroup && <><dt>Size group</dt><dd>{GROUP_LABEL[plan.sizeGroup] || plan.sizeGroup}</dd></>}
         {plan.box && <><dt>Box</dt><dd>{cmToIn(plan.box.length)} × {cmToIn(plan.box.width)} × {cmToIn(plan.box.height)} in · {gToLb(plan.box.weight)} lb <span className="muted xs">({BOX_LABEL[plan.box.group] || plan.box.group})</span></dd></>}
-        {(plan.attributes || []).length > 0 && <><dt>SHEIN details</dt><dd>{fmt(new Set(plan.attributes.map((a) => a.attribute_id)).size)} set from the product type’s defaults</dd></>}
+        {(plan.attributes || []).length > 0 && <><dt>SHEIN details</dt><dd>{fmt(new Set(plan.attributes.map((a) => a.attribute_id)).size)} set (this shoe’s own + the product type’s picked defaults)</dd></>}
+        {plan.model?.value && <><dt>Product Model</dt><dd data-model-from={plan.model.from}>“{plan.model.value}” <span className="muted xs">{plan.model.from === 'title' ? 'from the title' : 'typed for this shoe'}</span></dd></>}
         {q && <><dt>Monthly new-product limit</dt><dd>{q.controlled ? <>uses {fmt(q.uses)} of {fmt(q.available)} left this month</> : 'not limited for the store'}</dd></>}
         {plan.supplierCode && <><dt>Our code on SHEIN</dt><dd className="shl-mono">{plan.supplierCode}</dd></>}
       </dl>

@@ -243,6 +243,12 @@ import('./api/_lib/gc-read-worker.js')
   .then((m) => m.startCardReadWorker())
   .catch((e) => console.error('[gc-read] failed to start:', e.message));
 
+// Lost Package Tracker — Phase 2 asks FedEx / EasyPost about a month's Lost orders, one at a
+// time, on the server; a restart carries on where it stopped (docs/context/lost-packages.md).
+import('./api/_lib/lostpkg-worker.js')
+  .then((m) => m.startLostPackageWorker())
+  .catch((e) => console.error('[lostpkg] failed to start:', e.message));
+
 // eBay orders — incremental sync every 30 min so late shipments show by themselves
 // (docs/context/ebay-orders.md). Production only by default; EBAY_ORDERS_WATCH overrides.
 import('./api/_lib/ebay-orders-worker.js')

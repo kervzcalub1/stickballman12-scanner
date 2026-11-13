@@ -104,7 +104,8 @@ test('phone: the ⓘ opens one card\'s sentence inside it; the card itself still
   const sub = wrap.locator('.home-card-sub');
   await expect(sub).toBeHidden();
   const box = await info.boundingBox();
-  expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);
+  // 44px, give or take a subpixel (a loaded runner measured 43.99997).
+  expect(box.width).toBeGreaterThanOrEqual(43.5); expect(box.height).toBeGreaterThanOrEqual(43.5);
   await info.click();
   await expect(sub).toBeVisible();
   await expect(sub).toHaveText('Scan a new shipment into a batch');

@@ -3311,6 +3311,133 @@ test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fak
     }
   });
 
+  // Product Model from the TITLE (owner, 2026-11-14): "whatever I type in there is being set as default, but every shoe has a
+  // different product model". Setup can't hold a typed detail any more and its old rows never reach SHEIN; each shoe gets
+  // its own — typed for the shoe → else read from its title when sure → else blocked. The pure rules: e2e/shein-model.spec.js.
+  test('Product Model from the title (2026-11-14): no store-wide default; each shoe its own (title when sure, typed wins, unsure blocked); the per-shoe save writes only that shoe; live edits; the read-only report', async ({ request }) => {
+    const MODEL_ID = 1000546;
+    const choose = (n, data) => request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'publish_choices', productId: gidP(n), ...data } });
+    const modelIn = (it) => (it.body?.product_attribute_list || []).find((a) => a.attribute_id === MODEL_ID)?.attribute_extra_value ?? null;
+    const setupRows = async () => (await pool.query(`SELECT product_type_id, extra_values FROM shein_attr_defaults WHERE attribute_id = $1 AND product_type_id = $2`, [MODEL_ID, P4TYPE])).rows;
+    const overrides = async (n) => (await pool.query(`SELECT attr_overrides FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(n)])).rows[0]?.attr_overrides || {};
+    const before = (await pool.query(`SELECT shopify_product_id, spu FROM shein_listing_products WHERE shopify_product_id = ANY($1::text[])`, [[gidP(7708), gidP(7709)]])).rows;
+    let reportJob = null;
+    try {
+      fake.p4.template = { ...P4TEMPLATE, attribute_infos: [...P4TEMPLATE.attribute_infos, { attribute_id: MODEL_ID, attribute_name_en: 'Product Model', attribute_type: 4, attribute_mode: 0, attribute_status: 3, data_dimension: 2, attribute_value_info_list: [] }] };
+      await pool.query(`DELETE FROM shein_listing_cache WHERE kind = 'attr_template' AND key = $1`, [String(P4TYPE)]);
+      // the leak as it sits on prod: Setup holds the typed Product Model for the whole type ("ACG Air Max" on 5512)
+      await pool.query(`INSERT INTO shein_attr_defaults (product_type_id, attribute_id, scope, value_ids, extra_values, set_by) VALUES ($1, $2, 'product', '{}', '{"ACG Air Max"}', 'e2e')`, [P4TYPE, MODEL_ID]);
+      fake.writes.length = 0;
+
+      // 1. two shoes of the SAME type → each its own model, read from its title; Setup's text never sent
+      let job = await preview([7708, 7709]);
+      let a = await one(job.id, 7708); let b = await one(job.id, 7709);
+      expect(modelIn(a)).toBe('Air Force 1 Low');
+      expect(modelIn(b)).toBe('Dunk Low');
+      expect(a.plan.model).toEqual({ value: 'Air Force 1 Low', from: 'title' });
+      expect(a.plan.checklist.find((l) => l.key === 'attributes')).toMatchObject({ ok: true, model: { value: 'Air Force 1 Low', from: 'title' } });
+      expect(JSON.stringify([a.body, b.body, a.plan, b.plan])).not.toContain('ACG Air Max');
+
+      // 2. Setup refuses a typed detail (plain words, points to the shoe); its rows stay as they were
+      const refused = await request.post('/api/shein/listing-maps?type=attr', { headers: auth.ph, data: { action: 'set', productTypeId: P4TYPE, attributeId: MODEL_ID, extraValues: ['Air Max 90'] } });
+      expect(refused.status()).toBe(400);
+      const rj = await refused.json();
+      expect(rj).toMatchObject({ ok: false, perShoe: true });
+      expect(rj.error).toMatch(/typed per shoe.*Type it on the shoe/);
+      expect(await setupRows()).toEqual([{ product_type_id: String(P4TYPE), extra_values: ['ACG Air Max'] }]);
+
+      // 3. typed for THIS shoe wins — saved on that shoe only, never into Setup, never on the other shoe
+      expect((await choose(7708, { attr: { attributeId: MODEL_ID, extraValues: ['Air Force 1 Low Retro'] } })).status()).toBe(200);
+      expect((await overrides(7708))[String(MODEL_ID)]).toMatchObject({ ptid: P4TYPE, extraValues: ['Air Force 1 Low Retro'], by: 'E2E PH' });
+      expect((await overrides(7709))[String(MODEL_ID)]).toBeUndefined();
+      expect(await setupRows()).toEqual([{ product_type_id: String(P4TYPE), extra_values: ['ACG Air Max'] }]);
+      job = await preview([7708, 7709]);
+      a = await one(job.id, 7708); b = await one(job.id, 7709);
+      expect(modelIn(a)).toBe('Air Force 1 Low Retro');
+      expect(a.plan.model).toEqual({ value: 'Air Force 1 Low Retro', from: 'shoe' });
+      expect(modelIn(b)).toBe('Dunk Low');
+
+      // 4. a title we can't read a model from → nothing sent, the shoe is asked for ITS model
+      const shop = () => P4SHOP().map((p) => (p.productId === gidP(7709) ? { ...p, title: 'Nike Zoom Hyperflight Unseen Hours DMV (DD1391-100)' } : p));
+      const base = io();
+      const titled = { ...p2IO(L.IO, { shopify: shop, stock: stocked }), recentShelf: base.recentShelf, fetchImage: base.fetchImage, hostImage: base.hostImage };
+      const j2 = await L.startListingJob({ kind: 'preview', by: 'e2e-p4', scope: { productIds: [gidP(7709)], ops: ['publish'], convertPhotos: true }, io: titled }); jobsMade.add(j2.id);
+      b = await one((await finished(j2.id)).id, 7709);
+      expect(b.body).toBe(null);
+      expect(b.plan.checklist.find((l) => l.key === 'attributes')).toMatchObject({ ok: false, blockers: [expect.objectContaining({ code: 'missing_attr', params: expect.objectContaining({ attributeId: MODEL_ID, why: 'typed_per_shoe' }) })] });
+      expect(JSON.stringify(b.plan)).not.toContain('ACG Air Max');
+
+      // 5. a LIVE shoe's edit (editAttrs → attributePatch): typed wins, else the title's model (said so), never Setup's
+      await pool.query(`UPDATE shein_listing_products SET spu = 'E2EMODELSPU' WHERE shopify_product_id = $1`, [gidP(7708)]);
+      const eio = { sheinAttributeTemplates: async () => [fake.p4.template], sheinAssocRules: async (req) => [{ group_id: req.group_id, link_rule_attribute_list: [] }] };
+      const spu = { spuName: 'E2EMODELSPU', productTypeId: P4TYPE, categoryId: P4CAT, productAttributeInfoList: [{ attributeId: 7000, attributeValueId: 7001 }, { attributeId: 7200, attributeValueId: 7201 }] };
+      let e = await L.editAttrs(spu, { io: eio });
+      expect(e.list).toContainEqual({ attribute_id: MODEL_ID, attribute_extra_value: 'Air Force 1 Low Retro' });
+      expect((await choose(7708, { attr: { attributeId: MODEL_ID, clear: true } })).status()).toBe(200);
+      e = await L.editAttrs(spu, { io: eio });
+      expect(e.list).toContainEqual({ attribute_id: MODEL_ID, attribute_extra_value: 'Air Force 1 Low' });
+      expect(e.added).toEqual([{ attributeId: MODEL_ID, attribute: 'Product Model', from: 'title', value: 'Air Force 1 Low' }]);
+      expect(JSON.stringify(e)).not.toContain('ACG Air Max');
+
+      // 6. the read-only report: a shoe published with Setup's "ACG Air Max" whose title says otherwise
+      await pool.query(`UPDATE shein_listing_products SET spu = 'E2EMODELSPU2' WHERE shopify_product_id = $1`, [gidP(7709)]);
+      reportJob = (await pool.query(`INSERT INTO shein_listing_jobs (kind, status, started_by) VALUES ('run', 'done', 'e2e-p4-model') RETURNING id`)).rows[0].id;
+      jobsMade.add(reportJob);
+      await pool.query(`INSERT INTO shein_listing_job_items (job_id, shopify_product_id, op, status, body) VALUES ($1, $2, 'publish', 'done', $3)`,
+        [reportJob, gidP(7709), JSON.stringify({ product_type_id: P4TYPE, product_attribute_list: [{ attribute_id: 7000, attribute_value_id: 7001 }, { attribute_id: MODEL_ID, attribute_extra_value: 'ACG Air Max' }] })]);
+      const { setupModelReport } = await import('../api/_lib/shein-model-report.js');
+      const rep = await setupModelReport(pool);
+      expect(rep.rows.filter((r) => r.productId === gidP(7709))).toEqual([expect.objectContaining({ spu: 'E2EMODELSPU2', sent: 'ACG Air Max', should: 'Dunk Low', from: 'title', reason: 'setup_default_differs' })]);
+      expect(rep.setup).toContainEqual({ ptid: P4TYPE, values: ['ACG Air Max'] });
+      expect(fake.writes).toEqual([]);
+    } finally {
+      fake.p4.template = null;
+      await pool.query(`DELETE FROM shein_listing_cache WHERE kind = 'attr_template' AND key = $1`, [String(P4TYPE)]);
+      await pool.query(`DELETE FROM shein_attr_defaults WHERE product_type_id = $1 AND attribute_id = $2`, [P4TYPE, MODEL_ID]);
+      if (reportJob) await pool.query(`DELETE FROM shein_listing_jobs WHERE id = $1`, [reportJob]);
+      for (const r of before) await pool.query(`UPDATE shein_listing_products SET spu = $2, attr_overrides = '{}'::jsonb WHERE shopify_product_id = $1`, [r.shopify_product_id, r.spu]);
+    }
+  });
+
+  // Bug 4 (2026-11-14, prod 11-13: Free Metcon 6 5.5W in 4455): a size marked "Don't list on SHEIN" still blocked a NEW
+  // shoe's publish — the planner never got the exclusions (productRow.excludedVariants), and the drawer kept the old ✕.
+  test('Bug 4: a size left off (“Don’t list on SHEIN”) never blocks a new shoe’s publish — the preview lists only the kept sizes; the drawer’s Sizes line clears', async ({ request }) => {
+    const v13 = { variantId: gidV(770913), sku: 'DK-13', size: '13', price: '120', compareAt: null, qty: 1, barcode: null, weightG: null };   // 13: not one of SHEIN's sizes, no spelling confirmed
+    const shop13 = () => P4SHOP().map((p) => (p.productId === gidP(7709) ? { ...p, variants: [...p.variants, v13] } : p));
+    const base = io();
+    const io13 = { ...p2IO(L.IO, { shopify: shop13, stock: stocked }), recentShelf: base.recentShelf, fetchImage: base.fetchImage, hostImage: base.hostImage };
+    const prev13 = async () => { const j = await L.startListingJob({ kind: 'preview', by: 'e2e-p4', scope: { productIds: [gidP(7709)], ops: ['publish'], convertPhotos: true }, io: io13 }); jobsMade.add(j.id); return one((await finished(j.id)).id, 7709); };
+    const sizesLine = (it) => it.plan.checklist.find((l) => l.key === 'sizes');
+    try {
+      await L.recomputeStored({ replace: [shop13().find((p) => p.productId === gidP(7709))] });
+      fake.writes.length = 0;
+      let it = await prev13();
+      expect(it.body).toBe(null);
+      expect(sizesLine(it).ok).toBe(false);
+      expect(JSON.stringify(sizesLine(it).blockers)).toContain('13');
+      // a person leaves 13 off SHEIN
+      const ex = await request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'exclude', variantKeys: [gidV(770913)] } });
+      expect(ex.status()).toBe(200);
+      expect((await ex.json()).n).toMatchObject({ variants: 1 });
+      // the drawer: the last preview judged 13 → its ✕ is no longer shown (the readiness, which leaves 13 out)
+      const d = await (await request.get(`/api/shein/listings?product=${encodeURIComponent(gidP(7709))}`, { headers: auth.ph })).json();
+      expect(d.checklistFrom).toEqual({ readiness: true });
+      expect(d.checklist.find((l) => l.key === 'sizes').ok).not.toBe(false);
+      // the next preview: no size blocker, only the kept sizes go
+      it = await prev13();
+      expect(sizesLine(it)).toMatchObject({ ok: true, blockers: [] });
+      expect(it.plan.sizes.map((z) => z.variantId).sort()).toEqual([gidV(770909), gidV(770910)]);
+      expect(it.plan.skipped.map((z) => z.variantId)).not.toContain(gidV(770913));
+      expect(it.body).not.toBe(null);
+      expect(JSON.stringify(it.body)).not.toContain('DK-13');
+      expect(fake.writes).toEqual([]);
+    } finally {
+      await request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'include', variantKeys: [gidV(770913)] } });
+      await L.recomputeStored({ replace: [P4SHOP().find((p) => p.productId === gidP(7709))] });
+      await pool.query(`DELETE FROM shein_listing_variants WHERE row_key = $1`, [gidV(770913)]);
+    }
+  });
+
   test('store gates are checked before anything: SHEIN can’t take listings / the monthly quota is used → nothing sendable, for every product', async () => {
     fake.p4.canPublish = false; fake.p4.reason = 'KYC not finished'; await clearGates();
     let it = await one((await preview([7708, 7709])).id, 7708);
@@ -3713,6 +3840,58 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await s.getByRole('button', { name: 'Not now' }).click();
     await openAdvanced(page); await page.getByRole('tab', { name: /Jobs/ }).click();
     await expect(page.locator('.shl-rtable tr', { hasText: 'e2e_ph' }).or(page.locator('.shl-rtable tr', { hasText: 'e2e-p4ui' })).filter({ hasText: 'Preview · publish new products' }).first()).toContainText('Waiting for you');
+  });
+
+  test('Product Model from the title (2026-11-14): the shoe’s editor is PREFILLED from its title (“From the title” / “— check it”), saving writes only this shoe; Setup shows the typed detail as per shoe, its old default “not used”', async ({ page }) => {
+    const MODEL_ID = 1000546;
+    const tplRow = (await pool.query(`SELECT payload FROM shein_listing_cache WHERE kind = 'attr_template' AND key = $1`, [String(P4TYPE)])).rows[0];
+    const titleBefore = (await pool.query(`SELECT title FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(7709)])).rows[0].title;
+    const setupModel = async () => (await pool.query(`SELECT extra_values FROM shein_attr_defaults WHERE product_type_id = $1 AND attribute_id = $2`, [P4TYPE, MODEL_ID])).rows;
+    try {
+      const tpl = { ...(tplRow?.payload || P4TEMPLATE) };
+      tpl.attribute_infos = [...(tpl.attribute_infos || []).filter((a) => a.attribute_id !== MODEL_ID), { attribute_id: MODEL_ID, attribute_name_en: 'Product Model', attribute_type: 4, attribute_mode: 0, attribute_status: 3, data_dimension: 2, attribute_value_info_list: [] }];
+      await pool.query(`INSERT INTO shein_listing_cache (kind, key, payload) VALUES ('attr_template', $1, $2) ON CONFLICT (kind, key) DO UPDATE SET payload = EXCLUDED.payload`, [String(P4TYPE), JSON.stringify(tpl)]);
+      await pool.query(`INSERT INTO shein_attr_defaults (product_type_id, attribute_id, scope, value_ids, extra_values, set_by) VALUES ($1, $2, 'product', '{}', '{"ACG Air Max"}', 'e2e')`, [P4TYPE, MODEL_ID]);
+      await loginAs(page, 'ph_team');
+      await page.setViewportSize({ width: 1320, height: 1000 });
+      const openModel = async () => {
+        await page.goto(`/ph/shein-listings?product=${encodeURIComponent(gidP(7709))}`);
+        await line(page, 'attributes').getByRole('button', { name: /Set SHEIN details|Edit details/ }).click();
+        return line(page, 'attributes').locator(`[data-panel="shoe-attributes"] [data-shoe-attr="${MODEL_ID}"]`);
+      };
+      // a title we recognise: prefilled + "From the title", nothing to save (the server already uses it)
+      let row = await openModel();
+      await expect(row.getByRole('textbox', { name: 'Product Model for this shoe' })).toHaveValue('Dunk Low');
+      await expect(row.locator('[data-from-title="sure"]')).toHaveText('From the title');
+      await expect(row).toContainText('Read from the title: SHEIN gets “Dunk Low” for this shoe.');
+      await expect(row.getByRole('button', { name: 'Save for this shoe' })).toHaveCount(0);
+      await expect(row).not.toContainText('ACG Air Max');                 // Setup's old default is never offered
+      // Setup's editor: the typed detail is per shoe — no input, the old default "not used any more"
+      await line(page, 'attributes').getByRole('button', { name: /Set a detail for every shoe of this SHEIN type/ }).click();
+      const typed = line(page, 'attributes').locator(`[data-panel="attributes"] .shl-attr[data-attr="${MODEL_ID}"]`);
+      await expect(typed).toContainText('Typed per shoe');
+      await expect(typed.locator('input')).toHaveCount(0);
+      await expect(typed.locator('[data-old-default]')).toContainText('Old default “ACG Air Max”');
+      await expect(typed.locator('[data-old-default]')).toContainText('not used any more');
+      // a title we DON'T recognise: our guess prefilled, "check it", saved only for this shoe
+      await pool.query(`UPDATE shein_listing_products SET title = 'Nike Zoom Hyperflight Unseen Hours DMV (DD1391-100)' WHERE shopify_product_id = $1`, [gidP(7709)]);
+      row = await openModel();
+      const box = row.getByRole('textbox', { name: 'Product Model for this shoe' });
+      await expect(box).toHaveValue('Zoom Hyperflight');
+      await expect(row.locator('[data-from-title="guess"]')).toHaveText('From the title — check it');
+      await box.fill('Zoom Hyperflight Low');
+      await row.getByRole('button', { name: 'Save for this shoe' }).click();
+      await expect(row.locator('.ebo-chip.ok')).toHaveText('Set for this shoe');
+      const ov = (await pool.query(`SELECT attr_overrides FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(7709)])).rows[0].attr_overrides;
+      expect(ov[String(MODEL_ID)]).toMatchObject({ ptid: P4TYPE, extraValues: ['Zoom Hyperflight Low'], by: 'E2E PH' });
+      expect((await pool.query(`SELECT attr_overrides FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(7708)])).rows[0].attr_overrides?.[String(MODEL_ID)]).toBeUndefined();
+      expect(await setupModel()).toEqual([{ extra_values: ['ACG Air Max'] }]);   // never into Setup
+    } finally {
+      await pool.query(`UPDATE shein_listing_products SET title = $2, attr_overrides = COALESCE(attr_overrides, '{}'::jsonb) - $3::text WHERE shopify_product_id = $1`, [gidP(7709), titleBefore, String(MODEL_ID)]);
+      await pool.query(`DELETE FROM shein_attr_defaults WHERE product_type_id = $1 AND attribute_id = $2`, [P4TYPE, MODEL_ID]);
+      if (tplRow) await pool.query(`UPDATE shein_listing_cache SET payload = $2 WHERE kind = 'attr_template' AND key = $1`, [String(P4TYPE), JSON.stringify(tplRow.payload)]);
+      else await pool.query(`DELETE FROM shein_listing_cache WHERE kind = 'attr_template' AND key = $1`, [String(P4TYPE)]);
+    }
   });
 
   test('admin: “Publish 1 product” → the job card: In review; SHEIN rejects → Rejected with SHEIN’s reason + Publish again', async ({ page }) => {

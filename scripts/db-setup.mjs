@@ -3699,6 +3699,72 @@ await sql(`
     PRIMARY KEY (sku, size)
   )`);
 
+// Lost Package Tracker Tool (docs/context/lost-packages.md, 2026-11-14). One RUN per month's
+// "Make | Order Updates Sheet" workbook: Phase 1 is worked out in the browser and saved here
+// with every order it found; Phase 2 is a server job (api/_lib/lostpkg-worker.js) that asks
+// FedEx / EasyPost about the run's Lost orders one at a time — a restart carries on.
+await sql(`
+  CREATE TABLE IF NOT EXISTS lost_pkg_runs (
+    id             BIGSERIAL PRIMARY KEY,
+    month_label    TEXT NOT NULL,
+    source_name    TEXT,
+    created_by     TEXT,
+    created_by_id  BIGINT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sheets_scanned INT NOT NULL DEFAULT 0,
+    rows_scanned   INT NOT NULL DEFAULT 0,
+    rows_skipped   INT NOT NULL DEFAULT 0,
+    counts         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    order_count    INT NOT NULL DEFAULT 0,
+    uploaded       INT NOT NULL DEFAULT 0,
+    p2_status      TEXT NOT NULL DEFAULT 'none',
+    p2_by          TEXT,
+    p2_started_at  TIMESTAMPTZ,
+    p2_finished_at TIMESTAMPTZ,
+    p2_total       INT NOT NULL DEFAULT 0,
+    p2_checked     INT NOT NULL DEFAULT 0,
+    p2_last        TEXT,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`ALTER TABLE lost_pkg_runs DROP CONSTRAINT IF EXISTS lost_pkg_runs_p2_status_check`);
+await sql(`ALTER TABLE lost_pkg_runs ADD CONSTRAINT lost_pkg_runs_p2_status_check
+           CHECK (p2_status IN ('none', 'running', 'paused', 'stopped', 'done'))`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS lost_pkg_orders (
+    id                BIGSERIAL PRIMARY KEY,
+    run_id            BIGINT NOT NULL REFERENCES lost_pkg_runs(id) ON DELETE CASCADE,
+    key               TEXT NOT NULL,
+    tracking          TEXT,
+    order_number      TEXT,
+    tracking_fallback TEXT,
+    store             TEXT,
+    product           TEXT,
+    sku               TEXT,
+    qty               TEXT,
+    courier           TEXT,
+    order_date        TEXT,
+    eta               TEXT,
+    status_written    TEXT,
+    first_sheet       TEXT,
+    evidence          TEXT,
+    p1_class          TEXT NOT NULL,
+    p2_state          TEXT NOT NULL DEFAULT 'none',
+    p2_class          TEXT,
+    p2_courier        TEXT,
+    p2_primary        TEXT,
+    p2_fallback       TEXT,
+    p2_raw            TEXT,
+    p2_error          TEXT,
+    p2_attempts       INT NOT NULL DEFAULT 0,
+    p2_started_at     TIMESTAMPTZ,
+    p2_checked_at     TIMESTAMPTZ,
+    UNIQUE (run_id, key)
+  )`);
+await sql(`ALTER TABLE lost_pkg_orders DROP CONSTRAINT IF EXISTS lost_pkg_orders_p2_state_check`);
+await sql(`ALTER TABLE lost_pkg_orders ADD CONSTRAINT lost_pkg_orders_p2_state_check
+           CHECK (p2_state IN ('none', 'queued', 'checking', 'done'))`);
+await sql(`CREATE INDEX IF NOT EXISTS lost_pkg_orders_queue_idx ON lost_pkg_orders (p2_state, run_id, id)`);
+
 const LIVE_TABLES = [
   'shopify_listing_variants', 'listing_market_prices',
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
@@ -3712,6 +3778,8 @@ const LIVE_TABLES = [
   'buy_cart_receipt_lines', 'buy_cart_tasks', 'deleted_buy_carts',
   'online_orders', 'online_order_lines', 'online_order_events',
   'tracking_duplicates',
+  // Lost Package Tracker: the run row moves on every order checked, so its progress streams.
+  'lost_pkg_runs',
   'email_receipts', 'user_purchase_emails',
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log', 'presell_entries',
   'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_price_locks', 'stockx_listings', 'stockx_price_locks', 'stockx_price_edits', 'ebay_coupon_log', 'ebay_orders', 'shein_links',

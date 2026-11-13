@@ -77,7 +77,11 @@ export const BLOCKERS = {
     action: { kind: 'edit_size_map', label: 'Add foot length' } },
   missing_attr: { level: 'blocked', scope: 'product', applies: ['publish', 'edit', 'add_sizes'],
     title: (p) => `Missing SHEIN detail: ${p?.attribute || 'a required attribute'}.`,
-    fix: (p) => (p?.why === 'typed_per_shoe' ? 'It is typed per shoe (e.g. the model name) — open “Set SHEIN details” and type it for this shoe, then preview again.' : 'Set it for this shoe, or once for the product type in Setup.'),
+    fix: (p) => (p?.why === 'typed_per_shoe'
+      ? (Number(p?.attributeId) === 1000546
+        ? 'Every shoe has its own model and we couldn’t read it from the title — open “Set SHEIN details”, check our guess (or type it) for this shoe, save, then preview again.'
+        : 'It is typed per shoe — open “Set SHEIN details” and type it for this shoe, then preview again.')
+      : 'Set it for this shoe, or once for the product type in Setup.'),
     action: { kind: 'set_attr', label: 'Set it' } },
   no_category: { level: 'blocked', scope: 'product', applies: ['publish'],
     title: (p) => `No SHEIN category picked.${p?.suggestion ? ` We suggest ${p.suggestion}.` : ''}`, fix: () => 'Choose the SHEIN category.', action: { kind: 'choose_category', label: 'Choose category' } },
@@ -244,7 +248,7 @@ export const BLOCKERS = {
   title_not_ours: { level: 'note', scope: 'product', applies: ['edit'],
     title: () => 'The title differs from Shopify, but 4seller listed this product — we don’t change its title or photos.', fix: () => '', action: null },
   attrs_added: { level: 'note', scope: 'product', applies: ['edit', 'add_sizes'],
-    title: (p) => `Also sends SHEIN details it now requires: ${(p?.attributes || []).join(', ') || 'a required detail'} (from Setup → SHEIN details).`,
+    title: (p) => `Also sends SHEIN details it now requires: ${(p?.attributes || []).join(', ') || 'a required detail'} (from this shoe’s SHEIN details, its title, or Setup).`,
     fix: () => 'SHEIN refuses any edit of this shoe without them. A product-level change: SHEIN reviews every colour of it.', action: null },
   images_later: { level: 'note', scope: 'product', applies: ['edit'],
     title: () => 'Photo changes aren’t sent here.', fix: () => '', action: null },
@@ -1216,11 +1220,13 @@ export function planEdit({ spu, product, stored = [], productRow = null, fill = 
 
 // The details SHEIN now requires ride in the same partialEdit — the WHOLE list (it replaces), only when
 // one is missing (sending it reviews every colour of the shoe).
+// "Product Model “Air Max 90” (from the title)" — a model read from the shoe's title says so (2026-11-14)
+const addedLabel = (a) => (a.from === 'title' && a.value ? `${a.attribute} “${a.value}” (from the title)` : a.attribute);
 export function withAttrs(body, plan, attrs) {
   if (!attrs?.list?.length) return;
   body.product_attribute_list = attrs.list;
   plan.attributes = { added: attrs.added, dropped: attrs.dropped || [], count: attrs.list.length };
-  plan.notes.push(blocker('attrs_added', { attributes: attrs.added.map((a) => a.attribute) }));
+  plan.notes.push(blocker('attrs_added', { attributes: attrs.added.map(addedLabel) }));
 }
 
 // The plan as stored (no raw SHEIN objects).
@@ -1234,7 +1240,7 @@ export function summarizePlan(plan) {
   const parts = [];
   const skippedPart = (sk) => `${sk.length} size${sk.length === 1 ? '' : 's'} skipped: ${sk.map((x) => `${x.size || x.sku || '?'} (${renderBlocker(x.blocker).title.replace(/\.$/, '')})`).join('; ')}`;
   const lead = (pb) => (pb.length ? renderBlocker(pb[0]).title.replace(/\.$/, '') : '');
-  const attrPart = () => (plan.attributes?.added?.length ? `+ SHEIN details it now requires: ${plan.attributes.added.map((a) => a.attribute).join(', ')} (SHEIN reviews every colour)` : '');
+  const attrPart = () => (plan.attributes?.added?.length ? `+ SHEIN details it now requires: ${plan.attributes.added.map(addedLabel).join(', ')} (SHEIN reviews every colour)` : '');
   if (plan.op === 'publish') {   // Phase 4
     const sz = plan.sizes || [];
     const hard = (plan.blockers || []).filter((b) => !isNote(b) || b.code === 'shopify_inactive');   // inactive never publishes

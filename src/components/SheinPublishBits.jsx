@@ -21,6 +21,7 @@ import { fmt, when, NEEDS_PRIV, BlockerSay, FixButton } from './SheinListingsBit
 import { plain } from '../lib/sheinWords.js';
 import { SheinPhotoPicker } from './SheinPhotoPicker.jsx';
 import { BOX_PLACEHOLDERS, sizeGroupOf, validateImperialBox, boxToImperial, boxFromImperial, cleanTitle, isKnownBrand, favouriteLeaves } from '../lib/sheinPublish.js';
+import { modelFromTitle, PRODUCT_MODEL_ATTR_ID } from '../lib/sheinModel.js';
 
 export const GROUP_LABEL = {
   adult: 'Men’s / adult', women: 'Women’s (W)', youth: 'GS / youth (Y)', child: 'Kids · PS (10.5C and up)', toddler: 'Toddler · TD (up to 10C)',
@@ -279,6 +280,9 @@ function AttrControl({ a, dr, onChange }) {
 
 // Defaults per SHEIN product type: set once, used by every product of that type. `focus` = the
 // attribute ids a blocker names (e.g. one SHEIN requires because of another choice).
+// 2026-11-14 (owner): a TYPED detail (Product Model, Series) is never a default here — every shoe has its own. It
+// shows as "typed per shoe" with no input (the server refuses one too); an old saved default reads "not used" + Clear.
+const isTyped = (a) => a.mode === 0;
 export function AttrEditor({ productTypeId, categoryId = null, canWrite, onSaved, onSignOut, focus = [] }) {
   const { d, err, reload } = useLoad(() => api.sheinPublishMaps('attr', { productTypeId }), [productTypeId], onSignOut);
   const [drafts, setDrafts] = useState({});
@@ -296,8 +300,8 @@ export function AttrEditor({ productTypeId, categoryId = null, canWrite, onSaved
   const important = (a) => a.status === 3 || want.has(a.attributeId);
   const sorted = [...attrs].sort((a, b) => Number(important(b)) - Number(important(a)) || Number(!saved.has(a.attributeId)) - Number(!saved.has(b.attributeId)));
   const shown = all ? sorted : sorted.filter((a) => important(a) || saved.has(a.attributeId) || drafts[a.attributeId]);
-  const dirty = attrs.filter((a) => drafts[a.attributeId] && !sameDraft(drafts[a.attributeId], savedDraft(a.attributeId)));
-  const missing = attrs.filter((a) => important(a) && !saved.has(a.attributeId));
+  const dirty = attrs.filter((a) => !isTyped(a) && drafts[a.attributeId] && !sameDraft(drafts[a.attributeId], savedDraft(a.attributeId)));
+  const missing = attrs.filter((a) => !isTyped(a) && important(a) && !saved.has(a.attributeId));
 
   async function saveOne(a) {
     const dr = draftOf(a.attributeId);
@@ -320,7 +324,8 @@ export function AttrEditor({ productTypeId, categoryId = null, canWrite, onSaved
     try {
       const r = await api.sheinPublishMapSave('attr', { action: 'seed', productTypeId, spu: spu.trim() });
       const next = { ...drafts };
-      for (const p of r.proposed || []) if (attrs.some((a) => a.attributeId === Number(p.attributeId))) next[p.attributeId] = { valueIds: (p.valueIds || []).map(Number), extraValues: p.extraValues || [], proposed: true };
+      // a typed detail (Product Model) is that product's own — never copied as a default for the type
+      for (const p of r.proposed || []) if (attrs.some((a) => a.attributeId === Number(p.attributeId) && !isTyped(a))) next[p.attributeId] = { valueIds: (p.valueIds || []).map(Number), extraValues: p.extraValues || [], proposed: true };
       setDrafts(next); setProposedFrom(spu.trim()); setAll(true);
       setMsg(`${fmt((r.proposed || []).length)} details copied from ${spu.trim()} — nothing is saved yet. Check each one, then “Save all changes”.`);
     } catch (e) { if (e.unauthorized) onSignOut?.(); else setMsg(`Couldn’t copy: ${plain(e.message)}`); }
@@ -353,6 +358,24 @@ export function AttrEditor({ productTypeId, categoryId = null, canWrite, onSaved
           const isSaved = saved.has(a.attributeId);
           const changed = drafts[a.attributeId] && !sameDraft(drafts[a.attributeId], savedDraft(a.attributeId));
           const s = saved.get(a.attributeId);
+          if (isTyped(a)) {
+            return (
+              <div key={a.attributeId} className="shl-attr" data-attr={a.attributeId} data-typed="">
+                <div className="shl-attr-head">
+                  <b>{a.name || `#${a.attributeId}`}</b>
+                  {a.status === 3 ? <span className="ebo-chip bad">Required</span> : <span className="ebo-chip">Optional</span>}
+                  <span className="ebo-chip warn">Typed per shoe</span>
+                </div>
+                <p className="muted xs">Every shoe has its own {a.name || 'value'}, so it isn’t set here for every shoe of this type. {a.attributeId === PRODUCT_MODEL_ATTR_ID ? 'It is read from each shoe’s title when we recognise the model; otherwise type it on the shoe: ' : 'Type it on the shoe: '}open the shoe’s <b>Details → SHEIN details</b>.</p>
+                {isSaved && (
+                  <div className="shl-pub-acts">
+                    <span className="muted xs shl-grow" data-old-default="">Old default “{(s.extra_values || [])[0] || '—'}” (by {s.set_by || '—'} {when(s.set_at)}) — not used any more.</span>
+                    <button type="button" className="btn ghost xs" disabled={!!busy} onClick={() => run(`c${a.attributeId}`, async () => { await api.sheinPublishMapSave('attr', { action: 'clear', productTypeId, attributeId: a.attributeId }); await reload(); onSaved?.(); })}>Clear</button>
+                  </div>
+                )}
+              </div>
+            );
+          }
           return (
             <div key={a.attributeId} className={`shl-attr${important(a) && !isSaved ? ' need' : ''}${changed ? ' chg' : ''}`} data-attr={a.attributeId}>
               <div className="shl-attr-head">
@@ -404,17 +427,23 @@ export function ShoeAttrEditor({ product, productTypeId, categoryId = null, canW
     for (const [id, o] of Object.entries(product?.attr_overrides || {})) if (o && Number(o.ptid) === ptid) m.set(Number(id), o);
     return m;
   }, [product?.attr_overrides, ptid]);
-  const typeDefault = useMemo(() => new Map((d?.defaults || []).map((x) => [Number(x.attribute_id), x])), [d]);
+  // 2026-11-14: a Setup row for a TYPED detail (an old "Dunk Low" default) is never used — the server ignores it too
+  const typedIds = useMemo(() => new Set([PRODUCT_MODEL_ATTR_ID, ...attrs.filter((a) => a.mode === 0).map((a) => a.attributeId)]), [attrs]);
+  const typeDefault = useMemo(() => new Map((d?.defaults || []).filter((x) => !typedIds.has(Number(x.attribute_id))).map((x) => [Number(x.attribute_id), x])), [d, typedIds]);
   const want = new Set(focus.map(Number));
-  // typed + required with no Setup value (Product Model since its default was removed) = typed for each shoe
-  const perShoe = (a) => a.mode === 0 && (a.status === 3 || want.has(a.attributeId)) && !typeDefault.has(a.attributeId);
-  const covered = (a) => own.has(a.attributeId) || (typeDefault.has(a.attributeId) && !typeDefault.get(a.attributeId)?.stale);
+  // Product Model from the shoe's title (sheinModel.js — the server uses it only when `sure`); a typed value wins
+  const fromTitle = useMemo(() => modelFromTitle(product?.title || ''), [product?.title]);
+  const titleFor = (a) => (a.attributeId === PRODUCT_MODEL_ATTR_ID && a.mode === 0 && !own.has(a.attributeId) && fromTitle.model ? fromTitle : null);
+  // typed + required = typed for each shoe (never a Setup default)
+  const perShoe = (a) => a.mode === 0 && (a.status === 3 || want.has(a.attributeId));
+  const covered = (a) => own.has(a.attributeId) || !!titleFor(a)?.sure || (typeDefault.has(a.attributeId) && !typeDefault.get(a.attributeId)?.stale);
   const needed = (a) => (a.status === 3 || want.has(a.attributeId)) && !covered(a);
   const rank = (a) => (needed(a) ? 0 : own.has(a.attributeId) ? 1 : perShoe(a) || MODEL_HINT.test(a.name || '') ? 2 : 3);
   const sorted = [...attrs].sort((a, b) => rank(a) - rank(b));
   const shown = all ? sorted : sorted.filter((a) => rank(a) < 3 || drafts[a.attributeId]);
   const missing = attrs.filter(needed);
-  const draftOf = (id) => drafts[id] || ownDraft(own.get(id)) || { valueIds: [], extraValues: [] };
+  const titleDraft = (id) => (id === PRODUCT_MODEL_ATTR_ID && !own.has(id) && fromTitle.model ? { valueIds: [], extraValues: [fromTitle.model] } : null);
+  const draftOf = (id) => drafts[id] || ownDraft(own.get(id)) || titleDraft(id) || { valueIds: [], extraValues: [] };
   const label = (a, x) => (a.mode === 0 ? (x.extra_values || x.extraValues || [])[0] : (x.value_ids || x.valueIds || []).map((v) => a.values.find((o) => o.id === Number(v))?.label || v).join(', '));
 
   async function save(a) {
@@ -450,13 +479,15 @@ export function ShoeAttrEditor({ product, productTypeId, categoryId = null, canW
   }
   return (
     <div className="shl-pub-panel" data-panel="shoe-attributes">
-      <p className="xs shl-pub-lede"><b>For this shoe only</b> — {product?.title || 'this shoe'}. Type the model the way the shoe is sold (e.g. Samba OG, Air Jordan 4 Retro, Ultraboost 1.0). A value here wins over Setup’s; nothing goes to SHEIN until a publish is confirmed.{missing.length ? <> <b>{fmt(missing.length)} required still missing.</b></> : ''}</p>
+      <p className="xs shl-pub-lede"><b>For this shoe only</b> — {product?.title || 'this shoe'}. Type the model the way the shoe is sold (e.g. Samba OG, Air Jordan 4 Retro, Ultraboost 1.0) — when we recognise it, it is read from the title. A value typed here wins; it is saved for this shoe only, never for other shoes. Nothing goes to SHEIN until a publish is confirmed.{missing.length ? <> <b>{fmt(missing.length)} required still missing.</b></> : ''}</p>
       <div className="shl-attrs">
         {shown.map((a) => {
           const dr = draftOf(a.attributeId);
           const mine = own.get(a.attributeId);
           const def = typeDefault.get(a.attributeId);
-          const changed = drafts[a.attributeId] && JSON.stringify(drafts[a.attributeId]) !== JSON.stringify(ownDraft(mine) || { valueIds: [], extraValues: [] });
+          const tt = titleFor(a);
+          // an unsure guess from the title waits for a person to check + save it; a sure one is already used
+          const changed = drafts[a.attributeId] ? JSON.stringify(drafts[a.attributeId]) !== JSON.stringify(ownDraft(mine) || { valueIds: [], extraValues: [] }) : !!tt && !tt.sure;
           return (
             <div key={a.attributeId} className={`shl-attr${needed(a) ? ' need' : ''}${changed ? ' chg' : ''}`} data-shoe-attr={a.attributeId}>
               <div className="shl-attr-head">
@@ -464,7 +495,9 @@ export function ShoeAttrEditor({ product, productTypeId, categoryId = null, canW
                 {a.status === 3 ? <span className="ebo-chip bad">Required</span> : want.has(a.attributeId) ? <span className="ebo-chip bad">Required with your other choices</span> : <span className="ebo-chip">Optional</span>}
                 {mine && !changed && <span className="ebo-chip ok">Set for this shoe</span>}
                 {!mine && def && !perShoe(a) && <span className="ebo-chip">From Setup: {label(a, def) || '—'}</span>}
-                {!mine && perShoe(a) && <span className="ebo-chip warn">Typed per shoe</span>}
+                {tt?.sure && <span className="ebo-chip ok" data-from-title="sure">From the title</span>}
+                {tt && !tt.sure && <span className="ebo-chip warn" data-from-title="guess">From the title — check it</span>}
+                {!mine && !tt && perShoe(a) && <span className="ebo-chip warn">Typed per shoe</span>}
                 <span className="muted xs">{MODE_HINT[a.mode] || 'Pick'}</span>
               </div>
               {a.mode === 0
@@ -472,11 +505,12 @@ export function ShoeAttrEditor({ product, productTypeId, categoryId = null, canW
                     onChange={(e) => setDrafts((m) => ({ ...m, [a.attributeId]: { valueIds: [], extraValues: [e.target.value] } }))}
                     onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(a); } }} />
                 : <AttrControl a={a} dr={dr} onChange={(next) => setDrafts((m) => ({ ...m, [a.attributeId]: next }))} />}
+              {tt && !drafts[a.attributeId] && <p className="muted xs">{tt.sure ? <>Read from the title: SHEIN gets “{tt.model}” for this shoe. Change it here if it’s wrong.</> : <>Our guess from the title — not sent until a person checks it. Fix it if needed, then <b>Save for this shoe</b>.</>}</p>}
               {rowErr[a.attributeId] && <p className="shl-field-bad" role="alert">{rowErr[a.attributeId]}</p>}
               <div className="shl-pub-acts">
                 {mine && <span className="muted xs shl-grow">by {mine.by || '—'} {when(mine.at)}</span>}
                 {mine && !changed && <button type="button" className="btn ghost xs" disabled={!!busy} onClick={() => clear(a)}>{busy === `c${a.attributeId}` ? 'Removing…' : 'Remove'}</button>}
-                {changed && <button type="button" className="btn ghost xs" disabled={!!busy} onClick={() => setDrafts((m) => { const n = { ...m }; delete n[a.attributeId]; return n; })}>Undo</button>}
+                {changed && drafts[a.attributeId] && <button type="button" className="btn ghost xs" disabled={!!busy} onClick={() => setDrafts((m) => { const n = { ...m }; delete n[a.attributeId]; return n; })}>Undo</button>}
                 {changed && <button type="button" className="btn primary xs" disabled={!!busy} onClick={() => save(a)}>{busy === `s${a.attributeId}` ? 'Saving…' : 'Save for this shoe'}</button>}
               </div>
             </div>
@@ -722,6 +756,7 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
             <span>
               <span className="shl-pub-label">{l.n}. {l.label}</span>
               {l.ok === true && <OkDetail k={l.key} p={p} cat={cat} />}
+              {l.key === 'attributes' && l.model?.value && <span className="muted xs shl-block" data-model-from={l.model.from}>Product Model “{l.model.value}” · {l.model.from === 'title' ? 'from the title' : 'typed for this shoe'}</span>}
               {l.ok === null && !saved && <span className="muted xs shl-block">Not read yet — the preview checks it.</span>}
               {saved && <span className="xs shl-block shl-pub-saved">Saved — checked again by the next preview.</span>}
               {hard.map((b, i) => <span key={i} className="xs shl-block"><BlockerSay b={b} /></span>)}

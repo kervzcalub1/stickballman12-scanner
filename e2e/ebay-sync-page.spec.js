@@ -132,8 +132,8 @@ test.describe('eBay Sync page', () => {
     await expect(page.locator('[data-part]')).toHaveCount(0);
     await page.goto('/ph');
     await expect(page.getByText('eBay Sync')).toHaveCount(0);
-    // Home cards are title-only; the description is the card's hover text (title attribute).
-    await expect(page.locator('.home-card[title="Orders & late shipments, listings, reprice, coupons"]')).toBeVisible();
+    // Home cards are title-only; the description rides on the card (hover popup / switch).
+    await expect(page.locator('.home-card[aria-description="Orders & late shipments, listings, reprice, coupons"]')).toBeVisible();
   });
 
   test('eBay Products links to the eBay page for ending and repricing', async ({ page }) => {

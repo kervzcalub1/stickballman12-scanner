@@ -90,10 +90,13 @@ export const BLOCKERS = {
     action: { kind: 'open_seller_center', label: 'Seller Center ↗' } },
   no_image: { level: 'blocked', scope: 'product', applies: ['publish'],
     // ph: null = Shopify's photos counted · 0 = "Use PH edited photos" is on but the PH team has none for the style · n = PH photos counted
-    title: (p) => `Only ${p?.count ?? 0} ${Number(p?.ph) > 0 ? 'PH edited ' : ''}photo${Number(p?.count) === 1 ? '' : 's'}, SHEIN needs ${p?.need ?? 3}.`,
-    fix: (p) => (p?.ph === 0 ? `“Use PH edited photos” is on, but the PH team has no edited photos for ${p?.style || 'this style'} yet — upload them (or add photos on Shopify).`
-      : Number(p?.ph) > 0 ? `Upload more PH edited photos for ${p?.style || 'this style'}, or switch back to Shopify’s photos.` : 'Use the PH edited photos, or add photos on Shopify.'),
-    action: (p) => (p?.ph == null ? { kind: 'use_ph_photos', label: 'Use PH edited photos' } : null) },
+    // src 'clean' = the clean photos (cutouts on white) counted; clean = how many the style has (2026-11-14)
+    title: (p) => `Only ${p?.count ?? 0} ${p?.src === 'clean' ? 'clean ' : Number(p?.ph) > 0 ? 'PH edited ' : ''}photo${Number(p?.count) === 1 ? '' : 's'}, SHEIN needs ${p?.need ?? 3}.`,
+    fix: (p) => (p?.src === 'clean' ? `Put back a clean photo you left out (Choose photos), or brand ${p?.style || 'this style'} again in the Image Finder so every angle is cut out.`
+      : Number(p?.clean) > 0 ? `${p?.style || 'This style'} has ${p.clean} clean photo${Number(p.clean) === 1 ? '' : 's'} (the shoe on white, no text) — use them.`
+        : p?.ph === 0 ? `“Use PH edited photos” is on, but the PH team has no edited photos for ${p?.style || 'this style'} yet — upload them (or add photos on Shopify).`
+          : Number(p?.ph) > 0 ? `Upload more PH edited photos for ${p?.style || 'this style'}, or switch back to Shopify’s photos.` : 'Use the PH edited photos, or add photos on Shopify.'),
+    action: (p) => (p?.src === 'clean' ? null : Number(p?.clean) > 0 ? { kind: 'use_clean_photos', label: 'Use clean photos' } : p?.ph == null ? { kind: 'use_ph_photos', label: 'Use PH edited photos' } : null) },
   image_rejected: { level: 'blocked', scope: 'product', applies: ['publish'],
     title: (p) => `Photo rejected: ${p?.reason || p?.sheinMessage || 'no reason given'}.`, fix: () => 'Replace the photo.', action: shopifyLink },
   title_too_long: { level: 'blocked', scope: 'product', applies: ['publish'],
@@ -1251,7 +1254,7 @@ export function summarizePlan(plan) {
     if (!im.length) return lead([...(plan.blockers || []), ...(plan.notes || [])]) || 'Nothing to send';
     const ph = plan.photos || {};
     return [`Will replace SHEIN’s ${(plan.current || []).length} photo${(plan.current || []).length === 1 ? '' : 's'} with ${im.length}`,
-      ph.count != null ? `from ${ph.count} ${ph.source === 'ph_edited' ? 'PH edited' : 'Shopify'} photo${ph.count === 1 ? '' : 's'}${ph.skipped ? ` (${ph.skipped} left out)` : ''}` : '',
+      ph.count != null ? `from ${ph.count} ${ph.source === 'clean' ? 'clean' : ph.source === 'ph_edited' ? 'PH edited' : 'Shopify'} photo${ph.count === 1 ? '' : 's'}${ph.skipped ? ` (${ph.skipped} left out)` : ''}` : '',
       plan.skuImages ? `each size’s photo → the new main photo (${plan.skuImages})` : '', (plan.spuImages || []).length ? `${plan.spuImages.length} product-level photo${plan.spuImages.length === 1 ? '' : 's'}` : '', attrPart()].filter(Boolean).join(' · ');
   }
   if (plan.op === 'price') {

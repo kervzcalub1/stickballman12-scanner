@@ -11,6 +11,8 @@ import {
 import { r2Configured, presignUrl, publicUrl, isAllowedPhotoUrl } from './r2.js';
 import { planPublish, imagePlan, imageConversions, keepPhotos, shoeCategory, shoeAttrDefaults, BOX_PLACEHOLDERS, sizeGroupOf, validateBoxDefaults, templateParts } from '../../src/lib/sheinPublish.js';
 import { blocker, spuPayload, stableJson, hashString, BLOCKERS } from '../../src/lib/sheinListings.js';
+import { renderClean, cleanPhotosFor, CLEAN_RENDER_VERSION } from './shein-clean-photos.js';
+import { isCutoutUrl, isSlideAngle, photoSourceOf } from '../../src/lib/sheinCleanPhotos.js';
 
 const H = 3600_000; const DAY = 24 * H;
 export const RENDER_VERSION = 'pad1500-white-q88-v1';
@@ -180,7 +182,9 @@ export async function convertPhotos({ urls, fill, io, log }) {
   let cap = null; let used = 0;
   for (const { photo, type } of imageConversions(plan, urls.length)) {
     const src = urls[photo];
-    const key = `${crypto.createHash('sha256').update(`${src}|${RENDER_VERSION}`).digest('hex')}:${type}`;
+    // a clean photo (the brand tool's transparent cutout) is trimmed + flattened on white; the rest padded
+    const clean = isCutoutUrl(src);
+    const key = `${crypto.createHash('sha256').update(`${src}|${clean ? CLEAN_RENDER_VERSION : RENDER_VERSION}`).digest('hex')}:${type}`;
     const hit = await getListingCache('pic', key);
     if (hit?.payload?.transformed) { out.converted[`${photo}:${type}`] = hit.payload.transformed; out.cached += 1; continue; }
     if (cap == null) { cap = await readTransformCap(); used = await countTransformPicToday(); }
@@ -189,7 +193,7 @@ export async function convertPhotos({ urls, fill, io, log }) {
     try {
       let hosted = rendered.get(photo);
       if (!hosted) {
-        const jpg = await padPhoto(await io.fetchImage(src));
+        const jpg = clean ? await renderClean(await io.fetchImage(src)) : await padPhoto(await io.fetchImage(src));
         hosted = await io.hostImage(`shein-publish/${key.split(':')[0]}.jpg`, jpg);
         rendered.set(photo, hosted);
       }
@@ -206,16 +210,22 @@ export async function convertPhotos({ urls, fill, io, log }) {
   return out;
 }
 
-// The photos SHEIN gets for a product (publish and the photo replace share it): the PH edited photos for
-// the style when "Use PH edited photos" is on and there are any, else Shopify's (live read) — minus the
-// ones a person left out (photo_skip), in order. → { urls, skipped, source }
+// The photos SHEIN gets for a product (publish and the photo replace share it), minus the ones a person
+// left out (photo_skip), in order. Which set (photoSourceOf, 2026-11-14):
+//   clean     — the brand tool's cutouts of the style, flattened on white (automatic when there are any,
+//               unless a person switched them off: clean_photos = false)
+//   ph_edited — "Use PH edited photos" on and the style has some: the PH-branded shoe angles. The spec and
+//               welcome slides (extra1 / extra2) are NEVER sent.
+//   shopify   — Shopify's photos (live read).
+// → { urls, skipped, source }
 export async function sourcePhotos(row, product) {
-  let urls = [];
-  if (row?.use_ph_photos && product?.style) urls = (await productPhotosForSku(product.style)).map((p) => p.url);
-  const ph = urls.length > 0;
-  if (!urls.length) urls = (product?.images || []).map((i) => i.url);
+  const style = product?.style || row?.style || '';
+  const clean = style ? (await cleanPhotosFor(style)).map((p) => p.url) : [];
+  const ph = style && row?.use_ph_photos ? (await productPhotosForSku(style)).filter((p) => !isSlideAngle(p.angle)).map((p) => p.url) : [];
+  const source = photoSourceOf({ cleanPhotos: row?.clean_photos ?? null, usePhPhotos: !!row?.use_ph_photos, cleanCount: clean.length, phCount: ph.length });
+  const urls = source === 'clean' ? clean : source === 'ph_edited' ? ph : (product?.images || []).map((i) => i.url);
   const kept = keepPhotos(urls, row?.photo_skip);
-  return { urls: kept.urls, skipped: kept.skipped, source: ph ? 'ph_edited' : 'shopify' };
+  return { urls: kept.urls, skipped: kept.skipped, source };
 }
 
 /* --------------------------------- one product --------------------------------- */

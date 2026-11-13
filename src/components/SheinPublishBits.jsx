@@ -703,10 +703,6 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
   const line = (k) => list.find((l) => l.key === k);
   const titleMax = (line('title')?.blockers || []).find((b) => b.params?.max)?.params?.max || null;
   const focus = (line('attributes')?.blockers || []).map((b) => b.params?.attributeId).filter(Boolean);
-  const togglePh = async (on) => {
-    try { await api.sheinListingAction({ action: 'publish_choices', productId: p.shopify_product_id, usePhPhotos: on }); done('photos', on ? 'The PH edited photos will be used — re-checked by the next preview.' : 'Back to the Shopify photos.'); }
-    catch (e) { if (e.unauthorized) onSignOut?.(); else setMsg(`Not saved: ${plain(e.message)}`); }
-  };
 
   const panelFor = (key) => {
     const close = () => setOpen('');
@@ -766,9 +762,7 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
               {hard.map((b, i) => <span key={i} className="xs shl-block"><BlockerSay b={b} /></span>)}
               {notes.map((b, i) => <span key={`n${i}`} className="muted xs shl-block"><BlockerSay b={b} compact={!b.fix} /></span>)}
               {l.key === 'category' && !group && (groups.length > 1 ? <span className="xs shl-block shl-bad-text">Mixed size groups ({groups.map((g) => GROUP_LABEL[g]).join(', ')}) — split the product on Shopify first.</span> : <span className="xs shl-block muted">No US size we can read, so no size group.</span>)}
-              {l.key === 'photos' && (
-                <label className="shl-pub-ph"><input type="checkbox" checked={!!p.use_ph_photos} disabled={!!busy} onChange={(e) => togglePh(e.target.checked)} /><span>Use PH edited photos <span className="muted xs shl-block">The PH team’s photos for {p.style || 'this style'} when there are any, else Shopify’s.</span></span></label>
-              )}
+              {l.key === 'photos' && <span className="muted xs shl-block" data-photo-source="">{photoSourceSay(p)} Change it in {PANEL.photos}.</span>}
               {l.key === 'photos' && l.ok !== true && p.photo_skip?.length > 0 && <span className="muted xs shl-block" data-skip-count="">{fmt(p.photo_skip.length)} photo{p.photo_skip.length === 1 ? '' : 's'} left out — SHEIN won’t get {p.photo_skip.length === 1 ? 'it' : 'them'}.</span>}
             </span>
             <span className="shl-pub-btns">
@@ -787,11 +781,14 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
     </section>
   );
 }
+// Which photos SHEIN gets (2026-11-14): the clean photos (cutouts on white) when the style has them, unless switched off
+const photoSourceSay = (p) => (p.clean_photos !== false && Number(p.clean_count) > 0 ? `SHEIN gets the ${p.clean_count} clean photo${Number(p.clean_count) === 1 ? '' : 's'} (the shoe on white, no text).`
+  : p.use_ph_photos ? 'SHEIN gets the PH edited photos (branded; never the spec / welcome slides).' : 'SHEIN gets Shopify’s photos.');
 function OkDetail({ k, p, cat }) {
   let t = null;
   if (k === 'category' && cat) t = `${cat.category_path || `SHEIN category ${cat.category_id}`}${cat.shoe ? ' · this shoe only' : ''}`;
   if (k === 'attributes') { const n = Object.values(p.attr_overrides || {}).filter((o) => o && Number(o.ptid) === Number(cat?.product_type_id)).length; if (n) t = `${n} detail${n === 1 ? '' : 's'} set for this shoe`; }
   if (k === 'title' && p.title_override) t = `SHEIN title: “${p.title_override}”`;
-  if (k === 'photos') t = [p.use_ph_photos ? 'Using the PH edited photos' : null, p.photo_skip?.length ? `${p.photo_skip.length} photo${p.photo_skip.length === 1 ? '' : 's'} left out` : null].filter(Boolean).join(' · ') || null;
+  if (k === 'photos') t = p.photo_skip?.length ? `${p.photo_skip.length} photo${p.photo_skip.length === 1 ? '' : 's'} left out` : null;   // which set: the line's own data-photo-source
   return t ? <span className="muted xs shl-block">{t}</span> : null;
 }

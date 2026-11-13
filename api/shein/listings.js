@@ -12,6 +12,8 @@
 //          skipped:[{ productId, title, why }], canWrite, isAdmin }
 // GET  /api/shein/listings?photos=<gid>   (PH ok; Shopify + DB reads) the photos a publish would send, each with
 //      skipped → { ok, source, usePhPhotos, shopify:[{url,key,width,height,skipped}], ph:[{url,key,angle,skipped}], sent, max, stale }
+//      + (2026-11-14) source 'clean', cleanPhotos (null auto | true | false), clean:[{url,key,angle,how,skipped}], each Shopify photo's
+//        phCopy { angle, slide 'spec'|'welcome'|null } when it is a copy of the PH set (checked: false = not all read in time)
 // GET  /api/shein/listings?probe=1         -> { ok, probe, job }   the last Ask-SHEIN answer
 // POST /api/shein/listings { action }:
 //   snapshot                          re-read Shopify + SHEIN (a server job)          -> { ok, job }
@@ -34,7 +36,11 @@
 //     + categoryPick: { categoryId } | null (THIS shoe's SHEIN category, a leaf; only a shoe never live on SHEIN — 409 else)
 //     + attr: { attributeId, valueIds?, extraValues? } | { attributeId, clear: true } (THIS shoe's own SHEIN detail, e.g. Product Model;
 //       checked against the template of the shoe's category) — 2026-11-11
-//   publish_choices_bulk { productIds (≤ 100), patch: { skcValueId?, usePhPhotos?, skipCover? }, productTypeId?, titles?: { [productId]: title | null } }
+//     + photoSource: 'clean' | 'ph_edited' | 'shopify' | 'auto' (2026-11-14; usePhPhotos alone also switches the clean photos off)
+//   find_clean_photos { productId }  (PH, R2 list + reads; writes product_cutouts only) the style's cutouts made by the brand tool
+//     before they were recorded, matched to its uploaded angles -> { ok, found, recorded, cutouts, confidence }
+//   publish_choices_bulk { productIds (≤ 100), patch: { skcValueId?, usePhPhotos?, cleanPhotos?: true|false|null, skipCover?, skipSlides?: true }, productTypeId?, titles?: { [productId]: title | null } }
+//     skipSlides = leave out every Shopify photo that is a copy of the PH spec / welcome slide (checked by picture, ≤ 25 s) -> + slides { shoes, photos, unchecked }
 //     (PH, DB only; the same validation as publish_choices; a colour needs productTypeId and every product must be
 //     mapped to that SHEIN product type) -> { ok, updated, missing };
 //   publish_again { productIds }  admin or Connect integrations: re-publish after SHEIN rejected the first one -> { ok, products }
@@ -53,7 +59,10 @@ import {
   getSetting, setSetting, getListingItems, updateListingItem, requeueListingJob, resumeListingJob,
   lastPreviewItem, markPublishAgain, setListingPublishChoices, setListingCategoryPick, setListingAttrOverride, lastPublishRunItem,
   listingShopifyCounts, getListingProductsMany, setListingPublishChoicesMany, listCategoryMaps, listListingCache, setListingCoverSkip, productPhotosForSku,
+  cleanPhotoKeys, addListingPhotoSkips,
 } from '../_lib/db.js';
+import { cleanPhotosFor, findCleanPhotos, shopifyPhCopies } from '../_lib/shein-clean-photos.js';
+import { photoSourceOf, isSlideAngle, SLIDE_ANGLES } from '../../src/lib/sheinCleanPhotos.js';
 import { publishChecklist, cleanTitle, sizeGroupOf, templateParts, photoKey, keepPhotos, isShopifyPhoto, PHOTO_SKIP_MAX, shoeCategory, attrValueProblem } from '../../src/lib/sheinPublish.js';
 import { treeLeaves } from '../_lib/shein-publish.js';
 import { sheinStatus } from '../_lib/shein.js';
@@ -164,7 +173,9 @@ export default async function handler(req, res) {
         else todo.push(r);
       }
       const ready = await readinessMany(todo);
+      const cleanKeys = await cleanPhotoKeys().catch(() => new Map());
       const products = todo.map(({ product: p, variants }) => {
+        const cleanCount = (cleanKeys.get(String(p.style || '').trim().toUpperCase()) || new Set()).size;
         const x = ready.get(p.shopify_product_id) || null;
         const checklist = x?.checklist || publishChecklist(p.blockers || [], { unknown: ['store', 'quota', 'shelf', 'site', 'brand', 'title', 'fields', 'colour', 'attributes', 'size_chart', 'sizes', 'prices', 'photos', 'skus'] });
         const blocking = blockingLines(checklist);
@@ -173,7 +184,7 @@ export default async function handler(req, res) {
         return { productId: p.shopify_product_id, title: p.title, titleOverride: p.title_override || null, style: p.style, vendor: p.vendor, productType: p.product_type || '',
           imageUrl: p.image_url, shopifyStatus: p.shopify_status, inStock, sizes: variants.filter((v) => v.shopify_variant_id && !v.excluded).length, syncable,
           sizeGroups: groupsOf(variants), category: x?.category || null, productTypeId: x?.category?.productTypeId ?? null, skcValueId: p.skc_value_id == null ? null : Number(p.skc_value_id),
-          usePhPhotos: !!p.use_ph_photos, photoSkip: (p.photo_skip || []).length, coverSkipped: !!p.image_url && (p.photo_skip || []).includes(photoKey(p.image_url)), titleMax: x?.titleMax ?? null, checklist, blocking, ready: syncable && !blocking.length, shopifyUrl: adminUrl(p.shopify_product_id) };
+          usePhPhotos: !!p.use_ph_photos, cleanPhotos: p.clean_photos ?? null, cleanCount, cleanOn: p.clean_photos !== false && cleanCount > 0, photoSkip: (p.photo_skip || []).length, coverSkipped: !!p.image_url && (p.photo_skip || []).includes(photoKey(p.image_url)), titleMax: x?.titleMax ?? null, checklist, blocking, ready: syncable && !blocking.length, shopifyUrl: adminUrl(p.shopify_product_id) };
       });
       // the shoes that need fixing first (most ✕ first), then the ready ones
       products.sort((a, b) => Number(a.ready) - Number(b.ready) || b.blocking.length - a.blocking.length || String(a.title || '').localeCompare(String(b.title || '')));
@@ -189,17 +200,29 @@ export default async function handler(req, res) {
       const shop = await shopifyListingProduct(ppid).catch((e) => ({ error: e.message }));
       if (shop?.error) return send(res, 503, { ok: false, error: `Shopify didn’t answer: ${shop.error}` });
       const style = shop?.product?.style || d.product.style || '';
-      const ph = style ? await productPhotosForSku(style).catch(() => []) : [];
+      // the spec / welcome slides are never sent (2026-11-14) — not offered either
+      const phAll = style ? await productPhotosForSku(style).catch(() => []) : [];
+      const ph = phAll.filter((x) => !isSlideAngle(x.angle));
+      const cleanRows = await cleanPhotosFor(style);
       const skip = new Set(d.product.photo_skip || []);
-      const shopify = (shop?.product?.images || []).map((i) => ({ url: i.url, key: photoKey(i.url), width: i.width ?? null, height: i.height ?? null, skipped: skip.has(photoKey(i.url)) }));
       const phList = ph.map((x) => ({ url: x.url, key: photoKey(x.url), angle: x.angle || null, skipped: skip.has(photoKey(x.url)) }));
-      const usePh = !!d.product.use_ph_photos && phList.length > 0;
-      const used = usePh ? phList : shopify;
+      const clean = cleanRows.map((x) => ({ url: x.url, key: photoKey(x.url), angle: x.angle, how: x.how, origin: x.origin, skipped: skip.has(photoKey(x.url)) }));
+      const source = photoSourceOf({ cleanPhotos: d.product.clean_photos ?? null, usePhPhotos: !!d.product.use_ph_photos, cleanCount: clean.length, phCount: phList.length });
+      // when Shopify's photos are the ones sent: which are copies of the PH set (by picture; cached per photo; ≤ 6 s here,
+      // the rest next time) — the branded ones and the spec / welcome slides get named
+      const shopUrls = (shop?.product?.images || []).map((i) => i.url);
+      const copies = source === 'shopify' && phAll.length && shopUrls.length ? await shopifyPhCopies(shopUrls, phAll, { deadline: Date.now() + 6000 }).catch(() => null) : null;
+      const shopify = (shop?.product?.images || []).map((i) => {
+        const c = copies?.byKey.get(photoKey(i.url)) || null;
+        return { url: i.url, key: photoKey(i.url), width: i.width ?? null, height: i.height ?? null, skipped: skip.has(photoKey(i.url)), phCopy: c ? { angle: c.angle, slide: c.slide } : null };
+      });
+      const used = source === 'clean' ? clean : source === 'ph_edited' ? phList : shopify;
       const kept = keepPhotos(used.map((x) => x.url), [...skip]);
-      // a left-out photo no longer on Shopify / the PH list (stale) — shown so it can be put back
-      const known = new Set([...shopify, ...phList].map((x) => x.key));
-      return send(res, 200, { ok: true, productId: ppid, style, usePhPhotos: !!d.product.use_ph_photos, source: usePh ? 'ph_edited' : 'shopify',
-        shopify, ph: phList, sent: Math.min(kept.urls.length, 11), max: 11, stale: [...skip].filter((k) => !known.has(k)).map((k) => ({ key: k, shopify: isShopifyPhoto(k) })) });
+      // a left-out photo no longer on Shopify / the PH list / the clean list (stale) — shown so it can be put back
+      const known = new Set([...shopify, ...phList, ...clean].map((x) => x.key));
+      return send(res, 200, { ok: true, productId: ppid, style, usePhPhotos: !!d.product.use_ph_photos, cleanPhotos: d.product.clean_photos ?? null, source,
+        shopify, ph: phList, clean, slidesOnFile: phAll.filter((x) => isSlideAngle(x.angle)).length, copiesChecked: source !== 'shopify' || !phAll.length || !shopify.length ? null : !!copies && copies.checked === shopify.length && copies.phRead === phAll.length,
+        sent: Math.min(kept.urls.length, 11), max: 11, stale: [...skip].filter((k) => !known.has(k)).map((k) => ({ key: k, shopify: isShopifyPhoto(k) })) });
     }
     const pid = t(qs.get('product'), 200);
     if (pid) {
@@ -226,7 +249,9 @@ export default async function handler(req, res) {
         }
       }
       const itemOut = (i) => ({ ...(isAdmin ? i : { ...i, body: undefined, response: undefined }), summary: summarizePlan(i.plan) || i.error || null });
-      return send(res, 200, { ok: true, product: productOut(d.product), variants: d.variants.map(variantOut), canWrite, isAdmin, checklist, checklistFrom,
+      // + how many clean photos the style has (2026-11-14) — the drawer says which set SHEIN gets
+      const cleanCount = !String(pid).startsWith('shein:') && d.product.style ? (await cleanPhotosFor(d.product.style)).length : 0;
+      return send(res, 200, { ok: true, product: { ...productOut(d.product), clean_count: cleanCount }, variants: d.variants.map(variantOut), canWrite, isAdmin, checklist, checklistFrom,
         // never live on SHEIN (not on it, or our publish was rejected) → no live-shoe tools (add sizes, photo swap…)
         neverLive: !String(pid).startsWith('shein:') && neverLive(d), lastPublishRun: pubRun ? itemOut(pubRun) : null,
         jobItems: items.map((i) => ({ ...(isAdmin ? i : { ...i, body: undefined, response: undefined }), summary: summarizePlan(i.plan) || i.error || null })),
@@ -347,7 +372,12 @@ export default async function handler(req, res) {
           patch.titleOverride = title;
         }
         if (b.skcValueId !== undefined) { const v = b.skcValueId == null || b.skcValueId === '' ? null : Number(b.skcValueId); if (v != null && !Number.isSafeInteger(v)) return send(res, 400, { ok: false, error: 'That isn’t a SHEIN value id.' }); patch.skcValueId = v; }
-        if (b.usePhPhotos !== undefined) patch.usePhPhotos = b.usePhPhotos === true;
+        if (b.usePhPhotos !== undefined) { patch.usePhPhotos = b.usePhPhotos === true; patch.cleanPhotos = false; }   // an explicit PH / Shopify choice
+        if (b.photoSource !== undefined) {
+          const ps = { clean: { cleanPhotos: true }, auto: { cleanPhotos: null }, ph_edited: { cleanPhotos: false, usePhPhotos: true }, shopify: { cleanPhotos: false, usePhPhotos: false } }[b.photoSource];
+          if (!ps) return send(res, 400, { ok: false, error: 'photoSource: clean, ph_edited, shopify or auto.' });
+          Object.assign(patch, ps);
+        }
         // Per shoe (2026-11-11): THIS shoe's SHEIN category, and its own value for a SHEIN detail (Product Model)
         if (b.categoryPick !== undefined || b.attr !== undefined) {
           const cur = await getListingProduct(pid);
@@ -412,8 +442,13 @@ export default async function handler(req, res) {
         const patch = {}; const pa = b.patch && typeof b.patch === 'object' ? b.patch : {};
         if (pa.titleOverride !== undefined) return send(res, 400, { ok: false, error: 'A title is per shoe — send titles: { productId: title }.' });
         if (pa.skcValueId !== undefined) { const v = pa.skcValueId == null || pa.skcValueId === '' ? null : Number(pa.skcValueId); if (v != null && !Number.isSafeInteger(v)) return send(res, 400, { ok: false, error: 'That isn’t a SHEIN value id.' }); patch.skcValueId = v; }
-        if (pa.usePhPhotos !== undefined) patch.usePhPhotos = pa.usePhPhotos === true;
+        if (pa.usePhPhotos !== undefined) { patch.usePhPhotos = pa.usePhPhotos === true; patch.cleanPhotos = false; }   // an explicit PH / Shopify choice
+        if (pa.cleanPhotos !== undefined) {
+          if (![true, false, null].includes(pa.cleanPhotos)) return send(res, 400, { ok: false, error: 'cleanPhotos: true, false or null.' });
+          patch.cleanPhotos = pa.cleanPhotos;
+        }
         if (pa.skipCover !== undefined && typeof pa.skipCover !== 'boolean') return send(res, 400, { ok: false, error: 'skipCover: true or false.' });
+        if (pa.skipSlides !== undefined && pa.skipSlides !== true) return send(res, 400, { ok: false, error: 'skipSlides: true (put a slide back photo by photo).' });
         const titles = [];
         for (const [id, raw2] of titlesIn) {
           const pid2 = t(id, 200); if (!pid2) return send(res, 400, { ok: false, error: 'Which product is that title for?' });
@@ -422,7 +457,8 @@ export default async function handler(req, res) {
           titles.push([pid2, title]);
         }
         const cover = pa.skipCover;   // "leave out the cover photo" on all of them (true) / put it back (false)
-        const hasPatch = Object.keys(patch).length > 0 || cover !== undefined;
+        const slides = pa.skipSlides === true;   // leave out Shopify's copies of the PH spec / welcome slide (2026-11-14)
+        const hasPatch = Object.keys(patch).length > 0 || cover !== undefined || slides;
         if (!titles.length && !(hasPatch && productIds.length)) return send(res, 400, { ok: false, error: 'Nothing to save — pick the products and what to set.' });
         if (hasPatch && !productIds.length) return send(res, 400, { ok: false, error: 'Which products?' });
         const all = [...new Set([...productIds, ...titles.map((x) => x[0])])];
@@ -443,8 +479,42 @@ export default async function handler(req, res) {
         const picked = hasPatch ? productIds.filter((x) => have.has(x)) : [];
         const updated = await setListingPublishChoicesMany(Object.keys(patch).length ? picked : [], patch, titles.filter((x) => have.has(x[0])));
         if (cover !== undefined) for (const x of await setListingCoverSkip(picked, cover)) if (!updated.includes(x)) updated.push(x);
+        let slideOut = null;
+        if (slides) {
+          // Shopify's photos as last read (shopify_json), compared by picture with each style's PH spec + welcome slides
+          const th = userThrottle(user, 'skip_slides', { windowMs: 60_000, max: 4 });
+          if (!th.ok) return send(res, 429, { ok: false, error: `Checked a lot of photos just now — try again in ${th.retryInSec} s.` });
+          const deadline = Date.now() + 25_000;
+          const pairs = []; slideOut = { shoes: 0, photos: 0, unchecked: 0, noSlides: 0 };
+          for (const r of rows.filter((x) => picked.includes(x.product.shopify_product_id))) {
+            const p = r.product;
+            const urls = (p.shopify_json?.images || []).map((i) => i.url).filter(Boolean);
+            const extras = p.style ? (await productPhotosForSku(p.style).catch(() => [])).filter((x) => SLIDE_ANGLES.includes(x.angle)) : [];
+            if (!extras.length || !urls.length) { slideOut.noSlides += 1; continue; }
+            const m = await shopifyPhCopies(urls, extras, { deadline }).catch(() => null);
+            if (!m || m.checked < urls.length || m.phRead < extras.length) slideOut.unchecked += 1;
+            const keys = [...(m?.byKey || new Map()).entries()].filter(([, v]) => v.slide).map(([k]) => k);
+            if (keys.length) { pairs.push([p.shopify_product_id, keys]); slideOut.photos += keys.length; }
+          }
+          const done = await addListingPhotoSkips(pairs);
+          slideOut.shoes = done.length;
+          for (const x of done) if (!updated.includes(x)) updated.push(x);
+        }
         if (updated) await recountAfterChoices();
-        return send(res, 200, { ok: true, updated, missing });
+        return send(res, 200, { ok: true, updated, missing, ...(slideOut ? { slides: slideOut } : {}) });
+      }
+      case 'find_clean_photos': {
+        // the brand tool's cutouts for this shoe's style that were never recorded (R2 list + picture match; our DB only)
+        const pid = t(b.productId, 200);
+        if (!pid || pid.startsWith('shein:')) return send(res, 400, { ok: false, error: 'Which Shopify product?' });
+        const th = userThrottle(user, 'find_clean', { windowMs: 60_000, max: 6 });
+        if (!th.ok) return send(res, 429, { ok: false, error: `Looked a lot just now — try again in ${th.retryInSec} s.` });
+        const d = await getListingProduct(pid);
+        if (!d) return send(res, 404, { ok: false, error: 'That product isn’t in SHEIN Listings (yet) — re-read Shopify + SHEIN.' });
+        if (!d.product.style) return send(res, 409, { ok: false, error: 'This shoe has no style code — no clean photos can be matched to it.' });
+        const r = await findCleanPhotos(d.product.style, { write: true, by });
+        if (r.recorded) await recountAfterChoices();
+        return send(res, 200, { ok: true, style: r.sku, cutouts: r.cutouts, angles: r.angles || 0, found: r.found.length, recorded: r.recorded, confidence: r.confidence });
       }
       case 'look_again': {
         const itemIds = (Array.isArray(b.itemIds) ? b.itemIds : []).map(Number).filter((x) => Number.isInteger(x) && x > 0).slice(0, 50);

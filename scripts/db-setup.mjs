@@ -3269,6 +3269,28 @@ await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS category_
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS category_pick_at TIMESTAMPTZ`);
 // "Leave this photo out" (2026-11-11): photo keys (URL without ?query) the publish never sends to SHEIN
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS photo_skip TEXT[] NOT NULL DEFAULT '{}'`);
+// Clean photos (2026-11-14): which photos SHEIN gets. NULL = automatic (the clean photos — the brand tool's
+// cutouts on white — when the style has any), true = clean on, false = a person switched them off (then
+// use_ph_photos picks PH edited vs Shopify). docs/context/shein-listings.md → "Clean photos".
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS clean_photos BOOLEAN`);
+// The transparent cutout of each shoe angle the brand tool made (R2 listings/<sku>/_cut/…png), one per
+// (sku, angle). Recorded at the brand tool's Upload (origin 'brand', how 'upload'); for shoes branded before
+// that, found on R2 and matched to the uploaded set (origin 'recovered', how 'checked' = the picture matched
+// the branded photo of that angle · 'timestamp' = staging order only). Kept OUT of product_photos on purpose:
+// every thumbnail / photo_count / receiving query reads product_photos without a source filter.
+await sql(`
+  CREATE TABLE IF NOT EXISTS product_cutouts (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    sku         TEXT NOT NULL,
+    angle       TEXT NOT NULL,            -- side | diagonal | top | outsole | rear
+    url         TEXT NOT NULL,
+    origin      TEXT NOT NULL DEFAULT 'brand',
+    how         TEXT NOT NULL DEFAULT 'upload',
+    taken_at    TIMESTAMPTZ,
+    created_by  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE UNIQUE INDEX IF NOT EXISTS product_cutouts_sku_angle_idx ON product_cutouts (sku, angle)`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS publish_again_by TEXT`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS publish_again_at TIMESTAMPTZ`);
 // SHEIN image conversion (transform-pic) is an ASSET call: it makes a SHEIN-hosted URL, changes no product.
@@ -3762,7 +3784,7 @@ const LIVE_TABLES = [
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log', 'presell_entries',
   'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_price_locks', 'stockx_listings', 'stockx_price_locks', 'stockx_price_edits', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
   'shein_order_units', 'shein_shopify_orders', 'shein_live_runs', 'shein_live_items',
-  'shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_jobs', 'shein_listing_job_items',
+  'shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_jobs', 'shein_listing_job_items', 'product_cutouts',
   'cancellations', 'cancellation_photos', 'cancellation_events',
   'inbound_issues', 'inbound_issue_events',
   'stock_counts', 'stock_check_scans',

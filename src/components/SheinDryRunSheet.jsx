@@ -130,7 +130,7 @@ function PublishPlan({ plan }) {
         <div className="shl-d-sec" data-plan="photos">
           <h4 className="shl-h4">Photos{imgs.length ? ` (${fmt(imgs.length)})` : ''}</h4>
           {imgs.length > 0 && <div className="shl-pthumbs">{imgs.map((x) => <span key={x.image_sort} className="shl-pthumb-w"><RemoteThumb src={x.image_url} className="ebl-thumb shl-pthumb" alt={`${IMG_TYPE[x.image_type] || 'photo'} ${x.image_sort}`} /><span className="muted xs">{IMG_TYPE[x.image_type] || x.image_type}</span></span>)}</div>}
-          {ph && <p className="muted xs" data-photos="">{fmt(ph.count)} source photo{ph.count === 1 ? '' : 's'} from {ph.source === 'ph_edited' ? 'the PH edited photos' : 'Shopify'} {ph.skipped ? ` · ${fmt(ph.skipped)} left out by you` : ''} · {fmt(ph.converted)} converted for SHEIN in this preview{ph.cached ? ` · ${fmt(ph.cached)} already converted earlier` : ''}. Padded to 1500 × 1500 on white, never cropped.</p>}
+          {ph && <p className="muted xs" data-photos="">{fmt(ph.count)} source photo{ph.count === 1 ? '' : 's'} from {ph.source === 'clean' ? 'the clean photos (the shoe cut out, on white)' : ph.source === 'ph_edited' ? 'the PH edited photos' : 'Shopify'} {ph.skipped ? ` · ${fmt(ph.skipped)} left out by you` : ''} · {fmt(ph.converted)} converted for SHEIN in this preview{ph.cached ? ` · ${fmt(ph.cached)} already converted earlier` : ''}. {ph.source === 'clean' ? 'Each shoe trimmed and centred on a white 1500 × 1500.' : 'Padded to 1500 × 1500 on white, never cropped.'}</p>}
         </div>
       )}
       {sizes.length > 0 && (
@@ -170,7 +170,7 @@ function PhotoEditPlan({ plan }) {
       <div className="shl-d-sec" data-plan="photos-new">
         <h4 className="shl-h4">SHEIN will get{imgs.length ? ` (${fmt(imgs.length)})` : ''}</h4>
         {imgs.length > 0 ? strip(imgs, 'image_url') : <p className="muted xs">{ph?.why === 'needs_priv' ? 'Not converted in this preview — an admin, or someone with Connect integrations, previews it to see the new photos.' : 'Nothing yet — see above.'}</p>}
-        {ph && ph.count != null && <p className="muted xs">{fmt(ph.count)} photo{ph.count === 1 ? '' : 's'} from {ph.source === 'ph_edited' ? 'the PH edited photos' : 'Shopify'}{ph.skipped ? ` · ${fmt(ph.skipped)} left out by you` : ''} · {fmt(ph.converted)} converted for SHEIN in this preview{ph.cached ? ` · ${fmt(ph.cached)} already converted earlier` : ''}.</p>}
+        {ph && ph.count != null && <p className="muted xs">{fmt(ph.count)} photo{ph.count === 1 ? '' : 's'} from {ph.source === 'clean' ? 'the clean photos' : ph.source === 'ph_edited' ? 'the PH edited photos' : 'Shopify'}{ph.skipped ? ` · ${fmt(ph.skipped)} left out by you` : ''} · {fmt(ph.converted)} converted for SHEIN in this preview{ph.cached ? ` · ${fmt(ph.cached)} already converted earlier` : ''}.</p>}
         {plan.skuImages > 0 && <p className="muted xs">Each size’s photo ({fmt(plan.skuImages)}) becomes the new main photo — SHEIN needs all or none.</p>}
         {(plan.spuImages || []).length > 0 && <p className="muted xs">SHEIN also keeps product-level photos for this shoe: they are replaced too ({fmt(plan.spuImages.length)}).</p>}
         <p className="muted xs">Only the photos change{plan.skcTitleCopied ? ' (the colour title is re-sent exactly as SHEIN has it)' : ''} — prices, stock, sizes and the title stay as they are.</p>

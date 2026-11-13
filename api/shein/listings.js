@@ -212,7 +212,12 @@ export default async function handler(req, res) {
         const last = await lastPreviewItem(pid, 'publish');
         // a preview from BEFORE the last send judged the rejected publish — read the readiness instead
         const sentAt = pubRun ? new Date(pubRun.sent_at || pubRun.updated_at || 0).getTime() : 0;
-        if (last?.plan?.checklist && new Date(last.updated_at).getTime() > sentAt) { checklist = last.plan.checklist; checklistFrom = { jobId: Number(last.job_id), at: last.updated_at }; }
+        // Bug 4 (2026-11-14): a size left off SINCE that preview ("Don't list on SHEIN") — the preview still judged it, so
+        // its ✕ would stay on the checklist; read the readiness (which leaves it out) until the next preview
+        const offNow = new Set(d.variants.filter((v) => v.excluded).map((v) => v.shopify_variant_id));
+        const judged = [...(last?.plan?.sizes || []), ...(last?.plan?.skipped || [])].map((z) => z.variantId);
+        const staleExclude = judged.some((id) => offNow.has(id));
+        if (last?.plan?.checklist && new Date(last.updated_at).getTime() > sentAt && !staleExclude) { checklist = last.plan.checklist; checklistFrom = { jobId: Number(last.job_id), at: last.updated_at }; }
         else {
           // the readiness from the cache — a line SHEIN's rules weren't read for is null ("not read yet"), never ✓
           checklist = await readinessChecklist(d.product, d.variants).catch(() => null)

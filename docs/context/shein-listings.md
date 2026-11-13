@@ -270,8 +270,8 @@ Plan §3 Phase 2 + Appendix A.2; API: `partialEdit` (doc 3002047) and the review
   details. `product_attribute_list` REPLACES the list (doc 3002047 rule 3), so it is sent whole, and only
   when something is missing — it is a product-level change: SHEIN reviews EVERY colour of the shoe (note
   `attrs_added`, and "+ SHEIN details…" in the dry-run line). Only PICKED values are filled; a missing
-  TYPED one (Product Model — its default is one shoe's text, "Dunk Low") blocks: `missing_attr`,
-  why `typed_per_shoe`. A required detail with no default blocks too (SHEIN would refuse). Used by
+  TYPED one (Product Model — per shoe; from the shoe's typed value or its title, never Setup: see "Product Model from
+  the title") blocks: `missing_attr`, why `typed_per_shoe`. A required detail with no default blocks too (SHEIN would refuse). Used by
   `planAddSizes`, `planEdit` and the live fix's seller-SKU edit (`sheinSetSellerSkus(…, { attributes })`).
 - **What is sent** — ONE `partialEdit` per SHEIN product: every size to add + every seller-SKU relink
   pending for it (`shein_links` → `match 'link'`). **Products only** with ONE SKC, **no size chart**
@@ -794,8 +794,9 @@ Nikes), so the model must be typed per shoe; and a shoe SHEIN rejected needs its
   `shoe: true`) · `attrValueProblem(a, valueIds, extraValues)` (the one value check — Setup's `listing-maps type=attr`
   and the per-shoe save share it).
 - **Rules:** `buildAttributes` — a REQUIRED TYPED detail (mode 0) with no value → `missing_attr` why `typed_per_shoe`
-  ("type it for this shoe"). A Setup typed value is still used for a publish if someone sets one; on an EDIT of a
-  live shoe (`attributePatch`) a typed detail is filled ONLY from the shoe's own value (`shoe: true`), never Setup's.
+  ("type it for this shoe"). **Since 2026-11-14 a Setup typed value is never used, for a publish either** (see
+  "Product Model from the title"); on an EDIT of a live shoe (`attributePatch`) a typed detail is filled ONLY from the
+  shoe's own value (`shoe: true` — typed, or its title when sure).
 - **Used by:** `publishReadiness` / `publishContext` (+ `listListingCategoryPicks` so the picked categories' rules and
   templates are in the cache), `buildPublish` (category + tree check, details), `editAttrs` (live edits: add sizes,
   SKU fixes, photo replace — looks the shoe up by SPU, `listingAttrOverridesBySpu`), `typeOf`/`categoryOf` in
@@ -817,11 +818,57 @@ Nikes), so the model must be typed per shoe; and a shoe SHEIN rejected needs its
   instead (Setup)". Live shoe with a `missing_attr` blocker (sizes / product / its last edits): drawer section **SHEIN
   details for this shoe** (`[data-shoe-details]`) with the same editor.
 - **Not built:** changing the category of a shoe already live on SHEIN (SHEIN keeps a live product in its category);
-  the bulk sheet has no per-shoe Product Model (typed one by one in the drawer).
+  the bulk sheet has no per-shoe Product Model input (it comes from each title when sure; the rest are typed one by one
+  in the drawer).
 - e2e (`shein-listings.spec.js`): pure (shoeCategory / shoeAttrDefaults / typed_per_shoe / attributePatch / the value
   check); vs the fake SHEIN (`fake.p4.template` swaps in a required typed Product Model): the pick + the type map
   untouched, the preview blocks then sends the shoe's model, the other shoe still asked, a picked detail wins, Remove;
   the page: Change → Only this shoe → "· this shoe only" → shared again; details panel = the shoe's editor first.
+
+## Product Model from the shoe's TITLE; never a Setup default (built 2026-11-14)
+**Why (owner):** "whatever I type in there is being set as default, but every shoe has a different product model". Setup →
+SHEIN details still saved a TYPED detail (Product Model, id **1000546**, `attribute_mode 0`) as a default for every shoe
+of a SHEIN product type, and `buildAttributes` (publish) used it: prod had 374 = "Dunk Low", 1852 = "Nike Air",
+5512 = "ACG Air Max" (set 11-12) — so a LeBron 23, a Kobe 10, an Air Monarch IV… went up as "ACG Air Max".
+- **Pure helper** `src/lib/sheinModel.js` (server + page): `modelFromTitle(title) → { model, sure }` — strip the style code /
+  parentheses / Wmns / a collab prefix ("LEGO x Nike") / the brand → the LONGEST known model family at the start (≈ 300
+  patterns: Air Max 90, Kobe 8 Protro, Gazelle Indoor, 9060, Gel-NYC, Bapesta…) → qualifier words (Low, Mid, High, Retro,
+  OG, SE, Premium, LV8, Next Nature, GORE-TEX, RM, Golf, Cleat, Mule, Essential, Pro, Leather…) until the colourway.
+  Normalised like the typed values: '07 / Big Bubble / GS / PS / TD / Big Kid / the year dropped; "Jordan 6 Retro" →
+  "Air Jordan 6 Retro", a non-numbered Jordan stays "Jordan Stay Loyal"; "Air Flight '89" → "Air Flight 89"; "Ultra Boost
+  1.0" → "Ultraboost 1.0"; New Balance = the number alone ("9060", "990v4"). `sure` ONLY when a family matched; else a
+  guess (everything before a quoted colourway, else the first two words) that is never sent. Matches all 50 models a
+  person typed (`e2e/fixtures/shein-models.tsv`); 1,184 of the 1,208 Shopify titles are sure (the rest: apparel, Jordan
+  Mule / Grind, Nike Motive, 24.7, ST Charge…). `shoeModel()` = the same order for the page; `PRODUCT_MODEL_ATTR_ID`.
+- **The order** (`shoeAttrDefaults(defaults, overrides, ptid, { title, template })`, `src/lib/sheinPublish.js`): the
+  shoe's typed value (`attr_overrides`) → else the title when sure (a row `shoe: true, from: 'title'`, only for 1000546 and
+  only when the template lists it) → else nothing ("type it for this shoe", `missing_attr` why `typed_per_shoe`). Setup rows
+  for ANY typed detail of the template (`typedAttrIds`: Product Model, Series) are dropped, and `buildAttributes` refuses a
+  typed value without `shoe: true` as a second guard. Callers pass the Shopify title: `publishReadiness`, `buildPublish`
+  (`shein-publish.js`), `editAttrs` (live edits; `listingShoeBySpu` = the shoe's details + title by SPU — replaced
+  `listingAttrOverridesBySpu`).
+- **Setup refuses it:** `listing-maps type=attr set` on a typed detail → 400 "… is typed per shoe … Type it on the shoe:
+  open the shoe's Details → SHEIN details." (`perShoe: true`). Setup's editor shows a typed detail as "Typed per shoe"
+  (no input; "Copy from this product" skips it); an old saved row reads "Old default “…” — not used any more" + Clear.
+  **The old rows stay in the table** until the owner OKs deleting them on prod:
+  `DELETE FROM shein_attr_defaults WHERE attribute_id = 1000546;` (3 rows: 374, 1852, 5512).
+- **Page:** the shoe's editor (`ShoeAttrEditor`) PREFILLS Product Model from the title — chip "From the title" (sure: already
+  used, "Read from the title: SHEIN gets “…”", no Save needed) or "From the title — check it" (a guess: Save for this
+  shoe). Saving writes ONLY that shoe's `attr_overrides` (never `shein_attr_defaults`). The checklist's SHEIN details line
+  says `Product Model “…” · from the title | typed for this shoe` (`plan.model` → the line's `model`); the preview sheet
+  has a Product Model row; an edit's note reads "Product Model “…” (from the title)" (`attributePatch` → `added[].from`).
+- **Read-only report** of shoes already published with a Setup default that isn't theirs (the correction candidates; no
+  SHEIN call, no write — correcting live shoes is the owner's call): `node scripts/shein-model-report.mjs [--csv]`
+  (`api/_lib/shein-model-report.js`: the latest DONE publish per shoe, in a READ ONLY transaction → `setupModelCorrections`).
+  Local copy of prod 11-13: 132 published shoes checked, 46 sent a Setup default that isn't their model.
+- **Bug 4 (same branch):** a size marked "Don't list on SHEIN" still blocked a NEW shoe's publish (Free Metcon 6 5.5W in
+  4455): `buildPublish` passed `productRow: d.product` without `excludedVariants`. Fixed (`{ ...d.product,
+  excludedVariants }`), and the drawer no longer shows a preview's checklist that judged a size left off since (it reads the
+  readiness until the next preview).
+- e2e: `e2e/shein-model.spec.js` (pure: the 50, the rules, the order, no store-wide default, attributePatch, the report);
+  `shein-listings.spec.js` → "Product Model from the title" (fake SHEIN: two shoes of one type get their own models, Setup
+  refuses + its row never sent, typed wins and is saved on that shoe only, unsure blocked, `editAttrs`, the report query),
+  the page test (prefill + chips, Setup shows "Typed per shoe" / old default), and "Bug 4".
 
 ## A rejected shoe is never treated as live (fixed 2026-11-11)
 **Bug (owner's video, Samba OG IH6828):** after a Publish again preview + a Replace photos preview, the drawer showed

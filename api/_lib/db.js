@@ -12480,9 +12480,13 @@ export async function setListingAttrOverride(productId, attributeId, value) {
         WHERE shopify_product_id = ${productId} RETURNING *`;
   return r || null;
 }
-export async function listingAttrOverridesBySpu(spu) {
-  const [r] = await db()`SELECT attr_overrides FROM shein_listing_products WHERE spu = ${spu} AND attr_overrides <> '{}'::jsonb LIMIT 1`;
-  return r?.attr_overrides || null;
+// The shoe behind a SHEIN product, for its live edits (editAttrs): its own details + its Shopify title (the Product
+// Model is read from the title when none is typed — 2026-11-14). A row with details first, then a Shopify row
+// over a SHEIN-only one. → { attr_overrides, title } | null
+export async function listingShoeBySpu(spu) {
+  const [r] = await db()`SELECT attr_overrides, title FROM shein_listing_products WHERE spu = ${spu}
+    ORDER BY (COALESCE(attr_overrides, '{}'::jsonb) <> '{}'::jsonb) DESC, (shopify_product_id LIKE 'shein:%') ASC, updated_at DESC LIMIT 1`;
+  return r ? { attr_overrides: r.attr_overrides || null, title: r.title || null } : null;
 }
 export async function listListingCategoryPicks() {
   return await db()`SELECT DISTINCT category_pick_id, category_pick_ptid FROM shein_listing_products WHERE category_pick_id IS NOT NULL AND category_pick_ptid IS NOT NULL`;

@@ -168,8 +168,18 @@ a closed menu would duplicate every page title in the DOM and trip `getByText`.
 floor work first — staff `HOME_SECTIONS` (`src/lib/constants.js`): Receiving · Shelves & Stock ·
 Boxes | Sell & Ship · On the Way · Buying & In-Store · Marketplaces | Administration (admin) ·
 Setup & Help; PH `PH_HOME_SECTIONS`: Pricing & Listing · Marketplaces · Queues & Requests ·
-Purchase Orders · On the Way · Look Up · Help. Cards are **title-only** (`.home-compact` in
-styles.css hides `.home-card-sub`; the sentence is the card's `title` hover text), a section
+Purchase Orders · On the Way · Look Up · Help. Cards are **title-only** by default (`.home-compact`
+in styles.css hides `.home-card-sub`). **2026-11-14 the sentence came back** (`src/components/HomeTools.jsx`, `HomeToolCard` +
+`HomeDescToggle`, used by both homes), chosen by a desktop + a phone design review: **desktop
+hover** (or keyboard focus) stretches the card down to show it under the title (`.home-card-tip`,
+drawn as the card's lower half, lying over the cards below so nothing moves; 0.2 s delay; a
+sibling of the button because `.home-card` clips its overflow); **phone / touch** gets an **ⓘ**
+in each card's corner (`.home-card-info`, 44 px tap box) that opens that card's sentence inside
+it, the card's own tap still navigating; and a **Show descriptions** switch puts it on every
+card in full (`.home-describe`; one card a row on a phone), remembered per browser
+(`localStorage` `sbm.home.descriptions`). Rejected: a floating popup (read as bolted on) and a
+hover that grows the row (moved the page up to 71 px, neighbours' titles jumped). No `title`
+attribute any more (it doubled the hover text); tests find a card by `aria-description`. A section
 of ≤3 cards is half-width (order short ones in pairs), and on a phone the cards are two a
 row. `.home-compact` is scoped so the supplier home and No Box hub (same classes) are
 untouched. Admin home 2754→1782 px tall on desktop, 4948→2841 px on a phone.

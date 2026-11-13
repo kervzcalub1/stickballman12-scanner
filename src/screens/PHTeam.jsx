@@ -15,6 +15,7 @@ import { usePendingCounts, useUnsavedGuard, useMediaQuery, useLive } from '../ho
 import { skuCodes } from '../lib/sku.js';
 import { roleLabel, SYNC_BADGES, homeCardBadges, hasAnyPriv, hasPriv } from '../lib/constants.js';
 import { CheckAccess } from './CheckAccess.jsx';
+import { HomeToolCard, HomeDescToggle, useHomeDescriptions } from '../components/HomeTools.jsx';
 import { markupSuffix } from '../lib/config.js';
 import { rangeOf, ymd, estCivil, estCivilFromYmd, PH_DATE, PH_DATETIME, fmtPrice, estDate, estToday } from '../lib/format.js';
 import {
@@ -66,6 +67,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
   //               'request' | 'photos' | 'inquiry'
   const [page, setPage] = useState(() => phPageForPath(window.location.pathname));
   const counts = usePendingCounts();
+  const [describe, setDescribe] = useHomeDescriptions();   // home cards' sentences (HomeTools.jsx)
   // Navigate + push the matching /ph/* URL; Back/Forward + refresh restore it.
   const goPage = (p) => {
     setPage(p);
@@ -189,9 +191,10 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
           )}
         </section>
       )}
-      {/* Same compact title-only cards as the staff home (`ph-home`); a section of three
+      {/* Same compact cards as the staff home (`ph-home`, HomeTools.jsx); a section of three
           cards or fewer takes half the width, so Administration + Help share a row. */}
-      <div className="ph-home home-sections home-compact">
+      <HomeDescToggle on={describe} onChange={setDescribe} />
+      <div className={`ph-home home-sections home-compact${describe ? ' home-describe' : ''}`}>
         {PH_HOME_SECTIONS.map((section) => {
           const cards = section.cards.filter((c) => (!c.priv || canBuy) && (!c.privKey || hasPriv(user, c.privKey)));
           if (!cards.length) return null;
@@ -200,14 +203,8 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
               <h2 className="home-section-title">{section.title}</h2>
               <div className="home-grid home-tools">
                 {cards.map((c) => (
-                  <button className="home-card" key={c.key} title={c.sub} onClick={() => goPage(c.key)}>
-                    <span className="home-card-icon"><NavIcon name={c.icon} /></span>
-                    <span className="home-card-text">
-                      <span className="home-card-title">{c.title}</span>
-                      <span className="home-card-sub">{c.sub}</span>
-                      <CardBadges badges={phCardBadges(c.key, counts)} />
-                    </span>
-                  </button>
+                  <HomeToolCard key={c.key} icon={c.icon} title={c.title} sub={c.sub}
+                    badges={phCardBadges(c.key, counts)} onClick={() => goPage(c.key)} />
                 ))}
               </div>
             </section>

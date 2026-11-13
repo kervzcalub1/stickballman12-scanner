@@ -171,14 +171,15 @@ Setup & Help; PH `PH_HOME_SECTIONS`: Pricing & Listing · Marketplaces · Queues
 Purchase Orders · On the Way · Look Up · Help. Cards are **title-only** by default (`.home-compact`
 in styles.css hides `.home-card-sub`). **2026-11-14 the sentence came back** (`src/components/HomeTools.jsx`, `HomeToolCard` +
 `HomeDescToggle`, used by both homes), chosen by a desktop + a phone design review: **desktop
-hover** (or keyboard focus) stretches the card down to show it under the title (`.home-card-tip`,
-drawn as the card's lower half, lying over the cards below so nothing moves; 0.2 s delay; a
-sibling of the button because `.home-card` clips its overflow); **phone / touch** gets an **ⓘ**
+hover** (or keyboard focus) shows it in a small popup under the card (`.home-card-tip`, floats, so
+nothing moves; 0.25 s delay; a sibling of the button because `.home-card` clips its overflow —
+the owner picked it 11-14 over a version that stretched the card itself); **phone / touch** gets an **ⓘ**
 in each card's corner (`.home-card-info`, 44 px tap box) that opens that card's sentence inside
-it, the card's own tap still navigating; and a **Show descriptions** switch puts it on every
+it, the card's own tap still navigating; and a **Show descriptions** switch (small, on the right end of the FIRST
+section's heading line — `HomeSectionTitle`, no row of its own) puts it on every
 card in full (`.home-describe`; one card a row on a phone), remembered per browser
-(`localStorage` `sbm.home.descriptions`). Rejected: a floating popup (read as bolted on) and a
-hover that grows the row (moved the page up to 71 px, neighbours' titles jumped). No `title`
+(`localStorage` `sbm.home.descriptions`). Rejected: a hover that grows the row (moved the page up
+to 71 px, neighbours' titles jumped). No `title`
 attribute any more (it doubled the hover text); tests find a card by `aria-description`. A section
 of ≤3 cards is half-width (order short ones in pairs), and on a phone the cards are two a
 row. `.home-compact` is scoped so the supplier home and No Box hub (same classes) are

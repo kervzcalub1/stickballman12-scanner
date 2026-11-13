@@ -3,9 +3,9 @@
 //
 // 2026-11-13 the homes went title-only (owner: "hard to look at"). 2026-11-14 the owner
 // wanted each card's sentence back WITHOUT losing the clean look, so it lives in two places:
-//   - hover (mouse) or keyboard focus → the card stretches down and shows it under the
-//     title, lying over the cards below so nothing moves. Phones have no hover, which is
-//     what the switch is for;
+//   - hover (mouse) or keyboard focus → a small popup under the card (owner's pick, 11-14,
+//     after trying a stretch-the-card version). It floats, so nothing moves. Phones have no
+//     hover: they get an ⓘ per card instead;
 //   - the switch → every card shows its sentence in full, inline. Remembered per browser.
 // The supplier home and the No Box hub share the card classes but not this component.
 import React, { useCallback, useState } from 'react';
@@ -27,6 +27,19 @@ export function useHomeDescriptions() {
   return [on, set];
 }
 
+// A section heading, with the "Show descriptions" switch tucked onto the right end of the
+// FIRST section's heading line (owner 11-14: the switch on its own row took too much
+// room). The switch is positioned over the heading's empty right end, so it adds no height;
+// in a half-width first section it sits at the end of that half.
+export function HomeSectionTitle({ title, children = null }) {
+  return (
+    <div className="home-section-head">
+      <h2 className="home-section-title">{title}</h2>
+      {children}
+    </div>
+  );
+}
+
 export function HomeDescToggle({ on, onChange }) {
   return (
     <div className="home-desc-bar">
@@ -43,12 +56,12 @@ export function HomeDescToggle({ on, onChange }) {
 
 // One tool card. Three ways to its sentence:
 //   - `.home-card-sub`: inline, shown with the switch on (and inside a card opened by ⓘ);
-//   - `.home-card-tip`: the hover stretch on desktop — drawn as the card's lower half, a
-//     SIBLING of the button because the card clips its own overflow (the accent rail);
+//   - `.home-card-tip`: the hover popup on desktop — a SIBLING of the button because the
+//     card clips its own overflow (the accent rail);
 //   - `.home-card-info`: the ⓘ, phones / no-hover devices only (CSS). It opens THIS card's
 //     sentence inside the card; the card's own tap still navigates. Also a sibling — a
-//     button can't nest in a button. Picked 11-14 by a desktop + a phone design review over
-//     a floating popup and a hover that grows the whole row (it moved the page up to 71px).
+//     button can't nest in a button. The ⓘ came out of a phone design review (11-14); a
+//     hover that grows the whole row was rejected (it moved the page up to 71px).
 export function HomeToolCard({ icon, title, sub, badges, onClick }) {
   const info = !!sub;
   const [open, setOpen] = useState(false);

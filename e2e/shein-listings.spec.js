@@ -1257,7 +1257,7 @@ test.describe.serial('SHEIN Listings — the page', () => {
       await expect(page.locator('.shl-vtable').first()).toBeVisible();
       await page.screenshot({ path: `${dir}/shein-listings-${tag}-products.png`, fullPage: true });
       await page.goto(`/ph/shein-listings?product=${encodeURIComponent(gidP(7701))}`);
-      await expect(page.getByRole('dialog', { name: 'Product details' })).toContainText('Requirements');
+      await expect(page.getByRole('dialog', { name: 'Product details' })).toContainText('Edit this shoe');
       await page.screenshot({ path: `${dir}/shein-listings-${tag}-drawer.png`, fullPage: false });
       await page.goto('/ph/shein-listings?tab=sizes&sz=all');
       await expect(page.getByRole('heading', { name: /Our sizes/ })).toBeVisible();
@@ -4112,7 +4112,8 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
 
   // 2026-11-14 (owner): on a rejected shoe, Requirements → “Fix photos” opened the picker in “Published from this page” but
   // scrolled to the LIVE shoe's photo section, which a rejected shoe doesn't have — the drawer never moved.
-  test('a rejected shoe: Requirements → Fix photos scrolls to (and focuses) the picker that is open — “Published from this page”', async ({ page }) => {
+  // 2026-11-15: one editor for every shoe — “Fix photos” opens its Photos line (the same picker a live shoe gets).
+  test('a rejected shoe: “Fix photos” scrolls to (and focuses) the editor’s Photos line, its picker open', async ({ page }) => {
     await page.route('**/api/shein/listings?photos=*', (route) => route.fulfill({ json: { ok: true, productId: gidP(7708), style: 'CW2288-111', usePhPhotos: false, cleanPhotos: null, source: 'shopify',
       max: 11, stale: [], ph: [], clean: [], slidesOnFile: 0, copiesChecked: true, sent: 3, shopify: img(7708).map((x) => ({ ...x, key: x.url, skipped: false, phCopy: null })) } }));
     await loginAs(page, 'ph_team');
@@ -4125,10 +4126,104 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await expect(fix).toBeVisible();
     await dr.locator('.shl-d-body').evaluate((el) => { el.scrollTop = el.scrollHeight; });   // far from the picker
     await fix.click();
-    const target = dr.locator('#shl-pub-photos');
+    const target = dr.locator('[data-shoe-editor="publish"] .shl-pub-line[data-line="photos"]');
     await expect(target.locator('[data-photos-picker]')).toBeVisible();
     await expect(target).toBeFocused();
     await expect(target).toBeInViewport();
+  });
+
+  // 2026-11-15 (owner): “from the Errors tab I can change every detail; from Blocked only the blocking ones — not even the
+  // photos”. Now ONE editor (“Edit this shoe”) for every shoe, whichever tile it is opened from: the same menu (photos
+  // first), the same panels, the blockers on top as “Fix these first”. What SHEIN itself won't take on a live shoe (its
+  // category) says why on its line; the server still refuses it (409).
+  const MENU = ['Photos', 'SHEIN details', 'Category', 'Brand', 'Colour', 'SHEIN title'];
+  const menuWords = async (dr) => (await dr.locator('[data-edit-menu] .btn').allInnerTexts()).map((x) => x.replace(/^✕\s*/, '').replace(/\s*·\s*can’t change$/, '').trim());
+  const stubPhotos = (page) => page.route('**/api/shein/listings?photos=*', (route) => {
+    const pid = decodeURIComponent(new URL(route.request().url()).searchParams.get('photos'));
+    const n = pid.split('/').pop();
+    return route.fulfill({ json: { ok: true, productId: pid, style: 'E2E-STYLE', usePhPhotos: false, cleanPhotos: null, source: 'shopify',
+      max: 11, stale: [], ph: [], clean: [], slidesOnFile: 0, copiesChecked: true, sent: 3, shopify: img(n).map((x) => ({ ...x, key: x.url, skipped: false, phCopy: null })) } });
+  });
+  const listOf = async (request, status) => ((await (await request.get(`/api/shein/listings?status=${status}&pageSize=100`, { headers: auth.ph })).json()).products || [])
+    .filter((x) => /^gid:\/\/shopify\/Product\/77\d\d$/.test(x.shopify_product_id));
+  async function openFromTile(page, status, pid) {
+    await page.goto(`/ph/shein-listings?status=${status}`);
+    await page.locator(`.shl-product[data-product="${pid}"] .shl-pact`).getByRole('button', { name: 'Details' }).click();
+    const dr = drawer(page);
+    await expect(dr.locator('[data-shoe-editor]')).toBeVisible();
+    return dr;
+  }
+
+  test('one editor from every tile: Error (a rejected publish) and Blocked (a live shoe) open the same menu — photos first — and both open the photo picker and the shoe’s SHEIN details', async ({ page, request }) => {
+    await stubPhotos(page);
+    await loginAs(page, 'ph_team');
+    await page.setViewportSize({ width: 1320, height: 1000 });
+    const errorShoe = (await listOf(request, 'error')).find((x) => x.shopify_product_id === gidP(7708));
+    expect(errorShoe, 'the rejected publish (7708) is on the Error tile').toBeTruthy();
+    const blockedShoe = (await listOf(request, 'blocked')).find((x) => x.spu && Number(x.counts?.on_shein || 0) > 0);
+    expect(blockedShoe, 'a live shoe is on the Blocked tile').toBeTruthy();
+
+    // Error tile → the rejected shoe: publish lines, every detail editable
+    let dr = await openFromTile(page, 'error', gidP(7708));
+    await expect(dr.locator('[data-shoe-editor]')).toHaveAttribute('data-shoe-editor', 'publish');
+    expect(await menuWords(dr)).toEqual(MENU);
+    await expect(dr.locator('[data-edit-menu] [data-locked]')).toHaveCount(0);
+    await expect(dr.locator('[data-fix-first-list]')).toBeVisible();                        // what SHEIN refused, on top
+    await dr.locator('[data-edit-menu] [data-edit="photos"]').click();
+    await expect(dr.locator('.shl-pub-line[data-line="photos"] [data-photos-picker]')).toBeVisible();
+    await dr.locator('[data-edit-menu] [data-edit="attributes"]').click();
+    await expect(dr.locator('.shl-pub-line[data-line="attributes"]').locator('[data-panel="shoe-attributes"], .notice').first()).toBeVisible();
+    await shot(page, 'desktop-edit-from-error');
+
+    // Blocked tile → a live shoe: the SAME menu, the same picker + details editor; its blocker first
+    dr = await openFromTile(page, 'blocked', blockedShoe.shopify_product_id);
+    await expect(dr.locator('[data-shoe-editor]')).toHaveAttribute('data-shoe-editor', 'live');
+    expect(await menuWords(dr)).toEqual(MENU);
+    await shot(page, 'desktop-edit-from-blocked-top');
+    const first = dr.locator('[data-fix-first-list]');
+    await expect(first).toBeVisible();
+    await expect(first.locator('.shl-fixfirst-row').first()).toContainText(/\S/);
+    await expect(first.getByRole('button').first()).toBeVisible();                          // each blocker with the button that fixes it
+    await dr.locator('[data-edit-menu] [data-edit="photos"]').click();
+    const photos = dr.locator('.shl-pub-line[data-line="photos"]');
+    await expect(photos.locator('[data-photos-picker]')).toBeVisible();                     // photos — never hidden on a blocked shoe
+    await expect(photos.locator('[data-dry="photos"]')).toHaveText('Replace SHEIN photos');  // its preview (nothing is sent before a confirm)
+    await photos.locator('[data-photo="1"]').getByRole('button', { name: 'Leave out' }).click();
+    await expect(photos.locator('[data-photos-picker]')).toContainText('left out — SHEIN won’t get it');
+    await dr.locator('[data-edit-menu] [data-edit="attributes"]').click();
+    const attrs = dr.locator('.shl-pub-line[data-line="attributes"]');
+    await expect(attrs.locator('[data-panel="shoe-attributes"], .notice').first()).toBeVisible();
+    await expect(attrs.locator('[data-dry="model"]')).toHaveText('Send the Product Model');
+    // what a live shoe can't change says why — on the line, not hidden
+    await expect(dr.locator('.shl-pub-line[data-line="category"] [data-lock]')).toContainText('category it was listed in');
+    await expect(dr.locator('[data-edit-menu] [data-edit="category"]')).toHaveAttribute('data-locked', '');
+    await dr.locator('[data-shoe-editor]').scrollIntoViewIfNeeded();
+    await shot(page, 'desktop-edit-from-blocked');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await noSideScroll(page, 'the live shoe’s editor at 390 px');
+    await shot(page, 'phone-edit-from-blocked');
+    // the server still refuses a category for a live shoe — SHEIN's rule (409), whatever the page shows
+    const r = await request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'publish_choices', productId: blockedShoe.shopify_product_id, categoryPick: { categoryId: P4CAT } } });
+    expect(r.status()).toBe(409);
+    await pool.query(`UPDATE shein_listing_products SET photo_skip = '{}' WHERE shopify_product_id = $1`, [blockedShoe.shopify_product_id]);
+    expect(fake.writes).toEqual([]);
+  });
+
+  test('every other tile opens the same editor too (Out of date · Not on SHEIN · In review · Synced — whichever have shoes)', async ({ page, request }) => {
+    await stubPhotos(page);
+    await loginAs(page, 'ph_team');
+    await page.setViewportSize({ width: 1320, height: 1000 });
+    let opened = 0;
+    for (const st of ['out_of_date', 'not_on_shein', 'in_review', 'synced']) {
+      const shoe = (await listOf(request, st))[0];
+      if (!shoe) continue;
+      const dr = await openFromTile(page, st, shoe.shopify_product_id);
+      expect(await menuWords(dr), st).toEqual(MENU);
+      await dr.locator('[data-edit-menu] [data-edit="photos"]').click();
+      await expect(dr.locator('.shl-pub-line[data-line="photos"] [data-photos-picker]'), st).toBeVisible();
+      opened += 1;
+    }
+    expect(opened).toBeGreaterThan(0);
   });
 
   test('box sizes are shown and typed in inches / pounds, and saved for SHEIN in cm / grams', async ({ page }) => {
@@ -5494,5 +5589,39 @@ test.describe.serial('SHEIN Listings — clean photos (server, every read stubbe
     expect(b.wide).toBe(1500);                                                       // the opaque photo padded edge to edge, as before
     const again = await PUB.convertPhotos({ urls: [side], fill: {}, io, log: () => ({}) });
     expect(again.cached).toBeGreaterThan(0); expect(hosted).toHaveLength(2);         // cached by its own key
+  });
+});
+
+// 2026-11-15 (owner): the same edit menu for every shoe, whichever tile it is opened from (src/lib/sheinShoeEdit.js).
+test.describe('SHEIN Listings — one editor for every shoe (pure)', () => {
+  test('a live shoe’s lines: photos + SHEIN details editable and first; category / brand / colour / title say why they can’t change; the blockers group by line with their sizes; “Fix these first” = the ✕ lines, menu order first', async () => {
+    const { EDIT_MENU, LIVE_LOCKS, liveShoeLines, fixFirstLines, refusedBlockers } = await import('../src/lib/sheinShoeEdit.js');
+    expect(EDIT_MENU.map((x) => x[0])).toEqual(['photos', 'attributes', 'category', 'brand', 'colour', 'title']);
+    const wrong = (size) => ({ ...renderBlocker({ code: 'wrong_link', params: { sku: 'A8', size } }), size: undefined });
+    const variants = [
+      { shopify_size: '8', status: 'blocked', blockers: [wrong('8')] },
+      { shopify_size: '9', status: 'blocked', blockers: [wrong('8')] },
+      { shopify_size: '10', status: 'excluded', blockers: [renderBlocker({ code: 'no_price' })] },   // left off: never counted
+      { shopify_size: '11', status: 'error', blockers: [renderBlocker({ code: 'review_rejected', params: { failedReason: 'picture: watermark' } })] },
+    ];
+    const lines = liveShoeLines({ product: { blockers: [] }, variants, reviewOpen: true, photoRejected: 'picture: watermark' });
+    expect(lines.map((l) => l.key)).toEqual(['photos', 'attributes', 'sizes', 'skus', 'prices', 'shein', 'shopify', 'category', 'brand', 'colour', 'title', 'review']);
+    const by = Object.fromEntries(lines.map((l) => [l.key, l]));
+    expect(by.photos).toMatchObject({ ok: false });                           // SHEIN rejected the photos → ✕ on the photo line
+    expect(by.attributes).toMatchObject({ ok: true });
+    expect(by.skus.ok).toBe(false);
+    expect(by.skus.blockers).toHaveLength(1);                                 // one blocker, the sizes listed
+    expect(by.skus.blockers[0].sizes).toEqual(['8', '9']);
+    expect(by.prices.ok).toBe(true);                                          // the excluded size's blocker isn't counted
+    for (const k of ['category', 'brand', 'colour', 'title']) expect(by[k].lock).toBe(LIVE_LOCKS[k]);
+    expect(by.photos.lock).toBeUndefined(); expect(by.attributes.lock).toBeUndefined();
+    expect(by.review).toMatchObject({ ok: null, say: expect.stringContaining('waits until that review closes') });
+    expect(fixFirstLines(lines).map((l) => l.key)).toEqual(['photos', 'skus', 'shein']);
+    // a never-live shoe: SHEIN's review answer comes from its sizes (the publish readiness doesn't carry it)
+    expect(refusedBlockers({ blockers: [] }, variants).map((b) => b.code)).toEqual(['review_rejected']);
+    // a required detail SHEIN asked for on the shoe's last edit → SHEIN details ✕
+    const need = liveShoeLines({ product: { blockers: [] }, variants: [], extra: [renderBlocker({ code: 'missing_attr', params: { attributeId: 1000546, attribute: 'Product Model' } })] });
+    expect(need.find((l) => l.key === 'attributes').ok).toBe(false);
+    expect(fixFirstLines(need).map((l) => l.key)).toEqual(['attributes']);
   });
 });

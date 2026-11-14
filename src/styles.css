@@ -7615,3 +7615,20 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
   /* Room under the last row for the round keypad / advisor buttons that float at the bottom. */
   .lp-page { padding-bottom: 88px; }
 }
+
+/* SHEIN Listings → "Edit this shoe" (2026-11-15): the same menu for every shoe + "Fix these first" (SheinPublishBits.jsx → ShoeEditor) */
+.shl-edit-menu { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.shl-edit-menu .btn[data-locked] { opacity: 0.75; }
+.shl-fixfirst { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; margin: 0 0 10px; border-radius: 12px; border: 1px solid rgba(236,143,143,0.45); background: rgba(236,143,143,0.08); }
+.shl-fixfirst > b { color: #ec8f8f; }
+.shl-fixfirst-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 6px 0; font-size: 13px; border-top: 1px solid rgba(236,143,143,0.2); }
+.shl-edit .shl-pub-line.no { background: rgba(236,143,143,0.05); border-radius: 6px; }
+.shl-edit .shl-pub-line:focus { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+.shl-edit-acts { justify-content: flex-start; margin: 4px 0 2px; }
+.shl-edit-acts .shl-grow { flex: 1 1 220px; min-width: 0; }
+@media (max-width: 768px) {
+  .shl-edit-menu .btn { flex: 1 1 calc(50% - 6px); min-height: 40px; }
+  .shl-fixfirst-row { grid-template-columns: 20px minmax(0, 1fr); }
+  .shl-fixfirst .shl-pub-btns { grid-column: 2; justify-content: flex-start; }
+  .shl-edit-acts .btn { flex: 1 1 auto; min-height: 44px; }
+}

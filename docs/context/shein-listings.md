@@ -81,10 +81,11 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
 | `src/screens/SheinListingsProducts.jsx` | Products tab: filters, product rows → size rows (`VariantTable`), the selection bar (Dry run, Don't list on SHEIN), `useFixes` (custom size / don't list / list again), `useInJob` |
 | `src/screens/SheinListingsSizes.jsx` | Sizes tab: `ProbePanel` (Ask SHEIN) + our size → SHEIN size per category, "Add as a custom size", Clear |
 | `src/screens/SheinListingsJobs.jsx` | Jobs tab: running job, history, Resume, one job's items (`?job=`) + CSV |
-| `src/components/SheinProductDrawer.jsx` | Details drawer (`?product=`): requirements checklist, what SHEIN will receive, history (dry runs / sends → Open the sheet), the two dry runs (Add missing sizes · Update prices & sizes), "was …" diffs |
+| `src/components/SheinProductDrawer.jsx` | Details drawer (`?product=`): **Edit this shoe** (`ShoeEditor`, the same for every shoe — see “One editor for every shoe”), what SHEIN will receive, history (dry runs / sends → Open the sheet), the two dry runs (Add missing sizes · Update prices & sizes), "was …" diffs |
 | `src/components/SheinListingsBits.jsx` | `StatusChip`, `BlockerSay`, `FixButton` (live vs "Coming in a later phase"), `CustomSizeModal`, `when` (EST) |
 | `src/components/SheinDryRunSheet.jsx` | Phase 2: `DryRunSheet` (the overlay) + `DryRunView` (dry-run review → Confirm → the run's job card; also inline on Jobs `?job=`); Phase 4 `PublishPlan` |
-| `src/components/SheinPublishBits.jsx` | Phase 4: `PublishChecklist` (the drawer's 18 lines + inline fixes), `CategoryPicker`, `BrandPicker`, `AttrEditor`, `ColourPicker`, `TitleEditor`, `BoxDefaults` (D6), `useStoreGates` / `StoreGateBanner` |
+| `src/lib/sheinShoeEdit.js` | Pure: the editor's menu (`EDIT_MENU`), a live shoe's lines (`liveShoeLines`) + why a detail can't change on a live shoe (`LIVE_LOCKS`), “Fix these first” (`fixFirstLines`), SHEIN's review answer for a never-live shoe (`refusedBlockers`) |
+| `src/components/SheinPublishBits.jsx` | Phase 4: `ShoeEditor` (was `PublishChecklist`: the drawer's editor — the 18 publishing lines or a live shoe's lines + inline fixes), `CategoryPicker`, `BrandPicker`, `AttrEditor`, `ColourPicker`, `TitleEditor`, `BoxDefaults` (D6), `useStoreGates` / `StoreGateBanner` |
 | `src/components/SheinBulkPublish.jsx` | Bulk edit before publishing (2026-10-28): the ticked new shoes, what blocks each, fixes grouped by key, "Dry run publish (n ready)" |
 | `src/screens/SheinListingsSetup.jsx` | Phase 4: the Setup tab (`?tab=setup`, `?pt=`) — store gates, D6 box, category map, brand map, SHEIN details per product type |
 | `src/lib/sheinCutover.js`, `api/shein/listing-cutover.js`, `src/components/SheinCutover.jsx` | Phase 5: the cut-over / go-live checks (pure), the endpoint, the two Setup cards + the strip line |
@@ -218,7 +219,8 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
   disables Confirm; offers SHEIN's own value when one IS the same size (compareSize ok / ok_suffix /
   check_group — never a different number); foot length when the SHEIN product has a size chart. The
   server checks it all again.
-- **Drawer** (`?product=`): requirements (✓/✕ per group of blocker codes + review + category),
+- **Drawer** (`?product=`): **Edit this shoe** — one editor for every shoe (2026-11-15, section below; it replaced the
+  requirements list: ✓/✕ per group of blocker codes + review + category),
   "What SHEIN will receive" (new sizes first, highlighted; seller-SKU / price "was → now"; new sizes
   at stock 0), history (this product's dry runs / sends: status chip, summary, SHEIN's words, Open →
   the sheet; SHEIN calls, EST). Footer: Don't list on SHEIN / List on SHEIN again (live), **Dry run
@@ -981,6 +983,46 @@ LeBron 23), and `attributePatch` never REPLACES a detail a live product already 
   of live shoes" (fake SHEIN learns details-only edits: the preview body, 0 writes, never mixed, PH can't confirm (403),
   the candidates, the strip → the sheet, the admin's send = ONE edit with only `spu_name` + the list → In review →
   approved → Done → no longer a candidate → a new preview says already right).
+
+## One editor for every shoe — “Edit this shoe” (built 2026-11-15)
+**Why (owner):** opening a shoe from the **Error** tile let them change every detail, even ones already fine; from
+**Blocked** only the blocking ones — not the photos, which cause the most rejections. Same menu everywhere, wanted.
+- **What was different (before):** the drawer is one component whatever the tile; what it drew depended on the
+  shoe. A shoe **never live on SHEIN** (new, or its publish rejected = most of Error) got `PublishChecklist` — 18 lines
+  with a Change / Edit / Choose photos button on ✓ lines too. A shoe **live on SHEIN** (most of Blocked: wrong SKU,
+  size SHEIN lacks) got a ✓/✕ **Requirements** list whose only buttons fixed a ✕, a **SHEIN details** editor only
+  while a required detail was missing, and **Photos on SHEIN** far down, under Fix SHEIN sizes. No server rule
+  caused it — `publish_choices` already accepted photos / details for a live shoe; only `categoryPick` is refused (409).
+- **Now:** `ShoeEditor` (`SheinPublishBits.jsx`) for every Shopify shoe, at the top of the drawer:
+  - **The menu** (`[data-edit-menu]`, `EDIT_MENU`): Photos · SHEIN details · Category · Brand · Colour · SHEIN title — the
+    same six on every shoe, photos first; a ✕ is marked; a press opens that line's panel and scrolls/focuses it.
+  - **Fix these first** (`[data-fix-first-list]`, red box): every ✕ line, photos / details first, each with the button that
+    fixes it (the line's panel, or the blocker's own button: custom size, Match sizes, Fix photos…).
+  - **The lines**, one renderer, the SAME panels (`SheinPhotoPicker`, `ShoeAttrEditor`, `CategoryPicker`, `BrandPicker`,
+    `ColourPicker`, `TitleEditor`): mode `publish` (never live — the server's 18 lines as before, + a “SHEIN hasn't refused
+    anything” line when its sizes carry SHEIN's review answer, `refusedBlockers`; colour now has **Change colour** when ✓) ·
+    mode `live` (`liveShoeLines`, `src/lib/sheinShoeEdit.js`: Photos · SHEIN details · sizes · SKUs · prices · SHEIN refused ·
+    Shopify · Category · Brand · Colour · SHEIN title · review open). On a live shoe the Photos line carries the rejection
+    banner, the last photo send and **Replace SHEIN photos** (preview `ops:['photos']`); SHEIN details carries
+    **Send the Product Model** (preview `ops:['model']` for this shoe) — both PH ok, read only, Confirm on the sheet needs an
+    admin / Connect integrations, as before.
+  - Mode = the server: `GET ?product=` sends `checklist` only for a shoe never live (`!spu || neverLive`) → `publish`; else a
+    Shopify shoe with an SPU → `live`; a `shein:<spu>` row has no editor.
+- **Still can't change on a live shoe — said on its line (`LIVE_LOCKS`), never hidden:** **Category** — SHEIN keeps a live
+  product in its category (the server refuses the pick, 409). **Brand / Colour / SHEIN title** — no live edit sends them
+  (brand map + colour + title override are used by a publish only; `planEdit` sends Shopify's title for shoes WE published,
+  never 4seller's — D11). **Other SHEIN details** — saved for the shoe; SHEIN gets the Product Model with its preview, a
+  required detail SHEIN lacks rides the next edit (`attributePatch`), a detail SHEIN already shows is left as it is.
+- **Real SHEIN constraints kept:** a never-approved product can't be edited (Publish again — `never_approved`); one photo
+  change at a time (Replace disabled while the last is in review); an edit while a review is open waits (deferred) — the
+  review line says so; a live shoe's category (above).
+- Gone from the drawer (now lines): Requirements, “SHEIN details for this shoe”, “Photos on SHEIN”, the picker inside
+  “Published from this page” (that section keeps the status, **Choose photos** → the Photos line, Open the send, Publish again).
+  “Fix photos” anywhere opens the Photos line. No new column, no `db:setup`.
+- e2e (`shein-listings.spec.js`): pure — “one editor for every shoe (pure)”; page (Phase 4 page block) — from the **Error**
+  tile (a rejected publish) and the **Blocked** tile (a live shoe) the same six-item menu, the photo picker and the details
+  editor open in both, the live shoe's ✕ in Fix these first, Leave out a photo, the category lock + the server's 409, 390 px;
+  Out of date / Not on SHEIN / In review / Synced open the same menu; “Fix photos” on a rejected shoe → the Photos line.
 
 ## A rejected shoe is never treated as live (fixed 2026-11-11)
 **Bug (owner's video, Samba OG IH6828):** after a Publish again preview + a Replace photos preview, the drawer showed

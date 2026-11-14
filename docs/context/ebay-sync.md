@@ -66,6 +66,11 @@ For shoes eBay refuses as they are in Shopify (prod 11-14: 11 `title_long` 81-97
   ended one is refused unless the person ticks "I understand". Same gate as List (kill / not production / End switched Off; Test
   mode is fine). Logged to `ebay_listing_ends` (`logEbayEnd`, so a relist never brings it back) and `ebay_sync_log` end /
   `end_duplicate`; dropped from `ebay_listings` + `ebay_sync_links`. The row moves on after the next full check.
+  - **IP-hidden listing to end** (2026-11-15, Shox #327106732406): eBay hides a listing an IP rights owner reported and
+    GetItem on it fails. `ipHiddenRead` lets the end go ahead ONLY when that is the single parsed eBay error (eBay's
+    LongMessage "reported by the intellectual property rights owner"; the ErrorCode isn't known yet, so it is written into
+    the log note: add it to `IP_HIDDEN_CODES`). The kept listing must still read in full (Active, holds the SKU). Sizes lost
+    = unknown (`lost: null, lostUnknown: true`), said on success; any other read error still refuses.
 - **Risk: DPL syncs Title Shopify -> eBay.** If DPL links one of our new listings by SKU, it may push the long Shopify title; eBay
   refuses it, and **DPL's stock update for that listing may fail with it** (one revise carries both). After the first override
   listings go up, check DPL's error list (`docs/context/dpl.md`) for those item ids; if they show title errors, turn DPL's title

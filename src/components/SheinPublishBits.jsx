@@ -13,7 +13,8 @@
 //   · BoxDefaults     — D6: the default box size + weight per size group; UNCONFIRMED placeholders
 //                       block every publish until an admin / Connect integrations saves them.
 //   · useStoreGates / StoreGateBanner — SHEIN refusing new listings / quota 0 (previews still run).
-//   · PublishChecklist — the server's 18 lines (✓ / ✕ / not read yet), each ✕ with its fix.
+//   · ShoeEditor      — "Edit this shoe": the same menu for every shoe (photos first) + "Fix these first";
+//                       a new / rejected shoe = the server's 18 publishing lines, a live shoe = liveShoeLines.
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
@@ -22,6 +23,7 @@ import { plain } from '../lib/sheinWords.js';
 import { SheinPhotoPicker } from './SheinPhotoPicker.jsx';
 import { BOX_PLACEHOLDERS, sizeGroupOf, validateImperialBox, boxToImperial, boxFromImperial, cleanTitle, isKnownBrand, favouriteLeaves, isDefaultLabel } from '../lib/sheinPublish.js';
 import { modelFromTitle, PRODUCT_MODEL_ATTR_ID } from '../lib/sheinModel.js';
+import { EDIT_MENU, fixFirstLines } from '../lib/sheinShoeEdit.js';
 
 export const GROUP_LABEL = {
   adult: 'Men’s / adult', women: 'Women’s (W)', youth: 'GS / youth (Y)', child: 'Kids · PS (10.5C and up)', toddler: 'Toddler · TD (up to 10C)',
@@ -414,7 +416,7 @@ export function AttrEditor({ productTypeId, categoryId = null, canWrite, onSaved
 // shoe's current SHEIN product type — after a category change to another type it is asked again.
 const ownDraft = (o) => (o ? { valueIds: (o.valueIds || []).map(Number), extraValues: o.extraValues || [] } : null);
 const MODEL_HINT = /model|style name|series/i;
-export function ShoeAttrEditor({ product, productTypeId, categoryId = null, canWrite, onSaved, onSignOut, focus = [] }) {
+export function ShoeAttrEditor({ product, productTypeId, categoryId = null, canWrite, onSaved, onSignOut, focus = [], live = false }) {
   const ptid = Number(productTypeId) || null;
   const { d, err, reload } = useLoad(() => (ptid ? api.sheinPublishMaps('attr', { productTypeId: ptid }) : Promise.resolve({ template: null, defaults: [] })), [ptid], onSignOut);
   const [drafts, setDrafts] = useState({});
@@ -479,7 +481,7 @@ export function ShoeAttrEditor({ product, productTypeId, categoryId = null, canW
   }
   return (
     <div className="shl-pub-panel" data-panel="shoe-attributes">
-      <p className="xs shl-pub-lede"><b>For this shoe only</b> — {product?.title || 'this shoe'}. Type the model the way the shoe is sold (e.g. Samba OG, Air Jordan 4 Retro, Ultraboost 1.0) — when we recognise it, it is read from the title. A value typed here wins; it is saved for this shoe only, never for other shoes. Nothing goes to SHEIN until a publish is confirmed.{missing.length ? <> <b>{fmt(missing.length)} required still missing.</b></> : ''}</p>
+      <p className="xs shl-pub-lede"><b>For this shoe only</b> — {product?.title || 'this shoe'}. Type the model the way the shoe is sold (e.g. Samba OG, Air Jordan 4 Retro, Ultraboost 1.0) — when we recognise it, it is read from the title. A value typed here wins; it is saved for this shoe only, never for other shoes. {live ? <>This shoe is on SHEIN already: the Product Model goes to SHEIN with <b>Send the Product Model</b> (a preview first), and a required detail SHEIN is missing goes with the shoe’s next edit. Details SHEIN already shows stay as they are.</> : 'Nothing goes to SHEIN until a publish is confirmed.'}{missing.length ? <> <b>{fmt(missing.length)} required still missing.</b></> : ''}</p>
       <div className="shl-attrs">
         {shown.map((a) => {
           const dr = draftOf(a.attributeId);
@@ -677,32 +679,78 @@ export function StoreGateBanner({ gates, readAt }) {
   );
 }
 
-/* ------------------------------- the checklist ------------------------------- */
-// The fixes a checklist line opens inline (the rest use the blocker's own button).
+/* ------------------------------- the shoe's editor ------------------------------- */
+// "Edit this shoe" (2026-11-15, owner: "the same edit menu, whichever tab I open the shoe from"). ONE component
+// for every Shopify shoe in the drawer:
+//   · mode 'publish' — a shoe never live on SHEIN (new, or its publish rejected / in review): the server's 18
+//     publishing lines (✓ / ✕ / not read yet), every editable line with its button whether ✓ or ✕.
+//   · mode 'live'    — a shoe SHEIN holds sizes of: the same renderer and the SAME panels over the lines of
+//     src/lib/sheinShoeEdit.js (liveShoeLines). Photos + SHEIN details edit here; what SHEIN doesn't let us
+//     change on a live shoe (category) or no live edit sends (brand, colour, title) says so on its line.
+// Both: the menu row (Photos · SHEIN details · Category · Brand · Colour · SHEIN title — photos first) and
+// "Fix these first" (every ✕, highlighted, each with the button that fixes it). Saves touch OUR database
+// only; SHEIN gets a change only through a preview someone confirms.
+// The fixes a line opens inline (the rest use the blocker's own button).
 const PANEL = { category: 'Choose category', brand: 'Map to a SHEIN brand', title: 'Review title', colour: 'Pick the colour', attributes: 'Set SHEIN details', box: 'Confirm box sizes', photos: 'Choose photos' };
-const PANEL_OK = { category: 'Change', brand: 'Change', title: 'Edit SHEIN title', attributes: 'Edit details', photos: 'Choose photos' };
+const PANEL_OK = { category: 'Change', brand: 'Change', title: 'Edit SHEIN title', colour: 'Change colour', attributes: 'Edit details', photos: 'Choose photos' };
+const LIVE_PANELS = new Set(['photos', 'attributes']);   // a live shoe: the rest are locked (said on the line) or fixed by their blocker's button
+// a blocker's own action that one of the lines' panels does → that panel opens instead
+const KIND_PANEL = { choose_category: 'category', set_attr: 'attributes', review_title: 'title', set_defaults: 'box', use_ph_photos: 'photos', fix_photos: 'photos', map_brand: 'brand' };
 const STORE_KEYS = new Set(['store', 'quota', 'shelf', 'site']);
 
-export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut, onAct }) {
+export function ShoeEditor({ d, mode = 'publish', lines = null, canWrite, busy, onFix, onReload, onSignOut, onAct, open: openProp, setOpen: setOpenProp, extras = {}, onMatch }) {
+  const live = mode === 'live';
   const p = d.product;
-  const list = d.checklist || [];
+  const list = lines || d.checklist || [];
   const from = d.checklistFrom || {};
   const groups = productGroups(d.variants || []);
   const group = groups.length === 1 ? groups[0] : null;
-  const maps = useLoad(() => api.sheinPublishMaps('category'), [], onSignOut);
-  useLive(['shein_category_map', 'shein_brand_map'], maps.reload, { mount: false });
+  const maps = useLoad(() => (live ? Promise.resolve({ maps: [] }) : api.sheinPublishMaps('category')), [live], onSignOut);
+  useLive(live ? [] : ['shein_category_map', 'shein_brand_map'], maps.reload, { mount: false });
   const typeCat = (maps.d?.maps || []).find((m) => m.shopify_product_type === String(p.product_type || '') && m.size_group === group) || null;
-  // the shoe's own category (picked while fixing it) wins over its type's map — 2026-11-11
-  const cat = p.category_pick_id ? { category_id: p.category_pick_id, product_type_id: p.category_pick_ptid, category_path: p.category_pick_path, shoe: true } : typeCat;
+  // the shoe's own category (picked while fixing it) wins over its type's map — 2026-11-11; a live shoe: the one SHEIN has
+  const cat = live ? (p.category_id ? { category_id: p.category_id, product_type_id: p.product_type_id, category_path: null, live: true } : null)
+    : p.category_pick_id ? { category_id: p.category_pick_id, product_type_id: p.category_pick_ptid, category_path: p.category_pick_path, shoe: true } : typeCat;
   const [typeWide, setTypeWide] = useState(false);
-  const [open, setOpen] = useState('');
+  const [openOwn, setOpenOwn] = useState('');
+  const open = openProp !== undefined ? openProp : openOwn;
+  const setOpen = setOpenProp || setOpenOwn;
   const [fixed, setFixed] = useState(() => new Set());   // lines saved in this session: re-checked by the next preview
   const [msg, setMsg] = useState('');
+  const box = React.useRef(null);
   const done = (key, text) => { setFixed((s) => new Set([...s, key])); setOpen(''); setMsg(text); maps.reload(); onReload?.(); };
-  const n = { ok: list.filter((l) => l.ok === true).length, no: list.filter((l) => l.ok === false).length, unread: list.filter((l) => l.ok === null).length };
+  const n = { ok: list.filter((l) => l.ok === true).length, no: list.filter((l) => l.ok === false).length, unread: list.filter((l) => l.ok === null && !l.say).length };
   const line = (k) => list.find((l) => l.key === k);
   const titleMax = (line('title')?.blockers || []).find((b) => b.params?.max)?.params?.max || null;
   const focus = (line('attributes')?.blockers || []).map((b) => b.params?.attributeId).filter(Boolean);
+  const panelLabelOf = (l) => {
+    if (!l || l.lock) return null;
+    if (live && !LIVE_PANELS.has(l.key)) return null;
+    const lbl = l.ok !== true ? PANEL[l.key] : PANEL_OK[l.key];   // a line not read yet (null) can be fixed too
+    return lbl && !(l.key === 'category' && !group) ? lbl : null;
+  };
+  // open a line's panel (when it has one) and bring the line into view + focus — the menu, "Fix these first", a blocker's button
+  const goTo = (key, { toggle = false } = {}) => {
+    const l = line(key);
+    if (panelLabelOf(l)) setOpen(toggle && open === key ? '' : key);
+    setTimeout(() => {
+      const el = box.current?.querySelector(`[data-line="${key}"]`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      el.focus({ preventScroll: true });
+    }, 30);
+  };
+  // the button a ✕ line's first actionable blocker carries (a panel kind opens the panel; publish_again has its own)
+  const actionOf = (l) => {
+    const hard = (l.blockers || []).filter((b) => !['note', 'review'].includes(b.level));
+    const b = hard.find((x) => x.action && x.action.kind !== 'publish_again'
+      && !(KIND_PANEL[x.action.kind] && KIND_PANEL[x.action.kind] === l.key && panelLabelOf(l)));
+    if (!b) return null;
+    const pk = KIND_PANEL[b.action.kind];
+    if (pk && panelLabelOf(line(pk))) return <button type="button" className="btn xs shl-fix" onClick={() => goTo(pk)}>{b.action.label}</button>;
+    return <FixButton action={b.action} shopifyUrl={p.shopifyUrl} busy={busy} onMatch={onMatch}
+      onAct={(k) => onFix?.(k, (d.variants || []).find((v) => (v.blockers || []).some((x) => x.code === b.code)) || {}, b)} />;
+  };
 
   const panelFor = (key) => {
     const close = () => setOpen('');
@@ -713,67 +761,108 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
           : `Saved: every “${p.product_type || '(no type)'}” shoe in ${GROUP_LABEL[group]} goes to ${m?.category_path || 'that category'} — re-checked by the next preview.`)} />;
     if (key === 'brand') return <BrandPicker vendor={p.vendor} canWrite={canWrite} onSignOut={onSignOut} onCancel={close} onSaved={(m) => done('brand', m ? `Saved: ${p.vendor} → SHEIN brand ${m.brand_name || m.brand_code}.` : 'Brand cleared.')} />;
     if (key === 'title') return <TitleEditor product={p} max={titleMax} onSignOut={onSignOut} onSaved={() => done('title', 'SHEIN title saved (Shopify unchanged).')} />;
-    if (!cat && ['colour', 'attributes'].includes(key)) return <p className="notice xs">Choose the SHEIN category first — the colours and details SHEIN asks for depend on it.</p>;
+    if (!cat && ['colour', 'attributes'].includes(key)) {
+      return <p className="notice xs">{live ? 'SHEIN’s product type for this shoe isn’t read yet — refresh first (it reads the shoe from SHEIN).' : 'Choose the SHEIN category first — the colours and details SHEIN asks for depend on it.'}</p>;
+    }
     if (key === 'colour') return <ColourPicker productId={p.shopify_product_id} productTypeId={Number(cat.product_type_id)} current={p.skc_value_id} onSignOut={onSignOut} onSaved={() => done('colour', 'Colour saved.')} />;
     if (key === 'attributes') return (
       <>
-        <ShoeAttrEditor product={p} productTypeId={Number(cat.product_type_id)} categoryId={Number(cat.category_id)} canWrite={canWrite} focus={focus} onSignOut={onSignOut}
-          onSaved={(t) => { setFixed((s) => new Set([...s, 'attributes'])); setMsg(`${t} Re-checked by the next preview.`); onReload?.(); }} />
-        <p className="xs shl-pub-type-wide">
-          <button type="button" className="shl-linkbtn" aria-expanded={typeWide} onClick={() => setTypeWide(!typeWide)}>{typeWide ? 'Hide' : 'Set a detail for every shoe of this SHEIN type instead (Setup)'}</button>
-        </p>
-        {typeWide && <AttrEditor productTypeId={Number(cat.product_type_id)} categoryId={Number(cat.category_id)} canWrite={canWrite} focus={focus} onSignOut={onSignOut} onSaved={() => setFixed((s) => new Set([...s, 'attributes']))} />}
+        {live && !cat.product_type_id ? <p className="notice xs">SHEIN’s product type for this shoe isn’t read yet — refresh first.</p>
+          : <ShoeAttrEditor product={p} productTypeId={Number(cat.product_type_id)} categoryId={Number(cat.category_id)} canWrite={canWrite} focus={focus} onSignOut={onSignOut} live={live}
+            onSaved={(t) => { setFixed((s) => new Set([...s, 'attributes'])); setMsg(`${t} ${live ? 'SHEIN gets it with a preview someone confirms.' : 'Re-checked by the next preview.'}`); onReload?.(); }} />}
+        {!live && (
+          <>
+            <p className="xs shl-pub-type-wide">
+              <button type="button" className="shl-linkbtn" aria-expanded={typeWide} onClick={() => setTypeWide(!typeWide)}>{typeWide ? 'Hide' : 'Set a detail for every shoe of this SHEIN type instead (Setup)'}</button>
+            </p>
+            {typeWide && <AttrEditor productTypeId={Number(cat.product_type_id)} categoryId={Number(cat.category_id)} canWrite={canWrite} focus={focus} onSignOut={onSignOut} onSaved={() => setFixed((s) => new Set([...s, 'attributes']))} />}
+          </>
+        )}
       </>
     );
     if (key === 'box') return <BoxDefaults compact canWrite={canWrite} onSignOut={onSignOut} onSaved={() => done('box', 'Box sizes confirmed for every new product.')} />;
     if (key === 'photos') return <SheinPhotoPicker productId={p.shopify_product_id} onSignOut={onSignOut} onSaved={() => { setFixed((s) => new Set([...s, 'photos'])); onReload?.(); }} />;
     return null;
   };
+  const first = fixFirstLines(list);
 
   return (
-    <section className="shl-d-sec" data-checklist="">
-      <h4 className="shl-h4">What publishing needs</h4>
+    <section className="shl-d-sec shl-edit" ref={box} data-shoe-editor={mode} data-checklist={live ? undefined : ''}>
+      <h4 className="shl-h4">Edit this shoe</h4>
+      <div className="shl-edit-menu" role="group" aria-label="Edit this shoe" data-edit-menu="">
+        {EDIT_MENU.map(([k, label]) => {
+          const l = line(k);
+          if (!l) return null;
+          return (
+            <button key={k} type="button" className={`btn xs ${l.ok === false ? 'shl-fix' : 'ghost'}`} data-edit={k} data-locked={l.lock ? '' : undefined}
+              aria-expanded={panelLabelOf(l) ? open === k : undefined} title={l.lock || undefined} onClick={() => goTo(k, { toggle: true })}>
+              {l.ok === false ? '✕ ' : ''}{label}{l.lock ? ' · can’t change' : ''}
+            </button>
+          );
+        })}
+      </div>
+      {first.length > 0 && (
+        <div className="shl-fixfirst" role="status" data-fix-first-list="">
+          <b className="sm">Fix {first.length === 1 ? 'this' : `these ${fmt(first.length)}`} first</b>
+          {first.map((l) => {
+            const b = (l.blockers || []).find((x) => !['note', 'review'].includes(x.level)) || null;
+            const pl = panelLabelOf(l);
+            return (
+              <div key={l.key} className="shl-fixfirst-row" data-fix-first-line={l.key}>
+                <span className="shl-no" aria-label="Not OK">✕</span>
+                <span><span className="muted xs shl-block">{l.label}</span>{b ? <span className="xs shl-block"><BlockerSay b={b} />{b.sizes?.length > 1 ? <span className="muted"> · sizes {b.sizes.join(', ')}</span> : null}</span> : null}</span>
+                <span className="shl-pub-btns">{pl ? <button type="button" className="btn xs shl-fix" onClick={() => goTo(l.key)}>{pl}</button> : actionOf(l)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="shl-chiprow shl-pub-sum" data-sum="">
         <span className="ebo-chip ok">{fmt(n.ok)} ✓</span>
         <span className={`ebo-chip ${n.no ? 'bad' : ''}`.trim()}>{fmt(n.no)} to fix</span>
         {n.unread > 0 && <span className="ebo-chip">{fmt(n.unread)} not read yet</span>}
       </div>
-      <p className="muted xs shl-pub-from">{from.jobId ? <>As checked by preview #{from.jobId}, {when(from.at)}. Fixed something? Preview again to re-check.</> : <>From our records. SHEIN’s store checks, photos and SKUs are read by the preview (“Publish new product” below — it sends nothing).</>}</p>
+      {live
+        ? <p className="muted xs shl-pub-from">On SHEIN now. Change the photos and SHEIN details here — each goes to SHEIN only through its own preview, after someone confirms it. Sizes and SKUs: <b>Fix SHEIN sizes</b> below.</p>
+        : <p className="muted xs shl-pub-from"><b>What publishing needs</b> — {from.jobId ? <>as checked by preview #{from.jobId}, {when(from.at)}. Fixed something? Preview again to re-check.</> : <>from our records. SHEIN’s store checks, photos and SKUs are read by the preview (“Publish new product” below — it sends nothing).</>}</p>}
       {msg && <p className="ebl-ok xs" role="status">{msg}</p>}
       {list.map((l, idx) => {
         const hard = (l.blockers || []).filter((b) => !['note', 'review'].includes(b.level));
         const notes = (l.blockers || []).filter((b) => ['note', 'review'].includes(b.level));
         const saved = fixed.has(l.key) && l.ok !== true;
-        const icon = saved ? ['shl-wait', '…', 'Saved — checked again by the next preview'] : l.ok === true ? ['shl-yes', '✓', 'OK'] : l.ok === false ? ['shl-no', '✕', 'Not OK'] : ['shl-wait', '–', 'Not read yet'];
-        const panelLabel = l.ok !== true ? PANEL[l.key] : PANEL_OK[l.key];   // a line not read yet (null) can be fixed too
-        const canPanel = !!panelLabel && !(l.key === 'category' && !group);
-        const first = hard.find((b) => b.action && !['choose_category', 'set_attr', 'review_title', 'set_defaults', 'use_ph_photos', 'publish_again'].includes(b.action.kind));
+        const icon = saved ? ['shl-wait', '…', 'Saved — checked again by the next preview'] : l.ok === true ? ['shl-yes', '✓', 'OK'] : l.ok === false ? ['shl-no', '✕', 'Not OK']
+          : l.say ? ['shl-no', '…', 'Waiting'] : ['shl-wait', '–', 'Not read yet'];
+        const panelLabel = panelLabelOf(l);
+        const act = l.ok === false || (live && hard.length) ? actionOf(l) : null;
         return (
           <React.Fragment key={l.key}>
-          {(idx === 0 || (STORE_KEYS.has(list[idx - 1].key) && !STORE_KEYS.has(l.key))) && <p className="shl-pub-group xs">{STORE_KEYS.has(l.key) ? 'The store — SHEIN, for every product' : 'This product'}</p>}
-          <div className="shl-req shl-pub-line" data-line={l.key} data-ok={l.ok === true ? 'yes' : l.ok === false ? 'no' : 'unread'}>
+          {!live && (idx === 0 || (STORE_KEYS.has(list[idx - 1].key) && !STORE_KEYS.has(l.key))) && <p className="shl-pub-group xs">{STORE_KEYS.has(l.key) ? 'The store — SHEIN, for every product' : 'This product'}</p>}
+          <div className={`shl-req shl-pub-line${l.ok === false ? ' no' : ''}`} data-line={l.key} data-ok={l.ok === true ? 'yes' : l.ok === false ? 'no' : 'unread'} data-locked={l.lock ? '' : undefined} tabIndex={-1}>
             <span className={icon[0]} aria-label={icon[2]} title={icon[2]}>{icon[1]}</span>
             <span>
               <span className="shl-pub-label">{l.n}. {l.label}</span>
-              {l.ok === true && <OkDetail k={l.key} p={p} cat={cat} />}
+              {l.ok === true && <OkDetail k={l.key} p={p} cat={cat} live={live} />}
               {l.key === 'attributes' && l.model?.value && <span className="muted xs shl-block" data-model-from={l.model.from}>Product Model “{l.model.value}” · {l.model.from === 'title' ? 'from the title' : 'typed for this shoe'}</span>}
-              {l.ok === null && !saved && <span className="muted xs shl-block">Not read yet — the preview checks it.</span>}
-              {saved && <span className="xs shl-block shl-pub-saved">Saved — checked again by the next preview.</span>}
-              {hard.map((b, i) => <span key={i} className="xs shl-block"><BlockerSay b={b} /></span>)}
+              {l.say && <span className="xs shl-block">{l.say}</span>}
+              {l.ok === null && !l.say && !saved && <span className="muted xs shl-block">Not read yet — the preview checks it.</span>}
+              {saved && <span className="xs shl-block shl-pub-saved">{live ? 'Saved — preview the change to send it to SHEIN.' : 'Saved — checked again by the next preview.'}</span>}
+              {hard.map((b, i) => <span key={i} className="xs shl-block"><BlockerSay b={b} />{b.sizes?.length > 1 ? <span className="muted"> · sizes {b.sizes.join(', ')}</span> : null}</span>)}
               {notes.map((b, i) => <span key={`n${i}`} className="muted xs shl-block"><BlockerSay b={b} compact={!b.fix} /></span>)}
-              {l.key === 'category' && !group && (groups.length > 1 ? <span className="xs shl-block shl-bad-text">Mixed size groups ({groups.map((g) => GROUP_LABEL[g]).join(', ')}) — split the product on Shopify first.</span> : <span className="xs shl-block muted">No US size we can read, so no size group.</span>)}
+              {l.lock && <span className="muted xs shl-block" data-lock="">Can’t change here: {l.lock}</span>}
+              {!live && l.key === 'category' && !group && (groups.length > 1 ? <span className="xs shl-block shl-bad-text">Mixed size groups ({groups.map((g) => GROUP_LABEL[g]).join(', ')}) — split the product on Shopify first.</span> : <span className="xs shl-block muted">No US size we can read, so no size group.</span>)}
               {l.key === 'photos' && <span className="muted xs shl-block" data-photo-source="">{photoSourceSay(p)} Change it in {PANEL.photos}.</span>}
               {l.key === 'photos' && l.ok !== true && p.photo_skip?.length > 0 && <span className="muted xs shl-block" data-skip-count="">{fmt(p.photo_skip.length)} photo{p.photo_skip.length === 1 ? '' : 's'} left out — SHEIN won’t get {p.photo_skip.length === 1 ? 'it' : 'them'}.</span>}
             </span>
             <span className="shl-pub-btns">
-              {canPanel && <button type="button" className={`btn xs ${l.ok === false ? 'shl-fix' : 'ghost'}`} aria-expanded={open === l.key} onClick={() => setOpen(open === l.key ? '' : l.key)}>{open === l.key ? 'Close' : panelLabel}</button>}
+              {panelLabel && <button type="button" className={`btn xs ${l.ok === false ? 'shl-fix' : 'ghost'}`} aria-expanded={open === l.key} onClick={() => setOpen(open === l.key ? '' : l.key)}>{open === l.key ? 'Close' : panelLabel}</button>}
               {l.key === 'flight' && hard.some((b) => b.code === 'publish_rejected') && (
                 <button type="button" className="btn xs shl-fix" disabled={!canWrite || !!busy} title={canWrite ? 'Lets the next publish go to SHEIN again (SHEIN may still count the old SKUs)' : NEEDS_PRIV}
                   onClick={async () => { if (await onAct?.('publish_again', { productIds: [p.shopify_product_id] }, 'Publish again allowed — preview it, check it, then publish.')) done('flight', 'Publish again allowed — preview it, check it, then publish.'); }}>Publish again</button>
               )}
-              {first && <FixButton action={first.action} shopifyUrl={p.shopifyUrl} busy={busy} onAct={(k) => onFix?.(k, (d.variants || []).find((v) => (v.blockers || []).some((b) => b.code === first.code)) || {}, first)} />}
+              {act}
             </span>
-            {open === l.key && <div className="shl-req-fix">{panelFor(l.key)}</div>}
+            {extras[l.key] && <div className="shl-req-fix">{extras[l.key]}</div>}
+            {open === l.key && panelLabel && <div className="shl-req-fix">{panelFor(l.key)}</div>}
           </div>
           </React.Fragment>
         );
@@ -784,9 +873,11 @@ export function PublishChecklist({ d, canWrite, busy, onFix, onReload, onSignOut
 // Which photos SHEIN gets (2026-11-14): the clean photos (cutouts on white) when the style has them, unless switched off
 const photoSourceSay = (p) => (p.clean_photos !== false && Number(p.clean_count) > 0 ? `SHEIN gets the ${p.clean_count} clean photo${Number(p.clean_count) === 1 ? '' : 's'} (the shoe on white, no text).`
   : p.use_ph_photos ? 'SHEIN gets the PH edited photos (branded; never the spec / welcome slides).' : 'SHEIN gets Shopify’s photos.');
-function OkDetail({ k, p, cat }) {
+function OkDetail({ k, p, cat, live = false }) {
   let t = null;
   if (k === 'category' && cat) t = `${cat.category_path || `SHEIN category ${cat.category_id}`}${cat.shoe ? ' · this shoe only' : ''}`;
+  if (live && k === 'brand' && p.brand_code) t = `On SHEIN as brand ${p.brand_code}`;
+  if (live && k === 'title') return null;   // a live shoe's SHEIN title isn't ours to show here (an override is only used by a publish)
   if (k === 'attributes') { const n = Object.values(p.attr_overrides || {}).filter((o) => o && Number(o.ptid) === Number(cat?.product_type_id)).length; if (n) t = `${n} detail${n === 1 ? '' : 's'} set for this shoe`; }
   if (k === 'title' && p.title_override) t = `SHEIN title: “${p.title_override}”`;
   if (k === 'photos') t = p.photo_skip?.length ? `${p.photo_skip.length} photo${p.photo_skip.length === 1 ? '' : 's'} left out` : null;   // which set: the line's own data-photo-source

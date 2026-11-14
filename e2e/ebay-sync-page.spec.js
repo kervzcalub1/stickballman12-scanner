@@ -176,6 +176,39 @@ test.describe('eBay Sync page', () => {
     await expect(page.locator('[data-switch="orders"]')).toHaveCount(0);
   });
 
+  test('Settings: Stock on Test still says it is Live for the listings we created (not under the kill switch)', async ({ page }) => {
+    const status = baseStatus();
+    status.counts.created_stock_live = 8;
+    await mock(page, { status });
+    await loginAs(page, 'admin');
+    await page.goto('/ebay?tab=sync&sync=settings');
+    const stock = page.locator('[data-switch="stock"]');
+    await expect(stock).toContainText('Test mode');
+    await expect(stock.locator('[data-created-live-setting]')).toHaveText('But Live for the 8 listings we created');
+    await expect(page.locator('[data-switch="content"] [data-created-live-setting]')).toHaveCount(0);
+  });
+
+  test('Settings: no created-live line when none were created', async ({ page }) => {
+    const status = baseStatus();
+    status.counts.created_stock_live = 0;
+    await mock(page, { status });
+    await loginAs(page, 'admin');
+    await page.goto('/ebay?tab=sync&sync=settings');
+    await expect(page.locator('[data-switch="stock"]')).toContainText('Test mode');
+    await expect(page.locator('[data-created-live-setting]')).toHaveCount(0);
+  });
+
+  test('Settings: the kill switch hides the created-live line', async ({ page }) => {
+    const status = baseStatus();
+    status.counts.created_stock_live = 8;
+    status.settings.kill = true;
+    await mock(page, { status });
+    await loginAs(page, 'admin');
+    await page.goto('/ebay?tab=sync&sync=settings');
+    await expect(page.locator('[data-switch="stock"]')).toBeVisible();
+    await expect(page.locator('[data-created-live-setting]')).toHaveCount(0);
+  });
+
   test('the kill switch is instant to turn on and asks before it is turned off', async ({ page }) => {
     const st = await mock(page);
     await loginAs(page, 'admin');

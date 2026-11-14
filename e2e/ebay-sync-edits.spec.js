@@ -365,6 +365,56 @@ test.describe('End the extra listing (same SKU on two of our listings)', () => {
     expect((await endExtraListing(SHOX, { endItemId: A, keepItemId: B }, { by: 'k', io: off.io })).error).toMatch(/switched Off/);
     expect([...k.calls, ...off.calls]).toEqual([]);
   });
+
+  // eBay hid #A after an intellectual-property report: GetItem on it fails with that ONE error (prod 2026-11-15).
+  const ipErr = (code = '') => Object.assign(new Error("eBay GetItem: This listing was reported by the intellectual property rights owner. It's hidden until you can fix it."),
+    { errors: [{ code, severity: 'Error', short: 'Listing hidden.', long: "This listing was reported by the intellectual property rights owner. It's hidden until you can fix it." }] });
+  const readsWith = (fail) => async (id) => { const f = fail[id]; if (f) throw f(); return { status: 'Active', title: 'Nike Shox R4 GS', variations: live[id] || [] }; };
+
+  test('IP-hidden listing to END: still ended after the kept one reads in full; sizes lost = unknown, said and logged', async () => {
+    const t = mk({ fetchEbayItemContent: readsWith({ [A]: () => ipErr() }) });
+    await ctxOf(t, {});
+    const r = await endExtraListing(SHOX, { endItemId: A, keepItemId: B }, { by: 'kevin', io: t.io });
+    expect(r).toMatchObject({ ok: true, ended: A, kept: B, hidden: true, lostUnknown: true });
+    expect(r.note).toMatch(/hidden by eBay \(IP report\)/);
+    expect(t.calls.filter((c) => c[0] === 'endEbayItem').map((c) => c[1][0])).toEqual([A]);
+    expect(t.calls.find((c) => c[0] === 'logEbayEnd')[1][0]).toMatchObject({ itemId: A, ok: true, skus: '10043212', reason: expect.stringMatching(/IP report/) });
+    expect(t.logs.find((l) => l.action === 'end_duplicate')).toMatchObject({ itemId: A, ok: true, after: expect.objectContaining({ lost: null, lostUnknown: true, note: expect.stringMatching(/IP report/) }) });
+    // eBay's code, once it sends one, is written into the note so it can be pinned
+    const coded = mk({ fetchEbayItemContent: readsWith({ [A]: () => ipErr('21919474') }) });
+    await ctxOf(coded, {});
+    expect((await endExtraListing(SHOX, { endItemId: A, keepItemId: B }, { by: 'k', io: coded.io })).note).toMatch(/eBay error 21919474/);
+    // EndItem itself refuses: eBay's own words come back
+    const refuse = mk({ fetchEbayItemContent: readsWith({ [A]: () => ipErr() }) });
+    await ctxOf(refuse, {});
+    refuse.io.write.endEbayItem = async () => ({ ok: false, error: 'eBay EndItem: The item cannot be ended.' });
+    expect(await endExtraListing(SHOX, { endItemId: A, keepItemId: B }, { by: 'k', io: refuse.io })).toMatchObject({ ok: false, error: 'eBay EndItem: The item cannot be ended.' });
+  });
+
+  test('any other read error on the listing to END still refuses, and so does an IP-hidden one when the KEPT listing cannot be read', async () => {
+    const other = mk({ fetchEbayItemContent: readsWith({ [A]: () => Object.assign(new Error('eBay GetItem: Invalid item ID.'), { errors: [{ code: '17', severity: 'Error', long: 'Invalid item ID.' }] }) }) });
+    await ctxOf(other, {});
+    expect((await endExtraListing(SHOX, { endItemId: A, keepItemId: B }, { by: 'k', io: other.io })).error).toMatch(/Could not read the listings from eBay: .*Invalid item ID/);
+    // the IP text plus a second error is not the IP case
+    const two = mk({ fetchEbayItemContent: readsWith({ [A]: () => { const e = ipErr(); e.errors.push({ code: '10007', severity: 'Error', long: 'Internal error.' }); return e; } }) });
+    await ctxOf(two, {});
+    expect((await endExtraListing(SHOX, { endItemId: A, keepItemId: B }, { by: 'k', io: two.io })).ok).toBe(false);
+    // thrown text alone (no parsed eBay error) is not trusted
+    const bare = mk({ fetchEbayItemContent: readsWith({ [A]: () => new Error("eBay GetItem: This listing was reported by the intellectual property rights owner. It's hidden until you can fix it.") }) });
+    await ctxOf(bare, {});
+    expect((await endExtraListing(SHOX, { endItemId: A, keepItemId: B }, { by: 'k', io: bare.io })).ok).toBe(false);
+    const keepDown = mk({ fetchEbayItemContent: readsWith({ [A]: () => ipErr(), [B]: () => new Error('eBay GetItem: timeout') }) });
+    await ctxOf(keepDown, {});
+    expect((await endExtraListing(SHOX, { endItemId: A, keepItemId: B }, { by: 'k', io: keepDown.io })).error).toMatch(/Could not read the listings from eBay: eBay GetItem: timeout/);
+    // kept listing read but no longer active / no longer holds the SKU: refused even though the other is hidden
+    const keepEnded = mk({ fetchEbayItemContent: async (id) => { if (id === A) throw ipErr(); return { status: 'Completed', variations: live[B] }; } });
+    await ctxOf(keepEnded, {});
+    expect((await endExtraListing(SHOX, { endItemId: A, keepItemId: B }, { by: 'k', io: keepEnded.io })).error).toMatch(/not active on eBay/);
+    const keepNoSku = mk({ fetchEbayItemContent: async (id) => { if (id === A) throw ipErr(); return { status: 'Active', variations: [{ sku: 'OTHER', available: 1 }] }; } });
+    await ctxOf(keepNoSku, {});
+    expect((await endExtraListing(SHOX, { endItemId: A, keepItemId: B }, { by: 'k', io: keepNoSku.io })).error).toMatch(/no longer has SKU/);
+    expect([...other.calls, ...two.calls, ...bare.calls, ...keepDown.calls, ...keepEnded.calls, ...keepNoSku.calls].filter((c) => c[0] === 'endEbayItem')).toEqual([]);
+  });
 });
 
 /* ------------------------------ the real SQL (local database only) ------------------------------ */

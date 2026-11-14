@@ -838,6 +838,21 @@ export async function duplicateListings(productId, { io = IO, skip = false } = {
 // (re-worked out from our copy), and eBay is read LIVE for both: the one kept must be active and carry the SKU,
 // and a size with stock that is only on the one being ended is refused unless the person accepted losing it.
 // Then EndItem, ebay_listing_ends + ebay_sync_log. One listing at a time; never automatic.
+// eBay hides a listing that an intellectual-property rights owner reported, and GetItem on it then fails with one
+// error. Its ErrorCode is not in our records yet (prod 2026-11-15, Shox #327106732406), so the match is eBay's own
+// LongMessage from the parsed <Errors> block (not our thrown text), and only when it is the ONLY error. Add the code
+// to IP_HIDDEN_CODES once a log note shows it. -> { code, note } or null (anything else = a real read failure).
+const IP_HIDDEN_CODES = new Set([]);
+const IP_HIDDEN_TEXT = /reported by the intellectual property rights owner/i;
+export function ipHiddenRead(e) {
+  const errs = Array.isArray(e?.errors) ? e.errors : [];
+  if (errs.length !== 1) return null;
+  const x = errs[0];
+  const code = String(x.code || '').trim();
+  if (!IP_HIDDEN_CODES.has(code) && !(IP_HIDDEN_TEXT.test(x.long || '') || IP_HIDDEN_TEXT.test(x.short || ''))) return null;
+  return { code: code || null, note: `listing was hidden by eBay (IP report)${code ? `, eBay error ${code}` : ''}; its sizes could not be read` };
+}
+
 export async function endExtraListing(productId, { endItemId, keepItemId, acceptLoss = false }, { by, io = IO } = {}) {
   const endId = String(endItemId || '').replace(/[^0-9]/g, '');
   const keepId = String(keepItemId || '').replace(/[^0-9]/g, '');
@@ -852,22 +867,26 @@ export async function endExtraListing(productId, { endItemId, keepItemId, accept
   if (!endL || !keepL) return { ok: false, error: 'Those two listings no longer share a SKU of this shoe. Run the full check again.' };
   const shared = dup.dupSkus.filter((s) => endL.sizes.some((x) => x.sku === s) && keepL.sizes.some((x) => x.sku === s));
   if (!shared.length) return { ok: false, error: 'Those two listings do not share a SKU, so neither is a duplicate of the other.' };
-  let liveEnd; let liveKeep;
-  try { [liveEnd, liveKeep] = [await io.fetchEbayItemContent(endId), await io.fetchEbayItemContent(keepId)]; } catch (e) { return { ok: false, error: `Could not read the listings from eBay: ${e.message}` }; }
-  if (liveEnd.status && liveEnd.status !== 'Active') return { ok: false, error: `Listing ${endId} is no longer active on eBay.` };
+  let liveEnd = null; let liveKeep; let hidden = null;
+  // The one read error that does not stop it: eBay hid the listing to END after an IP report. The kept one must
+  // still read in full; any other error on either read refuses.
+  try { liveEnd = await io.fetchEbayItemContent(endId); } catch (e) { hidden = ipHiddenRead(e); if (!hidden) return { ok: false, error: `Could not read the listings from eBay: ${e.message}` }; }
+  try { liveKeep = await io.fetchEbayItemContent(keepId); } catch (e) { return { ok: false, error: `Could not read the listings from eBay: ${e.message}` }; }
+  if (liveEnd?.status && liveEnd.status !== 'Active') return { ok: false, error: `Listing ${endId} is no longer active on eBay.` };
   if (liveKeep.status && liveKeep.status !== 'Active') return { ok: false, error: `The listing you keep (${keepId}) is not active on eBay, so ${endId} was not ended.` };
   const keepSkus = new Set((liveKeep.variations || []).map((v) => v.sku));
   if (!shared.some((s) => keepSkus.has(s))) return { ok: false, error: `The listing you keep (${keepId}) no longer has SKU ${shared.join(', ')} on eBay, so ${endId} was not ended.` };
-  const lost = (liveEnd.variations || []).filter((v) => Number(v.available ?? (Number(v.quantity) - Number(v.sold || 0))) > 0 && !keepSkus.has(v.sku)).map((v) => v.sku || v.size || '?');
-  if (lost.length && !acceptLoss) return { ok: false, lost, error: `Ending ${endId} would take ${lost.length === 1 ? 'a size' : `${lost.length} sizes`} with stock off eBay (${lost.slice(0, 6).join(', ')}): ${keepId} does not have ${lost.length === 1 ? 'it' : 'them'}. Tick "I understand" to end it anyway.` };
+  // Hidden listing: eBay shows none of its sizes, so what ending it takes off eBay is unknown (null), said on success.
+  const lost = hidden ? null : (liveEnd.variations || []).filter((v) => Number(v.available ?? (Number(v.quantity) - Number(v.sold || 0))) > 0 && !keepSkus.has(v.sku)).map((v) => v.sku || v.size || '?');
+  if (lost?.length && !acceptLoss) return { ok: false, lost, error: `Ending ${endId} would take ${lost.length === 1 ? 'a size' : `${lost.length} sizes`} with stock off eBay (${lost.slice(0, 6).join(', ')}): ${keepId} does not have ${lost.length === 1 ? 'it' : 'them'}. Tick "I understand" to end it anyway.` };
   await ensureBudget(io, 'write');
   const reason = `Duplicate: SKU ${shared.join(', ')} is also on ${keepId}, which is kept`;
-  const res = await withLock(`item:${endId}`, () => manualDo(ctx, 'end', { action: 'end_duplicate', itemId: endId, sku: shared[0], before: { title: endL.title, keep: keepId, sizes: endL.sizes.length }, after: { reason, lost } }, async () => {
+  const res = await withLock(`item:${endId}`, () => manualDo(ctx, 'end', { action: 'end_duplicate', itemId: endId, sku: shared[0], before: { title: endL.title, keep: keepId, sizes: endL.sizes.length }, after: { reason, lost, ...(hidden ? { lostUnknown: true, note: hidden.note } : {}) } }, async () => {
     const out = await io.write.endEbayItem(endId);
-    await io.write.logEbayEnd({ itemId: endId, title: endL.title, skus: (liveEnd.variations || []).map((v) => v.sku).filter(Boolean).join(' ') || shared.join(' '), reason, ok: out.ok, error: out.error, by: by || 'eBay Sync' });
+    await io.write.logEbayEnd({ itemId: endId, title: endL.title, skus: (liveEnd?.variations || []).map((v) => v.sku).filter(Boolean).join(' ') || shared.join(' '), reason: hidden ? `${reason}; ${hidden.note}` : reason, ok: out.ok, error: out.error, by: by || 'eBay Sync' });
     if (out.ok) { await io.db.dropListing(endId); await io.db.dropLinks?.(endId); }
     return out;
   }));
-  if (res?.ok) return { ok: true, ended: endId, kept: keepId, already: !!res.already };
+  if (res?.ok) return { ok: true, ended: endId, kept: keepId, already: !!res.already, ...(hidden ? { hidden: true, lostUnknown: true, note: hidden.note } : {}) };
   return { ok: false, error: res?.error || 'eBay did not end it.' };
 }

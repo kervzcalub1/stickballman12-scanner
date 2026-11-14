@@ -420,8 +420,10 @@ function DuplicateModal({ row, onClose, onDone, onSignOut }) {
     if (!endId || !keep || busy) return;
     setBusy(true); setErr('');
     try {
-      await api.ebaySyncEndDuplicate(row.shopify_product_id, endId, keep, accept);
-      setDone(`Ended listing #${endId} on eBay. #${keep} stays. The row moves on after the next full check.`);
+      const r = await api.ebaySyncEndDuplicate(row.shopify_product_id, endId, keep, accept);
+      setDone(r?.hidden
+        ? `Ended listing #${endId} on eBay. #${keep} stays. eBay had hidden #${endId} after an IP report, so its sizes could not be read: which sizes it held is unknown. Check #${keep} has every size you need. The row moves on after the next full check.`
+        : `Ended listing #${endId} on eBay. #${keep} stays. The row moves on after the next full check.`);
       onDone();
     } catch (e) {
       if (e.unauthorized) onSignOut();

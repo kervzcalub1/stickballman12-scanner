@@ -202,6 +202,14 @@ export const BLOCKERS = {
   size_already_on_shein: { level: 'blocked', scope: 'variant', applies: ['add_sizes'],
     title: (p) => `SHEIN already has ${p?.sheinSize || 'this size'}${p?.sellerSku ? ` (SKU ${p.sellerSku})` : ''}.`,
     fix: () => 'Change the SKU on that SHEIN size to this one (Match sizes) instead of adding a second one.', action: { kind: 'open_match', label: 'Match sizes', here: true } },
+  // 2026-11-14: correcting the Product Model of a live shoe (op 'model')
+  model_unsure: { level: 'blocked', scope: 'product', applies: ['model'],
+    title: (p) => `We can’t tell this shoe’s Product Model from its title${p?.guess ? ` (our guess: “${p.guess}”)` : ''} — nothing is sent.`,
+    fix: () => 'Open its Details → SHEIN details, type the model for this shoe, save, then preview the fix again.', action: null },
+  model_already_right: { level: 'note', scope: 'product', applies: ['model'],
+    title: (p) => `Already right — SHEIN has “${p?.model || ''}”. Nothing to send.`, fix: () => '', action: null },
+  model_not_in_template: { level: 'note', scope: 'product', applies: ['model'],
+    title: () => 'This shoe’s SHEIN category has no Product Model — nothing to correct.', fix: () => '', action: null },
   never_approved: { level: 'blocked', scope: 'product', applies: ['add_sizes', 'edit', 'photos'],
     title: () => 'SHEIN never approved this shoe, so there is nothing on SHEIN to change (new sizes, prices or photos).',
     fix: () => 'Open its Details: fix what SHEIN rejected (Product Model, category, photos), then an admin presses Publish again — it goes as a new product.', action: null },
@@ -1254,6 +1262,13 @@ export function summarizePlan(plan) {
     return [`Will publish “${plan.title?.text || ''}” with ${sz.length} size${sz.length === 1 ? '' : 's'}: ${sz.map((z) => `${z.sheinSize}${z.kind === 'custom' ? ' (custom)' : ''} ${usd(z.price)}`).join(', ')}`,
       `${(plan.images || []).length} photo${(plan.images || []).length === 1 ? '' : 's'}`, plan.quota?.controlled ? `uses ${plan.quota.uses} of ${plan.quota.available} monthly new-product limit` : ''].filter(Boolean).join(' · ');
   }
+  if (plan.op === 'model') {   // 2026-11-14: the Product Model of a live shoe
+    const m = plan.model || {};
+    if (!plan.attributes) return lead([...(plan.blockers || []), ...(plan.notes || [])]) || 'Nothing to send';
+    const extra = (plan.attributes.added || []).map(addedLabel);
+    return [`Product Model: ${m.from ? `“${m.from}”` : 'none'} → “${m.to}” (${m.source === 'title' ? 'from the title' : 'typed for this shoe'})`,
+      extra.length ? `+ SHEIN details it now requires: ${extra.join(', ')}` : '', 'every other detail sent as SHEIN has it (SHEIN reviews every colour)'].filter(Boolean).join(' · ');
+  }
   if (plan.op === 'photos') {
     const im = plan.images || [];
     if (!im.length) return lead([...(plan.blockers || []), ...(plan.notes || [])]) || 'Nothing to send';
@@ -1315,7 +1330,9 @@ export const ITEM_STATUSES = {
 };
 export const itemStatus = (kind, status) => (ITEM_STATUSES[kind === 'run' ? 'run' : 'preview'][status]) || { label: status, chip: 'ebo-chip', tone: 'muted' };
 // Phase 3 — what each op of a preview / send is (the sheet's tag), and the run words that differ by op.
-export const OP_LABEL = { add_sku: 'Add sizes', price: 'Prices', edit: 'Sizes & SKUs', publish: 'Publish', photos: 'Photos' };
+export const OP_LABEL = { add_sku: 'Add sizes', price: 'Prices', edit: 'Sizes & SKUs', publish: 'Publish', photos: 'Photos', model: 'Product Model' };
+// 2026-11-14 — a preview / send that corrects the Product Model of shoes already on SHEIN (op 'model', alone).
+export const isModelOps = (ops) => (ops || []).includes('model');
 // 2026-11-11 — a preview / send that replaces the photos of shoes already on SHEIN (op 'photos', alone).
 export const isPhotoOps = (ops) => (ops || []).includes('photos');
 export const isUpdateOps = (ops) => (ops || []).some((o) => o === 'price' || o === 'edit');
@@ -1327,6 +1344,10 @@ export const PUBLISH_WORD = {
   run: { done: 'Approved', in_review: 'In review', failed: 'Error' },
 };
 export const OP_SAY = {
+  model: {
+    in_review: 'Sent. SHEIN is reviewing the corrected Product Model (hours to days); the old one stays live until it approves.',
+    done: 'SHEIN approved it — the shoe shows its own Product Model now.',
+  },
   photos: {
     in_review: 'Sent. SHEIN is reviewing the new photos (hours to days); the old ones stay live until it approves. Then send any sizes SHEIN rejected again (Add missing sizes).',
     done: 'SHEIN approved the new photos. Sizes SHEIN rejected before can go again now: Add missing sizes.',

@@ -9,6 +9,7 @@ import { useLive } from '../hooks.js';
 import { STATUSES, STATUS_ORDER, rowSyncable, rowSyncWhy } from '../lib/sheinListings.js';
 import { TERMS, plain } from '../lib/sheinWords.js';
 import { SheinBulkPublish } from '../components/SheinBulkPublish.jsx';
+import { ModelFixStrip } from '../components/SheinModelFix.jsx';
 import { PH_DATE } from '../lib/format.js';
 import { fmt, money, StatusChip, BlockerSay, FixButton, TONE, NEXT_PHASE, CustomSizeModal, PUBLISH_FIX_KINDS } from '../components/SheinListingsBits.jsx';
 
@@ -330,6 +331,7 @@ export function SheinListingsProducts({ setStatusAll, d, status, q, setQ, brand,
 
   return (
     <div className="card">
+      <ModelFixStrip active={active} busy={busy} onDryRun={onDryRun} onSignOut={onSignOut} />
       <div className="ebl-filters shl-filters">
         <input type="search" className="input" value={text} onChange={(e) => setText(e.target.value)} placeholder="Search name, style code or SKU…" aria-label="Search products" />
         {filtersSet > 0 || showFilters ? null : <button type="button" className="btn ghost sm shein-filterbtn" aria-expanded="false" onClick={() => setShowFilters(true)}>More filters</button>}

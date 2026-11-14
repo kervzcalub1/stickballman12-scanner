@@ -83,6 +83,7 @@ const TPL = {
 const TEMPLATE = (t) => ({ product_type_id: t, attribute_infos: [
   { attribute_id: 27, attribute_name_en: 'Color', attribute_type: 1, attribute_label: 1, attribute_status: 3, attribute_value_info_list: [val(81, 'Black')] },
   { attribute_id: ATTR, attribute_name_en: 'Size', attribute_type: 1, attribute_label: 0, attribute_status: 3, attribute_value_info_list: TPL[t] },
+  ...(fake.tplExtra?.[t] || []),   // a test adds product attributes (the Product Model fix, 2026-11-14)
 ] });
 
 const gidP = (n) => `gid://shopify/Product/${n}`;
@@ -300,6 +301,21 @@ function validateEdit(body) {
   const empty = (o, at = '') => { for (const [k, v] of Object.entries(o || {})) { if (v === '' || v === null) return `${at}${k}`; if (v && typeof v === 'object') { const r = empty(v, `${at}${k}.`); if (r) return r; } } return null; };
   const blank = empty(body);
   if (blank) return `field ${blank} is empty — that would clear it`;
+  // 2026-11-14: a details-only edit (the Product Model fix) — SPU level: the WHOLE list (doc 3002047 rule 3), product
+  // attributes only (types 3/4 of the template), every required one present, a typed one with its text
+  if (body.product_attribute_list && !body.skc_list && !body.multi_language_name_list) {
+    const tpl = TEMPLATE(base.productTypeId).attribute_infos;
+    const list = body.product_attribute_list;
+    for (const r of list) {
+      const a = tpl.find((x) => x.attribute_id === r.attribute_id);
+      if (!a || ![3, 4].includes(a.attribute_type)) return `attribute ${r.attribute_id} isn’t a product attribute of this type`;
+      if (a.attribute_mode === 0 && !r.attribute_extra_value) return `attribute ${r.attribute_id} needs its text`;
+    }
+    for (const a of tpl.filter((x) => [3, 4].includes(x.attribute_type) && x.attribute_status === 3)) if (!list.some((r) => r.attribute_id === a.attribute_id)) return `required attribute ${a.attribute_id} missing — the list replaces SHEIN’s`;
+    const keys = Object.keys(body).filter((k) => k !== 'spu_name' && k !== 'product_attribute_list');
+    if (keys.length) return `unexpected fields ${keys.join(', ')}`;
+    return null;
+  }
   if (body.multi_language_name_list) {
     const l = body.multi_language_name_list;
     if (!Array.isArray(l) || !l.some((x) => x.language === 'en') || l.some((x) => !x.name || x.name.length > 1000)) return 'multi_language_name_list: the default language (en), ≤ 1000';
@@ -348,6 +364,7 @@ function sheinNow(spuName) {
   const s = JSON.parse(JSON.stringify(base));
   const p = fake.p2;
   if (p.title[spuName]) s.productMultiNameList = p.title[spuName];
+  if (p.attrs?.[spuName]) s.productAttributeInfoList = p.attrs[spuName];
   for (const c of s.skcInfoList) {
     for (const k of c.skuInfoList) {
       if (p.relinked[k.skuCode]) k.supplierSku = p.relinked[k.skuCode];
@@ -368,6 +385,7 @@ function approveOnFake(spuName) {
   for (const e of p.edits.filter((x) => x.body.spu_name === spuName && x.ok && !x.applied)) {
     e.applied = true;
     if (e.body.multi_language_name_list) p.title[spuName] = e.body.multi_language_name_list.map((x) => ({ language: x.language, productName: x.name }));
+    if (e.body.product_attribute_list) (p.attrs || (p.attrs = {}))[spuName] = e.body.product_attribute_list.map((r) => ({ attributeId: r.attribute_id, attributeValueId: r.attribute_value_id ?? null, ...(r.attribute_extra_value ? { attributeValue: r.attribute_extra_value } : {}) }));
     for (const c of e.body.skc_list || []) for (const k of c.sku_list) {
       if (k.sku_code) { if (k.supplier_sku) p.relinked[k.sku_code] = k.supplier_sku; if (k.mall_state) p.mall[k.sku_code] = k.mall_state; continue; }
       const a = k.sale_attribute_list[0];
@@ -2621,6 +2639,159 @@ test.describe.serial('SHEIN Listings — replace live photos (server jobs vs the
     await expect(sec.locator('[data-dry="photos"]')).toHaveClass(/primary/);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+});
+
+// 2026-11-14 (owner approved): correct the Product Model of shoes ALREADY LIVE on SHEIN that went out with a Setup default
+// ("ACG Air Max" on every men's shoe). op 'model' = ONE partialEdit per SPU: SHEIN's current details with ONLY 1000546
+// swapped to the shoe's own model (typed → else the title when sure); unsure / already right → skipped; the send needs an
+// admin / Connect integrations; the fake SHEIN checks the body (a details-only edit, the whole list, nothing else).
+test.describe.serial('SHEIN Listings — fix the Product Model of live shoes (server jobs vs the fake SHEIN)', () => {
+  const MODEL = 1000546;
+  let L; let D; let auth; let started; let previewId; let pubJob; const saved = {};
+  const items = async (jobId) => (await D.listListingJobItems(jobId, { limit: 1000 })).map((i) => ({ ...i, n: Number(i.shopify_product_id.split('/').pop()) }));
+  const finished = async (id) => { await waitFor(async () => { const j = await D.getListingJob(id); return !['queued', 'running'].includes(j.status) && !L.listingJobRunning(); }); return D.getListingJob(id); };
+  const io = () => ({ ...p2IO(L.IO, { shopify: SHOPIFY }), recentShelf: async () => new Set() });
+  const preview = async (ns) => { const j = await L.startListingJob({ kind: 'preview', by: 'e2e-pm', scope: { productIds: ns.map(gidP), ops: ['model'] }, io: io() }); jobsMade.add(j.id); return finished(j.id); };
+  const A = (id, name, extra) => ({ attribute_id: id, attribute_name_en: name, attribute_type: 4, data_dimension: 1, ...extra });
+  const MODEL_ATTR = A(MODEL, 'Product Model', { attribute_mode: 0, attribute_status: 3, attribute_value_info_list: [] });
+  const cleanCache = () => pool.query(`DELETE FROM shein_listing_cache WHERE (kind = 'attr_template' AND key IN ('501','502','504')) OR kind = 'assoc_rules'`);
+
+  test.beforeAll(async () => {
+    if (!pool || !secretsOk || foreign) return;
+    L = await import('../api/_lib/shein-listing.js'); D = await import('../api/_lib/db.js');
+    const { signToken } = await import('../api/_lib/util.js');
+    auth = { ph: { Authorization: `Bearer ${signToken({ uid: 'e2e-ph', username: 'e2e_ph', name: 'E2E PH', role: 'ph_team' })}` },
+      admin: { Authorization: `Bearer ${signToken({ uid: 'admin', username: 'admin', name: 'Alex', role: 'admin' })}` } };
+    started = new Date();
+    // the live shoes' SHEIN details: the Air Max 95 went out with Setup's "ACG Air Max" (+ a leather upper → a lining is
+    // required by an associated rule; a colour sale attribute spu-info mixes in; a detail the template no longer lists)
+    for (const k of ['E2ESPU1', 'E2ESPU2', 'E2ESPU3']) saved[k] = SHEIN[k].productAttributeInfoList;
+    SHEIN.E2ESPU1.productAttributeInfoList = [{ attributeId: 7000, attributeValueId: 7001 }, { attributeId: MODEL, attributeValueId: null, attributeValue: 'ACG Air Max' }, { attributeId: 27, attributeValueId: 81 }, { attributeId: 5555, attributeValueId: 1 }];
+    SHEIN.E2ESPU2.productAttributeInfoList = [{ attributeId: MODEL, attributeValueId: null, attributeValue: 'Dunk Low' }];   // the Dunk Low Women: already right
+    SHEIN.E2ESPU3.productAttributeInfoList = [{ attributeId: MODEL, attributeValueId: null, attributeValue: 'Dunk Low' }];   // its title is made unsure below
+    fake.tplExtra = {
+      501: [A(7000, 'Upper Material', { attribute_mode: 3, attribute_status: 3, attribute_value_info_list: [val(7001, 'Leather'), val(7002, 'Mesh')] }),
+        A(7200, 'Lining Material', { attribute_mode: 3, attribute_status: 2, attribute_value_info_list: [val(7201, 'Fabric')] }), MODEL_ATTR],
+      502: [MODEL_ATTR], 504: [MODEL_ATTR] };
+    const { rows } = await pool.query(`SELECT id FROM shein_listing_jobs WHERE started_by LIKE 'e2e-p%'`);
+    await pool.query(`DELETE FROM shein_listing_jobs WHERE id = ANY($1::bigint[])`, [rows.map((r) => r.id)]);
+    await pool.query(`DELETE FROM shein_listing_variants WHERE ${TEST_IDS}`);
+    await pool.query(`DELETE FROM shein_listing_products WHERE ${TEST_IDS}`);
+    await pool.query(`DELETE FROM shein_attr_defaults WHERE product_type_id IN (501, 502, 504)`);
+    // Setup: a lining default (picked — fine) + the leak itself (a typed default, never used any more)
+    await pool.query(`INSERT INTO shein_attr_defaults (product_type_id, attribute_id, scope, value_ids, extra_values, set_by) VALUES (501, 7200, 'product', '{7201}', '{}', 'e2e'), (501, $1, 'product', '{}', '{"ACG Air Max"}', 'e2e')`, [MODEL]);
+    await cleanCache();
+    fake.p2 = P2(); fake.p4 = P4();
+    const snap = await L.startListingJob({ kind: 'snapshot', by: 'e2e-pm', io: testIO(L.IO, { shopify: SHOPIFY }) });
+    jobsMade.add(snap.id); await finished(snap.id);
+    await pool.query(`UPDATE shein_listing_products SET title = 'Nike Motive Black Anthracite (GS0001-001)' WHERE shopify_product_id = $1`, [gidP(7704)]);
+  });
+  test.beforeEach(() => { test.skip(!pool || !secretsOk || foreign, 'needs the database + BUY_GC_KEY (and no real SHEIN Listings data)'); });
+  test.afterAll(async () => {
+    for (const k of Object.keys(saved)) SHEIN[k].productAttributeInfoList = saved[k];
+    fake.tplExtra = null; fake.p2 = null; fake.p4 = null;
+    if (!pool || !started) return;
+    await pool.query(`DELETE FROM shein_attr_defaults WHERE product_type_id IN (501, 502, 504)`);
+    await cleanCache();
+    if (pubJob) await pool.query(`DELETE FROM shein_listing_jobs WHERE id = $1`, [pubJob]);
+  });
+
+  test('the preview (PH, reads only): the current details with ONLY the Product Model swapped (+ a lining SHEIN now requires); already right / unsure → skipped with why; 0 writes; never mixed; the send needs the privilege', async ({ request }) => {
+    fake.writes.length = 0;
+    const job = await preview([7701, 7702, 7704]);
+    previewId = job.id;
+    expect(job).toMatchObject({ status: 'awaiting_confirm', counts: expect.objectContaining({ model_fixes: 1, model_right: 1, sendable: 1, skipped: 2, shein_writes: 0 }) });
+    expect(job.phase).toMatch(/the Product Model of 1 product to correct\. Nothing was sent/);
+    const its = await items(job.id);
+    const fix = its.find((i) => i.n === 7701);
+    expect(fix).toMatchObject({ op: 'model', status: 'done', spu: 'E2ESPU1' });
+    // the whole list SHEIN has (the colour sale attribute and the dropped detail aside), only 1000546 changed — nothing else
+    expect(fix.body).toEqual({ spu_name: 'E2ESPU1', product_attribute_list: [{ attribute_id: 7000, attribute_value_id: 7001 }, { attribute_id: 7200, attribute_value_id: 7201 }, { attribute_id: MODEL, attribute_extra_value: 'Air Max 95' }] });
+    expect(fix.plan.model).toEqual({ from: 'ACG Air Max', to: 'Air Max 95', source: 'title' });
+    expect(fix.plan.attributes).toMatchObject({ added: [{ attributeId: 7200, attribute: 'Lining Material' }], dropped: [5555], count: 3 });
+    expect(summarizePlan(fix.plan)).toMatch(/^Product Model: “ACG Air Max” → “Air Max 95” \(from the title\) · \+ SHEIN details it now requires: Lining Material/);
+    const right = its.find((i) => i.n === 7702);
+    expect(right).toMatchObject({ status: 'skipped', body: null });
+    expect(right.blockers).toEqual([expect.objectContaining({ code: 'model_already_right', params: { model: 'Dunk Low' } })]);
+    const unsure = its.find((i) => i.n === 7704);
+    expect(unsure).toMatchObject({ status: 'skipped', body: null });
+    expect(unsure.blockers).toEqual([expect.objectContaining({ code: 'model_unsure', params: { current: 'Dunk Low', guess: 'Motive Black' } })]);   // the 2-word guess, never sent
+    expect(fake.writes).toEqual([]);
+    expect(fake.p2.edits).toEqual([]);
+    // never mixed with another op; a PH can preview but never confirm it
+    expect((await request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'preview', productIds: [gidP(7701)], ops: ['model', 'edit'] } })).status()).toBe(400);
+    expect((await request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'run', previewJobId: previewId } })).status()).toBe(403);
+    expect(fake.p2.edits).toEqual([]);
+  });
+
+  test('the candidates (GET ?modelFix=1, DB only): a shoe published with Setup’s “ACG Air Max” whose title says “Air Max 95”', async ({ request }) => {
+    pubJob = (await pool.query(`INSERT INTO shein_listing_jobs (kind, status, started_by) VALUES ('run', 'done', 'e2e-pm-publish') RETURNING id`)).rows[0].id;
+    jobsMade.add(pubJob);
+    await pool.query(`INSERT INTO shein_listing_job_items (job_id, shopify_product_id, op, status, body) VALUES ($1, $2, 'publish', 'done', $3)`,
+      [pubJob, gidP(7701), JSON.stringify({ product_type_id: 501, product_attribute_list: [{ attribute_id: 7000, attribute_value_id: 7001 }, { attribute_id: MODEL, attribute_extra_value: 'ACG Air Max' }] })]);
+    const r = await (await request.get('/api/shein/listings?modelFix=1', { headers: auth.ph })).json();
+    expect(r.candidates).toEqual([expect.objectContaining({ productId: gidP(7701), spu: 'E2ESPU1', sent: 'ACG Air Max', should: 'Air Max 95', from: 'title', reason: 'setup_default_differs', fixStatus: null })]);
+    expect(r.canWrite).toBe(false);
+  });
+
+  test('the page: the strip says how many shoes show another shoe’s model → “Preview the fix” starts the model preview; the sheet shows before → after, Confirm needs the privilege', async ({ page }) => {
+    const posted = [];
+    await loginAs(page, 'ph_team');
+    await page.setViewportSize({ width: 1320, height: 1000 });
+    await page.route((u) => u.pathname === '/api/shein/listings', async (route) => {
+      const req = route.request();
+      if (req.method() !== 'POST') return route.continue();
+      const b = req.postDataJSON() || {}; posted.push(b);
+      if (b.action !== 'preview') return route.continue();
+      const j = await L.startListingJob({ kind: 'preview', by: 'e2e-pm', scope: { productIds: b.productIds, ops: b.ops }, io: io() });
+      jobsMade.add(j.id); await finished(j.id);
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, job: j }) });
+    });
+    await page.goto('/ph/shein-listings');
+    const strip = page.locator('[data-modelfix]');
+    await expect(strip).toContainText('1 shoe on SHEIN shows another shoe’s Product Model');
+    await expect(strip).toContainText('“ACG Air Max” → “Air Max 95”');
+    await strip.getByRole('button', { name: 'Preview the fix (1)' }).click();
+    const sheet = page.getByRole('dialog', { name: 'Preview and send' });
+    await expect(sheet.locator('.shl-sheet-head')).toContainText('Fix the Product Model — what WOULD be sent', { timeout: 20_000 });
+    expect(posted.at(-1)).toMatchObject({ action: 'preview', productIds: [gidP(7701)], ops: ['model'] });
+    await expect(sheet.locator('[data-stats="model"]')).toContainText('Product Models to correct');
+    const it = sheet.locator(`.shl-ditem[data-product="${gidP(7701)}"][data-op="model"]`);
+    await expect(it.getByRole('button', { name: /Hide what is sent/ })).toBeVisible();   // one item → open
+    await expect(it.locator('[data-model-change]')).toContainText('“ACG Air Max”');
+    await expect(it.locator('[data-model-change]')).toContainText('“Air Max 95”');
+    const confirm = sheet.locator('[data-confirm]');
+    await expect(confirm).toHaveText('Correct the Product Model of 1 shoe on SHEIN');
+    await expect(confirm).toBeDisabled();                    // PH: an admin / Connect integrations confirms
+    expect(fake.p2.edits).toEqual([]);
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+
+  test('the send (admin): ONE partialEdit — only spu_name + the list (the fake checks it) → In review; SHEIN approves → Done; the shoe leaves the candidates; a new preview says “already right”', async ({ request }) => {
+    const j = await L.startRunJob({ previewJobId: previewId, by: 'e2e-pm', io: io() }); jobsMade.add(j.id);
+    const run = await finished(j.id);
+    const it = (await items(run.id)).find((i) => i.n === 7701);
+    expect(it, JSON.stringify({ s: it.status, e: it.error })).toMatchObject({ op: 'model', status: 'in_review', version: expect.stringMatching(/^E2EV/) });
+    expect((await items(run.id)).map((i) => i.n)).toEqual([7701]);   // only what the preview could send
+    const sent = fake.p2.edits.filter((e) => e.body.spu_name === 'E2ESPU1');
+    expect(sent).toHaveLength(1); expect(sent[0].ok).toBe(true);
+    expect(Object.keys(sent[0].body).sort()).toEqual(['product_attribute_list', 'spu_name']);
+    expect(sent[0].body).toEqual(it.body);
+    expect(fake.p2.edits.filter((e) => e.body.spu_name !== 'E2ESPU1')).toEqual([]);
+    // while in review: a fix went → no longer a candidate, the row says so
+    let r = await (await request.get('/api/shein/listings?modelFix=1', { headers: auth.ph })).json();
+    expect(r.candidates).toEqual([]);
+    expect(r.rows.find((x) => x.productId === gidP(7701))).toMatchObject({ fixStatus: 'in_review', fixJobId: Number(run.id) });
+    approveOnFake('E2ESPU1');
+    await L.listingFollowUp({ io: io(), force: true });
+    expect((await D.getListingItems([it.id]))[0].status).toBe('done');
+    r = await (await request.get('/api/shein/listings?modelFix=1', { headers: auth.ph })).json();
+    expect(r.rows.find((x) => x.productId === gidP(7701))).toMatchObject({ fixStatus: 'done' });
+    const again = (await items((await preview([7701])).id))[0];
+    expect(again).toMatchObject({ status: 'skipped', body: null });
+    expect(again.blockers).toEqual([expect.objectContaining({ code: 'model_already_right', params: { model: 'Air Max 95' } })]);
   });
 });
 

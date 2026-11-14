@@ -393,6 +393,7 @@ export const api = {
   sheinListingProduct: (id) => get(`/api/shein/listings?product=${encodeURIComponent(id)}`),
   sheinListingPhotos: (id) => get(`/api/shein/listings?photos=${encodeURIComponent(id)}`),
   sheinListingProbe: () => get('/api/shein/listings?probe=1'),
+  sheinModelFix: () => get('/api/shein/listings?modelFix=1'),
   // Bulk edit before publishing: the checklist + inputs of ≤ 100 products not on SHEIN (DB only).
   sheinPublishSetup: (ids) => get(`/api/shein/listings?publishSetup=${encodeURIComponent(ids.join(','))}`),
   sheinListingAction: (body) => post('/api/shein/listings', body),

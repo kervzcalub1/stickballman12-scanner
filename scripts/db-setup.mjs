@@ -3200,8 +3200,9 @@ await sql(`
     CONSTRAINT shein_listing_job_items_status_check CHECK (status IN ('pending','sending','sent','in_review','done','skipped','deferred','changed','failed'))
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS shein_listing_job_items_job ON shein_listing_job_items (job_id, seq)`);
-// The ops a job item may carry — ONE definition, re-applied on every run (2026-11-11: + 'photos', replace a live shoe's photos).
-const SHEIN_ITEM_OPS = ['read', 'add_sku', 'edit', 'price', 'mall_state', 'publish', 'seller_sku', 'recheck', 'photos'];
+// The ops a job item may carry — ONE definition, re-applied on every run (2026-11-11: + 'photos', replace a live shoe's photos;
+// 2026-11-14: + 'model', correct a live shoe's Product Model).
+const SHEIN_ITEM_OPS = ['read', 'add_sku', 'edit', 'price', 'mall_state', 'publish', 'seller_sku', 'recheck', 'photos', 'model'];
 await sql(`ALTER TABLE shein_listing_job_items DROP CONSTRAINT IF EXISTS shein_listing_job_items_op_check`);
 await sql(`ALTER TABLE shein_listing_job_items ADD CONSTRAINT shein_listing_job_items_op_check CHECK (op IN (${SHEIN_ITEM_OPS.map((o) => `'${o}'`).join(',')}))`);
 // Phase 2 (add sizes, 2026-10-27): the per-product plan a person reads (sizes / relinks / skipped),

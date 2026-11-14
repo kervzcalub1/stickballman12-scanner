@@ -30,6 +30,8 @@
 //   product/price/save, edit = ONE partialEdit (sizes back on, SKU relinks, title on OUR products only);
 //   auto_price { on }  admin or Connect integrations: D8's "auto re-sync price" switch (default OFF) -> { ok, autoPrice }
 //   2026-11-11 — replace the photos of shoes ON SHEIN: preview { productIds, ops:['photos'] } (alone) → ONE partialEdit each → SHEIN review.
+//   2026-11-14 — fix the Product Model of shoes ON SHEIN: preview { productIds, ops:['model'] } (alone) → ONE partialEdit each (the current
+//     details, only 1000546 swapped) → SHEIN review; GET ?modelFix=1 (PH, DB only) → { rows, candidates, setup, checked } (the shoes to fix).
 //   Phase 4 — publish brand-new products: preview { …, ops:['publish'] } (never mixed; filter = products NOT on SHEIN);
 //     photos are converted (R2 + transform-pic) only when the starter is an admin / Connect integrations holder (security H2);
 //   publish_choices { productId, titleOverride?, skcValueId?, usePhPhotos?, photoSkip?: [url] } (PH, DB only) -> { ok, product };
@@ -60,9 +62,10 @@ import {
   getSetting, setSetting, getListingItems, updateListingItem, requeueListingJob, resumeListingJob,
   lastPreviewItem, markPublishAgain, setListingPublishChoices, setListingCategoryPick, setListingAttrOverride, lastPublishRunItem,
   listingShopifyCounts, getListingProductsMany, setListingPublishChoicesMany, listCategoryMaps, listListingCache, setListingCoverSkip, productPhotosForSku,
-  cleanPhotoKeys, addListingPhotoSkips,
+  cleanPhotoKeys, addListingPhotoSkips, sheinModelReportData,
 } from '../_lib/db.js';
 import { cleanPhotosFor, findCleanPhotos, shopifyPhCopies, ensureShapes } from '../_lib/shein-clean-photos.js';
+import { modelReportFrom } from '../_lib/shein-model-report.js';
 import { photoSourceOf, isSlideAngle, SLIDE_ANGLES, cleanOrder } from '../../src/lib/sheinCleanPhotos.js';
 import { publishChecklist, cleanTitle, sizeGroupOf, templateParts, photoKey, keepPhotos, isShopifyPhoto, PHOTO_SKIP_MAX, shoeCategory, attrValueProblem } from '../../src/lib/sheinPublish.js';
 import { treeLeaves } from '../_lib/shein-publish.js';
@@ -190,6 +193,12 @@ export default async function handler(req, res) {
       // the shoes that need fixing first (most ✕ first), then the ready ones
       products.sort((a, b) => Number(a.ready) - Number(b.ready) || b.blocking.length - a.blocking.length || String(a.title || '').localeCompare(String(b.title || '')));
       return send(res, 200, { ok: true, products, skipped, canWrite, isAdmin });
+    }
+    if (qs.has('modelFix')) {
+      // 2026-11-14: live shoes whose Product Model on SHEIN isn't theirs (a Setup default went out with them) — DB only,
+      // read-only. `candidates` = what "Fix the Product Model" previews (op 'model'); a fix already sent shows its status.
+      const r = modelReportFrom(...await sheinModelReportData());
+      return send(res, 200, { ok: true, ...r, canWrite });
     }
     if (qs.has('photos')) {
       // The photos a publish would send (2026-11-11) — Shopify's (live read) and the PH team's edited ones for the
@@ -334,7 +343,7 @@ export default async function handler(req, res) {
         }
         if (!productIds.length) return send(res, 400, { ok: false, error: 'Pick the products to dry-run (none of these is on SHEIN yet).' });
         const ops = b.ops == null ? ['add_sku'] : (Array.isArray(b.ops) ? [...new Set(b.ops.map(String))] : []);
-        if (!ops.length || ops.some((o) => !PREVIEW_OPS.includes(o)) || (ops.includes('add_sku') && ops.length > 1) || (ops.includes('publish') && ops.length > 1) || (ops.includes('photos') && ops.length > 1)) return send(res, 400, { ok: false, error: 'ops: ["add_sku"], "price" and/or "edit", ["publish"] or ["photos"] — never mixed.' });
+        if (!ops.length || ops.some((o) => !PREVIEW_OPS.includes(o)) || (ops.includes('add_sku') && ops.length > 1) || (ops.includes('publish') && ops.length > 1) || (ops.includes('photos') && ops.length > 1) || (ops.includes('model') && ops.length > 1)) return send(res, 400, { ok: false, error: 'ops: ["add_sku"], "price" and/or "edit", ["publish"], ["photos"] or ["model"] — never mixed.' });
         // endSpecials: a person chose to END live SHEIN specials on these sizes (sent without specialPrice)
         return send(res, 200, { ok: true, job: jobOut(await startListingJob({ kind: 'preview', by, scope: { productIds, ops, filter: b.filter || null, endSpecials: b.endSpecials === true, convertPhotos: canWrite } })) });
       }

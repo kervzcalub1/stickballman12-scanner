@@ -562,7 +562,7 @@ const LINES = [
   [13, 'skus', 'Seller SKUs', ['no_seller_sku', 'dup_seller_sku', 'seller_sku_taken']],
   [14, 'prices', 'Prices', ['no_price']],
   [15, 'box', 'Box size / weight', ['no_weight', 'box_unconfirmed', 'unit_unverified']],
-  [16, 'photos', 'Photos', ['no_image', 'image_rejected', 'photos_need_priv', 'photo_cap_reached']],
+  [16, 'photos', 'Photos', ['no_image', 'image_rejected', 'photos_need_priv', 'photo_cap_reached', 'clean_main_unsure']],
   [17, 'fields', 'SHEIN extra fields', ['fill_required']],
   [18, 'flight', 'Not already sent / in review', ['publish_in_flight', 'publish_rejected', 'publish_unconfirmed']],
 ];
@@ -750,6 +750,8 @@ export function planPublish(input) {
   // images (§2.5) — converted by the server; refusals / too few photos block
   const ip = imagePlan(fill);
   plan.imagePlan = { newPlan: ip.newPlan, need: ip.need, sku: ip.sku };
+  // the clean photos have no confirmed side view for photo 1 (2026-11-14) — held, never sent on a guess
+  if (product?.cleanMainUnsure) blockers.push(blocker('clean_main_unsure', { style: product.style || null }));
   if (readiness && product.imageCount != null && Number(product.imageCount) < ip.need) blockers.push(blocker('no_image', { count: Number(product.imageCount), need: ip.need, ph: product.phPhotos ?? null, style: product.style || null, src: product.photoSource || null, clean: product.cleanPhotos ?? null }));
   if (images) {
     for (const e of images.errors || []) blockers.push(blocker('image_rejected', { reason: e.reason, sheinMessage: e.sheinMessage || null, photo: e.photo + 1 }));

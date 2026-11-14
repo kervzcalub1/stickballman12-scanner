@@ -39,6 +39,7 @@
 //     + attr: { attributeId, valueIds?, extraValues? } | { attributeId, clear: true } (THIS shoe's own SHEIN detail, e.g. Product Model;
 //       checked against the template of the shoe's category) — 2026-11-11
 //     + photoSource: 'clean' | 'ph_edited' | 'shopify' | 'auto' (2026-11-14; usePhPhotos alone also switches the clean photos off)
+//     + cleanMain: url | null — the clean photo SHEIN shows first (a person's "Make main photo"; null = automatic: a side view)
 //   find_clean_photos { productId }  (PH, R2 list + reads; writes product_cutouts only) the style's cutouts made by the brand tool
 //     before they were recorded, matched to its uploaded angles -> { ok, found, recorded, cutouts, confidence }
 //   publish_choices_bulk { productIds (≤ 100), patch: { skcValueId?, usePhPhotos?, cleanPhotos?: true|false|null, skipCover?, skipSlides?: true }, productTypeId?, titles?: { [productId]: title | null } }
@@ -63,9 +64,9 @@ import {
   listingShopifyCounts, getListingProductsMany, setListingPublishChoicesMany, listCategoryMaps, listListingCache, setListingCoverSkip, productPhotosForSku,
   cleanPhotoKeys, addListingPhotoSkips, sheinModelReportData,
 } from '../_lib/db.js';
-import { cleanPhotosFor, findCleanPhotos, shopifyPhCopies } from '../_lib/shein-clean-photos.js';
+import { cleanPhotosFor, findCleanPhotos, shopifyPhCopies, ensureShapes } from '../_lib/shein-clean-photos.js';
 import { modelReportFrom } from '../_lib/shein-model-report.js';
-import { photoSourceOf, isSlideAngle, SLIDE_ANGLES } from '../../src/lib/sheinCleanPhotos.js';
+import { photoSourceOf, isSlideAngle, SLIDE_ANGLES, cleanOrder } from '../../src/lib/sheinCleanPhotos.js';
 import { publishChecklist, cleanTitle, sizeGroupOf, templateParts, photoKey, keepPhotos, isShopifyPhoto, PHOTO_SKIP_MAX, shoeCategory, attrValueProblem } from '../../src/lib/sheinPublish.js';
 import { treeLeaves } from '../_lib/shein-publish.js';
 import { sheinStatus } from '../_lib/shein.js';
@@ -212,10 +213,14 @@ export default async function handler(req, res) {
       // the spec / welcome slides are never sent (2026-11-14) — not offered either
       const phAll = style ? await productPhotosForSku(style).catch(() => []) : [];
       const ph = phAll.filter((x) => !isSlideAngle(x.angle));
-      const cleanRows = await cleanPhotosFor(style);
+      // measured (silhouette → view) first, ≤ 6 s here (the rest next time); photo 1 = a confirmed side view (2026-11-14)
+      const cleanRows = style ? await ensureShapes(style, { deadline: Date.now() + 6000 }).catch(() => []) : [];
       const skip = new Set(d.product.photo_skip || []);
       const phList = ph.map((x) => ({ url: x.url, key: photoKey(x.url), angle: x.angle || null, skipped: skip.has(photoKey(x.url)) }));
-      const clean = cleanRows.map((x) => ({ url: x.url, key: photoKey(x.url), angle: x.angle, how: x.how, origin: x.origin, skipped: skip.has(photoKey(x.url)) }));
+      const order = cleanOrder(cleanRows, { mainKey: d.product.clean_main || null, skip: [...skip] });
+      const cleanOut = [...order.rows, ...cleanRows.filter((r) => skip.has(photoKey(r.url)))];   // as sent, then the left-out ones
+      const clean = cleanOut.map((x) => ({ url: x.url, key: photoKey(x.url), angle: x.angle, how: x.how, origin: x.origin, view: x.view || null, measured: !!x.shape,
+        main: x === order.main, skipped: skip.has(photoKey(x.url)) }));
       const source = photoSourceOf({ cleanPhotos: d.product.clean_photos ?? null, usePhPhotos: !!d.product.use_ph_photos, cleanCount: clean.length, phCount: phList.length });
       // when Shopify's photos are the ones sent: which are copies of the PH set (by picture; cached per photo; ≤ 6 s here,
       // the rest next time) — the branded ones and the spec / welcome slides get named
@@ -230,6 +235,7 @@ export default async function handler(req, res) {
       // a left-out photo no longer on Shopify / the PH list / the clean list (stale) — shown so it can be put back
       const known = new Set([...shopify, ...phList, ...clean].map((x) => x.key));
       return send(res, 200, { ok: true, productId: ppid, style, usePhPhotos: !!d.product.use_ph_photos, cleanPhotos: d.product.clean_photos ?? null, source,
+        cleanMain: d.product.clean_main || null, mainUnsure: source === 'clean' && order.unsure, mainWhy: order.why,
         shopify, ph: phList, clean, slidesOnFile: phAll.filter((x) => isSlideAngle(x.angle)).length, copiesChecked: source !== 'shopify' || !phAll.length || !shopify.length ? null : !!copies && copies.checked === shopify.length && copies.phRead === phAll.length,
         sent: Math.min(kept.urls.length, 11), max: 11, stale: [...skip].filter((k) => !known.has(k)).map((k) => ({ key: k, shopify: isShopifyPhoto(k) })) });
     }
@@ -382,6 +388,10 @@ export default async function handler(req, res) {
         }
         if (b.skcValueId !== undefined) { const v = b.skcValueId == null || b.skcValueId === '' ? null : Number(b.skcValueId); if (v != null && !Number.isSafeInteger(v)) return send(res, 400, { ok: false, error: 'That isn’t a SHEIN value id.' }); patch.skcValueId = v; }
         if (b.usePhPhotos !== undefined) { patch.usePhPhotos = b.usePhPhotos === true; patch.cleanPhotos = false; }   // an explicit PH / Shopify choice
+        if (b.cleanMain !== undefined) {   // "Make main photo" on a clean photo (null = automatic: a side view) — 2026-11-14
+          if (b.cleanMain != null && !(typeof b.cleanMain === 'string' && b.cleanMain.length <= 1000 && /^https:\/\//i.test(b.cleanMain))) return send(res, 400, { ok: false, error: 'cleanMain: a photo link (https) or null.' });
+          patch.cleanMain = b.cleanMain == null ? null : photoKey(b.cleanMain);
+        }
         if (b.photoSource !== undefined) {
           const ps = { clean: { cleanPhotos: true }, auto: { cleanPhotos: null }, ph_edited: { cleanPhotos: false, usePhPhotos: true }, shopify: { cleanPhotos: false, usePhPhotos: false } }[b.photoSource];
           if (!ps) return send(res, 400, { ok: false, error: 'photoSource: clean, ph_edited, shopify or auto.' });

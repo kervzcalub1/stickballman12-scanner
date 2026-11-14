@@ -3292,6 +3292,11 @@ await sql(`
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 await sql(`CREATE UNIQUE INDEX IF NOT EXISTS product_cutouts_sku_angle_idx ON product_cutouts (sku, angle)`);
+// What a cutout SHOWS (2026-11-14): its silhouette { ar, fill, topM, botM, gap } → viewOf (side / sole / pair). The
+// slot it is filed under is only PH's brand-tool slot (often not the view); SHEIN's main photo must be a side view.
+await sql(`ALTER TABLE product_cutouts ADD COLUMN IF NOT EXISTS shape JSONB`);
+// A person's pick of the clean photo SHEIN shows first (photo key) — wins over the automatic side-view pick.
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS clean_main TEXT`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS publish_again_by TEXT`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS publish_again_at TIMESTAMPTZ`);
 // SHEIN image conversion (transform-pic) is an ASSET call: it makes a SHEIN-hosted URL, changes no product.

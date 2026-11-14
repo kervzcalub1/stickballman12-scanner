@@ -11,8 +11,8 @@ import {
 import { r2Configured, presignUrl, publicUrl, isAllowedPhotoUrl } from './r2.js';
 import { planPublish, imagePlan, imageConversions, keepPhotos, shoeCategory, shoeAttrDefaults, BOX_PLACEHOLDERS, sizeGroupOf, validateBoxDefaults, templateParts } from '../../src/lib/sheinPublish.js';
 import { blocker, spuPayload, stableJson, hashString, BLOCKERS } from '../../src/lib/sheinListings.js';
-import { renderClean, cleanPhotosFor, CLEAN_RENDER_VERSION } from './shein-clean-photos.js';
-import { isCutoutUrl, isSlideAngle, photoSourceOf } from '../../src/lib/sheinCleanPhotos.js';
+import { renderClean, ensureShapes, CLEAN_RENDER_VERSION } from './shein-clean-photos.js';
+import { isCutoutUrl, isSlideAngle, photoSourceOf, cleanOrder } from '../../src/lib/sheinCleanPhotos.js';
 
 const H = 3600_000; const DAY = 24 * H;
 export const RENDER_VERSION = 'pad1500-white-q88-v1';
@@ -218,14 +218,22 @@ export async function convertPhotos({ urls, fill, io, log }) {
 //               welcome slides (extra1 / extra2) are NEVER sent.
 //   shopify   — Shopify's photos (live read).
 // → { urls, skipped, source }
-export async function sourcePhotos(row, product) {
+// The clean set (2026-11-14): photo 1 = a cutout whose silhouette is a side view (`cleanOrder`; a person's
+// "Make main photo" wins). None → mainUnsure: the caller holds the shoe ("check the main photo"), never a guess.
+// Cutouts recorded before shapes were are measured here first (downloads only those). → + { mainUnsure, mainWhy }
+export async function sourcePhotos(row, product, { load } = {}) {
   const style = product?.style || row?.style || '';
-  const clean = style ? (await cleanPhotosFor(style)).map((p) => p.url) : [];
+  const cleanRows = style ? await ensureShapes(style, load ? { load } : {}) : [];
+  const clean = cleanRows.map((p) => p.url);
   const ph = style && row?.use_ph_photos ? (await productPhotosForSku(style)).filter((p) => !isSlideAngle(p.angle)).map((p) => p.url) : [];
   const source = photoSourceOf({ cleanPhotos: row?.clean_photos ?? null, usePhPhotos: !!row?.use_ph_photos, cleanCount: clean.length, phCount: ph.length });
-  const urls = source === 'clean' ? clean : source === 'ph_edited' ? ph : (product?.images || []).map((i) => i.url);
+  if (source === 'clean') {
+    const o = cleanOrder(cleanRows, { mainKey: row?.clean_main || null, skip: row?.photo_skip || [] });
+    return { urls: o.rows.map((r) => r.url), skipped: keepPhotos(clean, row?.photo_skip).skipped, source, mainUnsure: o.unsure, mainWhy: o.why };
+  }
+  const urls = source === 'ph_edited' ? ph : (product?.images || []).map((i) => i.url);
   const kept = keepPhotos(urls, row?.photo_skip);
-  return { urls: kept.urls, skipped: kept.skipped, source };
+  return { urls: kept.urls, skipped: kept.skipped, source, mainUnsure: false, mainWhy: null };
 }
 
 /* --------------------------------- one product --------------------------------- */
@@ -291,7 +299,10 @@ export async function buildPublish(it, { jctx, io, log, fatal }) {
   const rejected = rejectedAt && !(d.product.publish_again_at && new Date(d.product.publish_again_at) > rejectedAt) ? { failedReason: (last.blockers || []).find((b) => b.code === 'review_rejected')?.params?.failedReason || null } : null;
   // Bug 4 (2026-11-14): the sizes a person left off ("Don't list on SHEIN") go to the planner too — it filters by
   // productRow.excludedVariants, and without them an excluded impossible size (5.5W in 4455) still blocked the publish
-  const input = { product, productRow: { ...d.product, excludedVariants: excluded }, gates: jctx.gates || {}, category, suggestion, fill, template, assoc, attrDefaults, brand, brandQuota, maps: sizeMaps, permission, customValues, market, box, taken, takenChecked: true, inFlight, unconfirmed, rejected, skuCounts };
+  // the photos first (DB + measuring unmeasured cutouts; no SHEIN call): a clean set without a confirmed side view
+  // as photo 1 holds the shoe ("check the main photo") before anything is converted (2026-11-14)
+  const src = await sourcePhotos(d.product, product, { load: io.fetchImage });
+  const input = { product: product && src.mainUnsure ? { ...product, cleanMainUnsure: true } : product, productRow: { ...d.product, excludedVariants: excluded }, gates: jctx.gates || {}, category, suggestion, fill, template, assoc, attrDefaults, brand, brandQuota, maps: sizeMaps, permission, customValues, market, box, taken, takenChecked: true, inFlight, unconfirmed, rejected, skuCounts };
   // Photos only when nothing else blocks (conversions are SHEIN asset calls)
   const pre = planPublish({ ...input, images: null, unknown: ['photos'] });
   const hard = pre.plan.blockers.filter((b) => !['note', 'review'].includes(BLOCKERS[b.code]?.level));
@@ -304,7 +315,6 @@ export async function buildPublish(it, { jctx, io, log, fatal }) {
     pre.plan.photos = { converted: false, why: 'needs_priv' };
     return { body: null, plan: pre.plan, variantIds: [] };
   }
-  const src = await sourcePhotos(d.product, product);
   const images = await convertPhotos({ urls: src.urls.slice(0, 11), fill, io, log: lg });
   const { body, plan, checklist } = planPublish({ ...input, images });
   plan.checklist = checklist;

@@ -26,7 +26,8 @@ import {
 } from './shein.js';
 import { buildPublish, publishGates, readPublishAnswer, publishApproved, readBoxDefaults, fetchImage, hostOnR2, templateFor, assocRequired, sourcePhotos, convertPhotos } from './shein-publish.js';
 import { publishReadiness, attributePatch, planModelFix, templateParts, shoeAttrDefaults, countAfterSkip, planPhotoEdit, spuHasSpuPhotos, imagePlan } from '../../src/lib/sheinPublish.js';
-import { photoSourceOf } from '../../src/lib/sheinCleanPhotos.js';
+import { photoSourceOf, cleanOrder, viewOf } from '../../src/lib/sheinCleanPhotos.js';
+import { photoKey } from '../../src/lib/sheinPublish.js';
 import { modelFromTitle } from '../../src/lib/sheinModel.js';
 import { shopifyListingCatalogue, shopifyListingProduct, shopifyConfigured, styleFromTitle } from './shopify.js';
 import {
@@ -38,7 +39,7 @@ import {
   getListingProduct, listListingProducts, updateListingItem, markListingItemSending, dueRunItems, runJobsWithDueItems, requeueListingJob,
   setListingJobStatus, listingInflight, markVariantsPublished, setVariantsLastError, verifySizeMap, verifySizeMapById, getPlatformQuotes, listListingJobItems,
   createRunJob, getListingItems, sheinShelfRecords, markVariantsSynced, listingPriceOffProducts, listCategoryMaps, listBrandMaps, setListingPublished, listAttrDefaults, listingShoeBySpu, listListingCategoryPicks,
-  listPublishUnconfirmed, resumeListingJob as resumeJobRow, phPhotoKeys, cleanPhotoKeys,
+  listPublishUnconfirmed, resumeListingJob as resumeJobRow, phPhotoKeys, cleanPhotoRows,
 } from './db.js';
 import { walkActive, pushSpus } from './shein-live.js';
 import {
@@ -326,7 +327,7 @@ async function computeAndSave({ products, payloads, sizes, io, snapshot = false,
 // SHEIN's rules / templates / permissions for the mapped categories, brand maps + list, attr defaults, D6.
 async function publishContext(maps, market) {
   const [categoryMaps, brandMaps, attrDefaults, box, brandsRow, unconf, phCounts, cleanCounts] = await Promise.all([listCategoryMaps(), listBrandMaps(), listAttrDefaults(), readBoxDefaults(), getListingCache('brands', 'store'), listPublishUnconfirmed(),
-    phPhotoKeys().catch(() => new Map()), cleanPhotoKeys().catch(() => new Map())]);
+    phPhotoKeys().catch(() => new Map()), cleanPhotoRows().catch(() => new Map())]);
   // re-review G1: a product with a publish SHEIN never confirmed shows publish_unconfirmed (no new publish)
   const unconfirmed = new Map(); for (const x of unconf) if (!unconfirmed.has(x.shopify_product_id)) unconfirmed.set(x.shopify_product_id, { itemId: Number(x.id), jobId: Number(x.job_id) });
   const picks = await listListingCategoryPicks().catch(() => []);   // the shoes' own categories (2026-11-11)
@@ -345,11 +346,14 @@ async function publishContext(maps, market) {
   return (p, pv, excludedVariants) => {
     const st = String(p?.style || '').trim().toUpperCase();
     const keys = phCounts.get(st) || new Set();
-    const cleanKeys = cleanCounts.get(st) || new Set();
+    const cleanRows = (cleanCounts.get(st) || []).map((r) => ({ ...r, view: r.shape ? viewOf(r.shape) : null }));
+    const cleanKeys = new Set(cleanRows.map((r) => photoKey(r.url)));
     const source = photoSourceOf({ cleanPhotos: pv?.clean_photos ?? null, usePhPhotos: !!pv?.use_ph_photos, cleanCount: cleanKeys.size, phCount: keys.size });
     const ph = source === 'clean' ? null : pv?.use_ph_photos ? keys.size : null;
     // the photos a person left out come off the count of the source in use
-    const prod = source === 'clean' ? { ...p, imageCount: countAfterSkip(cleanKeys.size, pv?.photo_skip, true, cleanKeys), phPhotos: null, photoSource: 'clean', cleanPhotos: cleanKeys.size }
+    // + photo 1 must be a confirmed side view (2026-11-14; lenient: a "side" slot not measured yet counts — the preview measures it)
+    const mainUnsure = source === 'clean' && cleanOrder(cleanRows, { mainKey: pv?.clean_main || null, skip: pv?.photo_skip || [], lenient: true }).unsure;
+    const prod = source === 'clean' ? { ...p, imageCount: countAfterSkip(cleanKeys.size, pv?.photo_skip, true, cleanKeys), phPhotos: null, photoSource: 'clean', cleanPhotos: cleanKeys.size, cleanMainUnsure: mainUnsure }
       : ph ? { ...p, imageCount: countAfterSkip(ph, pv?.photo_skip, true, keys), phPhotos: ph, photoSource: 'ph_edited', cleanPhotos: cleanKeys.size }
         : { ...p, imageCount: countAfterSkip(p?.imageCount, pv?.photo_skip, false, keys), phPhotos: ph, photoSource: 'shopify', cleanPhotos: cleanKeys.size };
     return publishReadiness(prod, { ...ctx, productRow: pv, excludedVariants, market });
@@ -1067,6 +1071,9 @@ async function buildPhotoEdit(it, { d, product, spu, payload, spuName, lg, io, j
     return { body: r.body, plan: r.plan, hash: r.body ? bodyHash(r.body) : null, variantIds: [], spuName };
   };
   const pre = planPhotoEdit({ spu, fill, fillUnread: !fill, ip, images: null, attrs });
+  // the clean set has no confirmed side view for photo 1 → held (2026-11-14), before anything is converted
+  const src = await sourcePhotos(d.product, product, { load: io.fetchImage });
+  if (src.mainUnsure) { pre.plan.blockers.push(blocker('clean_main_unsure', { style: d.product.style || null })); pre.body = null; }
   if (pre.plan.blockers.some((b) => !['note', 'review'].includes(BLOCKERS[b.code]?.level))) return finish(pre);
   // Security H2: only a dry run an admin / Connect-integrations holder started converts photos
   if (!jctx.convertPhotos) {
@@ -1074,7 +1081,6 @@ async function buildPhotoEdit(it, { d, product, spu, payload, spuName, lg, io, j
     pre.plan.photos = { converted: false, why: 'needs_priv' };
     return finish(pre);
   }
-  const src = await sourcePhotos(d.product, product);
   const images = await convertPhotos({ urls: src.urls.slice(0, 11), fill: pFill, io, log: lg });
   const r = planPhotoEdit({ spu, fill, fillUnread: !fill, ip, images, attrs });
   r.plan.photos = { source: src.source, count: src.urls.length, skipped: src.skipped, converted: images.conversions, cached: images.cached };

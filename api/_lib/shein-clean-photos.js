@@ -10,8 +10,8 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { listObjects, publicUrl, r2Configured } from './r2.js';
 import { alphaBbox, fitShoeBox } from './branding.js';
-import { productPhotosForSku, productCutoutsForSku, recordCutout, getListingCache, setListingCache } from './db.js';
-import { recoverCutouts, cutoutPrefix, cutoutKeyTime, SHOE_ANGLES, SIG_N, matchPhCopies } from '../../src/lib/sheinCleanPhotos.js';
+import { productPhotosForSku, productCutoutsForSku, recordCutout, setCutoutShape, getListingCache, setListingCache } from './db.js';
+import { recoverCutouts, cutoutPrefix, cutoutKeyTime, SHOE_ANGLES, SIG_N, matchPhCopies, viewOf } from '../../src/lib/sheinCleanPhotos.js';
 import { photoKey, isShopifyPhoto } from '../../src/lib/sheinPublish.js';
 
 const defaultLoad = async (url) => (await import('./shein-publish.js')).fetchImage(url);
@@ -52,13 +52,41 @@ function quickBbox(img) {
   const sx = img.width / w; const sy = img.height / h;
   return { x: Math.floor(minX * sx), y: Math.floor(minY * sy), w: Math.ceil((maxX - minX + 1) * sx), h: Math.ceil((maxY - minY + 1) * sy) };
 }
-// The cutout placed where Brand & Fill puts it by default (fitShoeBox), at 200 × 200, with its alpha.
+// The cutout placed where Brand & Fill puts it by default (fitShoeBox), at 200 × 200, with its alpha
+// (+ its shape: the decode is the slow part, so it is measured here too → .shape on the pixel array).
 async function placedCutout(buf) {
   const img = await loadImage(buf); const bb = quickBbox(img); const pl = fitShoeBox(bb);
+  const shape = await shapeOf(img).catch(() => null);
   const c = createCanvas(N, N); const g = c.getContext('2d');
   g.drawImage(img, bb.x, bb.y, bb.w, bb.h, pl.dx / SCALE, pl.dy / SCALE, pl.dw / SCALE, pl.dh / SCALE);
-  return g.getImageData(0, 0, N, N).data;
+  const px = g.getImageData(0, 0, N, N).data;
+  px.shape = shape;
+  return px;
 }
+// What the cutout SHOWS, from its silhouette (2026-11-14; read by `viewOf`, src/lib/sheinCleanPhotos.js): measured
+// on a quarter-size copy — ar, fill, the mean gaps over / under the shoe (topM / botM, middle 70 % of its
+// width) and the empty columns inside its box (gap: two shoes side by side). → { ar, fill, topM, botM, gap }
+export async function shapeOf(bufOrImg) {
+  const img = bufOrImg?.width ? bufOrImg : await loadImage(bufOrImg);
+  const k = 4; const w = Math.max(1, Math.round(img.width / k)); const h = Math.max(1, Math.round(img.height / k));
+  const c = createCanvas(w, h); const g = c.getContext('2d'); g.drawImage(img, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data;
+  const on = (x, y) => d[(y * w + x) * 4 + 3] > 128;
+  let x0 = w; let x1 = -1; let y0 = h; let y1 = -1; let n = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (on(x, y)) { n += 1; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (x1 < 0) return null;
+  const bw = x1 - x0 + 1; const bh = y1 - y0 + 1;
+  let top = 0; let bot = 0; let cols = 0; let gap = 0;
+  for (let x = x0; x <= x1; x++) {
+    let t = -1; let b = -1;
+    for (let y = y0; y <= y1; y++) if (on(x, y)) { if (t < 0) t = y; b = y; }
+    if (t < 0) { gap += 1; continue; }
+    if (x >= x0 + Math.round(bw * 0.15) && x <= x1 - Math.round(bw * 0.15)) { top += (t - y0) / bh; bot += (y1 - b) / bh; cols += 1; }
+  }
+  const r = (v, p = 3) => Math.round(v * 10 ** p) / 10 ** p;
+  return { ar: r(bw / bh, 2), fill: r(n / (bw * bh), 2), topM: cols ? r(top / cols) : 0, botM: cols ? r(bot / cols) : 0, gap };
+}
+
 // How far a placed cutout is from a branded photo, over the shoe's own pixels (mean |Δ| per channel).
 // Measured 2026-11-14: the cutout a branded photo was made from scores 2–14; any other angle ≥ 25. A shoe
 // PH moved / resized on the canvas scores high against everything (then the timestamps decide).
@@ -111,8 +139,9 @@ export async function findCleanPhotos(sku, { write = false, by = null, list = nu
   const placed = await pool(cand, async (c) => placedCutout(await load(c.url)));
   const scores = ph.map((_, a) => cand.map((_, j) => (branded[a] && placed[j] ? cutoutScore(placed[j], branded[a]) : Infinity)));
   const found = assignCutouts(ph.map((p) => p.angle), cand, scores, ts);
+  for (const f of found) { const shape = placed[cand.findIndex((c) => c.url === f.url)]?.shape || null; f.shape = shape; f.view = viewOf(shape); }
   let recorded = 0;
-  if (write) for (const f of found) if (await recordCutout({ sku: style, angle: f.angle, url: f.url, origin: 'recovered', how: f.how, takenAt: f.takenAt, createdBy: by })) recorded += 1;
+  if (write) for (const f of found) if (await recordCutout({ sku: style, angle: f.angle, url: f.url, origin: 'recovered', how: f.how, takenAt: f.takenAt, createdBy: by, shape: f.shape })) recorded += 1;
   const confidence = !found.length ? 'none' : found.every((f) => f.how === 'checked') ? 'checked' : 'mixed';
   return { sku: style, cutouts: cuts.length, angles: ph.length, found, recorded, confidence, why: ts.why };
 }
@@ -162,7 +191,20 @@ export async function shopifyPhCopies(shopifyUrls, ph, { load = defaultLoad, dea
   return { byKey: matchPhCopies(shop, phs), checked: shop.length, phRead: phs.length };
 }
 
-// The clean photos of a style in listing order: [{ url, angle, origin, how }].
+// The clean photos of a style in slot order: [{ url, angle, origin, how, view, shape }].
 export async function cleanPhotosFor(style) {
-  return style ? (await productCutoutsForSku(style).catch(() => [])).map((r) => ({ url: r.url, angle: r.angle, origin: r.origin, how: r.how })) : [];
+  return style ? (await productCutoutsForSku(style).catch(() => [])).map((r) => ({ url: r.url, angle: r.angle, origin: r.origin, how: r.how, view: r.shape ? viewOf(r.shape) : null, shape: r.shape || null })) : [];
+}
+// Measure the cutouts of a style recorded before shapes were (2026-11-14) — downloads only those, ≤ `deadline`.
+// → the style's clean photos with their views. A cutout that can't be read stays unmeasured (never a side view).
+export async function ensureShapes(style, { load = defaultLoad, deadline = Infinity } = {}) {
+  const rows = await cleanPhotosFor(style);
+  for (const r of rows) {
+    if (r.shape || Date.now() > deadline) continue;
+    try {
+      r.shape = await shapeOf(await load(r.url)); r.view = viewOf(r.shape);
+      await setCutoutShape(style, r.angle, r.shape);
+    } catch { /* unreadable now → stays unmeasured */ }
+  }
+  return rows;
 }

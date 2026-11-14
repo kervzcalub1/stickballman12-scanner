@@ -95,3 +95,50 @@ export function matchPhCopies(shop, ph) {
   }
   return out;
 }
+
+/* ------------------------- the MAIN photo (2026-11-14, live Nike run) ------------------------- */
+// The angle a cutout is filed under is only the brand-tool SLOT PH put it in — and PH often fills the slots
+// in the catalogue's gallery order, not side / 3/4 / top / sole / heel (IF1721-300: the "3/4" slot holds
+// the sole, the "sole" slot the inner side; 394055-101: the "side" slot holds a 3/4 pair). So what a
+// picture SHOWS is read from the cutout's own silhouette (`shape`, measured on the server):
+//   ar   width / height of the shoe        fill  share of that box the shoe covers
+//   topM mean gap from the box top to the shoe's top edge (a side profile is low at the toe, high at
+//        the collar → ~0.25–0.33; a sole / 3/4 / pair fills the top → ≤ 0.19)
+//   botM mean gap under the shoe (a side profile stands on its sole → ≤ 0.02; a cleat's studs ~0.05)
+//   gap  empty columns inside the box (two shoes next to each other — a top / heel pair)
+// Measured on 50+ PH sets: 50 of 53 "side" slots pass (the 3 that don't: two high-tops at ar 1.6 —
+// hence ar ≥ 1.45 — and one slot holding a 3/4 pair); every other slot that passes was checked by eye
+// and IS a side view (the inner side, filed under another slot). A sole: wide, full top, dense.
+export function viewOf(s) {
+  if (!s || !Number.isFinite(Number(s.ar))) return null;
+  // standing on its sole (≤ 0.035), or on studs (a cleat, ≤ 0.06) with a clearly side-on top edge (a single 3/4 shoe sits at 0.20–0.22)
+  if (s.ar >= 1.45 && s.fill <= 0.71 && !s.gap && ((s.topM >= 0.2 && s.botM <= 0.035) || (s.topM >= 0.25 && s.botM <= 0.06))) return 'side';
+  if (s.ar >= 2.4 && s.topM <= 0.11 && s.fill >= 0.76 && !s.gap) return 'sole';
+  if (s.gap > 0) return 'pair';
+  return null;
+}
+// How a cutout's filing was established: picture-matched to PH's uploaded photo of that slot, or recorded
+// by the brand tool at Upload — vs only by the order it was cut ('timestamp').
+export const CONFIRMED_HOW = ['checked', 'upload'];
+const keyOf = (u) => String(u ?? '').split(/[?#]/)[0].trim();
+// Photo 1 (SHEIN's main photo) of the clean set: a person's pick (mainKey) when it is still in the set,
+// else a cutout whose own silhouette is a side view (`viewOf`) — PH's "side" slot when it is one (and its filing
+// confirmed), then another confirmed slot that shows a side view, then one filed only by order whose picture
+// is a side view. A cutout is NEVER the main on its slot label alone (labels follow PH's slots, which are often
+// wrong). None → unsure: the shoe is held with "check the main photo", never sent on a guess.
+// `skip` = photo keys left out (they can't be the main). `lenient` (the stored readiness, no download): a
+// confirmed "side" slot whose shape isn't measured yet counts — the preview measures it before sending.
+// rows: [{ url, angle, how, view }] → { rows: main first then the rest in slot order, main, unsure, why }
+export function cleanOrder(rows, { mainKey = null, skip = [], lenient = false } = {}) {
+  const out = new Set((skip || []).map(keyOf));
+  const kept = orderClean(rows).filter((r) => !out.has(keyOf(r.url)));
+  const confirmed = (r) => CONFIRMED_HOW.includes(r.how);
+  let main = null; let why = null;
+  if (mainKey) { main = kept.find((r) => keyOf(r.url) === keyOf(mainKey)) || null; if (main) why = 'person'; }
+  if (!main) { main = kept.find((r) => r.angle === 'side' && confirmed(r) && (r.view === 'side' || (lenient && r.view == null))) || null; if (main) why = 'side_slot'; }
+  if (!main) { main = kept.find((r) => confirmed(r) && r.view === 'side') || null; if (main) why = 'side_view'; }
+  // filed only by order, but its own silhouette is a side view: the picture itself is checked, only PH's slot isn't
+  if (!main) { main = kept.find((r) => r.view === 'side') || null; if (main) why = 'side_view_by_order'; }
+  const rest = kept.filter((r) => r !== main);
+  return { rows: main ? [main, ...rest] : kept, main, unsure: !!kept.length && !main, why };
+}

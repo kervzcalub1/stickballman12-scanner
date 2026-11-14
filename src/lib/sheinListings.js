@@ -88,6 +88,11 @@ export const BLOCKERS = {
   brand_not_authorized: { level: 'blocked', scope: 'product', applies: ['publish'],
     title: (p) => `${p?.brand || 'This brand'} isn’t an authorised brand on our SHEIN store.`, fix: () => 'An admin applies for it in Seller Center.',
     action: { kind: 'open_seller_center', label: 'Seller Center ↗' } },
+  // 2026-11-14: SHEIN's main photo must be a side view; the clean photo filed as "side" is only PH's brand-tool slot
+  clean_main_unsure: { level: 'blocked', scope: 'product', applies: ['publish', 'photos'],
+    title: () => 'Check the main photo — none of the clean photos is confirmed as the side view.',
+    fix: (p) => `Open Choose photos and press “Make main photo” on a side view of ${p?.style || 'the shoe'} (or use the PH / Shopify photos). Nothing goes to SHEIN with a guessed main photo.`,
+    action: { kind: 'fix_photos', label: 'Check the main photo' } },
   no_image: { level: 'blocked', scope: 'product', applies: ['publish'],
     // ph: null = Shopify's photos counted · 0 = "Use PH edited photos" is on but the PH team has none for the style · n = PH photos counted
     // src 'clean' = the clean photos (cutouts on white) counted; clean = how many the style has (2026-11-14)

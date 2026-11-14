@@ -12452,13 +12452,14 @@ export async function listPublishUnconfirmed() {
 }
 export async function deleteBrandMap(vendor) { return (await db()`DELETE FROM shein_brand_map WHERE vendor = ${String(vendor).trim().toLowerCase()} RETURNING 1`).length; }
 // A product's Phase 4 choices (title override, SKC colour, PH photos) — DB only.
-export async function setListingPublishChoices(productId, { titleOverride, skcValueId, usePhPhotos, cleanPhotos, photoSkip }) {
+export async function setListingPublishChoices(productId, { titleOverride, skcValueId, usePhPhotos, cleanPhotos, cleanMain, photoSkip }) {
   const has = (v) => v !== undefined;
   const [r] = await db()`UPDATE shein_listing_products SET
       title_override = CASE WHEN ${has(titleOverride)} THEN ${titleOverride ?? null}::text ELSE title_override END,
       skc_value_id = CASE WHEN ${has(skcValueId)} THEN ${skcValueId ?? null}::bigint ELSE skc_value_id END,
       use_ph_photos = CASE WHEN ${has(usePhPhotos)} THEN ${!!usePhPhotos} ELSE use_ph_photos END,
       clean_photos = CASE WHEN ${has(cleanPhotos)} THEN ${cleanPhotos ?? null}::boolean ELSE clean_photos END,
+      clean_main = CASE WHEN ${has(cleanMain)} THEN ${cleanMain ?? null}::text ELSE clean_main END,
       photo_skip = CASE WHEN ${has(photoSkip)} THEN ${photoSkip || []}::text[] ELSE photo_skip END, updated_at = now()
     WHERE shopify_product_id = ${productId} RETURNING *`;
   return r || null;
@@ -12543,25 +12544,35 @@ export async function cleanPhotoKeys() {
 }
 // A style's cutouts in listing order (side first).
 export async function productCutoutsForSku(sku) {
-  return await db()`SELECT angle, url, origin, how, taken_at FROM product_cutouts WHERE upper(sku) = upper(${String(sku || '').trim()})
+  return await db()`SELECT angle, url, origin, how, taken_at, shape FROM product_cutouts WHERE upper(sku) = upper(${String(sku || '').trim()})
     ORDER BY CASE angle WHEN 'side' THEN 0 WHEN 'diagonal' THEN 1 WHEN 'top' THEN 2 WHEN 'outsole' THEN 3 WHEN 'rear' THEN 4 ELSE 5 END, taken_at NULLS LAST`;
 }
 // One cutout per (sku, angle): the brand tool's Upload replaces an angle's cutout ('brand' / 'upload'); a
 // recovered one (origin 'recovered') never replaces a cutout the brand tool recorded.
-export async function recordCutout({ sku, angle, url, origin = 'brand', how = 'upload', takenAt = null, createdBy = null }) {
+export async function recordCutout({ sku, angle, url, origin = 'brand', how = 'upload', takenAt = null, createdBy = null, shape = null }) {
   const s = String(sku || '').trim();
   if (!s || !angle || !url) return null;
   const at = takenAt == null ? null : new Date(Number(takenAt) || takenAt).toISOString();
+  const sh = shape ? JSON.stringify(shape) : null;
   const [r] = origin === 'brand'
-    ? await db()`INSERT INTO product_cutouts (sku, angle, url, origin, how, taken_at, created_by) VALUES (${s}, ${angle}, ${url}, 'brand', ${how}, ${at}::timestamptz, ${createdBy})
-        ON CONFLICT (sku, angle) DO UPDATE SET url = EXCLUDED.url, origin = 'brand', how = EXCLUDED.how, taken_at = EXCLUDED.taken_at, created_by = EXCLUDED.created_by, created_at = now() RETURNING *`
-    : await db()`INSERT INTO product_cutouts (sku, angle, url, origin, how, taken_at, created_by) VALUES (${s}, ${angle}, ${url}, ${origin}, ${how}, ${at}::timestamptz, ${createdBy})
-        ON CONFLICT (sku, angle) DO UPDATE SET url = EXCLUDED.url, how = EXCLUDED.how, taken_at = EXCLUDED.taken_at, created_by = EXCLUDED.created_by, created_at = now()
+    ? await db()`INSERT INTO product_cutouts (sku, angle, url, origin, how, taken_at, created_by, shape) VALUES (${s}, ${angle}, ${url}, 'brand', ${how}, ${at}::timestamptz, ${createdBy}, ${sh}::jsonb)
+        ON CONFLICT (sku, angle) DO UPDATE SET url = EXCLUDED.url, origin = 'brand', how = EXCLUDED.how, taken_at = EXCLUDED.taken_at, created_by = EXCLUDED.created_by, shape = EXCLUDED.shape, created_at = now() RETURNING *`
+    : await db()`INSERT INTO product_cutouts (sku, angle, url, origin, how, taken_at, created_by, shape) VALUES (${s}, ${angle}, ${url}, ${origin}, ${how}, ${at}::timestamptz, ${createdBy}, ${sh}::jsonb)
+        ON CONFLICT (sku, angle) DO UPDATE SET url = EXCLUDED.url, how = EXCLUDED.how, taken_at = EXCLUDED.taken_at, created_by = EXCLUDED.created_by, shape = EXCLUDED.shape, created_at = now()
         WHERE product_cutouts.origin <> 'brand' RETURNING *`;
   return r || null;
 }
-// The clean-photos backfill (scripts/shein-clean-photos.mjs): styles with PH edited photos (all, or only those
-// on SHEIN Listings), and the styles that already have clean photos recorded.
+// A cutout's silhouette measured later (cutouts recorded before 2026-11-14 have none) — read by viewOf.
+export async function setCutoutShape(sku, angle, shape) {
+  await db()`UPDATE product_cutouts SET shape = ${shape ? JSON.stringify(shape) : null}::jsonb WHERE upper(sku) = upper(${String(sku || '').trim()}) AND angle = ${angle}`;
+}
+// The stored readiness's view of each style's clean photos (no download): style → [{ url, angle, how, shape }].
+export async function cleanPhotoRows() {
+  const rows = await db()`SELECT sku, url, angle, how, shape FROM product_cutouts`;
+  const out = new Map();
+  for (const r of rows) { const k = String(r.sku).trim().toUpperCase(); if (!out.has(k)) out.set(k, []); out.get(k).push({ url: r.url, angle: r.angle, how: r.how, shape: r.shape || null }); }
+  return out;
+}
 export async function cleanBackfillStyles({ all = false } = {}) {
   const rows = all
     ? await db()`SELECT DISTINCT sku FROM product_photos WHERE source = 'ph_edited' ORDER BY sku`
@@ -12600,7 +12611,7 @@ export async function productPhotosForSku(sku, source = 'ph_edited') {
 export async function loadListingPrev() {
   const [products, variants] = await Promise.all([
     // + the publish choices (title / colour / PH photos): the stored readiness of a new shoe is judged on them too
-    db()`SELECT shopify_product_id, excluded, excluded_by, excluded_at, shopify_hash, shopify_json, computed_hash, spu, review_version, title_override, skc_value_id, use_ph_photos, clean_photos, photo_skip, category_pick_id, category_pick_ptid, category_pick_path, attr_overrides FROM shein_listing_products`,
+    db()`SELECT shopify_product_id, excluded, excluded_by, excluded_at, shopify_hash, shopify_json, computed_hash, spu, review_version, title_override, skc_value_id, use_ph_photos, clean_photos, clean_main, photo_skip, category_pick_id, category_pick_ptid, category_pick_path, attr_overrides FROM shein_listing_products`,
     db()`SELECT row_key, shein_sku, match, excluded, excluded_by, excluded_at, synced_hash, synced_fields, last_error FROM shein_listing_variants`,
   ]);
   return { products: new Map(products.map((r) => [r.shopify_product_id, r])), variants: new Map(variants.map((r) => [r.row_key, r])) };

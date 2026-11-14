@@ -15,7 +15,9 @@
 //   --concurrency 3   styles at a time (1–8)
 //
 // Reads R2 (list + the photos) and the DB; with --apply writes product_cutouts ONLY. Never writes or
-// deletes anything on R2. Idempotent: a re-run skips styles already done (unless --redo) and never
+// deletes anything on R2. Each cutout's outline is recorded too (`shape` → side view / sole / pair): SHEIN's
+// photo 1 must be a side view, and PH's brand-tool slot often isn't the view (docs → "The main photo").
+// Idempotent: a re-run skips styles already done (unless --redo) and never
 // replaces a cutout the brand tool itself recorded. ~10 MB of photos per style (5 cutouts + 5 branded).
 import fs from 'node:fs';
 import path from 'node:path';
@@ -46,6 +48,7 @@ const limit = Number(vals('--limit')[0]) || Infinity;
 
 const { cleanBackfillStyles, stylesWithCutouts } = await import('../api/_lib/db.js');
 const { findCleanPhotos } = await import('../api/_lib/shein-clean-photos.js');
+const { cleanOrder } = await import('../src/lib/sheinCleanPhotos.js');
 const { r2Configured } = await import('../api/_lib/r2.js');
 if (!r2Configured()) { console.error('R2 is not configured (R2_* in .env) — nothing to list.'); process.exit(1); }
 
@@ -71,7 +74,10 @@ async function worker() {
       i += 1;
       tally[r.confidence] = (tally[r.confidence] || 0) + 1; tally.photos += r.found.length; tally.recorded += r.recorded;
       if (r.found.length < (r.angles || 0)) misses.push(`${sku} ${r.found.length}/${r.angles} (${r.cutouts} cutouts)`);
-      console.log(`${String(i).padStart(4)}/${styles.length} ${sku.padEnd(22)} ${r.confidence.padEnd(8)} ${r.found.map((f) => `${f.angle}${f.how === 'timestamp' ? '~' : ''}`).join(' ') || `— (${r.why})`}`);
+      // + what each shows (side view = S, sole = o, pair = p) and photo 1 for SHEIN (MAIN? = none confirmed: the shoe is held)
+      const o = cleanOrder(r.found);
+      if (r.found.length && o.unsure) tally.mainUnsure = (tally.mainUnsure || 0) + 1;
+      console.log(`${String(i).padStart(4)}/${styles.length} ${sku.padEnd(22)} ${r.confidence.padEnd(8)} ${r.found.map((f) => `${f.angle}${f.how === 'timestamp' ? '~' : ''}${({ side: '[S]', sole: '[o]', pair: '[p]' })[f.view] || ''}`).join(' ') || `— (${r.why})`}${r.found.length ? (o.unsure ? '  MAIN?' : `  main=${o.main.angle}`) : ''}`);
     } catch (e) {
       i += 1; tally.failed += 1; console.log(`${String(i).padStart(4)}/${styles.length} ${sku.padEnd(22)} FAILED ${e.message}`);
     }

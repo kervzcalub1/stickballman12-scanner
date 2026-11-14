@@ -14397,7 +14397,7 @@ export async function ebaySyncProduct(id) {
 export async function ebaySyncProducts({ tab = 'uploaded', q = '', offset = 0, limit = 100 } = {}) {
   const term = `%${String(q).trim().replace(/[%_]/g, '\\$&')}%`;
   const rows = await db()`
-    SELECT p.shopify_product_id, p.title, p.style, p.status, p.item_id, p.view_url, p.image, p.sizes, p.qty, p.issues, p.checked_at,
+    SELECT p.shopify_product_id, p.title, p.style, p.status, p.item_id, p.view_url, p.image, p.sizes, p.qty, p.issues, p.checked_at, p.ended_by_stock,
            o.title AS ebay_title, (o.description_html IS NOT NULL) AS ebay_description, coalesce(jsonb_array_length(o.pictures), 0)::int AS ebay_pictures,
            o.updated_by AS ebay_edit_by, o.updated_at AS ebay_edit_at, (o.shopify_product_id IS NOT NULL) AS has_ebay_edit,
            count(*) OVER()::int AS total

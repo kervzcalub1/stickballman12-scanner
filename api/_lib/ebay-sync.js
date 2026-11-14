@@ -18,6 +18,8 @@ import {
   ebaySyncLinksByItem, ebaySyncItemsOfProducts, ebaySyncEbaySkus, ebaySyncRepricedKeys, ebaySyncProductPrev, ebaySyncUpsertProducts, ebaySyncPatchProduct,
   ebaySyncProductsToVerify, ebaySyncProductsToAdd, ebaySyncProductsToCheck, ebaySyncProductTabs, ebaySyncListingTabs, ebaySyncFacts, ebaySyncLinkCount,
   ebayLockedItemIds, logEbayEnd, dbConfigured, ebaySyncCreatedItemIds,
+  ebaySyncOverridesOf, ebaySyncOverridesAll, ebaySyncOverrideSave, ebaySyncOverrideDelete, ebaySyncProductForceRecheck, ebaySyncDupListings, ebaySyncDropLinks,
+  productPhotosForSku,
 } from './db.js';
 import {
   ebayConfigured, ebayStatus, fetchActiveListings, fetchEbayItemContent, verifyAddFixedPriceItem, addFixedPriceItem, reviseFixedPriceItem,
@@ -30,7 +32,8 @@ import { alertUsers, at } from './alerts.js';
 import { styleFromTitle } from '../../src/lib/ebayReprice.js';
 import {
   SWITCHES, normalizeSettings, canWrite, writesAllowed, buildLinks, decideLink, driftSince, driftPersists, blastCheck, readGuard, buildListing, precheck,
-  translateEbayErrors, contentDiff, productKey, handoverChecklist, endsByZero,
+  translateEbayErrors, contentDiff, productKey, handoverChecklist, endsByZero, manualWriteBlock, normalizeOverride, validateOverride, overrideKey,
+  shorterTitle, defaultEbayDescription, TITLE_MAX,
 } from '../../src/lib/ebaySync.js';
 
 export const SETTINGS_KEY = 'ebay_sync';
@@ -70,7 +73,10 @@ export const IO = {
     patchProduct: ebaySyncPatchProduct, linkCount: ebaySyncLinkCount, createdItemIds: ebaySyncCreatedItemIds, productTabs: ebaySyncProductTabs, endedByApp: ebaySyncEndedByApp,
     toVerify: ebaySyncProductsToVerify, toAdd: ebaySyncProductsToAdd, toCheck: ebaySyncProductsToCheck, prune: ebaySyncLogPrune, moveItemId: ebaySyncMoveItemId,
     dropListing: ebaySyncDropListing,
+    overridesOf: ebaySyncOverridesOf, overridesAll: ebaySyncOverridesAll, overrideSave: ebaySyncOverrideSave, overrideDelete: ebaySyncOverrideDelete,
+    forceRecheck: ebaySyncProductForceRecheck, dupListings: ebaySyncDupListings, dropLinks: ebaySyncDropLinks,
   },
+  imageFinderPhotos: (style) => productPhotosForSku(style, 'ph_edited'),
   // ---- every WRITE this feature can make to eBay (only ever reached through the live checks) ----
   write: { reviseEbayQuantities, reviseEbayPrices, addFixedPriceItem, reviseFixedPriceItem, relistFixedPriceItem, endEbayItem, logEbayEnd },
   alert: (ref, title, body) => alertUsers('ebay_sync', { ref, once: true, code: title, body, path: at('ebaysync') }),
@@ -157,6 +163,24 @@ async function liveQty(io, sku) {
   const st = await io.stockForSku(sku);
   if (!st || st.error || !st.levels?.length || st.tracked === false) return null;
   return Math.max(0, st.levels.reduce((n, l) => n + Number(l.available || 0), 0));
+}
+// The eBay-only edits for these products (Map id -> stored row). A missing table function (an older IO) = none.
+async function overridesFor(io, ids) {
+  if (!io.db.overridesOf || !ids?.length) return new Map();
+  return (await io.db.overridesOf(ids)) || new Map();
+}
+// A PERSON's one-off write (List on eBay, End the extra listing): allowed while the part is in Test mode, still
+// stopped by the kill switch, a server that may not write, and the part switched Off (re-read right before).
+// Logged live with manual: true.
+async function manualDo(ctx, domain, spec, fn) {
+  ctx.settings = await readSettings(ctx.io);
+  const block = manualWriteBlock(ctx.settings, domain);
+  if (block) return { ok: false, error: block, skipped: true };
+  let res;
+  try { res = await fn(); } catch (e) { res = { ok: false, error: e.message }; }
+  await ctx.io.db.logAdd({ domain, action: spec.action, mode: 'live', itemId: spec.itemId ?? null, sku: spec.sku ?? null, before: spec.before ?? null,
+    after: { ...(spec.after || {}), manual: true }, ok: res?.ok !== false, error: res?.error || null, by: ctx.by });
+  return res || { ok: true };
 }
 
 /* ------------------------------ stock + price + end ------------------------------ */
@@ -369,6 +393,7 @@ export async function reconcilePass(ctx) {
   const vanished = prevProducts.filter((p) => p.status === 'uploaded' && p.item_id && !activeItems.has(p.item_id)).map((p) => p.item_id);
   const endedByApp = vanished.length ? await io.db.endedByApp(vanished) : new Set();
   const endedByStockOf = new Set(prevProducts.filter((p) => vanished.includes(p.item_id) && !endedByApp.has(p.item_id)).map((p) => p.shopify_product_id));
+  const ovAll = io.db.overridesAll ? await io.db.overridesAll() : new Map();
   const products = [];
   for (const p of light.products) {
     const vs = byProduct.get(p.id) || [];
@@ -381,7 +406,7 @@ export async function reconcilePass(ctx) {
     products.push({
       id: p.id, title: p.title, style: styleFromTitle(p.title) || null, handle: p.handle, vendor: p.vendor, shopify_status: p.status, image: p.image,
       sizes: stocked.length, qty: stocked.reduce((n, v) => n + Number(v.qty), 0), eligible, uploaded: !!link, item_id: link?.item_id || null,
-      view_url: link?.view_url || null, shopify_key: productKey(p.updatedAt, stocked.map((v) => v.sku)),
+      view_url: link?.view_url || null, shopify_key: productKey(p.updatedAt, stocked.map((v) => v.sku), overrideKey(ovAll.get(p.id))),
       last_prices: Object.keys(kept).length ? kept : null, ended_by_stock: endedByStockOf.has(p.id),
     });
   }
@@ -473,6 +498,7 @@ export async function contentPass(ctx) {
   const full = await io.productsFull(todo.map((t) => t.shopify_product_id));
   if (full.error) throw new Error(full.error);
   const byId = new Map(full.products.map((p) => [p.id, p]));
+  const ovs = await overridesFor(io, todo.map((t) => t.shopify_product_id));
   const nowIso = io.now().toISOString();
   const revises = [];
   let checked = 0; let refused = 0;
@@ -494,7 +520,7 @@ export async function contentPass(ctx) {
       await io.db.patchProduct(row.shopify_product_id, { ...mark, drift: null });
       continue;
     }
-    const built = buildListing(product, profile);
+    const built = buildListing(product, profile, ovs.get(row.shopify_product_id));   // an eBay-only edit wins over Shopify, or this would "fix" eBay back
     built.variations = built.variations.filter((v) => !dupSkus.has(v.sku));   // a shared SKU is never added as a new size
     const diff = contentDiff(content, built);
     await io.db.patchProduct(row.shopify_product_id, { ...mark, drift: diff.drift ? diff : null });
@@ -568,10 +594,11 @@ export async function createPass(ctx) {
     const full = await io.productsFull(toVerify.map((p) => p.shopify_product_id));
     if (full.error) throw new Error(full.error);
     const byId = new Map(full.products.map((p) => [p.id, p]));
+    const ovs = await overridesFor(io, toVerify.map((p) => p.shopify_product_id));
     for (const row of toVerify) {
       const product = byId.get(row.shopify_product_id);
       if (!product) continue;
-      const listing = buildListing(product, profile);
+      const listing = buildListing(product, profile, ovs.get(row.shopify_product_id));
       let issues = precheck(product, listing, { dupSkus });
       if (!issues.length && !row.item_id) {
         const v = await io.verifyAddFixedPriceItem(listing);
@@ -597,10 +624,11 @@ export async function createPass(ctx) {
     if (full.error) throw new Error(full.error);
     const byId = new Map(full.products.map((p) => [p.id, p]));
     const onEbay = liveCreate ? await freshOnEbay(io) : null;
+    const ovs = await overridesFor(io, cands.map((c) => c.shopify_product_id));
     for (const row of cands) {
       const product = byId.get(row.shopify_product_id);
       if (!product || product.status !== 'ACTIVE') continue;
-      const listing = buildListing(product, profile);
+      const listing = buildListing(product, profile, ovs.get(row.shopify_product_id));
       const issues = precheck(product, listing, { dupSkus });
       if (issues.length) { await io.db.patchProduct(row.shopify_product_id, { issues, status: 'needs_attention', verify_ok: false }); continue; }
       if (onEbay && alreadyOnEbay(listing, onEbay)) {
@@ -674,13 +702,14 @@ export async function buildStatus(io = IO) {
   };
 }
 
-// A person asked for one product to be verified / listed / relisted now.
+// A person asked for one product to be verified / listed / relisted now. List / Relist work while New listings is
+// still in Test mode (a one-off upload never needs the switch flipped); the kill switch, a server that may not
+// write and New listings switched Off still stop it. Same fresh eBay look, lock and UUID as the create pass.
 export async function productAction(productId, action, { by, io = IO } = {}) {
   const ctx = { io, settings: await readSettings(io), by };
   if (['list', 'relist'].includes(action)) {
-    if (!(await liveNow(ctx, 'create'))) {
-      return { ok: false, error: ctx.settings.kill ? 'The kill switch is on, so nothing is sent to eBay.' : ctx.settings.switches.create !== 'live' ? 'New listings are not live. Turn the Create switch to Live first; Verify still works.' : 'This server is not allowed to write to eBay (it is not production).' };
-    }
+    const block = manualWriteBlock(ctx.settings, 'create');
+    if (block) return { ok: false, error: block };
     if (passRunning('create')) return { ok: false, error: 'The listing pass is running right now; try again in a minute.' };
   }
   const full = await io.productsFull([productId]);
@@ -690,7 +719,8 @@ export async function productAction(productId, action, { by, io = IO } = {}) {
   if (['list', 'relist'].includes(action) && product.status !== 'ACTIVE') return { ok: false, error: 'The product is not active in Shopify.' };
   const profile = await profileOf(io);
   const dupSkus = new Set([...((await readState('reconcile', io)).dupSkus || []), ...(await io.db.ebaySkus())]);
-  const listing = buildListing(product, profile);
+  const ov = (await overridesFor(io, [productId])).get(productId);
+  const listing = buildListing(product, profile, ov);
   let issues = precheck(product, listing, { dupSkus });
   const row = (await io.db.productPrev()).find((p) => p.shopify_product_id === productId);
   if (!issues.length && action === 'verify') {
@@ -698,8 +728,10 @@ export async function productAction(productId, action, { by, io = IO } = {}) {
     if (!v.ok) issues = translateEbayErrors(v.errors?.length ? v.errors : v.error);
   }
   if (action === 'verify') {
-    await io.db.patchProduct(productId, { issues, status: issues.length ? 'needs_attention' : 'not_uploaded', verify_ok: issues.length === 0, verified_at: io.now().toISOString() });
-    return { ok: true, issues };
+    // An uploaded listing keeps its status: a check only says what would be refused.
+    const status = row?.status === 'uploaded' ? 'uploaded' : (issues.length ? 'needs_attention' : 'not_uploaded');
+    await io.db.patchProduct(productId, { issues: status === 'uploaded' ? [] : issues, status, verify_ok: issues.length === 0, verified_at: io.now().toISOString() });
+    return { ok: true, issues, listing: { title: listing.title, pictures: listing.pictures.length, overridden: listing.overridden } };
   }
   if (action === 'relist' && !row?.item_id) return { ok: false, error: 'This product has no earlier eBay listing to relist. Use List instead.' };
   if (issues.length) return { ok: false, issues, error: issues[0].message };
@@ -708,7 +740,7 @@ export async function productAction(productId, action, { by, io = IO } = {}) {
   await ensureBudget(io, 'write');
   const relist = action === 'relist';
   const uuid = md5(`${productId}|manual|${row?.item_id || ''}|${listing.variations.map((v) => v.sku).join(',')}`);
-  const res = await withLock(`product:${productId}`, () => shadowOrDo(ctx, 'create', { action: relist ? 'relist' : 'add', itemId: productId, after: { title: listing.title, manual: true } },
+  const res = await withLock(`product:${productId}`, () => manualDo(ctx, 'create', { action: relist ? 'relist' : 'add', itemId: productId, after: { title: listing.title, sizes: listing.variations.length, overridden: listing.overridden } },
     () => (relist ? io.write.relistFixedPriceItem(row.item_id, { ...relistData(listing, row), uuid }) : io.write.addFixedPriceItem({ ...listing, uuid }))));
   if (res?.ok) {
     if (relist) await io.db.moveItemId(row.item_id, res.itemId);
@@ -719,4 +751,123 @@ export async function productAction(productId, action, { by, io = IO } = {}) {
   const out = translateEbayErrors(res?.errors?.length ? res.errors : res?.error);
   await io.db.patchProduct(productId, { issues: out, status: 'needs_attention', verify_ok: false });
   return { ok: false, issues: out, error: out[0]?.message };
+}
+
+/* ------------------------------------ eBay-only edits ------------------------------------ */
+
+// What the "Edit for eBay" form starts with: the saved edit (if any), Shopify's own values, a title that fits,
+// the plain description, and the slides Image Finder already uploaded for this style code (product_photos ph_edited).
+export async function ebayEditInfo(productId, { io = IO } = {}) {
+  const full = await io.productsFull([productId]);
+  if (full.error) return { ok: false, error: full.error };
+  const product = full.products[0];
+  if (!product) return { ok: false, error: 'Shopify no longer has this product.' };
+  const saved = (await overridesFor(io, [productId])).get(productId) || null;
+  const listing = buildListing(product, await profileOf(io));
+  const shortTitle = shorterTitle(product.title);
+  const photos = listing.style && io.imageFinderPhotos ? await io.imageFinderPhotos(listing.style) : [];
+  return {
+    ok: true,
+    saved: saved ? { title: saved.title, description: saved.description_html, pictures: normalizeOverride(saved)?.pictures || [], updated_by: saved.updated_by, updated_at: saved.updated_at } : null,
+    shopify: { title: product.title, description: product.descriptionHtml || '', pictures: listing.pictures, style: listing.style },
+    defaults: { title: shortTitle, description: defaultEbayDescription(shortTitle, listing.style) },
+    imageFinder: (photos || []).map((p) => ({ url: p.url, angle: p.angle })).filter((p) => /^https:\/\//i.test(p.url)),
+    titleMax: TITLE_MAX,
+  };
+}
+
+// Save (or, with clear, remove) an eBay-only edit, then check it with eBay at once (the dry run, no listing).
+// Shopify is never written. The product's verify / content keys are cleared so both passes look again.
+export async function saveEbayEdit(productId, body, { by, io = IO } = {}) {
+  if (body?.clear) {
+    await io.db.overrideDelete(productId);
+    await io.db.logAdd({ domain: 'content', action: 'ebay_edit_cleared', mode: 'live', itemId: productId, by });
+  } else {
+    const bad = validateOverride(body);
+    if (bad) return { ok: false, error: bad };
+    const o = normalizeOverride(body);
+    await io.db.overrideSave(productId, o, by);
+    await io.db.logAdd({ domain: 'content', action: 'ebay_edit_saved', mode: 'live', itemId: productId, after: { title: o.title, description: !!o.description, pictures: o.pictures?.length || 0 }, by });
+  }
+  await io.db.forceRecheck(productId);
+  // Saved either way; a check that could not run (Shopify / eBay unreachable) is said, not thrown.
+  const check = await productAction(productId, 'verify', { by, io });
+  return { ok: true, saved: !body?.clear, cleared: !!body?.clear, issues: check.ok === false ? null : (check.issues || []), listing: check.listing || null, checkError: check.ok === false ? (check.error || 'eBay could not be asked.') : null };
+}
+
+/* ---------------------------------- duplicate listings ---------------------------------- */
+
+const groupListings = (rows) => {
+  const by = new Map();
+  for (const r of rows) {
+    // Watchers come only from eBay's own GetItem at panel open (duplicateListings): null until then = "—".
+    const l = by.get(r.item_id) || { item_id: r.item_id, title: r.title, view_url: r.view_url, start_time: r.start_time || null, watch_count: null, sizes: [] };
+    l.sizes.push({ sku: r.sku, size: r.size, qty: r.ebay_qty, price: r.ebay_price == null ? null : Number(r.ebay_price), dup: !!r.dup });
+    by.set(r.item_id, l);
+  }
+  return [...by.values()];
+};
+// The same SKU on two (or more) of our eBay listings, for one Shopify product: every listing that carries one of
+// its SKUs, with price, start date and watchers. Nothing is ended here.
+export async function duplicateListings(productId, { io = IO, skip = false } = {}) {
+  const full = await io.productsFull([productId]);
+  if (full.error) return { ok: false, error: full.error };
+  const product = full.products[0];
+  if (!product) return { ok: false, error: 'Shopify no longer has this product.' };
+  const skus = (product.variants || []).map((v) => String(v.sku || '').trim()).filter(Boolean);
+  const listings = groupListings(await io.db.dupListings(skus));
+  const dupSkus = [...new Set(listings.flatMap((l) => l.sizes.filter((s) => s.dup).map((s) => s.sku)))];
+  // One read-only GetItem per listing (at most 6): today's price per size, start date and watchers from eBay itself.
+  // A listing eBay can't read keeps what our copy has, and watchers stay unknown ("—").
+  if (!skip) {
+    for (const l of listings.slice(0, 6)) {
+      try {
+        const c = await io.fetchEbayItemContent(l.item_id, { watchers: true });
+        l.live = true; l.status = c.status || null;
+        if (c.startTime) l.start_time = c.startTime;
+        l.watch_count = Number.isFinite(c.watchCount) ? c.watchCount : null;
+        const bySku = new Map((c.variations || []).map((v) => [v.sku, v]));
+        for (const s of l.sizes) { const v = bySku.get(s.sku); if (v?.price != null) s.price = Number(v.price); if (v) s.qty = v.available ?? s.qty; }
+      } catch (e) { if (e.budget) break; l.live = false; }
+    }
+  }
+  return { ok: true, title: product.title, dupSkus, listings };
+}
+
+// A person picked which of two listings with the same SKU to end. Right before: that SKU must still be on both
+// (re-worked out from our copy), and eBay is read LIVE for both: the one kept must be active and carry the SKU,
+// and a size with stock that is only on the one being ended is refused unless the person accepted losing it.
+// Then EndItem, ebay_listing_ends + ebay_sync_log. One listing at a time; never automatic.
+export async function endExtraListing(productId, { endItemId, keepItemId, acceptLoss = false }, { by, io = IO } = {}) {
+  const endId = String(endItemId || '').replace(/[^0-9]/g, '');
+  const keepId = String(keepItemId || '').replace(/[^0-9]/g, '');
+  if (!endId || !keepId || endId === keepId) return { ok: false, error: 'Pick the listing to end and the one to keep.' };
+  const ctx = { io, settings: await readSettings(io), by };
+  const block = manualWriteBlock(ctx.settings, 'end');
+  if (block) return { ok: false, error: block };
+  const dup = await duplicateListings(productId, { io, skip: true });   // the two listings are read live just below
+  if (!dup.ok) return dup;
+  const endL = dup.listings.find((l) => l.item_id === endId);
+  const keepL = dup.listings.find((l) => l.item_id === keepId);
+  if (!endL || !keepL) return { ok: false, error: 'Those two listings no longer share a SKU of this shoe. Run the full check again.' };
+  const shared = dup.dupSkus.filter((s) => endL.sizes.some((x) => x.sku === s) && keepL.sizes.some((x) => x.sku === s));
+  if (!shared.length) return { ok: false, error: 'Those two listings do not share a SKU, so neither is a duplicate of the other.' };
+  let liveEnd; let liveKeep;
+  try { [liveEnd, liveKeep] = [await io.fetchEbayItemContent(endId), await io.fetchEbayItemContent(keepId)]; } catch (e) { return { ok: false, error: `Could not read the listings from eBay: ${e.message}` }; }
+  if (liveEnd.status && liveEnd.status !== 'Active') return { ok: false, error: `Listing ${endId} is no longer active on eBay.` };
+  if (liveKeep.status && liveKeep.status !== 'Active') return { ok: false, error: `The listing you keep (${keepId}) is not active on eBay, so ${endId} was not ended.` };
+  const keepSkus = new Set((liveKeep.variations || []).map((v) => v.sku));
+  if (!shared.some((s) => keepSkus.has(s))) return { ok: false, error: `The listing you keep (${keepId}) no longer has SKU ${shared.join(', ')} on eBay, so ${endId} was not ended.` };
+  const lost = (liveEnd.variations || []).filter((v) => Number(v.available ?? (Number(v.quantity) - Number(v.sold || 0))) > 0 && !keepSkus.has(v.sku)).map((v) => v.sku || v.size || '?');
+  if (lost.length && !acceptLoss) return { ok: false, lost, error: `Ending ${endId} would take ${lost.length === 1 ? 'a size' : `${lost.length} sizes`} with stock off eBay (${lost.slice(0, 6).join(', ')}): ${keepId} does not have ${lost.length === 1 ? 'it' : 'them'}. Tick "I understand" to end it anyway.` };
+  await ensureBudget(io, 'write');
+  const reason = `Duplicate: SKU ${shared.join(', ')} is also on ${keepId}, which is kept`;
+  const res = await withLock(`item:${endId}`, () => manualDo(ctx, 'end', { action: 'end_duplicate', itemId: endId, sku: shared[0], before: { title: endL.title, keep: keepId, sizes: endL.sizes.length }, after: { reason, lost } }, async () => {
+    const out = await io.write.endEbayItem(endId);
+    await io.write.logEbayEnd({ itemId: endId, title: endL.title, skus: (liveEnd.variations || []).map((v) => v.sku).filter(Boolean).join(' ') || shared.join(' '), reason, ok: out.ok, error: out.error, by: by || 'eBay Sync' });
+    if (out.ok) { await io.db.dropListing(endId); await io.db.dropLinks?.(endId); }
+    return out;
+  }));
+  if (res?.ok) return { ok: true, ended: endId, kept: keepId, already: !!res.already };
+  return { ok: false, error: res?.error || 'eBay did not end it.' };
 }

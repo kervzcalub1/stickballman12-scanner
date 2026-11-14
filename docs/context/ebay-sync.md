@@ -6,7 +6,9 @@ listings, ending**. **Orders are NOT part of it: DPL keeps handling eBay orders.
 - **Switches** (`app_settings` key `ebay_sync`): `stock price content create end`, each `off | shadow | live` (default
   `shadow`), `kill`, `blastPct` (10). A write happens ONLY when the switch is `live` and `kill` is off; in shadow the
   intended action is a row in `ebay_sync_log` (mode `shadow`). All writers sit under `io.write` in `api/_lib/ebay-sync.js`
-  and are reached only through `shadowOrDo` (`e2e/ebay-sync.spec.js` proves it).
+  and are reached only through `shadowOrDo` (`e2e/ebay-sync.spec.js` proves it). **The one exception: a person's button for one
+  listing** (List on eBay, End the extra listing) goes through `manualDo` and may write while the part is in Test mode; kill,
+  not-production and Off still stop it (see "eBay-only edits" below).
 - **Passes** (`ebay-sync-worker.js`, production only, `EBAY_SYNC_WORKER=on|off`): `queue` 30 s (Shopify webhook -> `ebay_sync_queue`
   -> stock / end, live only), `reconcile` 30 min (full live read of both sides -> `ebay_sync_links`, `ebay_sync_products`, drift,
   stock / price / end), `content` 30 min (40 `GetItem` rolling), `create` 30 min (precheck + `VerifyAddFixedPriceItem`, live add
@@ -20,7 +22,7 @@ listings, ending**. **Orders are NOT part of it: DPL keeps handling eBay orders.
 - **End**: only a Shopify product that went draft / archived / deleted (re-read live first), through `endEbayItem` + `ebay_listing_ends`.
   SKUs that simply left Shopify stay with the eBay Listings "Not in Shopify" tab (`no_shopify` here, never ended by the sync).
 - **Tables**: `ebay_sync_profiles` (seeded `STICKBALLMAN12`), `_products`, `_links`, `_log` (60 d, shadow 14 d), `_queue`.
-- **Endpoints** `api/ebay-sync/{status,settings,run,products,listings,inventory,profiles,log}.js`; writes need admin or `connect_integrations`.
+- **Endpoints** `api/ebay-sync/{status,settings,run,products,listings,inventory,profiles,log,edit,duplicates}.js`; writes need admin or `connect_integrations`.
 - **Quantity (eBay's docs, read 2026-11-08):** `ReviseInventoryStatus` and `ReviseFixedPriceItem` both take the quantity AVAILABLE; eBay adds what sold itself. `GetItem` returns the total including sold, so it is never sent back: a revise only carries new sizes. A 0 on an unsold size may drop it, and with out-of-stock control off (this account) the last size at 0 ends the listing. Still to prove live: the first change of each kind, read back on eBay.
 
 ## Review fixes (D1 to D18)
@@ -31,6 +33,43 @@ listings, ending**. **Orders are NOT part of it: DPL keeps handling eBay orders.
 - **Content** revises send ONLY new sizes (existing ones would gain their sold count), `InvocationID` per revise, GetItem right before; checked when the product's `shopify_key` changed, plus a sweep of 100 a day; stops at 2,000 calls used.
 - **Create**: `Item.UUID` (md5 hex, 32) on add and relist; "UUID already used" = success; a fresh eBay read first (SKU or style already there = skip); relist only for a listing the sync saw eBay end (not one ended through the app), keeps prices we don't own, moves locks / reprice history to the new id, counts in the daily 25.
 - **Reads**: Shopify reads are paced (1 s between pages, throttle waited out then abort); an empty 200 is an error; the shrink guard stores why and an admin can run `reconcile` with `acceptCounts`.
+
+## eBay-only edits, List on eBay by hand, End the extra listing (2026-11-15)
+For shoes eBay refuses as they are in Shopify (prod 11-14: 11 `title_long` 81-97 chars, 4 `no_photo`, 1 `photo_small`,
+1 `no_description`, 1 `duplicate_sku`). **Shopify is never written** by any of this (`e2e/ebay-sync-edits.spec.js` pins it).
+- **Table `ebay_sync_overrides`** (`shopify_product_id` PK, `title`, `description_html`, `pictures` jsonb `[url]`, `updated_by/at`;
+  live table). NULL / `[]` = use Shopify's. Needs `db:setup`.
+- **`buildListing(product, profile, override)`**: the override's title / description / photos replace Shopify's. The **style code
+  still comes from the Shopify title** (the override's only if Shopify has none), so a short title that drops it keeps the
+  Style Code specific and the "already on eBay" check. `precheck` judges the values actually SENT (`listing.title`,
+  `listing.description`, `listing.photos`): a short title clears `title_long`, eBay photos clear `no_photo` / `photo_small`
+  (a bare URL has no size, so it is never "small"), an eBay description clears `no_description`.
+- **Every caller passes the override**: createPass verify + add, `productAction`, contentPass (so the content pass never "fixes"
+  the eBay title back to the long Shopify one). `productKey(updatedAt, skus, overrideKey)` folds the override in (no override =
+  the same key as before), and saving one also clears `verify_key` + `content_key`, so both passes look again.
+- **UI**: Shopify Products -> Needs Attention / Not Uploaded rows -> **Edit for eBay** (admin or `connect_integrations`, server
+  enforced: `POST /api/ebay-sync/edit`). Title (live /80 counter, starts as `shorterTitle()`), description (starts as
+  "<title>. Brand new with original box. Style code X."; plain text becomes `<p>` lines; scripts / frames / handlers refused),
+  photos (https URLs, up to 12; **Use Image Finder photos** = the style code's `product_photos` `source='ph_edited'` rows that
+  `/ph/image-finder` uploaded to R2, shoe angles then the spec / welcome slides; none = the button says "No Image Finder photos
+  for X"). Save runs **Check with eBay** (VerifyAddFixedPriceItem, no listing) at once. "Use Shopify's own again" deletes it.
+  A row with an edit shows "eBay only: ..." under the title. Log: `ebay_sync_log` content / `ebay_edit_saved` | `ebay_edit_cleared`.
+- **List on eBay** (per row, admin / `connect_integrations`) works while New listings is in **Test** mode: a person's one-off never
+  needs the global switch flipped. `manualWriteBlock`: the kill switch, a server that may not write (not production) and New
+  listings switched **Off** still stop it, re-read right before the write. Same path as before otherwise: precheck, fresh eBay
+  look (SKU / style already there = no), lock per product, `Item.UUID`. Logged live with `after.manual = true`; counts in the 25 a day.
+- **End the extra listing** (Needs Attention row with `duplicate_sku`): `GET /api/ebay-sync/duplicates` lists every one of OUR
+  listings that carries a SKU of this shoe found on two or more listings, each with its sizes; price, start date and **watchers
+  come from a read-only GetItem per listing at panel open** (`IncludeWatchCount`; watchers "—" when eBay does not return them,
+  start date falls back to the eBay Listings pull). The person picks which to end; **nothing is ended automatically**. Before the
+  `EndItem` both listings are read live again: the kept one must be Active and still carry the SKU; a size with stock only on the
+  ended one is refused unless the person ticks "I understand". Same gate as List (kill / not production / End switched Off; Test
+  mode is fine). Logged to `ebay_listing_ends` (`logEbayEnd`, so a relist never brings it back) and `ebay_sync_log` end /
+  `end_duplicate`; dropped from `ebay_listings` + `ebay_sync_links`. The row moves on after the next full check.
+- **Risk: DPL syncs Title Shopify -> eBay.** If DPL links one of our new listings by SKU, it may push the long Shopify title; eBay
+  refuses it, and **DPL's stock update for that listing may fail with it** (one revise carries both). After the first override
+  listings go up, check DPL's error list (`docs/context/dpl.md`) for those item ids; if they show title errors, turn DPL's title
+  sync off for them or keep the Shopify title short enough.
 
 ## Where it lives
 One **Sync** tab on the eBay page (`?tab=sync`, sections `?sync=`), `src/screens/EbaySync.jsx`. Owner: no new pages or dashboard cards. Reprice and Not in Shopify stay as they are; Sync links to them.

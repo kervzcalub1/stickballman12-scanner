@@ -40,6 +40,7 @@ export function mkIO(over = {}) {
     { id: 'P2', title: 'Locked Shoe (HQ1234-001)', handle: 'p2', vendor: 'nike', status: 'ACTIVE', updatedAt: '2026-11-01T00:00:00Z', image: null },
   ];
   const saved = { links: null, products: null };
+  const overrides = { ...(over.overrides || {}) };
   let lockCalls = 0;
   const io = {
     getSetting: async (k) => store.get(k) ?? null,
@@ -89,7 +90,16 @@ export function mkIO(over = {}) {
       createdItemIds: async () => over.created || [],
       prune: async () => {}, linkCount: async () => over.linkCount ?? 3, productTabs: async () => ({ uploaded: over.uploaded ?? 100 }),
       moveItemId: async (a, b) => { dbCalls.push(['moveItemId', a, b]); }, dropListing: async (id) => { dbCalls.push(['dropListing', id]); },
+      // eBay-only edits: over.overrides = { productId: { title, description_html, pictures } }, kept in memory.
+      overridesOf: async (ids) => new Map(ids.filter((id) => overrides[id]).map((id) => [id, overrides[id]])),
+      overridesAll: async () => new Map(Object.entries(overrides)),
+      overrideSave: async (id, o, by) => { overrides[id] = { shopify_product_id: id, title: o.title, description_html: o.description, pictures: o.pictures, updated_by: by }; dbCalls.push(['overrideSave', id]); },
+      overrideDelete: async (id) => { delete overrides[id]; dbCalls.push(['overrideDelete', id]); },
+      forceRecheck: async (id) => { dbCalls.push(['forceRecheck', id]); },
+      dupListings: async (skus) => (over.dupListings || []).filter((r) => (over.dupListings || []).some((x) => x.item_id === r.item_id && skus.includes(x.sku))),
+      dropLinks: async (id) => { dbCalls.push(['dropLinks', id]); },
     },
+    imageFinderPhotos: async (style) => (over.imageFinder?.[style] || []),
     write: {
       reviseEbayQuantities: over.live ? allow('reviseEbayQuantities', (c) => { over.onQty?.(c); return c.map((x) => ({ key: x.key, ok: true })); }) : forbid('reviseEbayQuantities'),
       reviseEbayPrices: over.live ? allow('reviseEbayPrices', (c) => c.map((x) => ({ key: x.key, ok: true }))) : forbid('reviseEbayPrices'),
@@ -101,7 +111,7 @@ export function mkIO(over = {}) {
     },
     alert: async (ref, title, body) => { alerts.push({ ref, title, body }); },
   };
-  return { io, calls, dbCalls, logs, alerts, patches, saved, store, state, stateWrites };
+  return { io, calls, dbCalls, logs, alerts, patches, saved, store, state, stateWrites, overrides };
 }
 export const ctxOf = async (t, settingsPatch = {}, extra = {}) => {
   await saveSettings(settingsPatch, 'tester', t.io);

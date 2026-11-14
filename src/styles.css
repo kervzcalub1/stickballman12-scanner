@@ -7632,3 +7632,23 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
   .shl-fixfirst .shl-pub-btns { grid-column: 2; justify-content: flex-start; }
   .shl-edit-acts .btn { flex: 1 1 auto; min-height: 44px; }
 }
+
+/* eBay Sync: Edit for eBay + End the extra listing (docs/context/ebay-sync.md "eBay-only edits") */
+.modal.form-modal.esy-edit { max-width: 620px; }
+.esy-edit-shoe { margin: 0 0 10px; text-align: center; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.esy-edit-note { margin: 0 0 14px; font-size: 13px; font-weight: 600; }
+.esy-count { font-weight: 600; margin-left: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.esy-count.over { color: var(--err); }
+.form-modal-label .input.esy-edit-urls { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.esy-edit-picbtns { display: flex; flex-wrap: wrap; gap: 6px; }
+.esy-edit-thumbs { display: flex; flex-wrap: wrap; gap: 6px; }
+.esy-ebayedit { margin-top: 4px; color: #e0b05f; overflow-wrap: anywhere; }
+.esy-dups { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.esy-dup { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: pointer; min-width: 0; }
+.esy-dup.on { border-color: rgba(224,106,106,0.7); background: rgba(224,106,106,0.08); }
+.esy-dup input { margin-top: 3px; flex: 0 0 auto; }
+.esy-dup-body { min-width: 0; flex: 1; overflow-wrap: anywhere; font-size: 13px; }
+.esy-dup-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 6px 0 0; }
+.esy-dup-facts dt { color: var(--muted); }
+.esy-dup-facts dd { margin: 0; min-width: 0; }
+.esy-accept { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }

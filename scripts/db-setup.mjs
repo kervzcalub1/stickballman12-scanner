@@ -3667,6 +3667,18 @@ await sql(`
     claimed_at  TIMESTAMPTZ,
     UNIQUE (kind, key)
   )`);
+// eBay-only edits (2026-11-15): a title / description / photos that go to eBay INSTEAD of Shopify's,
+// for a shoe eBay refuses as it is in Shopify (title over 80, no photo, no description). Shopify is
+// never written; buildListing reads this for every eBay listing it builds (docs/context/ebay-sync.md).
+await sql(`
+  CREATE TABLE IF NOT EXISTS ebay_sync_overrides (
+    shopify_product_id  TEXT PRIMARY KEY,
+    title               TEXT,               -- NULL = Shopify's title
+    description_html    TEXT,               -- NULL = Shopify's description
+    pictures            JSONB,              -- [url, …]; NULL or [] = Shopify's photos
+    updated_by          TEXT,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
 
 // ── Listings kept fresh by the server (owner, 2026-11-10; docs/context/shopify-listings.md) ──
 // Shopify Listings used to read every Shopify variant LIVE each time the page opened, and price
@@ -3794,7 +3806,7 @@ const LIVE_TABLES = [
   'cancellations', 'cancellation_photos', 'cancellation_events',
   'inbound_issues', 'inbound_issue_events',
   'stock_counts', 'stock_check_scans',
-  'ebay_sync_products', 'ebay_sync_links', 'ebay_sync_log', 'ebay_sync_profiles',
+  'ebay_sync_products', 'ebay_sync_links', 'ebay_sync_log', 'ebay_sync_profiles', 'ebay_sync_overrides',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

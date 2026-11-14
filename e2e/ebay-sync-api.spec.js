@@ -49,11 +49,39 @@ test.describe('eBay Sync: real endpoints', () => {
     await request.post('/api/ebay-sync/settings', { ...auth('admin'), data: { kill: before.kill } });
   });
 
-  test('listing a product is refused while New listings is not live', async ({ request }) => {
-    const r = await request.post('/api/ebay-sync/products', { ...auth('admin'), data: { productId: 'gid://shopify/Product/1', action: 'list' } });
-    const j = await r.json();
+  test('listing a product by hand is refused under the kill switch, and on a server that may not write', async ({ request }) => {
+    const before = (await (await request.get('/api/ebay-sync/status', auth('admin'))).json()).settings;
+    await request.post('/api/ebay-sync/settings', { ...auth('admin'), data: { kill: true } });
+    const k = await (await request.post('/api/ebay-sync/products', { ...auth('admin'), data: { productId: 'gid://shopify/Product/1', action: 'list' } })).json();
+    expect(k.ok).toBe(false);
+    expect(String(k.error)).toMatch(/kill switch/i);
+    await request.post('/api/ebay-sync/settings', { ...auth('admin'), data: { kill: false } });
+    // The test server is not production and has no EBAY_SYNC_WRITES: a one-off list never reaches eBay from here.
+    const j = await (await request.post('/api/ebay-sync/products', { ...auth('admin'), data: { productId: 'gid://shopify/Product/1', action: 'list' } })).json();
     expect(j.ok).toBe(false);
-    expect(String(j.error)).toMatch(/live|test|new listings/i);
+    expect(String(j.error)).toMatch(/not allowed to write|switched Off/i);
+    await request.post('/api/ebay-sync/settings', { ...auth('admin'), data: { kill: before.kill } });
+  });
+
+  test('eBay-only edits and ending a duplicate: PH reads, only admin / Connect integrations writes; both refused under the kill switch', async ({ request }) => {
+    const pid = 'gid://shopify/Product/1';
+    for (const path of ['edit', 'duplicates']) {
+      expect((await request.get(`/api/ebay-sync/${path}?productId=x`, auth('ph_team'))).status(), `ph GET ${path} bad id`).toBe(400);
+      for (const role of ['warehouse', 'supplier']) expect((await request.get(`/api/ebay-sync/${path}?productId=${encodeURIComponent(pid)}`, auth(role))).status(), `${role} GET ${path}`).toBe(403);
+      expect((await request.get(`/api/ebay-sync/${path}?productId=${encodeURIComponent(pid)}`)).status()).toBe(401);
+    }
+    expect((await request.post('/api/ebay-sync/edit', { ...auth('ph_team'), data: { productId: pid, title: 'Short' } })).status()).toBe(403);
+    expect((await request.post('/api/ebay-sync/duplicates', { ...auth('ph_team'), data: { productId: pid, endItemId: '1', keepItemId: '2' } })).status()).toBe(403);
+    // A title over 80 is refused before anything is stored.
+    const long = await request.post('/api/ebay-sync/edit', { ...auth('admin'), data: { productId: pid, title: 'x'.repeat(81) } });
+    expect(long.status()).toBe(400);
+    expect((await long.json()).error).toMatch(/80/);
+    const before = (await (await request.get('/api/ebay-sync/status', auth('admin'))).json()).settings;
+    await request.post('/api/ebay-sync/settings', { ...auth('admin'), data: { kill: true } });
+    const d = await (await request.post('/api/ebay-sync/duplicates', { ...auth('admin'), data: { productId: pid, endItemId: '1', keepItemId: '2' } })).json();
+    expect(d.ok).toBe(false);
+    expect(String(d.error)).toMatch(/kill switch/i);
+    await request.post('/api/ebay-sync/settings', { ...auth('admin'), data: { kill: before.kill } });
   });
 
   test('the Sync tab renders from the real API on an empty database', async ({ page }) => {

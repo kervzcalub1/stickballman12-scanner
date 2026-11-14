@@ -1,6 +1,7 @@
 // GET  /api/ebay-sync/products?tab=uploaded|not_uploaded|needs_attention&q=&offset= -> { ok, rows, total, tabs }
 // POST /api/ebay-sync/products { productId, action:'verify'|'list'|'relist' } -> { ok, issues?, itemId?, error? }
-// verify is always allowed (eBay's own dry run); list / relist only when the Create switch is live.
+// verify is always allowed (eBay's own dry run). list / relist are a person's one-off: they work while New listings is in
+// Test mode too; the kill switch, a server that may not write, and New listings switched Off still stop them.
 import { send, applySecurity, rateLimit, requireRole, getJsonBody } from '../_lib/util.js';
 import { requirePrivilege } from '../_lib/buycart.js';
 import { dbConfigured } from '../_lib/db.js';

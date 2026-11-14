@@ -11,7 +11,7 @@ import { useLive } from '../hooks.js';
 import { useQueryParam, writeParam } from '../lib/urlstate.js';
 import { PH_DATETIME } from '../lib/format.js';
 
-const LIVE_TABLES = ['ebay_sync_links', 'ebay_sync_products', 'ebay_sync_log', 'ebay_sync_queue', 'app_settings'];
+const LIVE_TABLES = ['ebay_sync_links', 'ebay_sync_products', 'ebay_sync_log', 'ebay_sync_queue', 'app_settings', 'ebay_sync_overrides'];
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const when = (iso) => (iso ? `${PH_DATETIME.format(new Date(iso))} EST` : '—');
 const money = (n) => (n == null || n === '' ? '—' : `$${Number(n).toFixed(2)}`);
@@ -276,6 +276,214 @@ function Overview({ st, canEdit, onRun, busy }) {
   );
 }
 
+// ---------- Edit for eBay (eBay-only title / description / photos) ----------
+const TITLE_MAX = 80;
+const unesc = (t) => String(t).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+// A description we saved from plain text (<p>line</p>…) goes back into the box as plain lines; real HTML stays as it is.
+const toPlain = (html) => {
+  const h = String(html || '').trim();
+  if (!h) return '';
+  return /^(<p>[^<]*<\/p>)+$/.test(h) ? h.replace(/^<p>|<\/p>$/g, '').split('</p><p>').map(unesc).join('\n') : h;
+};
+const urlLines = (t) => String(t || '').split(/[\s,]+/).map((u) => u.trim()).filter(Boolean);
+
+function EbayEditModal({ row, onClose, onDone, onSignOut }) {
+  const [info, setInfo] = useState(null);
+  const [err, setErr] = useState('');
+  const [title, setTitle] = useState('');
+  const [desc, setDesc] = useState('');
+  const [pics, setPics] = useState('');
+  const [busy, setBusy] = useState('');
+  const [result, setResult] = useState(null);
+  useEffect(() => {
+    let on = true;
+    api.ebaySyncEditInfo(row.shopify_product_id).then((r) => {
+      if (!on) return;
+      setInfo(r);
+      setTitle(r.saved?.title || r.defaults?.title || '');
+      setDesc(r.saved?.description ? toPlain(r.saved.description) : (r.defaults?.description || ''));
+      setPics((r.saved?.pictures || []).join('\n'));
+    }).catch((e) => { if (e.unauthorized) onSignOut(); else if (on) setErr(e.message || 'Could not read this shoe.'); });
+    return () => { on = false; };
+  }, [row.shopify_product_id, onSignOut]);
+  useEffect(() => {
+    const k = (e) => { if (e.key === 'Escape' && !busy) onClose(); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [busy, onClose]);
+
+  const list = urlLines(pics);
+  const len = title.trim().length;
+  const finder = info?.imageFinder || [];
+  async function save(e) {
+    e?.preventDefault?.();
+    if (busy) return;
+    setBusy('save'); setErr(''); setResult(null);
+    try { setResult(await api.ebaySyncEditSave(row.shopify_product_id, { title: title.trim(), description: desc, pictures: list })); onDone(); }
+    catch (e2) { if (e2.unauthorized) onSignOut(); else setErr(e2.message || 'That did not save.'); }
+    finally { setBusy(''); }
+  }
+  async function clear() {
+    setBusy('clear'); setErr(''); setResult(null);
+    try { setResult({ ...(await api.ebaySyncEditClear(row.shopify_product_id)), cleared: true }); setInfo((i) => ({ ...i, saved: null })); onDone(); }
+    catch (e2) { if (e2.unauthorized) onSignOut(); else setErr(e2.message || 'That did not go through.'); }
+    finally { setBusy(''); }
+  }
+  return (
+    <div className="modal-overlay" onClick={() => (busy ? null : onClose())}>
+      <form className="modal form-modal esy-edit" role="dialog" aria-modal="true" aria-label="Edit for eBay" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+        <h3 className="modal-title">Edit for eBay</h3>
+        <p className="esy-edit-shoe">{row.title}</p>
+        <div className="notice esy-edit-note" data-ebay-only>Changes eBay only. Shopify keeps its own title/description/photos.</div>
+        {!info && !err && <p className="muted mt">Loading…</p>}
+        {info && (
+          <div className="form-modal-fields">
+            <label className="form-modal-label">
+              <span>eBay title <b className={`esy-count${len > TITLE_MAX ? ' over' : ''}`} data-count>{len}/{TITLE_MAX}</b></span>
+              <input className="input" value={title} disabled={!!busy} onChange={(e) => setTitle(e.target.value)} aria-label="eBay title" />
+              <i className="form-modal-hint">Shopify’s title ({String(info.shopify?.title || '').length} characters): {info.shopify?.title}</i>
+              {len > TITLE_MAX && <i className="form-modal-hint error">eBay allows {TITLE_MAX} characters. Take out {len - TITLE_MAX}.</i>}
+            </label>
+            <label className="form-modal-label">
+              <span>eBay description</span>
+              <textarea className="input" rows={4} value={desc} disabled={!!busy} onChange={(e) => setDesc(e.target.value)} aria-label="eBay description" />
+              <i className="form-modal-hint">Plain text is fine. {info.shopify?.description ? 'Leave it empty to use Shopify’s description.' : 'Shopify has no description for this shoe.'}</i>
+            </label>
+            <div className="form-modal-label">
+              <span>eBay photos (one web address per line, up to 12)</span>
+              <textarea className="input esy-edit-urls" rows={3} value={pics} disabled={!!busy} onChange={(e) => setPics(e.target.value)} aria-label="eBay photos" placeholder="https://…" />
+              <div className="esy-edit-picbtns">
+                <button type="button" className="btn ghost sm" disabled={!!busy || !finder.length} onClick={() => setPics(finder.slice(0, 12).map((p) => p.url).join('\n'))} data-finder>
+                  {finder.length ? `Use Image Finder photos (${Math.min(12, finder.length)})` : `No Image Finder photos for ${info.shopify?.style || 'this style code'}`}
+                </button>
+                {list.length > 0 && <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => setPics('')}>Use Shopify’s photos</button>}
+              </div>
+              <i className="form-modal-hint">
+                {!finder.length && <>Make them on the Image Finder page first, or paste photo addresses. </>}
+                {list.length ? `${list.length} photo${list.length === 1 ? '' : 's'} for eBay.` : `Empty = Shopify’s photos (${(info.shopify?.pictures || []).length}).`}
+              </i>
+              {list.length > 0 && <div className="esy-edit-thumbs">{list.slice(0, 12).map((u) => <Thumb key={u} src={u} alt="" />)}</div>}
+            </div>
+          </div>
+        )}
+        {err && <div className="error mt" role="alert">{err}</div>}
+        {result && (
+          <div className={`mt ${result.checkError || result.issues?.length ? 'error' : 'notice'}`} role="status" data-edit-result>
+            {result.cleared ? 'Back to Shopify’s own title, description and photos. ' : 'Saved for eBay. '}
+            {result.checkError ? `eBay could not be asked: ${result.checkError}`
+              : result.issues?.length ? <>eBay would still refuse it:<ul className="esy-issues">{result.issues.map((i, n) => <li key={`${i.code}-${n}`}><b>{i.message}</b>{i.fix && <div className="esy-fix">{i.fix}</div>}</li>)}</ul></>
+                : 'Checked with eBay: nothing stops it now.'}
+          </div>
+        )}
+        <div className="modal-actions">
+          {info?.saved && <button type="button" className="btn ghost" disabled={!!busy} onClick={clear}>{busy === 'clear' ? 'Working…' : 'Use Shopify’s own again'}</button>}
+          <button type="button" className="btn ghost" disabled={!!busy} onClick={onClose}>{result ? 'Close' : 'Cancel'}</button>
+          <button type="submit" className="btn primary" disabled={!!busy || !info || len > TITLE_MAX}>{busy === 'save' ? 'Saving and checking…' : 'Save and check with eBay'}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ---------- End the extra listing (same SKU on two of our eBay listings) ----------
+const priceSpan = (sizes) => {
+  const p = sizes.map((s) => s.price).filter((n) => n != null);
+  if (!p.length) return '—';
+  const lo = Math.min(...p); const hi = Math.max(...p);
+  return lo === hi ? money(lo) : `${money(lo)}–${money(hi)}`;
+};
+function DuplicateModal({ row, onClose, onDone, onSignOut }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [endId, setEndId] = useState('');
+  const [keepId, setKeepId] = useState('');
+  const [lost, setLost] = useState(null);
+  const [accept, setAccept] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState('');
+  useEffect(() => {
+    let on = true;
+    api.ebaySyncDuplicates(row.shopify_product_id).then((r) => { if (on) setData(r); })
+      .catch((e) => { if (e.unauthorized) onSignOut(); else if (on) setErr(e.message || 'Could not read the listings.'); });
+    return () => { on = false; };
+  }, [row.shopify_product_id, onSignOut]);
+  useEffect(() => {
+    const k = (e) => { if (e.key === 'Escape' && !busy) onClose(); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [busy, onClose]);
+  const listings = data?.listings || [];
+  const others = listings.filter((l) => l.item_id !== endId);
+  const keep = keepId && keepId !== endId ? keepId : (others[0]?.item_id || '');
+  const pick = (id) => { setEndId(id); setLost(null); setAccept(false); setErr(''); };
+  async function end() {
+    if (!endId || !keep || busy) return;
+    setBusy(true); setErr('');
+    try {
+      await api.ebaySyncEndDuplicate(row.shopify_product_id, endId, keep, accept);
+      setDone(`Ended listing #${endId} on eBay. #${keep} stays. The row moves on after the next full check.`);
+      onDone();
+    } catch (e) {
+      if (e.unauthorized) onSignOut();
+      else { setErr(e.message || 'That did not go through.'); if (e.data?.lost?.length) setLost(e.data.lost); }
+    } finally { setBusy(false); }
+  }
+  return (
+    <div className="modal-overlay" onClick={() => (busy ? null : onClose())}>
+      <div className="modal form-modal esy-edit" role="dialog" aria-modal="true" aria-label="End the extra listing" onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">End the extra listing</h3>
+        <p className="esy-edit-shoe">{row.title}</p>
+        {!data && !err && <p className="muted mt">Loading…</p>}
+        {data && (
+          <>
+            <p className="sm">
+              {data.dupSkus?.length ? <>SKU <b>{data.dupSkus.join(', ')}</b> is on {listings.length} of our eBay listings. </> : 'No SKU of this shoe is on two listings any more. '}
+              Pick the one to end; the other stays. Nothing is ended until you press the button.
+            </p>
+            <div className="esy-dups">
+              {listings.map((l) => (
+                <label key={l.item_id} className={`esy-dup${endId === l.item_id ? ' on' : ''}`} data-dup={l.item_id}>
+                  <input type="radio" name="esy-end" checked={endId === l.item_id} disabled={busy || !!done} onChange={() => pick(l.item_id)} />
+                  <div className="esy-dup-body">
+                    <div><b>#{l.item_id}</b> {l.view_url && <a className="ebl-link" href={l.view_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>on eBay ↗</a>}</div>
+                    <div className="muted xs">{l.title}</div>
+                    <dl className="esy-dup-facts">
+                      <dt>Price</dt><dd>{priceSpan(l.sizes)}</dd>
+                      <dt>Started</dt><dd>{l.start_time ? when(l.start_time) : '—'}</dd>
+                      <dt>Watchers</dt><dd>{l.watch_count == null ? '—' : fmt(l.watch_count)}</dd>
+                      <dt>Sizes</dt><dd>{l.sizes.length} ({l.sizes.map((s) => s.size || s.sku).filter(Boolean).slice(0, 8).join(', ')}{l.sizes.length > 8 ? '…' : ''})</dd>
+                    </dl>
+                    {l.live === false && <div className="muted xs">eBay could not be read just now; these are from our last check.</div>}
+                    {l.status && l.status !== 'Active' && <div className="warn-text xs">eBay says this listing is {String(l.status).toLowerCase()}.</div>}
+                    {endId === l.item_id && <div className="error xs">This one will be ended.</div>}
+                  </div>
+                </label>
+              ))}
+            </div>
+            {endId && others.length > 1 && (
+              <label className="form-modal-label mt"><span>Keep</span>
+                <select className="input" value={keep} disabled={busy} onChange={(e) => setKeepId(e.target.value)}>
+                  {others.map((l) => <option key={l.item_id} value={l.item_id}>#{l.item_id}</option>)}
+                </select>
+              </label>
+            )}
+            {lost?.length > 0 && (
+              <label className="esy-accept mt"><input type="checkbox" checked={accept} disabled={busy} onChange={(e) => setAccept(e.target.checked)} />
+                <span>I understand {lost.join(', ')} go{lost.length === 1 ? 'es' : ''} off eBay with it.</span></label>
+            )}
+          </>
+        )}
+        {err && <div className="error mt" role="alert">{err}</div>}
+        {done && <div className="notice mt" role="status">{done}</div>}
+        <div className="modal-actions">
+          <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>{done ? 'Close' : 'Cancel'}</button>
+          {!done && <button type="button" className="btn danger" disabled={busy || !endId || !keep || (lost?.length > 0 && !accept)} onClick={end}>{busy ? 'Ending…' : endId ? `End listing #${endId}` : 'Pick one to end'}</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------- Shopify Products ----------
 function ProductsTab({ st, canEdit, narrow, onSignOut }) {
   const [sub, setSub] = useQueryParam('ssub', 'needs_attention');
@@ -283,21 +491,25 @@ function ProductsTab({ st, canEdit, narrow, onSignOut }) {
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
   const [aerr, setAerr] = useState('');
+  const [editing, setEditing] = useState(null);     // row whose eBay-only edit is open
+  const [dupOf, setDupOf] = useState(null);         // row whose duplicate listings are open
+  const [listing, setListing] = useState(null);     // row waiting for the "List on eBay" confirm
   const fetcher = useCallback((offset) => api.ebaySyncProducts({ tab: sub, q, offset }), [sub, q]);
   const list = usePaged(fetcher, [sub, q], onSignOut);
   const [tabs, setTabs] = useState(null);
   useEffect(() => { if (list.data?.tabs) setTabs(list.data.tabs); }, [list.data]);
-  const createLive = st.settings?.switches?.create === 'live';
+  const createMode = st.settings?.switches?.create || 'off';
 
   async function act(row, action) {
     setBusy(`${action}:${row.shopify_product_id}`); setAerr(''); setMsg('');
     try {
-      await api.ebaySyncProductAction(row.shopify_product_id, action);
-      setMsg(action === 'verify' ? `Asked eBay about “${row.title}”.` : `Sent “${row.title}” to eBay.`);
+      const r = await api.ebaySyncProductAction(row.shopify_product_id, action);
+      setMsg(action === 'verify' ? `Asked eBay about “${row.title}”.` : `Listed “${row.title}” on eBay${r.itemId ? ` as #${r.itemId}` : ''}.`);
       await list.reload();
-    } catch (e) { if (e.unauthorized) onSignOut(); else setAerr(e.message || 'That did not go through.'); }
+    } catch (e) { if (e.unauthorized) onSignOut(); else setAerr(e.message || 'That did not go through.'); throw e; }
     finally { setBusy(''); }
   }
+  const quietAct = (row, action) => act(row, action).catch(() => {});
 
   const cols = [
     { h: 'Photo', thumb: true, cell: (r) => <Thumb src={r.image} alt={r.title} /> },
@@ -308,6 +520,12 @@ function ProductsTab({ st, canEdit, narrow, onSignOut }) {
           {r.style && <span>{r.style}</span>}
           {r.view_url ? <a className="ebl-link" href={r.view_url} target="_blank" rel="noreferrer">on eBay{r.item_id ? ` #${r.item_id}` : ''} ↗</a> : (r.item_id && <span>#{r.item_id}</span>)}
         </div>
+        {r.has_ebay_edit && (
+          <div className="esy-ebayedit xs" data-ebay-edit>
+            <b>eBay only:</b> {r.ebay_title ? <>“{r.ebay_title}”</> : 'Shopify title'}
+            {r.ebay_pictures ? ` · ${r.ebay_pictures} photo${r.ebay_pictures === 1 ? '' : 's'}` : ''}{r.ebay_description ? ' · own description' : ''}
+          </div>
+        )}
       </div>) },
     ...(narrow ? [] : [{ h: 'Style', cell: (r) => r.style || <span className="muted">—</span> }]),
     { h: 'Sizes', cell: (r) => (sizesText(r.sizes) ? <span>{sizesText(r.sizes)}{r.qty != null && <span className="muted"> · qty {fmt(r.qty)}</span>}</span> : (r.qty != null ? `qty ${fmt(r.qty)}` : '')) },
@@ -318,8 +536,12 @@ function ProductsTab({ st, canEdit, narrow, onSignOut }) {
     { h: 'Checked', cell: (r) => (r.checked_at ? when(r.checked_at) : (sub === 'needs_attention' ? 'never' : '')) },
     ...(canEdit ? [{ h: 'Actions', cell: (r) => (
       <div className="esy-actions">
-        <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => act(r, 'verify')}>{busy === `verify:${r.shopify_product_id}` ? 'Asking…' : 'Check with eBay'}</button>
-        {createLive && sub !== 'uploaded' && <button type="button" className="btn primary sm" disabled={!!busy} onClick={() => act(r, 'list')}>List on eBay</button>}
+        <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => quietAct(r, 'verify')}>{busy === `verify:${r.shopify_product_id}` ? 'Asking…' : 'Check with eBay'}</button>
+        {sub !== 'uploaded' && <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => setEditing(r)}>Edit for eBay</button>}
+        {sub === 'needs_attention' && (r.issues || []).some((i) => i.code === 'duplicate_sku') && (
+          <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => setDupOf(r)}>End the extra listing</button>
+        )}
+        {sub !== 'uploaded' && <button type="button" className="btn primary sm" disabled={!!busy} onClick={() => { setAerr(''); setListing(r); }}>{busy === `list:${r.shopify_product_id}` ? 'Listing…' : 'List on eBay'}</button>}
       </div>) }] : []),
   ];
 
@@ -331,11 +553,19 @@ function ProductsTab({ st, canEdit, narrow, onSignOut }) {
       </div>
       {msg && <div className="notice mt">{msg}</div>}
       {aerr && <div className="error mt" role="alert">{aerr}</div>}
-      {sub === 'needs_attention' && <p className="muted sm">Shoes eBay refused or that we can't list yet, with the fix in plain words.</p>}
+      {sub === 'needs_attention' && <p className="muted sm">Shoes eBay refused or that we can't list yet, with the fix in plain words. Edit for eBay changes the eBay listing only; Shopify stays as it is.</p>}
       <Body st={list} empty={sub === 'needs_attention' ? 'Nothing needs attention.' : sub === 'uploaded' ? 'No shoes on eBay match.' : 'No shoes are waiting to be uploaded.'}>
         <DataList rows={list.rows} cols={cols} rowKey={(r) => r.shopify_product_id} narrow={narrow} label="Shopify products" />
       </Body>
       <Pager p={list.pager} label="shoes" />
+      {editing && <EbayEditModal row={editing} onClose={() => setEditing(null)} onDone={() => { list.reload(); }} onSignOut={onSignOut} />}
+      {dupOf && <DuplicateModal row={dupOf} onClose={() => setDupOf(null)} onDone={() => { list.reload(); }} onSignOut={onSignOut} />}
+      {listing && (
+        <FormModal title="List on eBay now?" submitLabel="Yes, list it"
+          message={`This puts “${listing.title}” on eBay as a real listing now${createMode === 'live' ? '' : ', even though New listings is in Test mode'}. It is checked against eBay first, and is not listed if a size or the style code is already on eBay. The kill switch still stops it.`}
+          onClose={() => setListing(null)}
+          onSubmit={async () => { const r = listing; setListing(null); await quietAct(r, 'list'); }} />
+      )}
     </div>
   );
 }

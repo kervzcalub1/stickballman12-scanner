@@ -435,6 +435,13 @@ export const api = {
   ebaySyncRun: (pass, extra) => post('/api/ebay-sync/run', { pass, ...extra }),
   ebaySyncProducts: ({ tab, q, offset } = {}) => get(`/api/ebay-sync/products?tab=${encodeURIComponent(tab || 'needs_attention')}&q=${encodeURIComponent(q || '')}&offset=${offset || 0}`),
   ebaySyncProductAction: (productId, action) => post('/api/ebay-sync/products', { productId, action }),
+  // eBay-only edits: title / description / photos for eBay instead of Shopify's (Shopify is never written).
+  ebaySyncEditInfo: (productId) => get(`/api/ebay-sync/edit?productId=${encodeURIComponent(productId)}`),
+  ebaySyncEditSave: (productId, edit) => post('/api/ebay-sync/edit', { productId, ...edit }),
+  ebaySyncEditClear: (productId) => post('/api/ebay-sync/edit', { productId, clear: true }),
+  // Same SKU on two of our eBay listings: list them, end the one a person picks.
+  ebaySyncDuplicates: (productId) => get(`/api/ebay-sync/duplicates?productId=${encodeURIComponent(productId)}`),
+  ebaySyncEndDuplicate: (productId, endItemId, keepItemId, acceptLoss = false) => post('/api/ebay-sync/duplicates', { productId, endItemId, keepItemId, acceptLoss }),
   ebaySyncListings: ({ filter, q, offset } = {}) => get(`/api/ebay-sync/listings?filter=${encodeURIComponent(filter || 'all')}&q=${encodeURIComponent(q || '')}&offset=${offset || 0}`),
   ebaySyncInventory: ({ q, offset } = {}) => get(`/api/ebay-sync/inventory?q=${encodeURIComponent(q || '')}&offset=${offset || 0}`),
   ebaySyncProfiles: () => get('/api/ebay-sync/profiles'),

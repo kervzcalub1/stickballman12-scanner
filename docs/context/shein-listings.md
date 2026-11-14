@@ -927,6 +927,43 @@ of a SHEIN product type, and `buildAttributes` (publish) used it: prod had 374 =
   refuses + its row never sent, typed wins and is saved on that shoe only, unsure blocked, `editAttrs`, the report query),
   the page test (prefill + chips, Setup shows "Typed per shoe" / old default), and "Bug 4".
 
+## Fix the Product Model of shoes already on SHEIN — op `model` (built 2026-11-14, owner approved)
+**Why:** the shoes published while Setup held a typed default went out with another shoe's model ("ACG Air Max" on a
+LeBron 23), and `attributePatch` never REPLACES a detail a live product already has. **Prod needs `db:setup`** (the
+`shein_listing_job_items_op_check` list gains `'model'`) before the first preview — else the job fails on the insert.
+- **What is sent:** ONE `partialEdit` per SPU = `{ spu_name, product_attribute_list }` and nothing else. The list = the
+  product's CURRENT details as spu-info shows them (`currentAttrRows`: template product attributes only, as `attributePatch`
+  keeps them; sale attributes left out; details the template no longer lists dropped) + any missing required detail
+  `attributePatch` would add, with ONLY 1000546 swapped to the shoe's own model (typed for the shoe → else its title when
+  sure). Pure: `planModelFix` (`src/lib/sheinPublish.js`). SPU level → SHEIN reviews every colour; the old model stays live
+  until it approves.
+- **Never sent:** no sure model → `model_unsure` (blocked; the guess shown — type it in Details → SHEIN details, preview
+  again); SHEIN already shows it (case / spaces aside) → `model_already_right` (note); the type has no Product Model →
+  `model_not_in_template`; a required detail we can't fill → its `missing_attr` (SHEIN would refuse the whole edit);
+  template unread → `missing_attr` `template_unread`. A sold-out shoe (0 pairs on Shopify) is NOT skipped for this op
+  (it is only the description); inactive / deleted on Shopify and never-approved shoes still are.
+- **The flow** = the other live ops: preview (PH ok, reads only, `ops: ['model']`, never mixed) → the sheet ("Fix the
+  Product Model": shoes checked / to correct / already right / not sent; each item "On SHEIN now “…” → will change to
+  “…” (read from the title | typed for this shoe)") → **Correct the Product Model of N shoes on SHEIN** (admin / Connect
+  integrations) → `in_review` → SHEIN's review (poll + webhook) → `done`. Idempotent like the rest (key = body + SHEIN's
+  version + the model it had); a lost answer is looked up (new document version, or spu-info already shows the model)
+  before any resend. Server: `buildModelFix`, `editAttrInputs` (what `editAttrs` reads, shared) in `api/_lib/shein-listing.js`.
+- **Which shoes:** `GET /api/shein/listings?modelFix=1` (PH ok, DB only, read-only transaction — `sheinModelReportData` +
+  `modelReportFrom`) → `{ rows, candidates, setup, checked, canWrite }`. A row = the latest DONE publish whose Product Model
+  isn't the shoe's own: `setup_default_differs` (a value Setup holds today), `sent_differs` (not Setup's value today —
+  Setup changed over time: 5512 was "Dunk Low" before it became "ACG Air Max" on 11-12, and the rows may be deleted), or
+  `setup_default_no_model` (a Setup value, but no sure model — a person types it). `candidates` = a sure model and no fix
+  sent yet (`fix_status` = its latest `model` run item: pending / sending / deferred / in_review / done).
+  **Page:** a strip at the top of Shoes on SHEIN → Products (`ModelFixStrip`, `src/components/SheinModelFix.jsx`), only
+  when there are any: "N shoes on SHEIN show another shoe's Product Model" + e.g. lines + **Preview the fix (N)** →
+  the model preview for exactly the candidates. The script prints the same rows (+ `fix_status`, `fix_job_id`).
+  Local copy of prod (11-13): 88 rows (46 Setup value + 42 older "Dunk Low"), all with a sure model.
+- e2e: `e2e/shein-model.spec.js` → `planModelFix` (only 1000546 changes, typed wins, a required detail added / blocking,
+  unsure / already right / no model / unread) + the report's new reasons; `shein-listings.spec.js` → "fix the Product Model
+  of live shoes" (fake SHEIN learns details-only edits: the preview body, 0 writes, never mixed, PH can't confirm (403),
+  the candidates, the strip → the sheet, the admin's send = ONE edit with only `spu_name` + the list → In review →
+  approved → Done → no longer a candidate → a new preview says already right).
+
 ## A rejected shoe is never treated as live (fixed 2026-11-11)
 **Bug (owner's video, Samba OG IH6828):** after a Publish again preview + a Replace photos preview, the drawer showed
 the LIVE-shoe tools (Photos on SHEIN → Replace SHEIN photos, Add missing sizes) for a shoe SHEIN never approved —

@@ -34,11 +34,11 @@ try {
   const { rows, setup, checked } = await setupModelReport(pool);
   if (process.argv.includes('--csv')) {
     const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    console.log(['shopify_product_id', 'spu', 'title', 'product_type_id', 'sent_model', 'should_be', 'from', 'title_guess', 'reason', 'sent_at'].join(','));
-    for (const r of rows) console.log([r.productId, r.spu, r.title, r.ptid, r.sent, r.should, r.from, r.guess, r.reason, r.sentAt ? new Date(r.sentAt).toISOString() : ''].map(q).join(','));
+    console.log(['shopify_product_id', 'spu', 'title', 'product_type_id', 'sent_model', 'should_be', 'from', 'title_guess', 'reason', 'sent_at', 'fix_status', 'fix_job_id'].join(','));
+    for (const r of rows) console.log([r.productId, r.spu, r.title, r.ptid, r.sent, r.should, r.from, r.guess, r.reason, r.sentAt ? new Date(r.sentAt).toISOString() : '', r.fixStatus, r.fixJobId].map(q).join(','));
   } else {
     console.log(`Setup Product Model defaults: ${setup.map((s) => `${s.ptid} = ${s.values.map((v) => `"${v}"`).join(', ')}`).join(' · ') || 'none'}`);
     console.log(`Published shoes checked: ${checked} · sent a Setup default that isn't theirs: ${rows.length}\n`);
-    for (const r of rows) console.log(`${r.spu || '—'} | ${r.title} | sent "${r.sent}" → ${r.should ? `"${r.should}" (${r.from === 'title' ? 'from the title' : 'typed for the shoe'})` : `needs a person (title guess "${r.guess || ''}")`}`);
+    for (const r of rows) console.log(`${r.spu || '—'} | ${r.title} | sent "${r.sent}" → ${r.should ? `"${r.should}" (${r.from === 'title' ? 'from the title' : 'typed for the shoe'})` : `needs a person (title guess "${r.guess || ''}")`}${r.fixStatus ? ` · fix ${r.fixStatus} (job #${r.fixJobId})` : ''}`);
   }
 } finally { await pool.end(); }

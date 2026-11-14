@@ -16,7 +16,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelFromTitle, shoeModel, setupModelCorrections, PRODUCT_MODEL_ATTR_ID } from '../src/lib/sheinModel.js';
-import { shoeAttrDefaults, buildAttributes, attributePatch, templateParts, typedAttrIds, modelOf } from '../src/lib/sheinPublish.js';
+import { shoeAttrDefaults, buildAttributes, attributePatch, templateParts, typedAttrIds, modelOf, planModelFix, currentAttrRows } from '../src/lib/sheinPublish.js';
+import { summarizePlan } from '../src/lib/sheinListings.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TYPED = fs.readFileSync(path.join(here, 'fixtures', 'shein-models.tsv'), 'utf8').trim().split('\n').map((l) => l.split('\t'));
@@ -158,6 +159,17 @@ test.describe('SHEIN Product Model from the title (pure)', () => {
       ['S6', 'ACG Air Max', 'Kobe X Low Protro', 'shoe', 'setup_default_differs'],
     ]);
     expect(out[2].guess).toBe('Motive');
+    // 2026-11-14: a wrong model that ISN'T today's Setup value (Setup changed since, or its rows were deleted) still counts;
+    // an unsure shoe with a non-Setup value is left alone; a fix already sent is passed through (never a candidate again)
+    const more = setupModelCorrections([
+      { shopify_product_id: 'gid://shopify/Product/7', spu: 'S7', title: 'Nike Gato LV8 Chrome (IB3566-001)', product_type_id: PT, body: body('Dunk Low') },
+      { shopify_product_id: 'gid://shopify/Product/8', spu: 'S8', title: "Nike Motive 'Black' (DV1237-001)", product_type_id: PT, body: body('Motive X') },
+      { shopify_product_id: 'gid://shopify/Product/9', spu: 'S9', title: 'Nike KD 19 (IH1117-500)', product_type_id: PT, body: body('ACG Air Max'), fix_status: 'in_review', fix_job_id: '42' },
+    ], setup);
+    expect(more.map((r) => [r.spu, r.sent, r.should, r.reason, r.fixStatus, r.fixJobId])).toEqual([
+      ['S7', 'Dunk Low', 'Gato LV8', 'sent_differs', null, null],
+      ['S9', 'ACG Air Max', 'KD 19', 'setup_default_differs', 'in_review', 42],
+    ]);
   });
 });
 
@@ -168,4 +180,50 @@ test('SHEIN placeholder colour: "Color default" counts as the default, real colo
   const { isDefaultLabel } = await import('../src/lib/sheinPublish.js');
   for (const l of ['Default', 'default', 'Color default', 'Colour Default', 'color_default', '默认', '颜色默认']) expect(isDefaultLabel(l)).toBe(true);
   for (const l of ['Black', 'Default Grey', 'White/Default', 'Multicolor', '', null]) expect(isDefaultLabel(l)).toBe(false);
+});
+
+// 2026-11-14 (owner approved): correct the Product Model of a shoe already live on SHEIN (op 'model').
+test.describe('SHEIN Product Model fix of a LIVE shoe — planModelFix (pure)', () => {
+  const LINING = { attribute_id: 7200, attribute_name_en: 'Lining Material', attribute_type: 4, attribute_mode: 3, attribute_status: 2, data_dimension: 1, attribute_value_info_list: [{ attribute_value_id: 7201, attribute_value_en: 'Fabric' }] };
+  const TPL = { product_type_id: PT, main_attribute_status: 2, attribute_infos: [{ attribute_id: 27, attribute_type: 1, attribute_label: 1, attribute_status: 3 }, UPPER, LINING, MODEL, SERIES] };
+  const live = (model, extra = []) => ({ spuName: 'S1', productAttributeInfoList: [cur(7000, 7001), cur(27, 81), cur(1002319, null, 'Air Max'), ...(model ? [cur(MODEL.attribute_id, null, model)] : []), cur(5555, 1), ...extra] });
+  const defs = (title, overrides = null) => shoeAttrDefaults(SETUP, overrides, PT, { title, template: TPL });
+
+  test('the body: the CURRENT list as SHEIN has it with ONLY 1000546 swapped — nothing else (no sizes, prices, photos, SKC fields)', () => {
+    const r = planModelFix({ spu: live('ACG Air Max'), template: TPL, defaults: defs('Nike LeBron 23 Out for Redemption (IH1513-400)') });
+    expect(r.body).toEqual({ spu_name: 'S1', product_attribute_list: [{ attribute_id: 7000, attribute_value_id: 7001 }, { attribute_id: 1002319, attribute_extra_value: 'Air Max' }, { attribute_id: PRODUCT_MODEL_ATTR_ID, attribute_extra_value: 'LeBron 23' }] });
+    expect(r.plan).toMatchObject({ op: 'model', model: { from: 'ACG Air Max', to: 'LeBron 23', source: 'title' }, attributes: { added: [], dropped: [5555], count: 3 }, blockers: [] });
+    // every other row is exactly what currentAttrRows (= what attributePatch keeps) reads
+    const keep = [...currentAttrRows(live('ACG Air Max'), TPL).cur.values()].filter((x) => x.attribute_id !== PRODUCT_MODEL_ATTR_ID);
+    expect(r.body.product_attribute_list.filter((x) => x.attribute_id !== PRODUCT_MODEL_ATTR_ID)).toEqual(keep);
+    expect(summarizePlan(r.plan)).toBe('Product Model: “ACG Air Max” → “LeBron 23” (from the title) · every other detail sent as SHEIN has it (SHEIN reviews every colour)');
+  });
+  test('typed for the shoe wins over the title; a missing required detail is added (as attributePatch would); one it can’t fill blocks', () => {
+    const t = planModelFix({ spu: live('ACG Air Max'), template: TPL, defaults: defs('Nike LeBron 23 (IH1513-400)', own('LeBron XXIII')) });
+    expect(t.body.product_attribute_list.at(-1)).toEqual({ attribute_id: PRODUCT_MODEL_ATTR_ID, attribute_extra_value: 'LeBron XXIII' });
+    expect(t.plan.model).toMatchObject({ to: 'LeBron XXIII', source: 'shoe' });
+    // a leather upper makes the lining required (an associated rule); Setup has a lining default → it rides along
+    const withLining = [...defs('Nike LeBron 23 (IH1513-400)'), { product_type_id: PT, attribute_id: 7200, value_ids: [7201], extra_values: [] }];
+    const a = planModelFix({ spu: live('ACG Air Max'), template: TPL, defaults: withLining, assoc: [{ attribute_id: 7200, allowed: [7201] }] });
+    expect(a.body.product_attribute_list).toEqual([{ attribute_id: 7000, attribute_value_id: 7001 }, { attribute_id: 1002319, attribute_extra_value: 'Air Max' }, { attribute_id: 7200, attribute_value_id: 7201 }, { attribute_id: PRODUCT_MODEL_ATTR_ID, attribute_extra_value: 'LeBron 23' }]);
+    expect(a.plan.attributes.added).toEqual([{ attributeId: 7200, attribute: 'Lining Material' }]);
+    // no lining default → SHEIN would refuse the whole edit → blocked here, nothing sent
+    const b = planModelFix({ spu: live('ACG Air Max'), template: TPL, defaults: defs('Nike LeBron 23 (IH1513-400)'), assoc: [{ attribute_id: 7200, allowed: [7201] }] });
+    expect(b.body).toBe(null);
+    expect(b.plan.blockers[0]).toMatchObject({ code: 'missing_attr', params: expect.objectContaining({ attributeId: 7200 }) });
+    // a live shoe with NO model on SHEIN gets one (from: none)
+    const n = planModelFix({ spu: live(null), template: TPL, defaults: defs('Nike Air Monarch IV Black (415445-001)') });
+    expect(n.body.product_attribute_list.at(-1)).toEqual({ attribute_id: PRODUCT_MODEL_ATTR_ID, attribute_extra_value: 'Air Monarch IV' });
+    expect(n.plan.model).toMatchObject({ from: null, to: 'Air Monarch IV' });
+  });
+  test('never sent: unsure title (the guess is shown) · already right (case / spaces aside) · the type has no Product Model · template unread', () => {
+    const u = planModelFix({ spu: live('ACG Air Max'), template: TPL, defaults: defs("Nike Motive 'Black Anthracite' (DV1237-001)"), guess: 'Motive' });
+    expect(u).toMatchObject({ body: null, plan: { blockers: [expect.objectContaining({ code: 'model_unsure', params: { current: 'ACG Air Max', guess: 'Motive' } })] } });
+    // Setup's "ACG Air Max" is never a source for the fix either
+    expect(planModelFix({ spu: live('Dunk Low'), template: TPL, defaults: SETUP }).plan.blockers[0].code).toBe('model_unsure');
+    const ok = planModelFix({ spu: live('air  max 270'), template: TPL, defaults: defs('Nike Air Max 270 White (AV7892-100)') });
+    expect(ok).toMatchObject({ body: null, plan: { blockers: [expect.objectContaining({ code: 'model_already_right', params: { model: 'air  max 270' } })] } });
+    expect(planModelFix({ spu: live('ACG Air Max'), template: NO_MODEL, defaults: defs('Nike Air Max 270 (AV7892-100)') }).plan.blockers[0].code).toBe('model_not_in_template');
+    expect(planModelFix({ spu: live('ACG Air Max'), template: null, defaults: [] }).plan.blockers[0]).toMatchObject({ code: 'missing_attr', params: { why: 'template_unread' } });
+  });
 });

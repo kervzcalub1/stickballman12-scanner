@@ -448,12 +448,12 @@ export function attrValueProblem(a, valueIds = [], extraValues = []) {
 // "Dunk Low"), so a product missing it is blocked unless a person typed it for THIS shoe (attr_overrides,
 // shoeAttrDefaults — 2026-11-11), never given another shoe's text.
 // → { list | null (nothing missing: send no list), added: [{attributeId, attribute}], dropped: [ids], problems }.
-export function attributePatch({ spu, template, defaults = [], assoc = [] }) {
-  if (!template?.attribute_infos) return { list: null, added: [], dropped: [], problems: [], unread: true };
-  const parts = templateParts(template);
-  // every product attribute the template still lists, hidden ones (status 1) too: the list replaces SHEIN's
-  const keep = new Set((template.attribute_infos || []).filter((a) => [3, 4].includes(Number(a.attribute_type))).map((a) => Number(a.attribute_id)));
-  const other = new Set((template.attribute_infos || []).filter((a) => [1, 2].includes(Number(a.attribute_type))).map((a) => Number(a.attribute_id)));
+// The product's CURRENT details on SHEIN as product_attribute_list rows (spu-info mixes in sale attributes —
+// only the template's product attributes, types 3/4, are kept; hidden ones (status 1) too: the list replaces
+// SHEIN's). → { cur: Map(stableKey → row), dropped: Set(ids the template no longer lists) }
+export function currentAttrRows(spu, template) {
+  const keep = new Set((template?.attribute_infos || []).filter((a) => [3, 4].includes(Number(a.attribute_type))).map((a) => Number(a.attribute_id)));
+  const other = new Set((template?.attribute_infos || []).filter((a) => [1, 2].includes(Number(a.attribute_type))).map((a) => Number(a.attribute_id)));
   const cur = new Map(); const dropped = new Set();
   for (const x of spu?.productAttributeInfoList || []) {
     const id = Number(x.attributeId);
@@ -464,6 +464,12 @@ export function attributePatch({ spu, template, defaults = [], assoc = [] }) {
     if (row.attribute_value_id == null && row.attribute_extra_value == null) continue;
     cur.set(stableKey(row), row);
   }
+  return { cur, dropped };
+}
+export function attributePatch({ spu, template, defaults = [], assoc = [] }) {
+  if (!template?.attribute_infos) return { list: null, added: [], dropped: [], problems: [], unread: true };
+  const parts = templateParts(template);
+  const { cur, dropped } = currentAttrRows(spu, template);
   const have = new Set([...cur.values()].map((r) => r.attribute_id));
   const assocBy = new Map((assoc || []).map((a) => [Number(a.attribute_id), a]));
   const added = []; const problems = []; const rows = [];
@@ -482,6 +488,39 @@ export function attributePatch({ spu, template, defaults = [], assoc = [] }) {
   return { list: [...cur.values(), ...rows], added, dropped: [...dropped], problems };
 }
 const stableKey = (r) => `${r.attribute_id}|${r.attribute_value_id ?? ''}|${r.attribute_extra_value ?? ''}`;
+
+// 2026-11-14 (owner approved): correct the Product Model of a shoe ALREADY LIVE on SHEIN. Live shoes published
+// while Setup held a typed default ("ACG Air Max", "Nike Air", "Dunk Low") carry another shoe's model, and
+// attributePatch never replaces a detail the product already has. op 'model' = ONE partialEdit per SPU:
+// { spu_name, product_attribute_list } — the product's CURRENT details (as attributePatch builds them, plus any
+// missing required one it would add) with ONLY 1000546 swapped to the shoe's own model (typed for the shoe → else its
+// title when sure; `defaults` = shoeAttrDefaults' rows). Nothing else is sent (no sizes, prices, photos, SKC fields).
+// No sure model / the template doesn't list it / already right → no body, the reason as a blocker.
+// → { body | null, plan: { op:'model', spu, model:{ from, to, source }, attributes:{ added, dropped, count }, blockers, notes } }
+export const modelKey = (s) => trim(s).replace(/\s+/g, ' ').toLowerCase();
+export function planModelFix({ spu, template, defaults = [], assoc = [], guess = null }) {
+  const MODEL = 1000546;
+  const plan = { op: 'model', spu: spu?.spuName || null, model: null, attributes: null, blockers: [], notes: [], sizes: [], relinks: [], skipped: [], prices: [], mallOn: [] };
+  const no = (b) => { plan.blockers.push(b); return { body: null, plan }; };
+  if (!template?.attribute_infos) return no(blocker('missing_attr', { why: 'template_unread' }));
+  const listed = (template.attribute_infos || []).find((a) => Number(a.attribute_id) === MODEL && [3, 4].includes(Number(a.attribute_type)));
+  const before = (spu?.productAttributeInfoList || []).filter((x) => Number(x.attributeId) === MODEL).map((x) => trim(x.attributeValue)).filter(Boolean);
+  plan.model = { from: before.join(' / ') || null, to: null, source: null };
+  if (!listed) return no(blocker('model_not_in_template', { current: plan.model.from }));
+  const own = (defaults || []).find((d) => Number(d.attribute_id) === MODEL && d.shoe && trim((d.extra_values || [])[0]));
+  if (!own) return no(blocker('model_unsure', { current: plan.model.from, guess: guess || null }));
+  const to = trim(own.extra_values[0]);
+  plan.model = { ...plan.model, to, source: own.from === 'title' ? 'title' : 'shoe' };
+  if (before.length === 1 && modelKey(before[0]) === modelKey(to)) return no(blocker('model_already_right', { model: before[0] }));
+  // what an edit of this shoe would send anyway: the current list + each missing required detail (SHEIN re-checks
+  // the WHOLE product on any edit); a required one we can't fill → SHEIN would refuse → blocked here
+  const patch = attributePatch({ spu, template, defaults, assoc });
+  if (patch.problems.length) { plan.blockers.push(...patch.problems); return { body: null, plan }; }
+  const base = patch.list || [...currentAttrRows(spu, template).cur.values()];
+  const list = [...base.filter((r) => Number(r.attribute_id) !== MODEL), { attribute_id: MODEL, attribute_extra_value: to }];
+  plan.attributes = { added: patch.added.filter((a) => Number(a.attributeId) !== MODEL), dropped: patch.dropped || [], count: list.length };
+  return { body: { spu_name: spu.spuName, product_attribute_list: list }, plan };
+}
 
 // fill-in-standard field_keys → what we do (spec §3.2). → { problems, send: { shelfRequire, skcTitle } }
 const HANDLED_KEYS = new Set(['brand_code', 'supplier_code', 'mall_state', 'skc_title', 'shelf_require', 'stop_purchase']);

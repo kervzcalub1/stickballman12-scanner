@@ -12484,6 +12484,19 @@ export async function setListingAttrOverride(productId, attributeId, value) {
 // The shoe behind a SHEIN product, for its live edits (editAttrs): its own details + its Shopify title (the Product
 // Model is read from the title when none is typed — 2026-11-14). A row with details first, then a Shopify row
 // over a SHEIN-only one. → { attr_overrides, title } | null
+// The Product Model report's two reads (api/_lib/shein-model-report.js), in ONE read-only transaction. DB only.
+export async function sheinModelReportData() {
+  const { SETUP_MODELS_SQL, PUBLISHED_MODELS_SQL } = await import('./shein-model-report.js');
+  const client = await pool().connect();
+  try {
+    await client.query('BEGIN READ ONLY');
+    const setup = (await client.query(SETUP_MODELS_SQL)).rows;
+    const published = (await client.query(PUBLISHED_MODELS_SQL)).rows;
+    await client.query('COMMIT');
+    return [setup, published];
+  } catch (e) { try { await client.query('ROLLBACK'); } catch { /* gone */ } throw e; }
+  finally { client.release(); }
+}
 export async function listingShoeBySpu(spu) {
   const [r] = await db()`SELECT attr_overrides, title FROM shein_listing_products WHERE spu = ${spu}
     ORDER BY (COALESCE(attr_overrides, '{}'::jsonb) <> '{}'::jsonb) DESC, (shopify_product_id LIKE 'shein:%') ASC, updated_at DESC LIMIT 1`;

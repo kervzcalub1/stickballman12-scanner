@@ -7047,6 +7047,9 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 
 /* ---- SHEIN Listings: Shopify active / inactive filter + bulk edit before publishing (2026-10-28) ---- */
 .shl-shopfilter { flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; }
+/* Fix the Product Model strip (2026-11-14) */
+.shl-modelfix { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
+.shl-modelfix .btn { flex: 0 0 auto; min-height: 44px; }
 .shl-shopfilter-lead { align-self: center; margin-right: 2px; }
 .shl-bar-dead { color: #e0b05f; }
 .shl-cat-fav { display: flex; flex-direction: column; gap: 2px; margin: 0 0 6px; padding: 0 0 6px; border-bottom: 1px dashed var(--border); }

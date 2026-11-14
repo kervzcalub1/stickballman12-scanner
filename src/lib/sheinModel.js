@@ -189,10 +189,16 @@ export function shoeModel({ title, overrides, productTypeId } = {}) {
   return { model: r.model || '', from: null, sure: false, guess: true };
 }
 
-// Read-only report (2026-11-14): LIVE shoes whose Product Model on SHEIN came from a Setup default (the leak the
-// owner found) and differs from the shoe's own model (typed, else the title when sure). Input rows = the latest
-// DONE publish per shoe (what we sent) + the shoe's row; `setupModels` = Map(ptid → [Setup typed values]).
-// → [{ productId, spu, title, ptid, sent, should, from, reason }]. No SHEIN call — a correction is the owner's call.
+// Read-only report (2026-11-14): LIVE shoes whose Product Model on SHEIN isn't their own. Input rows = the latest DONE
+// publish per shoe (what we sent) + the shoe's row (+ fix_status / fix_job_id: its latest Product Model fix that went
+// to SHEIN, if any); `setupModels` = Map(ptid → [Setup typed values]) — the leak the owner found ("ACG Air Max").
+//   setup_default_differs  sent a Setup default, the shoe's own model (typed, else the title when sure) differs
+//   setup_default_no_model sent a Setup default, we can't tell the shoe's own model (a person types it)
+//   sent_differs           not a Setup value (or Setup's rows were deleted since) but it differs from the shoe's own
+// A sent value equal to the shoe's own (case / spaces aside) is never listed; an unsure shoe whose sent value isn't a
+// Setup default is left alone (nothing to judge it by).
+// → [{ productId, spu, title, ptid, sent, should, from, guess, reason, sentAt, fixStatus, fixJobId }]. No SHEIN call.
+const normModel = (s) => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
 export function setupModelCorrections(rows = [], setupModels = new Map()) {
   const out = [];
   for (const r of rows) {
@@ -201,12 +207,13 @@ export function setupModelCorrections(rows = [], setupModels = new Map()) {
     const sent = sentRow?.attribute_extra_value ? String(sentRow.attribute_extra_value).trim() : null;
     if (!sent) continue;
     const ptid = Number(r.product_type_id ?? r.ptid);
-    const setup = (setupModels.get(ptid) || []).map((s) => String(s).trim().toLowerCase());
-    if (!setup.includes(sent.toLowerCase())) continue;                    // not a Setup default → a person's or the title's value
+    const isSetup = (setupModels.get(ptid) || []).map(normModel).includes(normModel(sent));
     const own = shoeModel({ title: r.title, overrides: r.attr_overrides, productTypeId: ptid });
-    if (own.sure && own.model.toLowerCase() === sent.toLowerCase()) continue;   // the default happened to be right
+    if (own.sure && normModel(own.model) === normModel(sent)) continue;   // it is the shoe's own model
+    if (!own.sure && !isSetup) continue;                                   // nothing to judge it by
     out.push({ productId: r.shopify_product_id, spu: r.spu || null, title: r.title || '', ptid, sent, should: own.sure ? own.model : null, from: own.from,
-      guess: own.sure ? null : own.model || null, reason: own.sure ? 'setup_default_differs' : 'setup_default_no_model', sentAt: r.sent_at || null });
+      guess: own.sure ? null : own.model || null, reason: !own.sure ? 'setup_default_no_model' : isSetup ? 'setup_default_differs' : 'sent_differs', sentAt: r.sent_at || null,
+      fixStatus: r.fix_status || null, fixJobId: r.fix_job_id == null ? null : Number(r.fix_job_id) });
   }
   return out;
 }

@@ -4,9 +4,9 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import { buildLinks, priceRule, readGuard, contentDiff, buildListing, validateProfile, pageOffset, canWrite, normalizeSettings, endsByZero } from '../src/lib/ebaySync.js';
 import { itemXml, uuidDuplicateItemId } from '../api/_lib/ebay.js';
-import { reconcilePass, queuePass, contentPass, createPass, runPass, productAction, readState } from '../api/_lib/ebay-sync.js';
+import { reconcilePass, queuePass, contentPass, createPass, runPass, productAction, readState, readSettings } from '../api/_lib/ebay-sync.js';
 import { shopifyEbayProductsLight, shopifyCollectionProductIds, shopifyListingState } from '../api/_lib/shopify.js';
-import { mkIO, ctxOf, NOW, TITLE, ALL_LIVE } from './helpers/ebaySyncIO.js';
+import { mkIO, ctxOf, NOW, OLD, TITLE, ALL_LIVE } from './helpers/ebaySyncIO.js';
 
 process.env.EBAY_SYNC_WRITES = 'on';
 const LIVE = { ...ALL_LIVE, blastPct: 10 };
@@ -444,5 +444,59 @@ test.describe('Zero: a stock push to 0 that takes the last size ends the listing
     await queuePass(full1);
     expect(w.calls.filter((c) => c[0] === 'reviseEbayQuantities')).toEqual([]);   // blocked by end's window
     expect(w.alerts[0].title).toMatch(/stopped/);
+  });
+});
+
+/* ---- stock goes live for the listings OUR sync created, even with the global Stock switch on Test ---- */
+test.describe('stock live for created listings only', () => {
+  // 111 = created by us, 222 = DPL's. Both drift: eBay holds 1, Shopify has 5.
+  const rows = [
+    { item_id: '111', variation_key: 'A', sku: 'A', size: '8', price: 100, qty_available: 1, title: TITLE },
+    { item_id: '222', variation_key: 'L', sku: 'L', size: '10', price: 200, qty_available: 1, title: 'Locked Shoe (HQ1234-001)' }];
+  const variants = [
+    { variantId: 'v-A', productId: 'P1', sku: 'A', size: '8', price: '100', qty: 5, status: 'ACTIVE', productTitle: TITLE },
+    { variantId: 'v-L', productId: 'P2', sku: 'L', size: '10', price: '200', qty: 5, status: 'ACTIVE', productTitle: 'Locked Shoe (HQ1234-001)' }];
+  const prev = [{ link_key: '111|A', qty_drift_since: OLD }, { link_key: '222|L', qty_drift_since: OLD }];
+  const TEST_STOCK = { switches: { ...ALL_LIVE.switches, stock: 'shadow', price: 'shadow', content: 'shadow', create: 'shadow', end: 'shadow' }, blastPct: 100 };
+  const base = { live: true, ebayRows: rows, variants, prev, created: ['111'], listingCount: 2, linkCount: 2 };
+  const liveStock = (t) => t.logs.filter((l) => l.domain === 'stock' && l.mode === 'live');
+
+  test('reconcile: the created item gets Shopify qty, the DPL item gets nothing, switch stays Test', async () => {
+    const sent = [];
+    const t = mkIO({ ...base, onQty: (c) => sent.push(...c) });
+    const ctx = await ctxOf(t, TEST_STOCK);
+    await reconcilePass(ctx);
+    expect(sent.map((c) => [c.itemId, c.qty])).toEqual([['111', 5]]);
+    expect(liveStock(t).map((l) => l.itemId)).toEqual(['111']);
+    expect(t.logs.some((l) => l.domain === 'stock' && l.mode === 'shadow' && l.after?.sample?.some((x) => x.item === '222'))).toBe(true);
+    expect((await readSettings(t.io)).switches.stock).toBe('shadow');
+  });
+  test('the kill switch stops the created set too; off stops it too', async () => {
+    for (const patch of [{ kill: true }, { switches: { ...TEST_STOCK.switches, stock: 'off' } }]) {
+      const t = mkIO({ ...base });
+      await reconcilePass(await ctxOf(t, { ...TEST_STOCK, ...patch }));
+      expect(t.calls.filter((c) => c[0] === 'reviseEbayQuantities')).toEqual([]);
+      expect(liveStock(t)).toEqual([]);
+    }
+  });
+  test('the blast limit still applies to the created set', async () => {
+    const t = mkIO({ ...base, window: { 'stock.set_qty': 50 } });
+    await reconcilePass(await ctxOf(t, { ...TEST_STOCK, blastPct: 10 }));
+    expect(t.calls.filter((c) => c[0] === 'reviseEbayQuantities')).toEqual([]);
+    expect(t.logs.some((l) => l.domain === 'stock' && l.action === 'blast_stop')).toBe(true);
+  });
+  test('no created items: nothing live (DPL keeps all of it)', async () => {
+    const t = mkIO({ ...base, created: [] });
+    await reconcilePass(await ctxOf(t, TEST_STOCK));
+    expect(t.calls.filter((c) => c[0] === 'reviseEbayQuantities')).toEqual([]);
+    expect(liveStock(t)).toEqual([]);
+  });
+  test('queue: a sale queued for a created SKU is sent, a DPL SKU is not, and no relist/add is called', async () => {
+    const sent = [];
+    const links = { A: [{ link_key: '111|A', item_id: '111', sku: 'A', variation_key: 'A', ebay_qty: 1 }], L: [{ link_key: '222|L', item_id: '222', sku: 'L', variation_key: 'L', ebay_qty: 1 }] };
+    const t = mkIO({ ...base, onQty: (c) => sent.push(...c), queue: [{ id: 1, kind: 'sku', key: 'A' }, { id: 2, kind: 'sku', key: 'L' }], linksBySku: (s) => links[s] });
+    await queuePass(await ctxOf(t, TEST_STOCK));
+    expect(sent.map((c) => c.itemId)).toEqual(['111']);
+    expect(t.calls.filter((c) => ['relistFixedPriceItem', 'addFixedPriceItem'].includes(c[0]))).toEqual([]);
   });
 });

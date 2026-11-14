@@ -16,7 +16,10 @@ the SHEIN Reprice reader (`openWorkbook` / `readSheet`, fflate). Same rules as t
   first, then loose; "Tracking Courier/Status/…" can never be the tracking column). No header →
   the Make sheet's positions: **F order, K tracking, O status**.
 - Each order is keyed by tracking (`T:`) else order number (`O:`); junk ids (`N/A`, `-`, `none`,
-  `pending`, `tbd`…) count as blank; a numeric `1234.0` loses its `.0`.
+  `pending`, `tbd`…) count as blank; a numeric `1234.0` loses its `.0`, and a number in scientific notation
+  (`4.93235840438E11`, as the sheet holds some FedEx numbers) is expanded digit-for-digit to
+  `493235840438` (`excelIdText`) — also at Phase 2 (`cleanTracking`) and in the downloads, so a
+  run saved before 2026-11-14 asks FedEx the right number too.
 - Status words are searched in the status cell **and the whole row**: **Refunded › Cancelled ›
   Delivered › Lost** ("delivered", "POD", "left at door", "handed to resident"…). **Lost = nothing
   in the workbook says it was delivered.**

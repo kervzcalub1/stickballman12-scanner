@@ -1,5 +1,5 @@
 // E2E auth helper. The app keeps its session in sessionStorage (sb_session_token
-// + sb_user), and the server's verifyToken trusts the SIGNED payload (HMAC + exp,
+// + sb_user) — read first — and a shared copy in localStorage (e2e/login-tabs.spec.js), and the server's verifyToken trusts the SIGNED payload (HMAC + exp,
 // no DB lookup). So we mint a valid token with the server's own signToken using
 // SESSION_SECRET from .env — no per-user passwords needed, and it stays the single
 // source of truth for the token format.

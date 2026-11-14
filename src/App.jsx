@@ -4,7 +4,7 @@
 // stays in memory. A page may claim the device Back button via `navBack` (close a
 // modal / step back) before the app navigates away.
 import React, { useEffect, useRef, useState } from 'react';
-import { getUser, clearAuth, api } from './api.js';
+import { getUser, clearAuth, api, onAuthChange } from './api.js';
 import { isUnsavedDirty } from './hooks.js';
 import { pathForView, viewForPath, hasPriv, isAdminRole } from './lib/constants.js';
 import { sheinSectionsFor } from './lib/sheinPage.js';
@@ -94,6 +94,15 @@ export default function App() {
     if (v === 'home') window.history.replaceState(null, '', pathForView(v));
   }
   function signOut() { clearAuth(); setUserState(null); setView('home'); window.history.replaceState(null, '', '/'); }
+  // Other tabs of this browser share the sign-in (src/api.js): signed out of this session in
+  // another tab → signed out here too; signed in elsewhere while this tab sits on the sign-in
+  // screen → in, without typing it again.
+  const authRef = useRef({ onAuthed, signOut });
+  authRef.current = { onAuthed, signOut };
+  useEffect(() => onAuthChange((u) => {
+    if (!u) { if (appRef.current.user) authRef.current.signOut(); }
+    else if (!appRef.current.user) authRef.current.onAuthed(u);
+  }), []);
 
   // Load app-wide settings (price margin) once signed in, so "GI + N%" labels and
   // Final-price math use the real configured value. Bump state to re-render after.

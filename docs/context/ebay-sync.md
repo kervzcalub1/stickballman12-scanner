@@ -34,3 +34,19 @@ listings, ending**. **Orders are NOT part of it: DPL keeps handling eBay orders.
 
 ## Where it lives
 One **Sync** tab on the eBay page (`?tab=sync`, sections `?sync=`), `src/screens/EbaySync.jsx`. Owner: no new pages or dashboard cards. Reprice and Not in Shopify stay as they are; Sync links to them.
+
+## Stock is live for the listings we created (per-item rule)
+DPL owns stock for the other listings, so the global **Stock** switch stays Test. But a listing OUR sync created
+(DPL is not linked to it) would get no stock updates at all, so **stock writes go live per item for those only**:
+`pushStock` splits each batch; items in the created set go through the normal live path (live re-read of Shopify,
+same reconcile/queue passes, same blast limit, `ebay_sync_log` domain `stock` mode `live`), everything else stays a
+shadow row. No new write path, no schema change.
+- **Created by us** = `ebaySyncCreatedItemIds()` in `api/_lib/db.js`: `ebay_sync_products.item_id` where a `ebay_sync_log`
+  row exists with `domain='create' AND action IN ('add','relist') AND mode='live' AND ok` and `item_id` = that product's
+  Shopify id (the create log keys on the Shopify product id). New creates and relists join automatically. (Log rows
+  older than 60 days are pruned; a listing created that long ago would fall back to the global switch.)
+- Blocked exactly like any live write: kill switch, Stock = Off, or a server that may not write.
+- If DPL later links one of these by SKU it stays in our set: two writers of the same Shopify number, harmless.
+- A created listing eBay ends at 0 is never relisted by the stock path; only the create pass relists.
+- Shown on the Stock row of the eBay Sync screen: "Live for the N listings we created" (`counts.created_stock_live`).
+- Orders stay DPL's; Shopify is never written.

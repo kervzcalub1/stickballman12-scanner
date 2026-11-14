@@ -86,6 +86,7 @@ export function mkIO(over = {}) {
       upsertProducts: async (rows) => { saved.products = rows; }, patchProduct: async (id, p) => { patches.push([id, p]); },
       toVerify: async () => over.toVerify || [], toAdd: async (n) => { dbCalls.push(['toAdd', n]); return (over.toAdd || []).slice(0, n); },
       toCheck: async (n, sweep) => { dbCalls.push(['toCheck', n, sweep]); return over.toCheck || []; },
+      createdItemIds: async () => over.created || [],
       prune: async () => {}, linkCount: async () => over.linkCount ?? 3, productTabs: async () => ({ uploaded: over.uploaded ?? 100 }),
       moveItemId: async (a, b) => { dbCalls.push(['moveItemId', a, b]); }, dropListing: async (id) => { dbCalls.push(['dropListing', id]); },
     },

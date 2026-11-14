@@ -14493,6 +14493,15 @@ export async function ebaySyncLiveCount(domain, action, minutes = 60) {
                          AND at > now() - make_interval(mins => ${minutes})`;
   return r?.n || 0;
 }
+// eBay item ids of the listings OUR sync created: a product with a live, successful add / relist in the log
+// (the log's item_id is the Shopify product id), at the eBay item id the product row holds now.
+export async function ebaySyncCreatedItemIds() {
+  const rows = await db()`SELECT DISTINCT p.item_id FROM ebay_sync_products p
+                           WHERE p.item_id IS NOT NULL AND p.item_id <> ''
+                             AND EXISTS (SELECT 1 FROM ebay_sync_log l WHERE l.domain = 'create' AND l.action IN ('add', 'relist')
+                                           AND l.mode = 'live' AND l.ok AND l.item_id = p.shopify_product_id)`;
+  return rows.map((r) => r.item_id);
+}
 export async function ebaySyncListingCount() {
   const [r] = await db()`SELECT count(DISTINCT item_id)::int AS n FROM ebay_sync_links WHERE item_id <> ''`;
   return r?.n || 0;

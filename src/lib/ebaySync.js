@@ -303,7 +303,28 @@ export function shorterTitle(title, max = TITLE_MAX) {
     words.splice(i, 1);
   }
   const out = join();
-  return out.length <= max ? out : out.slice(0, max).trim();
+  return tidyTitle(out.length <= max ? out : out.slice(0, max));
+}
+// Trimming can cut a quoted phrase in half. Drop a quote mark with no partner (straight or curly; an apostrophe
+// inside a word is not a quote), then any trailing space or dangling separator.
+function tidyTitle(t) {
+  const chars = [...t];
+  const wordy = (c) => !!c && /[\p{L}\p{N}]/u.test(c);
+  const drop = new Set();
+  for (const q of ["'", '"']) {
+    const at = [];
+    chars.forEach((c, i) => { if (c === q && !(wordy(chars[i - 1]) && wordy(chars[i + 1]))) at.push(i); });
+    if (at.length % 2) drop.add(at[at.length - 1]);
+  }
+  for (const [open, close] of [['\u2018', '\u2019'], ['\u201C', '\u201D']]) {
+    const opens = [];
+    chars.forEach((c, i) => {
+      if (c === open) opens.push(i);
+      else if (c === close && !(wordy(chars[i - 1]) && wordy(chars[i + 1]))) { if (opens.length) opens.pop(); else drop.add(i); }
+    });
+    opens.forEach((i) => drop.add(i));
+  }
+  return chars.filter((_, i) => !drop.has(i)).join('').replace(/\s+/g, ' ').replace(/^[\s\-\u2013\u2014|,:;/&+]+|[\s\-\u2013\u2014|,:;/&+]+$/g, '').trim();
 }
 
 // What stops a product from going on eBay, in words a person can act on. `dupSkus` = SKUs used twice

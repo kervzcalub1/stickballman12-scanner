@@ -485,6 +485,10 @@ function DuplicateModal({ row, onClose, onDone, onSignOut }) {
 }
 
 // ---------- Shopify Products ----------
+// The title eBay gets: the eBay-only edit when there is one, else Shopify's.
+const sentTitle = (r) => r.ebay_title || r.title;
+// When eBay gets its own title, show Shopify's smaller underneath.
+const ShopifyTitleNote = ({ r }) => (sentTitle(r) !== r.title ? <span className="muted xs" data-shopify-title style={{ display: 'block', marginTop: 6, overflowWrap: 'anywhere' }}>Shopify title: {r.title}</span> : null);
 function ProductsTab({ st, canEdit, narrow, onSignOut }) {
   const [sub, setSub] = useQueryParam('ssub', 'needs_attention');
   const [q, setQ] = useQueryParam('syncq', '');
@@ -504,7 +508,7 @@ function ProductsTab({ st, canEdit, narrow, onSignOut }) {
     setBusy(`${action}:${row.shopify_product_id}`); setAerr(''); setMsg('');
     try {
       const r = await api.ebaySyncProductAction(row.shopify_product_id, action);
-      setMsg(action === 'verify' ? `Asked eBay about “${row.title}”.` : `Listed “${row.title}” on eBay${r.itemId ? ` as #${r.itemId}` : ''}.`);
+      setMsg(action === 'verify' ? `Asked eBay about “${sentTitle(row)}”.` : <>{action === 'relist' ? 'Relisted' : 'Listed'} “{sentTitle(row)}” on eBay{r.itemId ? ` as #${r.itemId}` : ''}.<ShopifyTitleNote r={row} /></>);
       await list.reload();
     } catch (e) { if (e.unauthorized) onSignOut(); else setAerr(e.message || 'That did not go through.'); throw e; }
     finally { setBusy(''); }
@@ -541,7 +545,11 @@ function ProductsTab({ st, canEdit, narrow, onSignOut }) {
         {sub === 'needs_attention' && (r.issues || []).some((i) => i.code === 'duplicate_sku') && (
           <button type="button" className="btn ghost sm" disabled={!!busy} onClick={() => setDupOf(r)}>End the extra listing</button>
         )}
-        {sub !== 'uploaded' && <button type="button" className="btn primary sm" disabled={!!busy} onClick={() => { setAerr(''); setListing(r); }}>{busy === `list:${r.shopify_product_id}` ? 'Listing…' : 'List on eBay'}</button>}
+        {sub !== 'uploaded' && (!r.item_id || r.ended_by_stock) && (
+          <button type="button" className="btn primary sm" disabled={!!busy} onClick={() => { setAerr(''); setListing(r); }}>
+            {busy === `${r.item_id ? 'relist' : 'list'}:${r.shopify_product_id}` ? (r.item_id ? 'Relisting…' : 'Listing…') : (r.item_id ? 'Relist on eBay' : 'List on eBay')}
+          </button>
+        )}
       </div>) }] : []),
   ];
 
@@ -561,10 +569,10 @@ function ProductsTab({ st, canEdit, narrow, onSignOut }) {
       {editing && <EbayEditModal row={editing} onClose={() => setEditing(null)} onDone={() => { list.reload(); }} onSignOut={onSignOut} />}
       {dupOf && <DuplicateModal row={dupOf} onClose={() => setDupOf(null)} onDone={() => { list.reload(); }} onSignOut={onSignOut} />}
       {listing && (
-        <FormModal title="List on eBay now?" submitLabel="Yes, list it"
-          message={`This puts “${listing.title}” on eBay as a real listing now${createMode === 'live' ? '' : ', even though New listings is in Test mode'}. It is checked against eBay first, and is not listed if a size or the style code is already on eBay. The kill switch still stops it.`}
+        <FormModal title={listing.item_id ? 'Relist on eBay now?' : 'List on eBay now?'} submitLabel={listing.item_id ? 'Yes, relist it' : 'Yes, list it'}
+          message={<>This puts “{sentTitle(listing)}” on eBay as a real listing now{createMode === 'live' ? '' : ', even though New listings is in Test mode'}. It is checked against eBay first, and is not listed if a size or the style code is already on eBay. The kill switch still stops it.<ShopifyTitleNote r={listing} /></>}
           onClose={() => setListing(null)}
-          onSubmit={async () => { const r = listing; setListing(null); await quietAct(r, 'list'); }} />
+          onSubmit={async () => { const r = listing; setListing(null); await quietAct(r, r.item_id ? 'relist' : 'list'); }} />
       )}
     </div>
   );

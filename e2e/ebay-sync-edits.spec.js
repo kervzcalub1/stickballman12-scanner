@@ -90,6 +90,35 @@ test.describe('eBay-only edits: buildListing + precheck', () => {
     expect(shorterTitle(LONG).length).toBeLessThanOrEqual(80);
   });
 
+  test('shorterTitle never leaves an unpaired quote or a dangling separator, stays within 80, keeps the style code', () => {
+    const KI = "Air Jordan 1 Retro High OG Women's 'Lucid Pink Team Victory Red Gold Mettalic' (KI7175)";
+    const cases = [
+      KI,
+      "Nike Air Max 90 Men's Running Shoes 'Triple Black Reflective Silver Anthracite Volt Edition' (DM0029-001)",
+      '\u2018Lucid Pink Team Victory Red Gold Metallic Extra Long Colourway Name Here Again\u2019 Mens Shoes (KI7175)',
+      '"Quoted Collab Name Very Long Wording That Keeps Going Past Limit Of Eighty Chars" Sneakers - (HQ1234-100)',
+      'Jordan 4 Retro - Bred Reimagined \u201CRed Black White Cement Grey Fire Red Extra Words Long\u201D | (FV5029-006)',
+    ];
+    for (const c of cases) {
+      const out = shorterTitle(c);
+      const style = c.match(/\(([A-Z0-9-]+)\)\s*$/)[1];
+      expect(out.length, out).toBeLessThanOrEqual(80);
+      expect(out, out).toContain(style);
+      expect(out).toBe(out.trim());
+      expect(out).not.toMatch(/[\s\-|,:;/&+]$/);
+      for (const [a, b] of [["'", "'"], ['"', '"'], ['\u2018', '\u2019'], ['\u201C', '\u201D']]) {
+        const bare = out.replace(/(\p{L}|\p{N})[\u2019'](?=\p{L}|\p{N})/gu, '$1');   // an apostrophe inside a word
+        const n = (ch) => [...bare].filter((x) => x === ch).length;
+        expect(a === b ? n(a) % 2 : n(a) - n(b), `${out} (${a}${b})`).toBe(0);
+      }
+    }
+    // the reported case: the opening ' is gone, the apostrophe in a word stays
+    const ki = shorterTitle("Air Jordan 1 Retro High OG 'Lucid Pink Team Victory Red Gold Mettalic Extra Words Here Now' (KI7175)");
+    expect(ki).not.toContain("'");
+    expect(ki.endsWith('(KI7175)')).toBe(true);
+    expect(shorterTitle("Men's Dunk Low 'Panda' (DD1391-100)")).toBe("Men's Dunk Low 'Panda' (DD1391-100)");   // short + paired: untouched
+  });
+
   test('a person\'s one-off write: Test mode is fine; kill, a server that may not write, and Off stop it', () => {
     const on = { EBAY_SYNC_WRITES: 'on' };
     expect(manualWriteBlock(normalizeSettings({}), 'create', on)).toBeNull();                        // shadow
@@ -391,8 +420,13 @@ const ROW = { shopify_product_id: PID, title: LONG, style: 'IB6388-002', status:
 const DUP_ROW = { shopify_product_id: 'gid://shopify/Product/9091517415614', title: 'Nike Shox R4 Black Bright Crimson (GS)', style: null, status: 'needs_attention', item_id: null, view_url: null, image: null, qty: 1, checked_at: '2026-11-14T14:00:00Z',
   issues: [{ code: 'duplicate_sku', message: 'SKU 10043212 is used by more than one size or listing.', fix: 'Make each SKU unique in Shopify, or end the other listing that uses it.' }] };
 
-async function mockPage(page, { kill = false, finder = true } = {}) {
-  const st = { rows: [ROW, DUP_ROW], posts: [], status: STATUS({ kill }) };
+const OV_ROW = { shopify_product_id: 'gid://shopify/Product/7001', title: "Air Jordan 1 Retro High OG 'Lucid Pink Team Victory Red Gold Mettalic' (KI7175)", ebay_title: "Jordan 1 High OG 'Lucid Pink Team Victory Red' (KI7175)", has_ebay_edit: true, ebay_pictures: 0, ebay_description: false,
+  style: 'KI7175', status: 'not_uploaded', item_id: null, view_url: null, image: null, qty: 3, checked_at: '2026-11-14T14:00:00Z', issues: [] };
+const LIVE_ROW = { ...DUP_ROW, shopify_product_id: 'gid://shopify/Product/7002', title: 'Nike Shox R4 live on eBay', item_id: '327444779878', view_url: 'https://www.ebay.com/itm/327444779878', ended_by_stock: false };
+const ENDED_ROW = { ...DUP_ROW, shopify_product_id: 'gid://shopify/Product/7003', title: 'Nike Dunk ended by stock', item_id: '327000000001', ended_by_stock: true, issues: [] };
+
+async function mockPage(page, { kill = false, finder = true, extra = [] } = {}) {
+  const st = { rows: [ROW, DUP_ROW, ...extra], posts: [], status: STATUS({ kill }) };
   await page.route('**/api/ebay/status', (r) => r.fulfill({ json: { ok: true, configured: true, missing: [], secrets: true, connected: true, user: 'stickballman12', pull: { state: 'idle' } } }));
   await page.route('**/api/ebay/pull', (r) => r.fulfill({ json: { ok: true, rows: [] } }));
   await page.route('**/api/ebay/orders**', (r) => r.fulfill({ json: { ok: true, rows: [], orders: [] } }));
@@ -407,7 +441,7 @@ async function mockPage(page, { kill = false, finder = true } = {}) {
         st.rows = st.rows.filter((r) => r.shopify_product_id !== body.productId);   // the check passed: it leaves Needs Attention
         return route.fulfill({ json: { ok: true, saved: true, issues: [], checkError: null } });
       }
-      if (name === 'products' && body.action === 'list') {
+      if (name === 'products' && (body.action === 'list' || body.action === 'relist')) {
         return route.fulfill({ status: 200, json: st.status.settings.kill ? { ok: false, error: 'The kill switch is on, so nothing is sent to eBay.' } : { ok: true, itemId: '999' } });
       }
       if (name === 'duplicates') return route.fulfill({ json: { ok: true, ended: body.endItemId, kept: body.keepItemId } });
@@ -495,6 +529,58 @@ test.describe('eBay Sync page: Edit for eBay, List on eBay, End the extra listin
     await expect(page.getByRole('alert')).toContainText('The kill switch is on, so nothing is sent to eBay.');
     expect(st.posts.filter((p) => p.name === 'products').map((p) => p.body)).toEqual([{ productId: PID, action: 'list' }]);
   });
+
+  test('List on eBay quotes the title eBay gets (the eBay-only edit), Shopify title smaller underneath, in the dialog and the banner', async ({ page }) => {
+    const st = await mockPage(page, { extra: [OV_ROW] });
+    await loginAs(page, 'admin');
+    await page.goto('/ebay?tab=sync&sync=products&ssub=needs_attention');
+    await page.locator('tr', { hasText: OV_ROW.ebay_title }).getByRole('button', { name: 'List on eBay' }).click();
+    const dlg = page.getByRole('dialog');
+    await expect(dlg).toContainText(`“${OV_ROW.ebay_title}” on eBay`);
+    await expect(dlg.locator('.modal-msg')).not.toContainText(`“${OV_ROW.title}”`);
+    await expect(dlg.locator('[data-shopify-title]')).toHaveText(`Shopify title: ${OV_ROW.title}`);
+    await page.getByRole('button', { name: 'Yes, list it' }).click();
+    await expect(page.locator('.notice')).toContainText(`Listed “${OV_ROW.ebay_title}” on eBay as #999.`);
+    await expect(page.locator('.notice [data-shopify-title]')).toHaveText(`Shopify title: ${OV_ROW.title}`);
+    expect(st.posts.filter((p) => p.name === 'products').map((p) => p.body.action)).toEqual(['list']);
+    // no edit: no Shopify line
+    await page.locator('tr', { hasText: LONG }).getByRole('button', { name: 'List on eBay' }).click();
+    await expect(page.getByRole('dialog').locator('[data-shopify-title]')).toHaveCount(0);
+  });
+
+  test('a row already on eBay has no List button; one ended for stock says Relist and sends relist', async ({ page }) => {
+    const st = await mockPage(page, { extra: [LIVE_ROW, ENDED_ROW] });
+    await loginAs(page, 'admin');
+    await page.goto('/ebay?tab=sync&sync=products&ssub=needs_attention');
+    const live = page.locator('tr', { hasText: LIVE_ROW.title });
+    await expect(live.getByRole('button', { name: 'Edit for eBay' })).toBeVisible();
+    await expect(live.getByRole('button', { name: /(Re)?list on eBay/i })).toHaveCount(0);
+    const ended = page.locator('tr', { hasText: ENDED_ROW.title });
+    await expect(ended.getByRole('button', { name: 'List on eBay', exact: true })).toHaveCount(0);
+    await ended.getByRole('button', { name: 'Relist on eBay' }).click();
+    await expect(page.getByRole('dialog')).toContainText('Relist on eBay now?');
+    await page.getByRole('button', { name: 'Yes, relist it' }).click();
+    await expect(page.locator('.notice')).toContainText(`Relisted “${ENDED_ROW.title}” on eBay as #999.`);
+    expect(st.posts.filter((p) => p.name === 'products').map((p) => p.body)).toEqual([{ productId: ENDED_ROW.shopify_product_id, action: 'relist' }]);
+  });
+
+  for (const [label, w, h] of [['390', 390, 844], ['desktop', 1280, 900]]) {
+    test(`${label}: Edit-for-eBay row and the List dialog (own title + Shopify title) fit without sideways scrolling`, async ({ page }) => {
+      await page.setViewportSize({ width: w, height: h });
+      await mockPage(page, { extra: [OV_ROW, LIVE_ROW, ENDED_ROW] });
+      await loginAs(page, 'admin');
+      await page.goto('/ebay?tab=sync&sync=products&ssub=needs_attention');
+      await expect(page.getByRole('button', { name: 'Edit for eBay' }).first()).toBeVisible();
+      const wide = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      expect(await wide()).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: `test-results/ebay-fix-rows-${label}.png`, fullPage: true });
+      await page.getByRole('button', { name: 'List on eBay', exact: true }).nth(2).click();   // rows: long, shox dup, override
+      await expect(page.locator('[data-shopify-title]')).toBeVisible();
+      expect(await wide()).toBeLessThanOrEqual(0);
+      await page.waitForTimeout(400);
+      await page.screenshot({ path: `test-results/ebay-fix-list-dialog-${label}.png` });
+    });
+  }
 
   test('End the extra listing: both item ids with price, start date and watchers; the person picks; only that one is sent', async ({ page }) => {
     const st = await mockPage(page);

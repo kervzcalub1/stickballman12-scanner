@@ -748,7 +748,13 @@ function SettingsTab({ st, canEdit, narrow, onChanged, onSignOut }) {
           const m = sw[p.key] || 'off';
           return (
             <div className="esy-switch" key={p.key} data-switch={p.key}>
-              <div className="esy-switch-name"><b>{p.label}</b><div className="muted xs">{modeWords(m)}</div></div>
+              <div className="esy-switch-name"><b>{p.label}</b><div className="muted xs">{modeWords(m)}</div>
+                {/* Test doesn't mean nothing is live: the listings our sync created get live stock
+                    (ebaySyncCreatedItemIds). Said here too, where someone would flip Stock. */}
+                {p.key === 'stock' && m === 'shadow' && !s.kill && st.counts?.created_stock_live > 0 && (
+                  <div className="muted xs esy-created-live" data-created-live-setting>But Live for the {st.counts.created_stock_live} listings we created</div>
+                )}
+              </div>
               <div className="seg sm esy-seg" role="group" aria-label={`${p.label} mode`}>
                 {MODE_BUTTONS.map(([k, label]) => (
                   <button key={k} type="button" className={`seg-btn${m === k ? ' on' : ''}${k === 'live' && m === k ? ' no' : ''}`} aria-pressed={m === k}

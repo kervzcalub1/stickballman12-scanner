@@ -88,4 +88,5 @@ shadow row. No new write path, no schema change.
 - If DPL later links one of these by SKU it stays in our set: two writers of the same Shopify number, harmless.
 - A created listing eBay ends at 0 is never relisted by the stock path; only the create pass relists.
 - Shown on the Stock row of the eBay Sync screen: "Live for the N listings we created" (`counts.created_stock_live`).
+  Also on Settings + Log under the Stock switch while it is on Test ("But Live for the N listings we created"; hidden under the kill switch), so Test doesn't read as "nothing is live" where someone would flip it.
 - Orders stay DPL's; Shopify is never written.

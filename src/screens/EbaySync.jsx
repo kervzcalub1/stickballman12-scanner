@@ -195,6 +195,7 @@ function Overview({ st, canEdit, onRun, busy }) {
               <div className={`esy-part ${m}`} key={p.key} data-part={p.key}>
                 <div className="esy-part-name">{p.label}<span className="muted xs"> · {p.what}</span></div>
                 <div className="esy-part-state">{modeWords(m)}</div>
+                {p.key === 'stock' && m !== 'off' && st.counts?.created_stock_live > 0 && <div className="muted xs" data-created-live>Live for the {st.counts.created_stock_live} listings we created</div>}
               </div>
             );
           })}

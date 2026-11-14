@@ -17,7 +17,7 @@ import {
   ebaySyncClaimQueue, ebaySyncQueueDone, ebaySyncQueueCount, ebaySyncLinkPrev, ebaySyncReplaceLinks, ebaySyncLinksBySku, ebaySyncSetLinkQty,
   ebaySyncLinksByItem, ebaySyncItemsOfProducts, ebaySyncEbaySkus, ebaySyncRepricedKeys, ebaySyncProductPrev, ebaySyncUpsertProducts, ebaySyncPatchProduct,
   ebaySyncProductsToVerify, ebaySyncProductsToAdd, ebaySyncProductsToCheck, ebaySyncProductTabs, ebaySyncListingTabs, ebaySyncFacts, ebaySyncLinkCount,
-  ebayLockedItemIds, logEbayEnd, dbConfigured,
+  ebayLockedItemIds, logEbayEnd, dbConfigured, ebaySyncCreatedItemIds,
 } from './db.js';
 import {
   ebayConfigured, ebayStatus, fetchActiveListings, fetchEbayItemContent, verifyAddFixedPriceItem, addFixedPriceItem, reviseFixedPriceItem,
@@ -67,7 +67,7 @@ export const IO = {
     claimQueue: ebaySyncClaimQueue, queueDone: ebaySyncQueueDone,
     linkPrev: ebaySyncLinkPrev, replaceLinks: ebaySyncReplaceLinks, linksBySku: ebaySyncLinksBySku, setLinkQty: ebaySyncSetLinkQty, linksByItem: ebaySyncLinksByItem,
     itemsOfProducts: ebaySyncItemsOfProducts, ebaySkus: ebaySyncEbaySkus, productPrev: ebaySyncProductPrev, upsertProducts: ebaySyncUpsertProducts,
-    patchProduct: ebaySyncPatchProduct, linkCount: ebaySyncLinkCount, productTabs: ebaySyncProductTabs, endedByApp: ebaySyncEndedByApp,
+    patchProduct: ebaySyncPatchProduct, linkCount: ebaySyncLinkCount, createdItemIds: ebaySyncCreatedItemIds, productTabs: ebaySyncProductTabs, endedByApp: ebaySyncEndedByApp,
     toVerify: ebaySyncProductsToVerify, toAdd: ebaySyncProductsToAdd, toCheck: ebaySyncProductsToCheck, prune: ebaySyncLogPrune, moveItemId: ebaySyncMoveItemId,
     dropListing: ebaySyncDropListing,
   },
@@ -161,14 +161,30 @@ async function liveQty(io, sku) {
 
 /* ------------------------------ stock + price + end ------------------------------ */
 
+// Listings OUR sync created (a live add/relist in the log) write stock live even while the global Stock switch is Test,
+// because DPL owns stock for every other listing. The kill switch, "off" and a non-production server still block them.
+async function createdLiveSet(ctx) {
+  ctx.settings = await readSettings(ctx.io);
+  if (ctx.settings.switches.stock === 'off' || ctx.settings.kill === true || !writesAllowed()) return new Set();
+  return new Set(ctx.io.db.createdItemIds ? await ctx.io.db.createdItemIds() : []);
+}
 // changes: [{ link, qty }]. Sliding-window blast check, a shadow row or the live writes in chunks.
-async function pushStock(ctx, changes, total, listingTotal) {
+async function pushStock(ctx, changes, total, listingTotal, createdOnly = false) {
   const { io } = ctx;
   if (!changes.length || ctx.settings.switches.stock === 'off') return { sent: 0 };
+  if (!createdOnly && !(await liveNow(ctx, 'stock'))) {
+    const mine = await createdLiveSet(ctx);
+    const ours = changes.filter((c) => mine.has(c.link.item_id));
+    if (ours.length) {
+      const rest = changes.filter((c) => !mine.has(c.link.item_id));
+      if (rest.length) await pushStock(ctx, rest, total, listingTotal);   // DPL's listings: stays a dry run
+      return pushStock(ctx, ours, total, listingTotal, true);
+    }
+  }
   const byItem = new Map();
   for (const itemId of new Set(changes.map((c) => c.link.item_id))) byItem.set(itemId, await io.db.linksByItem(itemId));
   const ends = endsByZero(changes, (id) => byItem.get(id));
-  const live = await liveNow(ctx, 'stock');
+  const live = createdOnly || await liveNow(ctx, 'stock');
   if (!live) {
     const blast = blastCheck({ changes: changes.length, total, blastPct: ctx.settings.blastPct });
     await shadowOrDo(ctx, 'stock', { action: 'set_qty', after: { count: changes.length, blast, sample: changes.slice(0, 10).map((c) => ({ item: c.link.item_id, sku: c.link.sku, from: c.link.ebay_qty, to: c.qty })) } });
@@ -187,7 +203,7 @@ async function pushStock(ctx, changes, total, listingTotal) {
   const ok = new Set();
   let sent = 0;
   for (let i = 0; i < changes.length; i += CHUNK) {
-    if (!(await liveNow(ctx, 'stock'))) break;   // the kill switch was pressed while this pass was running
+    if (createdOnly ? !(await createdLiveSet(ctx)).size : !(await liveNow(ctx, 'stock'))) break;   // the kill switch was pressed while this pass was running
     const results = await io.write.reviseEbayQuantities(changes.slice(i, i + CHUNK).map((c) => ({ key: c.link.link_key, itemId: c.link.item_id, sku: sizeOfLink(c.link), qty: c.qty })));
     for (const r of results) {
       const c = by.get(r.key);
@@ -377,14 +393,17 @@ export async function reconcilePass(ctx) {
   const ends = await endListings(ctx, endItems, Math.max(1, itemIds.length));
 
   // stock: read each size's quantity from Shopify LIVE right before it goes out (the reconcile read is minutes old)
-  if (await liveNow(ctx, 'stock')) {
+  const stockAll = await liveNow(ctx, 'stock');
+  const mineSet = stockAll ? new Set() : await createdLiveSet(ctx);   // only the listings we created, while Stock is Test
+  if (stockAll || mineSet.size) {
     const verified = [];
-    for (const c of stockChanges.slice(0, MAX_LIVE_STOCK_READS)) {
+    const dry = stockAll ? [] : stockChanges.filter((c) => !mineSet.has(c.link.item_id));   // DPL's: untouched, shadow-logged
+    for (const c of (stockAll ? stockChanges : stockChanges.filter((c) => mineSet.has(c.link.item_id))).slice(0, MAX_LIVE_STOCK_READS)) {
       const q = await liveQty(io, c.link.sku);
       if (q == null) continue;                     // no levels / untracked / unreadable: never send 0 from that
       if (q !== c.link.ebay_qty) verified.push({ link: c.link, qty: q });
     }
-    stockChanges = verified;
+    stockChanges = [...verified, ...dry];
   }
   const stock = await pushStock(ctx, stockChanges, Math.max(1, onEbay), Math.max(1, itemIds.length));
   const price = await pushPrice(ctx, priceChanges, Math.max(1, onEbay));
@@ -403,7 +422,9 @@ export async function queuePass(ctx) {
   const { io } = ctx;
   const rows = await io.db.claimQueue(MAX_QUEUE_CLAIM);
   if (!rows.length) return { idle: true, note: 'Queue empty.' };
-  const stockLive = await liveNow(ctx, 'stock');
+  const stockAll = await liveNow(ctx, 'stock');
+  const mineSet = stockAll ? new Set() : await createdLiveSet(ctx);
+  const stockLive = stockAll || mineSet.size > 0;
   const endLive = await liveNow(ctx, 'end');
   // In shadow the reconcile pass sees the same differences, so the queue just clears.
   if (!stockLive && !endLive) { await io.db.queueDone(rows.map((r) => r.id)); return { idle: true, note: `${rows.length} queued change(s) left to the reconcile pass (not live).` }; }
@@ -418,7 +439,7 @@ export async function queuePass(ctx) {
         if (!links.length) continue;
         const qty = await liveQty(io, sku);
         if (qty == null) continue;                  // Shopify can't say: nothing is sent, and nothing is zeroed
-        for (const link of links) if (link.ebay_qty !== qty) changes.push({ link, qty });
+        for (const link of links) if (link.ebay_qty !== qty && (stockAll || mineSet.has(link.item_id))) changes.push({ link, qty });
       } catch (e) { failed.add(sku); console.error(`[ebay-sync] queue SKU ${sku}: ${e.message}`); }   // only this SKU's rows stay
     }
     if (changes.length) await pushStock(ctx, changes, total, listingTotal);
@@ -640,12 +661,13 @@ export async function buildStatus(io = IO) {
     ebaySyncProductTabs(), ebaySyncListingTabs(), ebaySyncFacts(), ebaySyncQueueCount(),
     ebaySyncLiveDone('content', 'revise'), ebaySyncLiveDone('create', 'add'), tradingUsage(),
   ]);
+  const ctxCreated = settings.kill || settings.switches.stock === 'off' || !writesAllowed() ? 0 : (await ebaySyncCreatedItemIds().catch(() => [])).length;
   const ebay = await ebayStatus().catch(() => ({}));
   const observedDays = rec.firstAt ? Math.floor((io.now().getTime() - new Date(rec.firstAt).getTime()) / 86400_000) : 0;
   return {
     settings, passes, budget: { used: budget.used, limit: budget.limit, resetAt: budget.resetAt, readStop: budget.readStop, writeStop: budget.writeStop },
     writes_enabled: writesAllowed(),
-    counts: { products, listings, queue, linked: facts.linked, duplicates: facts.duplicates, no_shopify: facts.no_shopify, needs_attention: facts.needs_attention },
+    counts: { created_stock_live: ctxCreated, products, listings, queue, linked: facts.linked, duplicates: facts.duplicates, no_shopify: facts.no_shopify, needs_attention: facts.needs_attention },
     ebay: { connected: !!ebay.connected, user: ebay.user || null },
     facts: { ...facts, contentLive, createLive, observedDays },
     handover: handoverChecklist({ observedDays, qtyDrift: facts.qty_drift, priceDrift: facts.price_drift, contentLive, createLive }),

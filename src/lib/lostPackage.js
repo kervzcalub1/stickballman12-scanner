@@ -39,8 +39,24 @@ const JUNK = new Set(['none', 'nan', 'n/a', 'na', '-', '', 'null', 'tbd', 'pendi
 const s = (v) => (v == null ? '' : String(v).trim());
 const normHeader = (v) => s(v).replace(/\s+/g, ' ').toLowerCase();
 const realId = (v) => !!v && !JUNK.has(v.toLowerCase().trim());
-// Excel keeps a number typed into a cell as a number: "1234.0" → "1234".
-const stripDotZero = (v) => (/^\d+\.0$/.test(v) ? v.slice(0, -2) : v);
+// Excel keeps a number typed into a cell as a number, and the month's sheet can hold it in
+// scientific notation (as a number OR as text): FedEx 493235840438 arrives as
+// "4.93235840438E11" (owner 2026-11-14 — FedEx can't read that, so the order was never
+// really checked). Expanded digit-for-digit as TEXT (never through Number, which would round
+// long numbers); a value that isn't a whole number is left alone. "1234.0" → "1234" too.
+const SCI_RE = /^(\d+)(?:\.(\d+))?e\+?(\d+)$/i;
+export function excelIdText(v) {
+  const t = s(v);
+  const m = t.match(SCI_RE);
+  if (m) {
+    const [, int, frac = '', expS] = m;
+    const exp = Number(expS);
+    if (frac.length > exp) return t;
+    return (int + frac + '0'.repeat(exp - frac.length)).replace(/^0+(?=\d)/, '');
+  }
+  return /^\d+\.0+$/.test(t) ? t.replace(/\.0+$/, '') : t;
+}
+const stripDotZero = excelIdText;
 
 /** Which column is tracking / order / status, by the header row (0-based). */
 export function detectColumns(header) {
@@ -247,7 +263,8 @@ export const P2_LABEL = {
 
 const P1_COLS = ['Status', 'Tracking Number', 'Order Number', 'Store Name', 'Product Name', 'SKU', 'Quantity',
   'Tracking Courier', 'Order Date', 'Estimated Date Arrival', 'Delivery Status (as written)', 'First Seen Sheet', 'Evidence'];
-const p1Row = (o) => [o.p1_class, o.tracking, o.order_number, o.store, o.product, o.sku, o.qty, o.courier,
+// excelIdText again here: a run saved before 2026-11-14 still holds "4.93235840438E11".
+const p1Row = (o) => [o.p1_class, excelIdText(o.tracking), excelIdText(o.order_number), o.store, o.product, o.sku, o.qty, o.courier,
   o.order_date, o.eta, o.status_written, o.first_sheet, o.evidence];
 const cols = (labels) => labels.map((label) => ({ label, maxWidth: 48 }));
 

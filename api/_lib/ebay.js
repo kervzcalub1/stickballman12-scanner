@@ -692,9 +692,12 @@ export function parseItemContent(xml) {
     specificsSet: sizeSet, item_id: unesc(tag(flat, 'ItemID') || ''), title: unesc(tag(flat, 'Title') || ''), description: descOf(tag(flat, 'Description')),
     pictureCount: tags(pics, 'PictureURL').length, status: tag(tag(flat, 'SellingStatus') || '', 'ListingStatus') || null,
     sizeName: variations.length ? 'Size' : null, variations,
+    // Only there when asked for (IncludeWatchCount) / when eBay sends them; null = eBay did not say.
+    startTime: tag(tag(flat, 'ListingDetails') || '', 'StartTime') || null, watchCount: num(tag(flat, 'WatchCount')),
   };
 }
-export async function fetchEbayItemContent(itemId) {
-  const xml = await trading('GetItem', `<ItemID>${String(itemId).replace(/[^0-9]/g, '')}</ItemID><DetailLevel>ReturnAll</DetailLevel>`, { guard: 'read' });
+// GetItem, read only. `watchers` also asks eBay for the watch count (End the extra listing shows it).
+export async function fetchEbayItemContent(itemId, { watchers = false } = {}) {
+  const xml = await trading('GetItem', `<ItemID>${String(itemId).replace(/[^0-9]/g, '')}</ItemID><DetailLevel>ReturnAll</DetailLevel>${watchers ? '<IncludeWatchCount>true</IncludeWatchCount>' : ''}`, { guard: 'read' });
   return parseItemContent(xml);
 }

@@ -332,15 +332,17 @@ test.describe('eBay Sync: new listings and content', () => {
     await createPass(await ctxOf(full25, ALL_LIVE));
     expect(full25.calls).toEqual([]);
   });
-  test('Verify is allowed but List / Relist refuse when Create is not live', async () => {
+  test('Verify is allowed; List / Relist refuse when New listings is Off or the kill switch is on', async () => {
     const t = mkIO({ fullProduct: () => full, verify: async () => ({ ok: true }) });
-    await ctxOf(t, {});
+    await ctxOf(t, { switches: { create: 'off' } });
     const v = await productAction('P9', 'verify', { by: 'k', io: t.io });
-    expect(v).toEqual({ ok: true, issues: [] });
+    expect(v).toMatchObject({ ok: true, issues: [] });
     const l = await productAction('P9', 'list', { by: 'k', io: t.io });
     expect(l.ok).toBe(false);
-    expect(l.error).toMatch(/not live/i);
+    expect(l.error).toMatch(/switched Off/i);
     expect((await productAction('P9', 'relist', { by: 'k', io: t.io })).ok).toBe(false);
+    await ctxOf(t, { switches: { create: 'shadow' }, kill: true });
+    expect((await productAction('P9', 'list', { by: 'k', io: t.io })).error).toMatch(/kill switch/i);
     expect(t.calls).toEqual([]);
   });
   test('content drift: shadow records it; live sends ONLY the new size (never an existing one), with the union size set', async () => {

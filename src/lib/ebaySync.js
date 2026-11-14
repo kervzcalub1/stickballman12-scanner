@@ -32,6 +32,17 @@ export const writesAllowed = (env = typeof process !== 'undefined' ? process.env
   String(env.EBAY_SYNC_WRITES || '').trim().toLowerCase() === 'on' || String(env.RAILWAY_ENVIRONMENT_NAME || '').trim().toLowerCase() === 'production';
 export const canWrite = (settings, domain) => settings?.switches?.[domain] === 'live' && settings?.kill !== true && writesAllowed();
 export const modeOf = (settings, domain) => (canWrite(settings, domain) ? 'live' : 'shadow');
+// A PERSON pressing one button for one listing (List on eBay, End the extra listing) may write while that part
+// is still in Test mode, so a one-off never needs the whole switch flipped. The kill switch, a server that may
+// not write, and a part switched Off still stop it. → null (go) or why not, in words.
+export function manualWriteBlock(settings, domain, env) {
+  if (settings?.kill === true) return 'The kill switch is on, so nothing is sent to eBay.';
+  if (!writesAllowed(env)) return 'This server is not allowed to write to eBay (it is not production).';
+  if ((settings?.switches?.[domain] || 'off') === 'off') {
+    return domain === 'create' ? 'New listings are switched Off. Set them to Test or Live first.' : domain === 'end' ? 'End listings is switched Off. Set it to Test or Live first.' : 'This part is switched Off.';
+  }
+  return null;
+}
 
 // A listing profile that would make eBay refuse every new listing, or price them wrongly, is refused up front.
 export function validateProfile(c) {
@@ -196,10 +207,15 @@ const realUpc = (b) => (/^\d{12,14}$/.test(trim(b)) ? trim(b) : 'Does not apply'
 // Shopify product (full read) + profile -> the data for Trading XML, as DPL's listings read in
 // Phase 0: title and description verbatim, Brand = vendor, Style Code from the title, one variation
 // specific "Size", SKU, UPC = barcode, only sizes with stock, up to 12 pictures.
-export function buildListing(product, profile) {
+// `override` (ebay_sync_overrides, see normalizeOverride) = an eBay-only title / description / photos that
+// replace Shopify's. The style code still comes from the SHOPIFY title (the override's only if Shopify has none),
+// so a shorter title that drops it keeps the Style Code specific and the "already on eBay" check.
+export function buildListing(product, profile, override = null) {
   const p = profile || {};
-  const title = trim(product.title);
-  const style = styleFromTitle(title);
+  const ov = normalizeOverride(override);
+  const shopTitle = trim(product.title);
+  const title = ov?.title || shopTitle;
+  const style = styleFromTitle(shopTitle) || (ov?.title ? styleFromTitle(ov.title) : null);
   const brand = capFirst(trim(product.vendor));
   const uplift = Number(p.uplift) || 0;
   const variations = (product.variants || [])
@@ -214,16 +230,58 @@ export function buildListing(product, profile) {
   for (const [k, v] of Object.entries(p.specifics || {})) specifics.push([k, String(v)]);
   if (style) specifics.push(['Style Code', style]);
   const max = Math.min(Number(p.maxPictures) || MAX_PICTURES, MAX_PICTURES);
+  // The photos actually sent, with their size when Shopify knows it (an eBay-only photo is a bare URL).
+  const photos = (ov?.pictures?.length ? ov.pictures.map((url) => ({ url })) : (product.images || []).map((i) => (typeof i === 'string' ? { url: i } : i)))
+    .filter((i) => i && i.url).slice(0, max);
+  const overridden = ov ? ['title', 'description', 'pictures'].filter((k) => (k === 'pictures' ? ov.pictures?.length : ov[k])) : [];
   return {
-    title, description: String(product.descriptionHtml ?? ''), brand, style,
+    title, description: ov?.description || String(product.descriptionHtml ?? ''), brand, style,
     categoryId: String(p.categoryId || ''), conditionId: Number(p.conditionId) || 1000,
     listingType: p.listingType || 'FixedPriceItem', duration: p.duration || 'GTC', dispatchDays: Number(p.dispatchDays) || 1,
     location: p.location || '', postalCode: p.postalCode || '', country: p.country || 'US', currency: p.currency || 'USD', site: p.site || 'US',
     policies: p.policies || {}, package: p.package || {}, specifics,
     sizeName: p.sizeName || 'Size', sizeValues: [...new Set(variations.map((v) => v.size))],
-    pictures: (product.images || []).map((i) => (typeof i === 'string' ? i : i.url)).filter(Boolean).slice(0, max),
+    pictures: photos.map((i) => i.url), photos, overridden,
     variations,
   };
+}
+
+/* ----------------------------- eBay-only edits ----------------------------- */
+
+export const OVERRIDE_DESC_MAX = 50_000;
+const escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// A stored or typed override -> { title, description, pictures } with blanks as null (= use Shopify's), or null when
+// nothing is overridden. Plain text in the description becomes one HTML paragraph per line.
+export function normalizeOverride(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const title = trim(raw.title).replace(/\s+/g, ' ') || null;
+  let description = trim(raw.description ?? raw.description_html) || null;
+  if (description && !/<[a-z][^>]*>/i.test(description)) description = description.split(/\n+/).map((l) => trim(l)).filter(Boolean).map((l) => `<p>${escHtml(l)}</p>`).join('');
+  let pics = raw.pictures;
+  if (typeof pics === 'string') { try { pics = JSON.parse(pics); } catch { pics = []; } }
+  const pictures = [...new Set((Array.isArray(pics) ? pics : []).map((u) => trim(typeof u === 'string' ? u : u?.url)).filter(Boolean))];
+  if (!title && !description && !pictures.length) return null;
+  return { title, description, pictures: pictures.length ? pictures : null };
+}
+// What is wrong with an override a person typed, in words, or null.
+export function validateOverride(raw) {
+  const o = normalizeOverride(raw);
+  if (!o) return 'Nothing to save: give a title, a description or at least one photo.';
+  if (o.title && o.title.length > TITLE_MAX) return `The eBay title is ${o.title.length} characters; eBay allows ${TITLE_MAX}.`;
+  if (o.description && o.description.length > OVERRIDE_DESC_MAX) return 'The description is too long.';
+  // eBay refuses active content in a description, and it would run on our listing page.
+  if (o.description && /<\s*(script|iframe|object|embed|form|link|meta|style)\b|javascript:|\son[a-z]+\s*=/i.test(o.description)) return 'The description may not contain scripts, frames, forms or event handlers. Plain text is best.';
+  if (o.pictures && o.pictures.length > MAX_PICTURES) return `eBay takes at most ${MAX_PICTURES} photos.`;
+  const badPic = (o.pictures || []).find((u) => !/^https:\/\/[^\s"'<>]+$/i.test(u) || u.length > 1000);
+  if (badPic) return `Each photo must be a full https:// address (this one is not: ${badPic.slice(0, 80)}).`;
+  return null;
+}
+// A fingerprint of an override (folded into the product's key, so a change re-verifies). '' = none.
+export const overrideKey = (raw) => { const o = normalizeOverride(raw); return o ? hashOf([o.title || '', o.description || '', o.pictures || []]) : ''; };
+// The plain description the form starts with.
+export function defaultEbayDescription(title, style) {
+  const t = trim(title).replace(/[.\s]+$/, '');
+  return [t ? `${t}.` : '', 'Brand new with original box.', style ? `Style code ${style}.` : ''].filter(Boolean).join(' ');
 }
 
 // A title that fits eBay's 80: drop filler words first, then trailing words, never the style code.
@@ -253,13 +311,15 @@ export function shorterTitle(title, max = TITLE_MAX) {
 export function precheck(product, listing, { dupSkus = new Set() } = {}) {
   const issues = [];
   const add = (code, message, fix) => issues.push({ code, message, fix });
-  const imgs = (product.images || []).map((i) => (typeof i === 'string' ? { url: i } : i)).filter((i) => i.url);
-  if (!imgs.length) add('no_photo', 'The product has no photo.', 'Add at least 1 photo to the product in Shopify (500 pixels or larger on the longest side).');
-  else if (imgs.every((i) => i.width && i.height && Math.max(i.width, i.height) < 500)) add('photo_small', 'Every photo is under 500 pixels.', 'Upload a photo that is at least 500 pixels on the longest side. eBay refuses smaller ones with "Add at least 1 photo".');
-  const t = trim(product.title);
-  if (t.length > TITLE_MAX) add('title_long', `The title is ${t.length} characters; eBay's limit is ${TITLE_MAX}.`, `Shorten it, for example: "${shorterTitle(t)}"`);
-  if (!trim(product.title)) add('no_title', 'The product has no title.', 'Give the product a title in Shopify.');
-  if (!textOf(product.descriptionHtml)) add('no_description', 'The product has no description.', 'Add a description to the product in Shopify.');
+  // Judged on what would actually be SENT (an eBay-only edit replaces Shopify's title / description / photos).
+  const OR_EDIT = ' Or press Edit for eBay to change it on eBay only.';
+  const imgs = (listing.photos || (product.images || []).map((i) => (typeof i === 'string' ? { url: i } : i))).filter((i) => i && i.url);
+  if (!imgs.length) add('no_photo', 'The product has no photo.', `Add at least 1 photo to the product in Shopify (500 pixels or larger on the longest side).${OR_EDIT}`);
+  else if (imgs.every((i) => i.width && i.height && Math.max(i.width, i.height) < 500)) add('photo_small', 'Every photo is under 500 pixels.', `Upload a photo that is at least 500 pixels on the longest side. eBay refuses smaller ones with "Add at least 1 photo".${OR_EDIT}`);
+  const t = trim(listing.title ?? product.title);
+  if (t.length > TITLE_MAX) add('title_long', `The title is ${t.length} characters; eBay's limit is ${TITLE_MAX}.`, `Shorten it, for example: "${shorterTitle(t)}".${OR_EDIT}`);
+  if (!t) add('no_title', 'The product has no title.', 'Give the product a title in Shopify.');
+  if (!textOf(listing.description ?? product.descriptionHtml)) add('no_description', 'The product has no description.', `Add a description to the product in Shopify.${OR_EDIT}`);
   const stocked = (product.variants || []).filter((v) => Number(v.qty) > 0);
   if (!stocked.length) add('no_stock', 'No size has stock.', 'It lists once a size is in stock.');
   const noSku = stocked.filter((v) => !trim(v.sku));
@@ -314,7 +374,9 @@ export function contentDiff(ebay, built) {
 
 // A cheap fingerprint of what could change a listing (product edit time + which SKUs are in stock),
 // so the create pass only re-verifies a product that changed.
-export const productKey = (updatedAt, inStockSkus) => hashOf([updatedAt || '', [...inStockSkus].sort()]);
+// An eBay-only edit's key (overrideKey) is folded in, so saving or changing one re-verifies the product and has
+// the content pass look at its listing again. No override = the same key as before overrides existed.
+export const productKey = (updatedAt, inStockSkus, ovKey = '') => hashOf(ovKey ? [updatedAt || '', [...inStockSkus].sort(), ovKey] : [updatedAt || '', [...inStockSkus].sort()]);
 
 /* -------------------------------- handover -------------------------------- */
 

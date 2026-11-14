@@ -14397,10 +14397,13 @@ export async function ebaySyncProduct(id) {
 export async function ebaySyncProducts({ tab = 'uploaded', q = '', offset = 0, limit = 100 } = {}) {
   const term = `%${String(q).trim().replace(/[%_]/g, '\\$&')}%`;
   const rows = await db()`
-    SELECT shopify_product_id, title, style, status, item_id, view_url, image, sizes, qty, issues, checked_at, count(*) OVER()::int AS total
-      FROM ebay_sync_products
-     WHERE status = ${tab} AND (${q} = '' OR title ILIKE ${term} OR style ILIKE ${term} OR item_id ILIKE ${term})
-     ORDER BY title OFFSET ${offset} LIMIT ${limit}`;
+    SELECT p.shopify_product_id, p.title, p.style, p.status, p.item_id, p.view_url, p.image, p.sizes, p.qty, p.issues, p.checked_at,
+           o.title AS ebay_title, (o.description_html IS NOT NULL) AS ebay_description, coalesce(jsonb_array_length(o.pictures), 0)::int AS ebay_pictures,
+           o.updated_by AS ebay_edit_by, o.updated_at AS ebay_edit_at, (o.shopify_product_id IS NOT NULL) AS has_ebay_edit,
+           count(*) OVER()::int AS total
+      FROM ebay_sync_products p LEFT JOIN ebay_sync_overrides o ON o.shopify_product_id = p.shopify_product_id
+     WHERE p.status = ${tab} AND (${q} = '' OR p.title ILIKE ${term} OR p.style ILIKE ${term} OR p.item_id ILIKE ${term} OR o.title ILIKE ${term})
+     ORDER BY p.title OFFSET ${offset} LIMIT ${limit}`;
   return { rows: rows.map(({ total, ...r }) => r), total: rows[0]?.total ?? 0 };
 }
 export async function ebaySyncProductTabs() {
@@ -14521,6 +14524,57 @@ export async function ebaySyncEndedByApp(itemIds) {
 }
 export async function ebaySyncDropListing(itemId) {
   await db()`DELETE FROM ebay_listings WHERE item_id = ${String(itemId)}`;
+}
+
+// eBay-only edits (ebay_sync_overrides): a title / description / photos that go to eBay instead of Shopify's.
+// Shopify is never written. pictures = a JSON array of https URLs.
+export async function ebaySyncOverridesOf(productIds) {
+  const ids = [...new Set((productIds || []).map(String))];
+  if (!ids.length) return new Map();
+  const rows = await db()`SELECT shopify_product_id, title, description_html, pictures, updated_by, updated_at FROM ebay_sync_overrides WHERE shopify_product_id = ANY(${ids}::text[])`;
+  return new Map(rows.map((r) => [r.shopify_product_id, r]));
+}
+export async function ebaySyncOverridesAll() {
+  const rows = await db()`SELECT shopify_product_id, title, description_html, pictures FROM ebay_sync_overrides`;
+  return new Map(rows.map((r) => [r.shopify_product_id, r]));
+}
+export async function ebaySyncOverrideSave(productId, { title = null, description = null, pictures = null }, by) {
+  const pics = pictures && pictures.length ? JSON.stringify(pictures) : null;
+  const [r] = await db()`
+    INSERT INTO ebay_sync_overrides (shopify_product_id, title, description_html, pictures, updated_by, updated_at)
+    VALUES (${productId}, ${title || null}, ${description || null}, ${pics}::jsonb, ${by || null}, now())
+    ON CONFLICT (shopify_product_id) DO UPDATE SET title = EXCLUDED.title, description_html = EXCLUDED.description_html,
+      pictures = EXCLUDED.pictures, updated_by = EXCLUDED.updated_by, updated_at = now()
+    RETURNING shopify_product_id, title, description_html, pictures, updated_by, updated_at`;
+  return r;
+}
+export async function ebaySyncOverrideDelete(productId) {
+  await db()`DELETE FROM ebay_sync_overrides WHERE shopify_product_id = ${productId}`;
+}
+// After an override changes: verify again and have the content pass look at the listing again.
+export async function ebaySyncProductForceRecheck(productId) {
+  await db()`UPDATE ebay_sync_products SET verify_key = NULL, content_key = NULL WHERE shopify_product_id = ${productId}`;
+}
+// Every eBay listing that carries one of these SKUs, when that SKU is on two or more of our listings:
+// each listing with all of its sizes, plus its start date from the eBay Listings pull (when pulled; eBay's GetItem
+// replaces it at panel open, and is the only source of watchers).
+export async function ebaySyncDupListings(skus) {
+  const list = [...new Set((skus || []).map(String).filter(Boolean))];
+  if (!list.length) return [];
+  return await db()`
+    WITH dup AS (
+      SELECT sku FROM ebay_sync_links WHERE item_id <> '' AND sku = ANY(${list}::text[]) GROUP BY sku HAVING count(DISTINCT item_id) > 1
+    ), items AS (
+      SELECT DISTINCT item_id FROM ebay_sync_links WHERE item_id <> '' AND sku IN (SELECT sku FROM dup)
+    )
+    SELECT l.item_id, l.sku, l.size, l.title, l.view_url, l.ebay_qty, l.ebay_price, (l.sku IN (SELECT sku FROM dup)) AS dup,
+           (SELECT min(e.start_time) FROM ebay_listings e WHERE e.item_id = l.item_id) AS start_time
+      FROM ebay_sync_links l WHERE l.item_id IN (SELECT item_id FROM items)
+     ORDER BY l.item_id, l.size`;
+}
+// Gone from eBay: out of our sync copy of the listing too (until the next full check reads eBay again).
+export async function ebaySyncDropLinks(itemId) {
+  await db()`DELETE FROM ebay_sync_links WHERE item_id = ${String(itemId)}`;
 }
 
 // ── Shopify Listings, kept by the server (docs/context/shopify-listings.md "Kept fresh") ──

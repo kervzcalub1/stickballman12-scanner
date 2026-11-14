@@ -56,6 +56,9 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
       const el = ['shl-photos-sec', 'shl-pub-photos'].map((x) => document.getElementById(x)).find(Boolean)
         || document.querySelector('.shl-drawer [data-line="photos"]');
       if (!el) { if (++tries < 10) setTimeout(go, 50); return; }
+      // the checklist's photo line (a shoe never sent): open its "Choose photos" panel too (2026-11-14: "Check the main photo")
+      const panel = el.matches('[data-line]') ? el.querySelector('.shl-pub-btns button[aria-expanded="false"]') : null;
+      if (panel) panel.click();
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       (el.matches('[tabindex]') ? el : el.querySelector('button'))?.focus({ preventScroll: true });
     };

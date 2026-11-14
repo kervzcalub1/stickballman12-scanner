@@ -70,7 +70,12 @@ export function SheinPhotoPicker({ productId, onSaved, onSignOut, lede = null })
     setBusy(false);
   }
   const counts = { clean: clean.length, ph_edited: d.ph.length, shopify: d.shopify.length };
+  // a clean photo says what it SHOWS (its outline: side view / sole / pair), not only PH's brand-tool slot — the
+  // slots are often filled in the catalogue's order (2026-11-14: the "3/4" slot of IF1721-300 holds the sole)
+  const VIEW = { side: 'side view', sole: 'sole', pair: 'pair' };
   const label = (x) => {
+    if (d.source === 'clean' && x.view) return VIEW[x.view];
+    if (d.source === 'clean' && x.angle) return `PH slot: ${ANGLE_LABEL[x.angle] || x.angle}`;
     if (x.angle) return ANGLE_LABEL[x.angle] || x.angle;
     if (x.phCopy?.slide) return `PH ${x.phCopy.slide} slide`;
     return x.phCopy ? 'PH-branded' : null;
@@ -96,6 +101,12 @@ export function SheinPhotoPicker({ productId, onSaved, onSignOut, lede = null })
           : d.source === 'ph_edited' ? <>, from the PH edited photos for <b>{d.style}</b></> : ', from Shopify'}{kept > d.max ? ` (the first ${d.max})` : ''}.
         {' '}Photo 1 is the main photo.{d.source === 'clean' && d.cleanPhotos == null ? ' Chosen automatically — this style has clean photos.' : ''}
       </p>
+      {d.source === 'clean' && d.mainUnsure && (
+        <p className="notice xs" role="status" data-main-unsure=""><b>Check the main photo.</b> None of these is confirmed as the side view, so nothing goes to SHEIN yet — press <b>Make main photo</b> on the side view (photo 1 is what SHEIN shows first).</p>
+      )}
+      {d.source === 'clean' && !d.mainUnsure && d.mainWhy === 'side_view_by_order' && (
+        <p className="muted xs" data-main-why="">Photo 1 is a side view by its outline; its slot was only placed by the order it was cut out — check it.</p>
+      )}
       {brandedIn > 0 && (
         <p className="shl-bad-text xs" role="status" data-branded="">{fmt(brandedIn)} of these carr{brandedIn === 1 ? 'ies' : 'y'} the PH brand template (brick wall, name, logo) — SHEIN rejects that as a watermark / promotional information.
           {clean.length ? ' Use the clean photos instead.' : ' Find the clean photos below, or leave them out.'}</p>
@@ -122,8 +133,11 @@ export function SheinPhotoPicker({ productId, onSaved, onSignOut, lede = null })
             <button type="button" className="shl-photo-img" onClick={() => setZoom(i)} aria-label={`Look at photo ${i + 1}`}>
               <RemoteThumb src={x.url} className="ebl-thumb shl-photo-thumb" alt={`Photo ${i + 1}`} />
             </button>
-            <span className="xs">{i + 1}{i === 0 ? ' · main' : ''}{label(x) ? ` · ${label(x)}` : ''}{x.how === 'timestamp' ? <span className="muted" title="Matched by the order it was cut out, not by the picture — check it"> (angle by order)</span> : ''}{x.skipped ? <b className="shl-bad-text"> · left out</b> : ''}</span>
+            <span className="xs">{i + 1}{(d.source === 'clean' ? x.main : i === 0) ? ' · main' : ''}{label(x) ? ` · ${label(x)}` : ''}{x.skipped ? <b className="shl-bad-text"> · left out</b> : ''}</span>
+            {x.how === 'timestamp' && <span className="badge warn xs" data-unconfirmed="" title="Filed by the order it was cut out, not matched to PH’s photo — check what it shows">unconfirmed</span>}
             <button type="button" className={`btn xs ${x.skipped ? 'ghost' : 'shl-fix'}`} disabled={busy} onClick={() => toggle(x, i)}>{x.skipped ? 'Put back' : 'Leave out'}</button>
+            {d.source === 'clean' && !x.skipped && !x.main && <button type="button" className="btn ghost xs" data-act="make-main" disabled={busy} onClick={() => act({ cleanMain: x.url }, `Photo ${i + 1} is now the main photo.`)}>Make main photo</button>}
+            {d.source === 'clean' && x.main && d.mainWhy === 'person' && <button type="button" className="shl-linkbtn xs" disabled={busy} onClick={() => act({ cleanMain: null }, 'The main photo is picked automatically again (a side view).')}>Pick automatically</button>}
           </div>
         ))}
       </div>

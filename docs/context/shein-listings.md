@@ -787,6 +787,24 @@ rejects them ("Image contains promotional information", "watermark"); leaving th
   spec / welcome slides named + **Leave out the spec + welcome slides**. Checklist photo line says which set SHEIN gets
   (the "Use PH edited photos" checkbox is gone — the picker switches). Bulk sheet Photos block: **Use clean photos on all
   n**, **Leave out the spec + welcome slides on all n**, the cover and PH / Shopify buttons as before.
+- **The main photo (fixed 2026-11-14, live Nike run):** a cutout's angle is only PH's brand-tool SLOT — PH often fills
+  the slots in the catalogue's gallery order (IF1721-300: the "3/4" slot holds the sole, the "sole" slot the inner side;
+  IO6253-500 the same; 394055-101: the "side" slot is a 3/4 pair). The picture match only proves which cutout made
+  which branded slot, so it copied PH's mistakes. Now each cutout's own outline is measured (`shapeOf` → `shape` JSONB
+  on `product_cutouts`: ar, fill, topM, botM, gap; recorded by the brand tool's Upload and by `findCleanPhotos`,
+  measured on first use for older rows — `ensureShapes`) and `viewOf` reads it as side / sole / pair (a side profile
+  has a low toe and high collar → topM ≥ 0.2, stands on its sole → botM ≤ 0.035, or on studs ≤ 0.06 with topM ≥ 0.25).
+  Checked by eye on 66 PH sets: every cutout it calls a side view is one (incl. inner sides filed under other slots);
+  it rejects the 3/4 views. **Photo 1** = `cleanOrder`: a person's **Make main photo** (`clean_main`), else PH's side
+  slot when confirmed (picture / Upload) AND its outline is a side view, else another confirmed slot showing a side
+  view, else one filed only by order whose outline is a side view (`side_view_by_order`, said in the picker). Never a
+  slot label alone. None → **`clean_main_unsure`** ("Check the main photo", photo line 16, action `fix_photos`): the
+  publish and the photo replace are held before anything is converted; the stored readiness is lenient for a confirmed
+  side slot not measured yet. Sample of 66 styles: 64 get a side-view main, 2 are held (no side view uploaded:
+  394055-101, FD8315-500). Picker: labels say what a photo shows ("side view", "sole", "pair", else "PH slot: 3/4"),
+  a by-order cutout carries an **unconfirmed** badge, **Make main photo** / **Pick automatically**, the "Check the main
+  photo" banner. Swapping two non-main slots is not built (SHEIN only treats photo 1 specially). DB: `product_cutouts.shape`,
+  `shein_listing_products.clean_main` — **prod needs `db:setup`**. The backfill prints `[S]`/`[o]`/`[p]` + `main=` / `MAIN?`.
 - **Fix photos scroll (bug):** on a never-live / rejected shoe the drawer's "Fix photos" now scrolls to and focuses the
   picker that is open (`#shl-pub-photos` in "Published from this page"; `#shl-photos-sec` for a live shoe; else the
   checklist's photo line). It used to scroll only to the live section.

@@ -13,6 +13,7 @@
 import { send, applySecurity, rateLimit, requireRole, getJsonBody, cleanSku, fetchWithTimeout } from '../_lib/util.js';
 import { setProductPhoto, recordCutout, dbConfigured } from '../_lib/db.js';
 import { cutoutKeyTime } from '../../src/lib/sheinCleanPhotos.js';
+import { shapeOf } from '../_lib/shein-clean-photos.js';
 import { r2Configured, presignPutUrl, publicUrl, isAllowedPhotoUrl } from '../_lib/r2.js';
 import { kicksdbSpecData } from '../_lib/kicksdb.js';
 import { nikeSpecData } from '../_lib/nike.js';
@@ -146,7 +147,8 @@ export default async function handler(req, res) {
           const finalUrl = await storeFinal(angle, branded);
           // The clean photo SHEIN gets (2026-11-14): the cutout this angle was made from, recorded with its angle
           // (product_cutouts). Never fails the upload — the branded photo is already saved.
-          if (cutoutUrl) await recordCutout({ sku, angle, url: cutoutUrl, origin: 'brand', how: 'upload', takenAt: cutoutKeyTime(cutoutUrl), createdBy })
+          // + its silhouette (what it SHOWS — PH's slot isn't always the view; SHEIN's main photo must be a side view)
+          if (cutoutUrl) await recordCutout({ sku, angle, url: cutoutUrl, origin: 'brand', how: 'upload', takenAt: cutoutKeyTime(cutoutUrl), createdBy, shape: await shapeOf(shoeBuffer).catch(() => null) })
             .catch((e) => console.error('[images/brand] record cutout', angle, e.message));
           return { slot: angle, ok: true, url: finalUrl };
         }

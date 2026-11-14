@@ -405,9 +405,10 @@ test('a printed Alias label is read on our own server — number, SKU, size and 
   expect(row).toMatchObject({ platform: 'alias', sku: 'DQ4071-001', size: 'US M 9.5', reason: 'customer asked', details_from: 'label' });
   expect(prompts).toHaveLength(0);
   const [raw] = await q('SELECT ai_raw FROM cancellations WHERE id = $1', [row.id]);
-  // One label = one order whatever tesseract does: both reads agree, or the second misread ONE
-  // digit (CI read "#991…" as "#091…", 2026-11-13) and that is kept as "Second read said …" on
-  // this row instead of filing a second cancellation (mergeReads in api/_lib/cancelOcr.js).
+  // One label = one order whatever tesseract does. On CI's font (Liberation Sans) the first read
+  // turns "#991…" into "#091…" on ~40 % of labels (measured 2026-11-15 in the CI image); the
+  // reads then disagree, a third read decides, and the losing reading is kept on the row as
+  // `other` (mergeReads + settleWithThird in api/_lib/cancelOcr.js).
   expect(raw.ai_raw).toMatchObject({ by: 'ocr' });
   if (raw.ai_raw.agreed !== true) expect(raw.ai_raw.other).toMatch(/^\d+$/);
   expect(raw.ai_raw.text).toContain(num);
@@ -668,4 +669,28 @@ test('two reads: a one-digit misread is the same order; two real numbers both re
   expect(mergeReads([o('991138546')], [o('091138547')])).toHaveLength(2);
   // No second read at all.
   expect(mergeReads([o('991138546')], null)).toEqual([expect.objectContaining({ agreed: null })]);
+});
+
+test('reads that disagree: a third read decides; two real numbers one read saw together stay two (pure)', async () => {
+  const { mergeReads, settleWithThird } = await import('../api/_lib/cancelOcr.js');
+  const o = (n) => ({ platform: 'alias', order_number: n });
+  const settle = (a, b, c) => settleWithThird(mergeReads(a, b), c, a, b);
+  // The CI misread: the first read said 091…, the second and third 991… → 991…, first kept as `other`.
+  expect(settle([o('091138476')], [o('991138476')], [o('991138476')]))
+    .toEqual([expect.objectContaining({ order_number: '991138476', agreed: true, other: '091138476' })]);
+  // The third agrees with the first: the first stands.
+  expect(settle([o('991138476')], [o('091138476')], [o('991138476')]))
+    .toEqual([expect.objectContaining({ order_number: '991138476', agreed: true, other: '091138476' })]);
+  // Two characters off ("00…" / "99…") filed one photo as TWO cancellations: now one order.
+  expect(settle([o('001177462')], [o('991177462')], [o('991177462')]))
+    .toEqual([expect.objectContaining({ order_number: '991177462', agreed: true, other: '001177462' })]);
+  // A digit too many ("0901144585" for "991144585"): the same.
+  expect(settle([o('0901144585')], [o('991144585')], [o('991144585')]).map((x) => x.order_number)).toEqual(['991144585']);
+  // Two consecutive orders the second read saw TOGETHER stay two, whatever the third read missed.
+  expect(settle([o('991138546')], [o('991138546'), o('991138547')], [o('991138546')]).map((x) => x.order_number))
+    .toEqual(['991138546', '991138547']);
+  // The third read can't settle it: left flagged exactly as before.
+  expect(settle([o('091138476')], [o('991138476')], [o('551138476')]))
+    .toEqual([expect.objectContaining({ order_number: '091138476', agreed: false, other: '991138476' })]);
+  expect(settleWithThird(mergeReads([o('091138476')], [o('991138476')]), null)).toHaveLength(1);
 });

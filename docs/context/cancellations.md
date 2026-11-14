@@ -125,7 +125,15 @@ character misread** (`mergeReads`, 2026-11-13: the second read turned `#99113854
 `#091138546` and one label became two cancellations): a second-read number one character away
 from a first-read number the second read did NOT find is the SAME order — one row, flagged, the
 note says "Second read said #…". If the second read found both numbers they are two orders
-(consecutive numbers on one photo) and both are recorded. 25 s cap. The
+(consecutive numbers on one photo) and both are recorded.
+**When the two reads disagree, a THIRD read decides** (`settleWithThird`, 2026-11-15; 3000 px,
+plain, as a page): the number two of the three reads saw is recorded (agreed, the losing reading
+kept as `other`); a number only one of three saw, within two characters of a number two reads
+agree on, is that order misread (`#001177462` / `#991177462` had filed one photo as two) —
+unless one read saw both, then they're two orders. Measured in the CI image (Ubuntu, Liberation
+Sans): the first read turned `#991…` into `#091…` on 23 of 60 printed labels; with the third read
+60/60 came out right. On the real phone photos the first read is still the best single read, so
+the order of the reads didn't change. 25 s cap per read step. The
 read text is kept on the row (`ai_raw.text`) so a miss can become a rule + a test line.
 Measured on the real Alias labels of 2026-10-20 (WhatsApp copies, 471 px): order #, SKU, size
 right on both reads, ~1 s each; the ITEM name line is too small at that resolution to read

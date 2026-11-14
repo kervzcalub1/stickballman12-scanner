@@ -7,6 +7,13 @@
 // "agreed"; one only a single read found is still filed, flagged "reads disagree", so it is
 // never lost. Nothing leaves the server, and it costs nothing per photo.
 //
+// When the two reads DISAGREE, a third read (mid-size, plain, as a page) breaks the tie: the
+// number two of the three reads saw wins (`settleWithThird`). Measured 2026-11-15 in the CI
+// image (Ubuntu, Liberation Sans): the first read turned the leading "99" of a printed label
+// into "09" on ~40 % of labels (once "00", which filed one photo as TWO cancellations); the
+// first two reads alone can't say which is right, two of three can. On the real phone photos
+// the first read is still the best single read, so it stays first.
+//
 // Measured on the real Alias labels of 2026-10-20 (WhatsApp copies, 471 px wide): order #,
 // style code and size all read right; the small "ORDER #" caption and the tracking line don't
 // read at all — which is why `ordersFromText` takes a lone 9–10 digit line on a packing label.
@@ -23,25 +30,38 @@ export async function canOpenImage(buf) {
   try { const sharp = (await import('sharp')).default; await sharp(buf).metadata(); return true; } catch { return false; }
 }
 
-async function readOnce(buf) {
+// How each read prepares the picture: [long edge px, sharpen?, page mode].
+const PREP = {
+  first: [3600, true, 'SPARSE_TEXT'],   // large + sharpened, scattered text
+  second: [2400, false, 'AUTO'],        // smaller + plain grey, as a page
+  third: [3000, false, 'AUTO'],         // the tie-break: only when the first two disagree
+};
+
+/** tesseract over the picture, once per named prep → { name: text | null }. */
+async function readWith(buf, names) {
   const sharp = (await import('sharp')).default;
   const { createWorker, PSM } = await import('tesseract.js');
   const meta = await sharp(buf).rotate().metadata();
   const wide = Math.max(meta.width || 0, meta.height || 0) || 1600;
   // Scale so the long edge is ~3600 / ~2400 px: small print on a phone photo needs the room.
-  const big = await sharp(buf).rotate().resize({ width: Math.round(3600 * (meta.width || wide) / wide) })
-    .greyscale().normalise().sharpen().png().toBuffer();
-  const page = await sharp(buf).rotate().resize({ width: Math.round(2400 * (meta.width || wide) / wide) })
-    .greyscale().normalise().png().toBuffer();
+  const prepared = await Promise.all(names.map(async (n) => {
+    const [edge, sharpen] = PREP[n];
+    let p = sharp(buf).rotate().resize({ width: Math.round(edge * (meta.width || wide) / wide) }).greyscale().normalise();
+    if (sharpen) p = p.sharpen();
+    return p.png().toBuffer();
+  }));
   let worker; let timer;
   try {
     worker = await createWorker('eng', 1, { langPath: REPO_ROOT, gzip: false, cachePath: tmpdir() });
     const run = async () => {
-      await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
-      const a = (await worker.recognize(big)).data.text;
-      await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
-      const b = await worker.recognize(page).then((r) => r.data.text, () => null);
-      return { a, b };
+      const out = {};
+      for (let i = 0; i < names.length; i++) {
+        await worker.setParameters({ tessedit_pageseg_mode: PSM[PREP[names[i]][2]] });
+        // The first read failing is a failure; a later one failing is just "no second opinion".
+        const r = worker.recognize(prepared[i]).then((x) => x.data.text);
+        out[names[i]] = i === 0 ? await r : await r.catch(() => null);
+      }
+      return out;
     };
     const late = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('local read timed out')), TIMEOUT_MS); });
     return await Promise.race([run(), late]);
@@ -97,16 +117,77 @@ export function mergeReads(first, second) {
   ];
 }
 
+// Edit distance between two order numbers (a misread can drop or add a digit: "991144585"
+// read as "0901144585").
+function editDistance(x, y) {
+  let prev = Array.from({ length: y.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= x.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= y.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[y.length];
+}
+
+/**
+ * The two reads disagreed: a third read decides. `merged` = mergeReads(first, second); `third`
+ * = the third read's orders (null = it failed → nothing changes).
+ *   - a one-character pair (first said X, second said Y): the one the third read ALSO saw is
+ *     the number; the other reading is kept on the row (`other`).
+ *   - a number only one of the first two saw, that the third read saw too: agreed.
+ *   - a number ONLY ONE of the three reads saw, within two characters of a number two reads
+ *     agree on: the same label misread ("991177462" / "001177462" filed one photo as two
+ *     cancellations, CI 2026-11-15) — folded into that order as its `other`, not filed. NOT
+ *     when any one read saw BOTH numbers: then they are two real orders on one photo.
+ * Anything the third read can't settle stays flagged exactly as mergeReads left it. Pure.
+ */
+export function settleWithThird(merged, third, first = [], second = []) {
+  if (third == null) return merged;
+  const keysC = new Set(third.map((o) => orderKey(o.order_number)));
+  const seen = (n) => n != null && keysC.has(orderKey(n));
+  const out = merged.map((o) => {
+    if (o.agreed !== false) return { ...o };
+    if (o.other && seen(o.other) && !seen(o.order_number)) {
+      return { ...o, order_number: o.other, other: o.order_number, agreed: true, byThird: true };
+    }
+    if (seen(o.order_number)) {
+      const { onlySecond, ...rest } = o;
+      return { ...rest, agreed: true, byThird: true };
+    }
+    return o;
+  });
+  const settled = out.filter((o) => o.agreed === true);
+  const reads = [first, second || [], third].map((r) => new Set(r.map((x) => orderKey(x.order_number))));
+  const together = (k1, k2) => reads.some((r) => r.has(k1) && r.has(k2));
+  const kept = [];
+  for (const o of out) {
+    if (o.agreed === false && !o.other) {
+      const k = orderKey(o.order_number);
+      const twin = settled.find((s) => { const sk = orderKey(s.order_number); return sk !== k && editDistance(sk, k) <= 2 && !together(sk, k); });
+      if (twin) { twin.other ||= o.order_number; continue; }
+    }
+    kept.push(o);
+  }
+  return kept;
+}
+
 export async function readCancellationLocally(buf, platform = null) {
-  const { a, b } = await queued(() => readOnce(buf));
+  const { first: a, second: b } = await queued(() => readWith(buf, ['first', 'second']));
   const first = ordersFromText(a, platform);
   const second = b == null ? null : ordersFromText(b, platform);
-  const orders = mergeReads(first, second);
+  let orders = mergeReads(first, second);
+  // The two reads disagree: a third read, prepared another way, decides (settleWithThird).
+  let c = null; let third = null;
+  if (second != null && orders.some((o) => o.agreed === false)) {
+    c = await queued(() => readWith(buf, ['third'])).then((r) => r.third, () => null);
+    third = c == null ? null : ordersFromText(c, platform);
+    orders = settleWithThird(orders, third, first, second);
+  }
   // The style code / size from whichever read found them.
-  const one = (k) => first.find((o) => o[k])?.[k] || second?.find((o) => o[k])?.[k] || null;
+  const one = (k) => first.find((o) => o[k])?.[k] || second?.find((o) => o[k])?.[k] || third?.find((o) => o[k])?.[k] || null;
   return {
     what: '',
-    text: [a, b].filter(Boolean).join('\n----\n').slice(0, 4000),
+    text: [a, b, c].filter(Boolean).join('\n----\n').slice(0, 4000),
     orders: orders.map((o) => ({
       platform: o.platform, order_number: o.order_number,
       sku: o.sku || (orders.length === 1 ? one('sku') : null), size: o.size || (orders.length === 1 ? one('size') : null),

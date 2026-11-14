@@ -6,7 +6,7 @@
 // what the viewer's own call returns.
 //
 // fetch() rather than EventSource: EventSource cannot send an Authorization header, and
-// the session token lives in sessionStorage, not in a cookie. A small SSE parser over the
+// the session token lives in web storage (src/api.js), not in a cookie. A small SSE parser over the
 // response body does the same job.
 import { getToken } from '../api.js';
 

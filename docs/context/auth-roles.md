@@ -3,8 +3,18 @@
 ## Accounts & login
 - `api/auth/login.js` — `admin` is an env account (username `admin`, name `Alex`,
   password `ADMIN_PASSWORD`); everyone else is a DB row. Passwords hashed with
-  **scrypt**. Success → `{ token, user }`; client stores both in `sessionStorage`
-  (`sb_session_token`, `sb_user`) and sends `Authorization: Bearer <token>`.
+  **scrypt**. Success → `{ token, user }`; client stores both (`sb_session_token`,
+  `sb_user`) in `localStorage` AND `sessionStorage` and sends `Authorization: Bearer <token>`.
+  **One sign-in for every tab of the browser** (2026-11-15 — it used to be `sessionStorage`
+  only, which is per TAB, so every new tab asked to sign in again). `src/api.js`: the tab's
+  own copy (sessionStorage) is read first, so a tab keeps its account when another tab signs
+  in as someone else; a new tab adopts the shared copy at load. Signing out signs out the
+  other tabs on the SAME session (`storage` event → `onAuthChange` in App.jsx); a tab on the
+  sign-in screen is let in when another tab signs in. An expired token (its `exp`) is dropped
+  at load, and ANY 401 through `request()` now sends every screen to the sign-in (`sb:unauthorized`
+  event), not just the screens that check `err.unauthorized`. Trade-off: closing the browser no
+  longer signs you out — the token's ~8 h expiry does (sign out on a shared device).
+  Test: `e2e/login-tabs.spec.js`.
 - `api/auth/signup.js` — creates a `pending` account with a **role picker**
   (warehouse | ph_team — never admin). Can't log in until approved.
 - Approval: admin **Check Access** screen → `api/admin/users.js` (list),

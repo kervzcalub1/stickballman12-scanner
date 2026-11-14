@@ -2,23 +2,110 @@
 
 const TOKEN_KEY = 'sb_session_token';
 const USER_KEY = 'sb_user';
+const UNAUTHORIZED_EVENT = 'sb:unauthorized';
+
+// Where the session lives (owner 2026-11-15: "logged in, open a new tab, it asks me to log
+// in again"). It used to be sessionStorage only, which the browser keeps PER TAB — so every
+// new tab started signed out. Now the sign-in is written to BOTH:
+//   localStorage   — shared by every tab of this browser, so a new tab is signed in;
+//   sessionStorage — this tab's own copy, read FIRST, so a tab keeps the account it's on
+//                    even if another tab signs in as someone else.
+// The token still expires on the server's clock (~8 h, api/_lib/util.js signToken); an
+// expired one gets a 401 → clearAuth → the sign-in screen, as before. Either store can throw
+// (Safari private mode, blocked site data) — then it simply isn't used.
+const read = (store, k) => { try { return store.getItem(k); } catch { return null; } };
+const write = (store, k, v) => { try { store.setItem(k, v); } catch { /* not available */ } };
+const drop = (store, k) => { try { store.removeItem(k); } catch { /* not available */ } };
+const ss = () => (typeof sessionStorage === 'undefined' ? null : sessionStorage);
+const ls = () => (typeof localStorage === 'undefined' ? null : localStorage);
+// The store holding this tab's session: its own copy, else the browser's shared one.
+const home = () => (ss() && read(ss(), TOKEN_KEY) ? ss() : ls());
+// A tab that starts on the shared sign-in takes its own copy at once, so it stays on that
+// account even if another tab later signs in as someone else.
+function adoptShared() {
+  if (!ss() || !ls() || read(ss(), TOKEN_KEY)) return;
+  const t = read(ls(), TOKEN_KEY);
+  if (!t) return;
+  write(ss(), TOKEN_KEY, t);
+  const u = read(ls(), USER_KEY);
+  if (u) write(ss(), USER_KEY, u);
+}
+// A token past its expiry (the server's own `exp`, epoch ms — no clock zone involved) is
+// thrown away instead of shown as signed in: with the sign-in kept in localStorage, opening
+// the browser the next morning would otherwise land on a Home where every call fails.
+function expired(t) {
+  try {
+    const body = String(t).split('.')[0].replace(/-/g, '+').replace(/_/g, '/');
+    const { exp } = JSON.parse(atob(body + '='.repeat((4 - (body.length % 4)) % 4)));
+    return !!exp && Date.now() > exp;
+  } catch { return false; }   // unreadable here → the server decides (401)
+}
+function dropExpired() {
+  for (const s of [ss(), ls()]) {
+    const t = s && read(s, TOKEN_KEY);
+    if (t && expired(t)) { drop(s, TOKEN_KEY); drop(s, USER_KEY); }
+  }
+}
+dropExpired();
+adoptShared();
 
 export function getToken() {
-  return sessionStorage.getItem(TOKEN_KEY) || '';
+  const s = home();
+  return (s && read(s, TOKEN_KEY)) || '';
 }
 export function setToken(t) {
-  if (t) sessionStorage.setItem(TOKEN_KEY, t);
+  if (!t) return;
+  for (const s of [ss(), ls()]) if (s) write(s, TOKEN_KEY, t);
 }
 export function getUser() {
-  try { return JSON.parse(sessionStorage.getItem(USER_KEY) || 'null'); }
+  const s = home();
+  try { return JSON.parse((s && read(s, USER_KEY)) || 'null'); }
   catch { return null; }
 }
 export function setUser(u) {
-  if (u) sessionStorage.setItem(USER_KEY, JSON.stringify(u));
+  if (!u) return;
+  const v = JSON.stringify(u);
+  // The shared copy follows only the session it belongs to (a tab on another account
+  // refreshing its own user must not rename the browser's saved sign-in).
+  if (ss()) write(ss(), USER_KEY, v);
+  if (ls() && (!ss() || read(ls(), TOKEN_KEY) === read(ss(), TOKEN_KEY))) write(ls(), USER_KEY, v);
 }
 export function clearAuth() {
-  sessionStorage.removeItem(TOKEN_KEY);
-  sessionStorage.removeItem(USER_KEY);
+  // The shared copy goes only if it is THIS tab's session (signing out of one account in one
+  // tab must not sign out a different account saved by another tab).
+  const mine = ss() ? read(ss(), TOKEN_KEY) : null;
+  if (ls() && (!mine || read(ls(), TOKEN_KEY) === mine)) { drop(ls(), TOKEN_KEY); drop(ls(), USER_KEY); }
+  if (ss()) { drop(ss(), TOKEN_KEY); drop(ss(), USER_KEY); }
+}
+
+/**
+ * Another tab signed in or out: `cb(user | null)` when it changes THIS tab — signed out of
+ * the same session elsewhere → null; signed in elsewhere while this tab is on the sign-in
+ * screen → that user. Returns an unsubscribe.
+ */
+export function onAuthChange(cb) {
+  if (typeof window === 'undefined') return () => {};
+  const onStorage = (e) => {
+    if (e.storageArea !== ls() || (e.key !== TOKEN_KEY && e.key !== USER_KEY && e.key !== null)) return;
+    const mine = ss() ? read(ss(), TOKEN_KEY) : null;
+    const shared = read(ls(), TOKEN_KEY);
+    if (!shared) {
+      // Signed out elsewhere: follow only if this tab was on that same session.
+      const was = e.key === TOKEN_KEY ? e.oldValue : null;
+      if (mine && (mine === was || e.key === null)) { drop(ss(), TOKEN_KEY); drop(ss(), USER_KEY); cb(null); }
+    } else if (!mine && read(ls(), USER_KEY) && !expired(shared)) {
+      // Signed in elsewhere while this tab had no session (the token and the user arrive as
+      // two events — act once both are there).
+      adoptShared();
+      cb(getUser());
+    }
+  };
+  // A 401 anywhere (an expired or revoked session): every screen goes to the sign-in, not
+  // only the ones that handle `err.unauthorized` themselves.
+  const onUnauthorized = () => cb(null);
+  window.addEventListener('storage', onStorage);
+  window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  return () => { window.removeEventListener('storage', onStorage); window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized); };
 }
 // Back-compat alias used by older call sites.
 export const clearToken = clearAuth;
@@ -41,6 +128,7 @@ async function request(method, path, body, { auth = true } = {}) {
 
   if (res.status === 401) {
     clearAuth();
+    if (auth && typeof window !== 'undefined') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     const err = new Error(data.error || 'Session expired. Please sign in again.');
     err.unauthorized = true;
     throw err;

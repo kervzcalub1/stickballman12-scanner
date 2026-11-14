@@ -14,7 +14,7 @@ import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { estDate, estTime } from '../lib/format.js';
 import { XLSX_MIME } from '../lib/xlsx.js';
-import { scanWorkbookBytes, monthFromFileName, phase1Book, phase2Book, CLASSES, P2_LABEL } from '../lib/lostPackage.js';
+import { scanWorkbookBytes, monthFromFileName, phase1Book, phase2Book, CLASSES, P2_LABEL, excelIdText } from '../lib/lostPackage.js';
 
 const CHUNK = 400;
 const SHOW = 300;
@@ -291,12 +291,12 @@ function RunView({ detail, carriers, busy, onAction }) {
               <thead><tr><th>Tracking</th><th>Order #</th><th>Store</th><th>Shoe</th><th>Ordered</th><th>As written</th><th>Phase 1</th><th>Phase 2</th></tr></thead>
               <tbody>
                 {shown.slice(0, SHOW).map((o) => {
-                  const trk = o.tracking || o.tracking_fallback;
+                  const trk = excelIdText(o.tracking || o.tracking_fallback);
                   return (
                     <tr key={o.id}>
                       <td data-label="Tracking" className="lp-trk">{trk ? <TrackingLink number={trk} carrier={o.courier} /> : <span className="muted">—</span>}
                         {o.courier && <div className="muted xs">{o.courier}</div>}</td>
-                      <td data-label="Order #">{o.order_number || <span className="muted">—</span>}</td>
+                      <td data-label="Order #">{excelIdText(o.order_number) || <span className="muted">—</span>}</td>
                       <td data-label="Store">{o.store}</td>
                       <td data-label="Shoe">{o.product}{o.sku && <div className="muted xs">{o.sku}{o.qty ? ` · ×${o.qty}` : ''}</div>}</td>
                       <td data-label="Ordered" className="muted xs">{o.order_date}{o.eta && <div>ETA {o.eta}</div>}</td>

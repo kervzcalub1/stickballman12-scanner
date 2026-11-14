@@ -192,6 +192,18 @@ test('Phase 1: "not delivered" is not a delivery; an Order Date column is not th
   expect(r.orders[0].key).toBe('T:222');
 });
 
+test('a tracking number the sheet holds as "4.93235840438E11" goes to FedEx as 493235840438 (pure)', async () => {
+  const { scanSheets, excelIdText, cleanTracking, inferCourier } = await import('../src/lib/lostPackage.js');
+  for (const [raw, want] of [['4.93235840438E11', '493235840438'], ['3.8363917247E11', '383639172470'], ['4.93235840438E+11', '493235840438'],
+    ['493235840438.0', '493235840438'], ['1Z7311EY0392973725', '1Z7311EY0392973725'], ['1.5E0', '1.5E0']]) expect(excelIdText(raw)).toBe(want);
+  // the same pair written both ways is ONE order
+  const r = scanSheets([{ name: 'T', rows: [['Order Number', 'Tracking Number', 'Status'], ['A1', '4.93235840438E11', 'in transit'], ['A1', '493235840438', '']] }]);
+  expect(r.orders.map((o) => o.key)).toEqual(['T:493235840438']);
+  // a run saved before the fix still asks FedEx the right number
+  expect(cleanTracking('4.93235840438E11')).toBe('493235840438');
+  expect(inferCourier(cleanTracking('4.93235840438E11'), '')).toBe('fedex');
+});
+
 test('admin home has the card; the warehouse home does not, and the page sends them home', async ({ page }) => {
   await loginAs(page, 'admin');
   await page.goto('/');

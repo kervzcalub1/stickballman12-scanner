@@ -3782,6 +3782,10 @@ await sql(`ALTER TABLE lost_pkg_orders DROP CONSTRAINT IF EXISTS lost_pkg_orders
 await sql(`ALTER TABLE lost_pkg_orders ADD CONSTRAINT lost_pkg_orders_p2_state_check
            CHECK (p2_state IN ('none', 'queued', 'checking', 'done'))`);
 await sql(`CREATE INDEX IF NOT EXISTS lost_pkg_orders_queue_idx ON lost_pkg_orders (p2_state, run_id, id)`);
+// 2026-11-16: a finding can be REMOVED from a run (put back any time) — it leaves the list, the
+// totals and the Excel downloads, and Phase 2 stops asking about it.
+await sql(`ALTER TABLE lost_pkg_orders ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE lost_pkg_orders ADD COLUMN IF NOT EXISTS removed_by TEXT`);
 
 const LIVE_TABLES = [
   'shopify_listing_variants', 'listing_market_prices',

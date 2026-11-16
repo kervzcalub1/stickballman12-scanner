@@ -145,6 +145,57 @@ test('Phase 1 in the browser, Phase 2 on the server: the month\'s lost packages'
   expect(failed.map((r) => r.join(' ')).join('\n')).toContain('No tracking number');
 });
 
+// 2026-11-16: a finding can be taken off the run (and put back); the Excel is downloaded again without it.
+test('Remove a finding, download the findings again without it, put it back', async ({ page, request }) => {
+  expect(runId).toBeTruthy();
+  const fs = await import('node:fs/promises');
+  const getRun = async () => (await (await request.get(`/api/lost-packages/orders?run=${runId}`, { headers: ph() })).json());
+  const before = await getRun();
+  const victim = before.orders.find((o) => o.p2_class === 'lost' && o.tracking === '794612345678');
+  expect(victim).toBeTruthy();
+  // the warehouse can't; an order of another run isn't touched
+  expect((await request.post('/api/lost-packages/remove', { headers: wh(), data: { runId, ids: [Number(victim.id)] } })).status()).toBe(403);
+  expect((await (await request.post('/api/lost-packages/remove', { headers: ph(), data: { runId: runId + 999999, ids: [Number(victim.id)] } })).status())).toBe(404);
+
+  await loginAs(page, 'ph_team');
+  await page.goto(`/ph/lost-packages?run=${runId}&show=p2:lost`);
+  const rowOf = (trk) => page.locator('.lp-orders tbody tr', { hasText: trk });
+  await expect(rowOf('794612345678')).toBeVisible();
+  await rowOf('794612345678').getByRole('button', { name: /^Remove/ }).click();
+  await expect(rowOf('794612345678')).toHaveCount(0);
+  await expect(page.locator('.lp-p2 .lp-tile.lost')).toContainText('2');
+  await expect(page.locator('.lp-run .lp-tile.lost')).toContainText('5');
+  await expect(page.getByRole('status').filter({ hasText: '1 removed from this run' })).toBeVisible();
+
+  const [d] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '⬇ Download the findings again' }).click()]);
+  const x = await fs.readFile(await d.path());
+  expect(openWorkbook(x).sheets.map((s) => s.name)).toEqual(['PHASE 2 LOST PACKAGES', 'PHASE 2 CANCEL', 'PHASE 2 REFUND', 'FAILED TO SCAN', 'REMOVED', 'SUMMARY']);
+  const lostRows = readSheetRows(x, 'PHASE 2 LOST PACKAGES');
+  expect(lostRows.length).toBe(3);                                   // header + 2
+  expect(lostRows.map((r) => r.join(' ')).join('\n')).not.toContain('794612345678');
+  const rem = readSheetRows(x, 'REMOVED');
+  expect(rem.length).toBe(2);
+  expect(rem[1].join(' ')).toContain('794612345678');
+  expect(rem[1].join(' ')).toContain('E2E');                          // who removed it
+
+  // a recheck would not ask about a removed one; the saved run's own totals moved too
+  const mid = await getRun();
+  expect(Number(mid.run.p2_total)).toBe(5);
+  expect(mid.run.counts.Lost).toBe(5);
+
+  // put it back, by ticking it on the Removed view
+  await page.getByRole('button', { name: 'See them / put back' }).click();
+  await rowOf('794612345678').getByRole('checkbox').check();
+  await page.getByRole('button', { name: '↩ Put back (1)' }).click();
+  await expect(rowOf('794612345678')).toHaveCount(0);
+  await page.getByLabel('Which orders').selectOption('p2:lost');
+  await expect(rowOf('794612345678')).toBeVisible();
+  await expect(page.locator('.lp-p2 .lp-tile.lost')).toContainText('3');
+  const after = await getRun();
+  expect(after.run.counts.Lost).toBe(6);
+  expect(after.orders.find((o) => o.id === victim.id).p2_class).toBe('lost');   // its answer was kept
+});
+
 test('Pause / Resume / Stop move only where they may; the warehouse is refused', async ({ request }) => {
   expect(runId).toBeTruthy();
   const act = (action, headers = ph()) => request.post('/api/lost-packages/phase2', { headers, data: { runId, action } });

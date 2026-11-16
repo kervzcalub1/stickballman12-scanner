@@ -293,7 +293,7 @@ const p2Row = (o) => [...p1Row(o), o.p2_courier, o.p2_primary, o.p2_fallback, P2
   o.p2_raw, o.p2_error, o.p2_checked_est || ''];
 
 /** The Phase 2 workbook, as the original laid it out: Lost / Cancel / Refund / Failed / Summary. */
-export function phase2Book(run, lostOrders) {
+export function phase2Book(run, lostOrders, removed = []) {
   const by = (c) => lostOrders.filter((o) => o.p2_class === c);
   const notChecked = lostOrders.filter((o) => !o.p2_class);
   const summary = [
@@ -307,6 +307,7 @@ export function phase2Book(run, lostOrders) {
     ['Cancelled', by('cancelled').length],
     ['Refunded', by('refunded').length],
     ['Failed to scan', by('failed').length],
+    ['Removed from the list by hand', removed.length],
   ];
   const head = cols([...P1_COLS, ...P2_EXTRA]);
   return buildXlsxBook([
@@ -315,6 +316,9 @@ export function phase2Book(run, lostOrders) {
     { sheetName: 'PHASE 2 REFUND', columns: head, rows: by('refunded').map(p2Row) },
     { sheetName: 'FAILED TO SCAN', columns: head, rows: by('failed').map(p2Row) },
     ...(notChecked.length ? [{ sheetName: 'NOT CHECKED YET', columns: head, rows: notChecked.map(p2Row) }] : []),
+    // Kept for the record: what someone took off the list, who, and when.
+    ...(removed.length ? [{ sheetName: 'REMOVED', columns: cols([...P1_COLS, ...P2_EXTRA, 'REMOVED_BY', 'REMOVED (EST)']),
+      rows: removed.map((o) => [...p2Row(o), o.removed_by || '', o.removed_est || '']) }] : []),
     { sheetName: 'SUMMARY', columns: cols(['Item', 'Value']), rows: summary },
   ]);
 }

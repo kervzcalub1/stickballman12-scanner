@@ -14709,7 +14709,7 @@ const P2_TALLY = `(SELECT jsonb_build_object(
     'cancelled', count(*) FILTER (WHERE o.p2_class = 'cancelled'),
     'refunded', count(*) FILTER (WHERE o.p2_class = 'refunded'),
     'failed', count(*) FILTER (WHERE o.p2_class = 'failed'))
-  FROM lost_pkg_orders o WHERE o.run_id = r.id) AS p2_counts`;
+  FROM lost_pkg_orders o WHERE o.run_id = r.id AND o.removed_at IS NULL) AS p2_counts`;
 
 // The shared column list is spliced in as TEXT (the tag can't nest fragments), so these two
 // build their statement directly; db() still guards DATABASE_URL.
@@ -14728,9 +14728,49 @@ export async function listLostOrders(runId) {
   return db()`
     SELECT id, key, tracking, order_number, tracking_fallback, store, product, sku, qty, courier, order_date, eta,
            status_written, first_sheet, evidence, p1_class, p2_state, p2_class, p2_courier, p2_primary, p2_fallback,
-           p2_raw, p2_error, p2_checked_at,
-           to_char(p2_checked_at AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI') AS p2_checked_est
+           p2_raw, p2_error, p2_checked_at, removed_at, removed_by,
+           to_char(p2_checked_at AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI') AS p2_checked_est,
+           to_char(removed_at AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI') AS removed_est
       FROM lost_pkg_orders WHERE run_id = ${runId} ORDER BY id`;
+}
+
+/**
+ * Remove findings from a run, or put them back (removed = false). A removed order leaves the
+ * list, the totals and the downloads; it is kept on the row (who / when), never deleted. One
+ * still waiting for Phase 2 leaves the queue; put back on a paused / stopped run it rejoins it.
+ * The run's Phase 1 counts and Phase 2 totals are re-counted from what is left. -> how many moved.
+ */
+export async function setLostOrdersRemoved(runId, ids, removed, by) {
+  const sql = db();
+  let rows;
+  if (removed) {
+    rows = await sql`
+      UPDATE lost_pkg_orders SET removed_at = now(), removed_by = ${by || null},
+             p2_state = CASE WHEN p2_state = 'queued' THEN 'none' ELSE p2_state END
+       WHERE run_id = ${runId} AND id = ANY(${ids}::bigint[]) AND removed_at IS NULL RETURNING id`;
+  } else {
+    rows = await sql`
+      UPDATE lost_pkg_orders o SET removed_at = NULL, removed_by = NULL,
+             p2_state = CASE WHEN o.p2_state = 'none' AND o.p1_class = 'Lost'
+                              AND (SELECT p2_status FROM lost_pkg_runs WHERE id = ${runId}) IN ('paused', 'stopped')
+                             THEN 'queued' ELSE o.p2_state END
+       WHERE o.run_id = ${runId} AND o.id = ANY(${ids}::bigint[]) AND o.removed_at IS NOT NULL RETURNING o.id`;
+  }
+  if (rows.length) {
+    await sql`
+      UPDATE lost_pkg_runs r SET
+             counts = (SELECT jsonb_build_object(
+                         'Lost', count(*) FILTER (WHERE p1_class = 'Lost'),
+                         'Delivered', count(*) FILTER (WHERE p1_class = 'Delivered'),
+                         'Cancelled', count(*) FILTER (WHERE p1_class = 'Cancelled'),
+                         'Refunded', count(*) FILTER (WHERE p1_class = 'Refunded'))
+                         FROM lost_pkg_orders WHERE run_id = r.id AND removed_at IS NULL),
+             p2_total = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = r.id AND p1_class = 'Lost' AND removed_at IS NULL),
+             p2_checked = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = r.id AND p2_state = 'done' AND removed_at IS NULL),
+             updated_at = now()
+       WHERE r.id = ${runId}`;
+  }
+  return rows.length;
 }
 
 export async function deleteLostRun(id) {
@@ -14755,14 +14795,14 @@ export async function setLostPhase2(runId, action, by) {
     if (action === 'recheck') {
       await sql`UPDATE lost_pkg_orders SET p2_state = 'queued', p2_class = NULL, p2_courier = NULL, p2_primary = NULL,
                        p2_fallback = NULL, p2_raw = NULL, p2_error = NULL, p2_attempts = 0, p2_checked_at = NULL
-                 WHERE run_id = ${runId} AND p1_class = 'Lost'`;
+                 WHERE run_id = ${runId} AND p1_class = 'Lost' AND removed_at IS NULL`;
     } else {
-      await sql`UPDATE lost_pkg_orders SET p2_state = 'queued' WHERE run_id = ${runId} AND p1_class = 'Lost' AND p2_state = 'none'`;
+      await sql`UPDATE lost_pkg_orders SET p2_state = 'queued' WHERE run_id = ${runId} AND p1_class = 'Lost' AND p2_state = 'none' AND removed_at IS NULL`;
     }
     const [r] = await sql`
       UPDATE lost_pkg_runs SET p2_status = 'running', p2_by = ${by}, p2_started_at = now(), p2_finished_at = NULL,
-             p2_total = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = ${runId} AND p1_class = 'Lost'),
-             p2_checked = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = ${runId} AND p2_state = 'done'),
+             p2_total = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = ${runId} AND p1_class = 'Lost' AND removed_at IS NULL),
+             p2_checked = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = ${runId} AND p2_state = 'done' AND removed_at IS NULL),
              p2_last = NULL, updated_at = now()
        WHERE id = ${runId} RETURNING p2_status`;
     return r.p2_status;
@@ -14807,7 +14847,7 @@ export async function finishLostOrder(order, r) {
   // in a running run finishes it.
   await sql`
     UPDATE lost_pkg_runs r SET
-           p2_checked = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = r.id AND p2_state = 'done'),
+           p2_checked = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = r.id AND p2_state = 'done' AND removed_at IS NULL),
            p2_last = ${r.label || null},
            p2_status = CASE WHEN r.p2_status = 'running' AND NOT EXISTS (
                          SELECT 1 FROM lost_pkg_orders WHERE run_id = r.id AND p2_state IN ('queued', 'checking'))
@@ -14837,7 +14877,7 @@ export async function requeueStuckLostOrders(olderThanMinutes) {
 export async function finishIdleLostRuns() {
   await db()`
     UPDATE lost_pkg_runs r SET p2_status = 'done', p2_finished_at = now(), updated_at = now(),
-           p2_checked = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = r.id AND p2_state = 'done')
+           p2_checked = (SELECT count(*) FROM lost_pkg_orders WHERE run_id = r.id AND p2_state = 'done' AND removed_at IS NULL)
      WHERE r.p2_status = 'running'
        AND NOT EXISTS (SELECT 1 FROM lost_pkg_orders WHERE run_id = r.id AND p2_state IN ('queued', 'checking'))`;
 }

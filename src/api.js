@@ -234,6 +234,7 @@ export const api = {
   lostAddOrders: (runId, orders) => post('/api/lost-packages/orders', { runId, orders }),
   lostRun: (runId) => get(`/api/lost-packages/orders?run=${encodeURIComponent(runId)}`),
   lostPhase2: (runId, action) => post('/api/lost-packages/phase2', { runId, action }),
+  lostRemove: (runId, ids, removed = true) => post('/api/lost-packages/remove', { runId, ids, removed }),
   cancellations: ({ from = null, to = null } = {}) => get(`/api/cancellations/list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) })}`),
   cancellation: (id) => get(`/api/cancellations/get?id=${encodeURIComponent(id)}`),
   saveCancellation: (row) => post('/api/cancellations/save', row),

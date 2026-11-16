@@ -73,6 +73,23 @@ creates them again. Tests point `FEDEX_API_BASE` / `EASYPOST_API_BASE` at a fake
   (NOT CHECKED YET, when stopped part-way) · SUMMARY, each row + PHASE2_COURIER_USED / PRIMARY /
   FALLBACK / STATUS / RAW / ERROR / CHECKED (EST).
 
+## Removing findings (2026-11-16, owner: "remove and re-download findings")
+The final findings are the Phase 2 list; someone goes through it, takes off the ones that are
+not really lost (found, settled with the store, a duplicate), then downloads the Excel again.
+- Every row has a tick box and **✕ Remove**; **Tick all n** + **✕ Remove (n)** does many at once.
+  `POST /api/lost-packages/remove { runId, ids, removed }` (`setLostOrdersRemoved`), admins + PH.
+- **Soft**: `lost_pkg_orders.removed_at` / `removed_by` — the row and its courier answer are kept.
+  The filter's **Removed (n)** view lists them (who, when EST) with **↩ Put back**.
+- A removed order is out of the list, the tiles, the saved run's totals (`counts`, `p2_total`,
+  `p2_checked`, `p2_counts` are re-counted without it) and both Excel downloads. The Phase 2 Excel
+  gains a **REMOVED** sheet (+ REMOVED_BY / REMOVED (EST)) and a Summary line, so the file says
+  what was taken off by hand. **⬇ Download the findings again** appears next to the list once
+  something is removed (same file as ⬇ Phase 2 Excel).
+- Phase 2 never asks about a removed order (start / recheck skip it; one still queued leaves the
+  queue; put back on a paused / stopped run it rejoins it). **Refused while Phase 2 is running**
+  (409) — pause or wait. A put-back order on a finished run that was never asked shows "—" until
+  "Check them all again".
+
 ## Phone
 Both tables turn into one card per row at ≤760px (label gutter left, the cell's lines stacked
 right — like Undelivered); the run's buttons are 44px; the page leaves room at the bottom for the
@@ -81,5 +98,5 @@ floating keypad / advisor buttons.
 ## Tables
 `lost_pkg_runs` (one per month's workbook: counts, `p2_status` none|running|paused|stopped|done,
 `p2_total` / `p2_checked` / `p2_last`) and `lost_pkg_orders` (`UNIQUE (run_id, key)`, the Phase 1
-row + `p2_*` answer). Not carried over from the original: its debug log bundle (.zip) and changelog
+row + `p2_*` answer + `removed_at` / `removed_by`). Not carried over from the original: its debug log bundle (.zip) and changelog
 modal — every answer's raw courier text and error are on the row and in the Phase 2 Excel instead.

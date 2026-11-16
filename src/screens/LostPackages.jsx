@@ -108,6 +108,17 @@ export function LostPackages({ onHome, onSignOut }) {
     } catch (e) { fail(e); } finally { setBusy(''); }
   }
 
+  // Take findings off the run (or put them back). Kept on the row, so nothing is lost.
+  async function setRemoved(ids, removed) {
+    if (!detail || !ids.length) return false;
+    setErr(''); setBusy('remove');
+    try {
+      await api.lostRemove(detail.run.id, ids, removed);
+      await loadRun(); loadRuns();
+      return true;
+    } catch (e) { fail(e); return false; } finally { setBusy(''); }
+  }
+
   return (
     <div className="app lp-page">
       <TopBar title="Lost Package Tracker Tool" onHome={onHome} onSignOut={onSignOut} />
@@ -145,7 +156,7 @@ export function LostPackages({ onHome, onSignOut }) {
       </section>
 
       {runId && !detail && !err && <div className="card muted sm">Loading the run…</div>}
-      {detail && <RunView detail={detail} carriers={carriers} busy={busy} onAction={phase2} />}
+      {detail && <RunView detail={detail} carriers={carriers} busy={busy} onAction={phase2} onRemove={setRemoved} />}
 
       <section className="card">
         <h3 className="lp-h">Saved runs <span className="muted sm">{runs ? `${runs.length}` : ''}</span></h3>
@@ -178,11 +189,19 @@ export function LostPackages({ onHome, onSignOut }) {
   );
 }
 
-function RunView({ detail, carriers, busy, onAction }) {
-  const { run, orders } = detail;
+function RunView({ detail, carriers, busy, onAction, onRemove }) {
+  const { run } = detail;
   const [cls, setCls] = useQueryParam('show', 'Lost');
   const [q, setQ] = useQueryParam('q', '');
+  // Removed findings are out of everything — list, totals, downloads — except their own view.
+  const orders = useMemo(() => detail.orders.filter((o) => !o.removed_at), [detail.orders]);
+  const removed = useMemo(() => detail.orders.filter((o) => o.removed_at), [detail.orders]);
   const lost = useMemo(() => orders.filter((o) => o.p1_class === 'Lost'), [orders]);
+  const removedLost = useMemo(() => removed.filter((o) => o.p1_class === 'Lost'), [removed]);
+  const [ticked, setTicked] = useState(() => new Set());
+  const inRemoved = cls === 'removed';
+  const running = run.p2_status === 'running';
+  useEffect(() => { setTicked(new Set()); }, [cls, run.id]);
   const p2 = run.p2_counts || {};
   const pct = run.p2_total ? Math.round((Number(run.p2_checked) / Number(run.p2_total)) * 100) : 0;
   const incomplete = Number(run.uploaded) < Number(run.order_count);
@@ -190,15 +209,21 @@ function RunView({ detail, carriers, busy, onAction }) {
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return orders.filter((o) => {
-      if (cls.startsWith('p2:')) { if (o.p2_class !== cls.slice(3)) return false; } else if (cls !== 'all' && o.p1_class !== cls) return false;
+    return (inRemoved ? removed : orders).filter((o) => {
+      if (inRemoved) { /* every removed one */ } else if (cls.startsWith('p2:')) { if (o.p2_class !== cls.slice(3)) return false; } else if (cls !== 'all' && o.p1_class !== cls) return false;
       if (!needle) return true;
       return [o.tracking, o.tracking_fallback, o.order_number, o.store, o.product, o.sku].some((v) => String(v || '').toLowerCase().includes(needle));
     });
-  }, [orders, cls, q]);
+  }, [orders, removed, inRemoved, cls, q]);
 
   const p1Download = () => saveBytes(`lost-packages-phase1-${fileSafe(run.month_label)}.xlsx`, phase1Book(run, orders));
-  const p2Download = () => saveBytes(`lost-packages-phase2-${fileSafe(run.month_label)}.xlsx`, phase2Book(run, lost));
+  const p2Download = () => saveBytes(`lost-packages-phase2-${fileSafe(run.month_label)}.xlsx`, phase2Book(run, lost, removedLost));
+
+  const tickedShown = shown.filter((o) => ticked.has(o.id));
+  const toggle = (id) => setTicked((t) => { const x = new Set(t); if (x.has(id)) x.delete(id); else x.add(id); return x; });
+  async function move(ids, toRemoved) {
+    if (await onRemove(ids, toRemoved)) setTicked(new Set());
+  }
 
   return (
     <>
@@ -280,20 +305,37 @@ function RunView({ detail, carriers, busy, onAction }) {
             {checked && ['lost', 'delivered', 'cancelled', 'refunded', 'failed'].map((c) => (
               <option key={c} value={`p2:${c}`}>Phase 2: {P2_LABEL[c]} ({n(p2[c])})</option>
             ))}
+            {(removed.length > 0 || inRemoved) && <option value="removed">Removed ({n(removed.length)})</option>}
           </select>
           <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)}
             placeholder="Tracking, order #, store, shoe, SKU" aria-label="Search the orders" />
         </div>
         <p className="muted xs">{n(shown.length)} order{shown.length === 1 ? '' : 's'}{shown.length > SHOW ? ` — first ${SHOW} shown; the Excel has them all` : ''}</p>
+        <div className="lp-pick">
+          <button type="button" className="btn sm ghost" disabled={!shown.length} onClick={() => setTicked(new Set(shown.map((o) => o.id)))}>Tick all {n(shown.length)}</button>
+          {tickedShown.length > 0 && <button type="button" className="btn sm ghost" onClick={() => setTicked(new Set())}>Clear ({n(tickedShown.length)})</button>}
+          {inRemoved
+            ? <button type="button" className="btn sm" disabled={!tickedShown.length || !!busy || running} onClick={() => move(tickedShown.map((o) => o.id), false)}>↩ Put back ({n(tickedShown.length)})</button>
+            : <button type="button" className="btn sm ghost danger" disabled={!tickedShown.length || !!busy || running} onClick={() => move(tickedShown.map((o) => o.id), true)}>✕ Remove ({n(tickedShown.length)})</button>}
+          {checked && removed.length > 0 && <button type="button" className="btn sm primary" onClick={p2Download}>⬇ Download the findings again</button>}
+        </div>
+        {running && <p className="muted xs">Phase 2 is checking — pause it or wait for it to finish before removing findings.</p>}
+        {removed.length > 0 && !inRemoved && (
+          <p className="muted xs" role="status">{n(removed.length)} removed from this run — not in the list, the totals or the Excel.{' '}
+            <button type="button" className="lp-link" onClick={() => setCls('removed')}>See them / put back</button></p>
+        )}
+        {inRemoved && <p className="muted xs">Taken off this run by hand. Put one back and it returns to the list and the Excel.</p>}
         {shown.length > 0 && (
           <div className="lp-scroll">
             <table className="table lp-orders">
-              <thead><tr><th>Tracking</th><th>Order #</th><th>Store</th><th>Shoe</th><th>Ordered</th><th>As written</th><th>Phase 1</th><th>Phase 2</th></tr></thead>
+              <thead><tr><th aria-label="Pick" /><th>Tracking</th><th>Order #</th><th>Store</th><th>Shoe</th><th>Ordered</th><th>As written</th><th>Phase 1</th><th>Phase 2</th><th aria-label="Remove or put back" /></tr></thead>
               <tbody>
                 {shown.slice(0, SHOW).map((o) => {
                   const trk = excelIdText(o.tracking || o.tracking_fallback);
                   return (
-                    <tr key={o.id}>
+                    <tr key={o.id} className={ticked.has(o.id) ? 'on' : ''}>
+                      <td data-label="Pick" className="lp-tick"><input type="checkbox" checked={ticked.has(o.id)} onChange={() => toggle(o.id)}
+                        aria-label={`Pick ${trk || excelIdText(o.order_number) || 'this order'}`} /></td>
                       <td data-label="Tracking" className="lp-trk">{trk ? <TrackingLink number={trk} carrier={o.courier} /> : <span className="muted">—</span>}
                         {o.courier && <div className="muted xs">{o.courier}</div>}</td>
                       <td data-label="Order #">{excelIdText(o.order_number) || <span className="muted">—</span>}</td>
@@ -310,6 +352,11 @@ function RunView({ detail, carriers, busy, onAction }) {
                             : <span className="muted xs">—</span>}
                         {o.p2_raw && <div className="muted xs lp-raw">{o.p2_raw}</div>}
                         {o.p2_error && <div className="xs lp-err">{o.p2_error}</div>}
+                      </td>
+                      <td data-label={inRemoved ? 'Removed' : ''} className="lp-act">
+                        {inRemoved && <div className="muted xs">{o.removed_by || '—'} · {o.removed_est} EST</div>}
+                        <button type="button" className="btn sm ghost" disabled={!!busy || running} onClick={() => move([o.id], !inRemoved)}
+                          aria-label={`${inRemoved ? 'Put back' : 'Remove'} ${trk || excelIdText(o.order_number) || 'this order'}`}>{inRemoved ? '↩ Put back' : '✕ Remove'}</button>
                       </td>
                     </tr>
                   );

@@ -7579,6 +7579,12 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .lp-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
 .lp-filter .input { flex: 1 1 220px; }
 .lp-scroll { overflow-x: auto; }
+.lp-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
+.lp-link { background: none; border: 0; padding: 0; color: var(--primary); cursor: pointer; font: inherit; text-decoration: underline; }
+.lp-tick { width: 28px; }
+.lp-tick input { width: 18px; height: 18px; }
+.lp-act { white-space: nowrap; text-align: right; }
+.lp-orders tbody tr.on > td { background: rgba(90, 140, 255, 0.08); }
 .lp-runs tbody tr { cursor: pointer; }
 .lp-runs tbody tr.on > td { background: rgba(90, 140, 255, 0.08); }
 .lp-file-cell { max-width: 280px; overflow-wrap: anywhere; font-size: 12px; color: var(--muted); }
@@ -7606,6 +7612,9 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
   .table.lp-runs td.num, .table.lp-orders td.num { text-align: left; }   /* beats the global right-aligned .num */
   .lp-trk, .lp-raw, .lp-err { white-space: normal; overflow-wrap: anywhere; max-width: none; }
   .lp-runs td.lp-file-cell { max-width: none; }
+  .lp-act { text-align: left; white-space: normal; }
+  .lp-act .btn, .lp-pick .btn { min-height: 44px; }
+  .lp-tick { width: auto; }
 }
 @media (max-width: 560px) {
   .lp-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }

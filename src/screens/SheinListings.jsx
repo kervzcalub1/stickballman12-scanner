@@ -132,11 +132,12 @@ export function SheinListings({ onSignOut, visible = true }) {
   const stale = lastRead && Date.now() - new Date(lastRead).getTime() > STALE_MS;
   const interrupted = !active && s?.latestSnapshot?.status === 'interrupted' ? s.latestSnapshot : null;
   const toMap = (s?.topBlockers || []).find((b) => b.code === 'size_needs_map')?.sizes || 0;
-  // A tile: the shoes whose own status is it (the same tile again = All). Leaving Blocked / Error drops the reason.
+  // A tile: the shoes whose own status is it (the same tile again = All). Changing tile drops the reason.
   const pickStatus = (code) => {
     const next = status === code && !any ? '' : code;
     setStatus(next); setAny('');
-    if (!REASON_STATUSES.includes(next)) setBlocker('');
+    // …and so does moving between them: a reason picked on Blocked is rarely one Error has (QA 11-17).
+    if (!REASON_STATUSES.includes(next) || next !== status) setBlocker('');
     setP(''); if (tabKey !== 'products') setTab('');
   };
   // A tile's second line: the shoes with at least one size in that status (their own status may be worse).

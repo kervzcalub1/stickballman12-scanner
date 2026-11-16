@@ -71,7 +71,8 @@ export function recoverCutouts({ cutouts = [], ph = [], gapMs = 15 * 60_000, spr
   // fewer cutouts than angles: the first angles (side first) are the ones we can't place — the last
   // cutouts belong to the last angles
   const offset = n - take.length;
-  return { confidence: exact ? 'exact' : 'guess', why, photos: take.map((c, i) => ({ url: c.url, angle: angles[offset + i].angle, takenAt: c.ts })) };
+  // + the whole last session (2026-11-17): the only cutouts that can be in the uploaded set — findCleanPhotos scores these
+  return { confidence: exact ? 'exact' : 'guess', why, photos: take.map((c, i) => ({ url: c.url, angle: angles[offset + i].angle, takenAt: c.ts })), session };
 }
 
 // Image signatures: a grey 16 × 16 block average (0–255 per block). Two copies of the same picture —
@@ -126,16 +127,21 @@ const keyOf = (u) => String(u ?? '').split(/[?#]/)[0].trim();
 // confirmed), then another confirmed slot that shows a side view, then one filed only by order whose picture
 // is a side view. A cutout is NEVER the main on its slot label alone (labels follow PH's slots, which are often
 // wrong). None → unsure: the shoe is held with "check the main photo", never sent on a guess.
-// `skip` = photo keys left out (they can't be the main). `lenient` (the stored readiness, no download): a
-// confirmed "side" slot whose shape isn't measured yet counts — the preview measures it before sending.
+// `skip` = photo keys left out (they can't be the main).
+// 2026-11-17 (stage 2): ONE rule for the stored readiness and the preview (the readiness used to be lenient for an
+// unmeasured shape while the preview was strict — the page said ready, the preview refused). A CONFIRMED "side" slot
+// (an Image Finder Upload, or a picture match) is photo 1 unless its outline POSITIVELY reads as a sole or a pair —
+// measured or not; a high-top (ar < 1.45) or a shadow under the sole (botM > 0.06) no longer holds it. A slot filed
+// only by order still needs its outline to read as a side view. `lenient` is accepted and ignored (older callers).
 // rows: [{ url, angle, how, view }] → { rows: main first then the rest in slot order, main, unsure, why }
-export function cleanOrder(rows, { mainKey = null, skip = [], lenient = false } = {}) {
+export const NOT_A_SIDE = ['sole', 'pair'];
+export function cleanOrder(rows, { mainKey = null, skip = [] } = {}) {
   const out = new Set((skip || []).map(keyOf));
   const kept = orderClean(rows).filter((r) => !out.has(keyOf(r.url)));
   const confirmed = (r) => CONFIRMED_HOW.includes(r.how);
   let main = null; let why = null;
   if (mainKey) { main = kept.find((r) => keyOf(r.url) === keyOf(mainKey)) || null; if (main) why = 'person'; }
-  if (!main) { main = kept.find((r) => r.angle === 'side' && confirmed(r) && (r.view === 'side' || (lenient && r.view == null))) || null; if (main) why = 'side_slot'; }
+  if (!main) { main = kept.find((r) => r.angle === 'side' && confirmed(r) && !NOT_A_SIDE.includes(r.view)) || null; if (main) why = 'side_slot'; }
   if (!main) { main = kept.find((r) => confirmed(r) && r.view === 'side') || null; if (main) why = 'side_view'; }
   // filed only by order, but its own silhouette is a side view: the picture itself is checked, only PH's slot isn't
   if (!main) { main = kept.find((r) => r.view === 'side') || null; if (main) why = 'side_view_by_order'; }

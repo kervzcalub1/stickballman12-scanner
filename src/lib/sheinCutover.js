@@ -34,6 +34,9 @@ export const GOLIVE_TABLES = ['shein_listing_products', 'shein_listing_variants'
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 const dayNo = (ymd) => Math.floor(Date.parse(`${ymd}T12:00:00Z`) / 86_400_000);
 const fromDayNo = (n) => new Date(n * 86_400_000).toISOString().slice(0, 10);   // a civil-date number back to YYYY-MM-DD (UTC noon maths, not a clock)
+// A snapshot the server started by itself: "auto (nightly 03:00 EST)" or "auto (every N min)" (2026-11-10 on); a
+// person's Refresh doesn't count. A row without started_by is taken as automatic (the DB already filtered it).
+export const isAutoSnapshot = (j) => j?.started_by == null || /^auto \(/.test(String(j.started_by));
 export const estDaysBetween = (a, b) => dayNo(b) - dayNo(a);   // whole EST calendar days from a to b (YYYY-MM-DD)
 const estHour = (now) => Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' }).format(now));
 // A date a person typed: YYYY-MM-DD, not in the future (EST), not before 2026.
@@ -103,8 +106,10 @@ export function evaluateCutover({ ticks = {}, facts = {}, now }) {
     shoes: [...bad, ...waiting],
   });
 
-  // (c) the nightly snapshot ran every night (the 03:00 EST read; nights strictly after the start day)
-  const doneNights = new Set((facts.nightly || []).filter((j) => j.status === 'done').map((j) => estDate(j.created_at)));
+  // (c) the automatic read ran every night (nights strictly after the start day). facts.nightly = every AUTOMATIC
+  // snapshot (2026-11-17: the 03:00 EST nightly OR the every-30-min read that replaced it on 2026-11-10 — it
+  // counted only "auto (nightly…" before, so it could never pass); one finished on an EST date covers that night.
+  const doneNights = new Set((facts.nightly || []).filter((j) => j.status === 'done' && isAutoSnapshot(j)).map((j) => estDate(j.created_at)));
   const nights = [];
   if (paused) {
     const lastNight = Math.min(dayNo(today) - (estHour(now) >= 4 ? 0 : 1), dayNo(startDay) + WINDOW_DAYS);
@@ -112,8 +117,8 @@ export function evaluateCutover({ ticks = {}, facts = {}, now }) {
   }
   const missedNights = nights.filter((d) => !doneNights.has(d));
   items.push({
-    key: 'c', title: 'The nightly read ran every night for 30 days',
-    how: 'From the Jobs list: one finished “Refresh” started by the 03:00 EST nightly on each EST night since the start (the nightly runs on the live server only).',
+    key: 'c', title: 'The automatic read ran every night for 30 days',
+    how: 'From the Jobs list: at least one finished automatic “Refresh” (every 30 minutes, or the 03:00 EST nightly) on each EST day since the start (they run on the live server only).',
     ok: !paused ? false : missedNights.length ? false : complete ? true : null,
     detail: !paused ? 'Starts when 4seller is ticked paused.'
       : missedNights.length ? `Missed ${missedNights.length} night${missedNights.length === 1 ? '' : 's'}: ${missedNights.slice(0, 6).join(', ')}${missedNights.length > 6 ? ' …' : ''} (EST).`

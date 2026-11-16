@@ -29,6 +29,7 @@ import {
   STATUSES, STATUS_ORDER, TILE_STATUSES, BLOCKERS, renderBlocker, sizeKey, resolveSize, validateCustomText, suggestCustomSpelling,
   spuPayload, templateSizes, computeListings, listingHash, normalizeWebhookProduct, rollup, isSheinWrite, matchStore,
   planAddSizes, summarizePlan, sheinNewSizePrice, reviewVerdict, customTextConflict, planPrice, planEdit, variantReadiness, PRICE_FROM, itemRetryable, productReadiness, blocker,
+  searchTerms, searchMatches, normSearchText, blockerLabel,
 } from '../src/lib/sheinListings.js';
 
 const FAKE_PORT = 5194;
@@ -242,10 +243,16 @@ test.describe('SHEIN Listings — the engine', () => {
     expect(byKey(compute({ products: stockOnly, prev })).get(gidV(770107)).status).toBe('synced');
     const priced = SHOPIFY(); priced[0].variants[0].price = '149.00';
     expect(listingHash(priced[0])).not.toBe(listingHash(SHOPIFY()[0]));
-    const after = byKey(compute({ products: priced, prev })).get(gidV(770107));
+    // 2026-11-17 (stage 2, item 4 — this used to read Needs update): with NO market price the target is only the
+    // Shopify fallback — SHEIN $160 vs Shopify $149 is a note, not Needs update, and nothing would send it
+    const noMarket = byKey(compute({ products: priced, prev })).get(gidV(770107));
+    expect(noMarket).toMatchObject({ status: 'synced', diffs: [] });
+    expect(noMarket.notes).toEqual([expect.objectContaining({ code: 'price_no_market', params: { shein: '160.00', shopify: '149.00' } })]);
+    expect(renderBlocker(noMarket.notes[0]).title).toBe('SHEIN $160.00 · Shopify $149.00 — no market price to compare.');
+    // with a market price ($129.50 + 15 % → $149) it IS Needs update: the Shopify change AND (Phase 3, D4) SHEIN's price vs the target
+    const after = byKey(compute({ products: priced, prev, market: new Map([[gidV(770107), 12950]]) })).get(gidV(770107));
     expect(after.status).toBe('out_of_date');
-    // the Shopify change AND (Phase 3, D4) SHEIN's price vs the new target
-    expect(after.diffs).toEqual([expect.objectContaining({ field: 'shein_price', from: '160.00', to: '149.00' }), expect.objectContaining({ field: 'price', from: '160.00', to: '149.00' })]);
+    expect(after.diffs).toEqual([expect.objectContaining({ field: 'shein_price', from: '160.00', to: '149.00', source: 'market' }), expect.objectContaining({ field: 'price', from: '160.00', to: '149.00' })]);
   });
 
   test('a person’s “leave off SHEIN” carries over; a REST webhook payload hashes like the GraphQL read', () => {
@@ -862,12 +869,13 @@ test.describe.serial('SHEIN Listings — the snapshot (a server job, read-only)'
     expect(await L.recheckProducts([normalizeWebhookProduct(asRest(stock[0]))], { io: io1 })).toMatchObject({ rechecked: 0 });
     // price: through the webhook's own path (coalesce → refresh Shopify → recompute from stored SHEIN rows)
     const priced = SHOPIFY(); priced[0].variants[0].price = '149.00';
-    const io2 = testIO(L.IO, { shopify: () => priced });
+    // a fresh market price ($129.50 + 15 % → $149): since 2026-11-17 only a MARKET target makes a price Needs update
+    const io2 = { ...testIO(L.IO, { shopify: () => priced }), marketTargets: async () => new Map([[gidV(770107), 12950]]) };
     L.listingProductChanged(asRest(priced[0]), { io: io2 });
     await L.flushRechecks(io2);
     const { rows: [a7] } = await pool.query(`SELECT status, diffs FROM shein_listing_variants WHERE row_key = $1`, [gidV(770107)]);
     expect(a7.status).toBe('out_of_date');
-    expect(a7.diffs).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'price', from: '160.00', to: '149.00' }), expect.objectContaining({ field: 'shein_price', to: '149.00' })]));
+    expect(a7.diffs).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'price', from: '160.00', to: '149.00' }), expect.objectContaining({ field: 'shein_price', to: '149.00', source: 'market' })]));
     expect(fake.calls.length).toBe(before);   // no SHEIN call at all
     const { rows: [p1] } = await pool.query(`SELECT status FROM shein_listing_products WHERE shopify_product_id = $1`, [gidP(7701)]);
     expect(p1.status).toBe('blocked');        // still the worst size (the swap)
@@ -955,19 +963,25 @@ test.describe.serial('SHEIN Listings — the endpoints', () => {
     expect((await request.get('/api/shein/listings?status=missing', { headers: auth.ph })).status()).toBe(400);
   });
 
-  test('the list: each tile = its filtered list (a product counts under every status one of its in-stock sizes has); filters; search by SKU / SHEIN SKU / SPU / style; ?product= detail', async ({ request }) => {
+  test('the list: each tile = its filtered list (the WHOLE shoe; any=1 = a counted size in it); filters; search by SKU / SHEIN SKU / SPU / style; ?product= detail', async ({ request }) => {
     test.skip(!pool || !secretsOk || foreign, 'needs the snapshot data from above');
     const get = async (qs) => (await request.get(`/api/shein/listings${qs}`, { headers: auth.ph })).json();
     const all = await get('?pageSize=200');
-    // 2026-10-27 decision: a tile / ?status= = products with ANY in-stock size in that status (not only
-    // the worst), so the tiles can add up to more than All — but each tile's count IS its list's length.
+    // 2026-11-17: a tile / ?status= = shoes whose OVERALL status is that (the tiles add up to All); any=1 keeps the
+    // 2026-10-27 list (a product with ANY counted size in that status) — and each count IS its list's length.
+    let sum = 0;
     for (const st of TILE_STATUSES) {
       const list = await get(`?status=${st}&pageSize=200`);
       expect(list.total, st).toBe(all.summary.byStatus[st].products);
+      expect(list.products.every((p) => p.status === st), st).toBe(true);
+      sum += list.total;
+      expect((await get(`?status=${st}&any=1&pageSize=200`)).total, `${st} any`).toBe(all.summary.byStatus[st].anySize);
     }
     expect(all.summary.all).toBe(all.total);
-    const upd = await get('?status=out_of_date&q=ib7936');
-    expect(upd.products.map((p) => [p.shopify_product_id, p.status])).toEqual([[gidP(7701), 'blocked']]);   // worst is Blocked, yet it has a Needs-update size → listed; the chip stays Blocked
+    expect(sum).toBe(all.total);
+    expect((await get('?status=out_of_date&q=ib7936')).products).toEqual([]);                 // its worst is Blocked → not under Needs update …
+    const upd = await get('?status=out_of_date&any=1&q=ib7936');
+    expect(upd.products.map((p) => [p.shopify_product_id, p.status])).toEqual([[gidP(7701), 'blocked']]);   // … but it has a Needs-update size → listed with any=1; the chip stays Blocked
     expect(all.summary.lastSnapshot).toMatchObject({ kind: 'snapshot', status: 'done' });
     for (const q of ['A9', 'E2E1-07', 'E2ESPU1', 'IB7936-100', 'e2eskc1']) {
       const r = await get(`?q=${encodeURIComponent(q)}`);
@@ -1182,7 +1196,7 @@ test.describe.serial('SHEIN Listings — the page', () => {
   test('ticked products are not restored by a refresh', async ({ page }) => {
     await page.goto('/ph/shein-listings');
     await page.locator(`.shl-product[data-product="${P7702}"] .shl-chk input`).check();
-    await expect(page.locator('.shl-bar')).toContainText('1 product');
+    await expect(page.locator('.shl-bar')).toContainText('1 shoe');   // 2026-11-17: the page counts shoes
     await expect(page.locator('.shl-bar').getByRole('button', { name: /^Add missing sizes/ })).toBeEnabled();    // Phase 2: a preview (reads only)
     expect(page.url()).not.toMatch(/gid|pick|sel=/);
     await page.reload();
@@ -2112,10 +2126,13 @@ test.describe('SHEIN Listings Phase 3 — the engine (pure)', () => {
   test('D4 drives “Needs update”: SHEIN’s price more than $0.50 off the target (market + 15 % up, else Shopify) — not 50 cents', () => {
     const base = { shopify: { variantId: 'v', sku: 'A7', size: '7', price: '160', qty: 1 }, match: 'sku', product: { shopifyStatus: 'ACTIVE', onShein: true }, skuCount: 1 };
     const shein = (b) => ({ sheinSku: 's', sellerSku: 'A7', size: 'US7', basePrice: b, mallState: 1 });
-    expect(variantReadiness({ ...base, shein: shein(159.6), targetPrice: { price: 160, from: 'shopify' } }).status).toBe('synced');
-    const off = variantReadiness({ ...base, shein: shein(159.4), targetPrice: { price: 160, from: 'shopify' } });
+    expect(variantReadiness({ ...base, shein: shein(159.6), targetPrice: { price: 160, from: 'market' } }).status).toBe('synced');
+    const off = variantReadiness({ ...base, shein: shein(159.4), targetPrice: { price: 160, from: 'market' } });
     expect(off.status).toBe('out_of_date');
     expect(off.diffs).toEqual([expect.objectContaining({ field: 'shein_price', from: '159.40', to: '160.00' })]);
+    // 2026-11-17 (stage 2): against the Shopify FALLBACK it is a note, not Needs update (was: the same diff)
+    const fb = variantReadiness({ ...base, shein: shein(120), targetPrice: { price: 160, from: 'shopify' } });
+    expect(fb).toMatchObject({ status: 'synced', diffs: [], notes: [expect.objectContaining({ code: 'price_no_market', params: { shein: '120.00', shopify: '160.00' } })] });
     // market $130 + 15 % = 149.50 → $150 (always up) — the Shopify price isn't used when there is a market price
     expect(variantReadiness({ ...base, shein: shein(140), targetPrice: sheinNewSizePrice({ marketCents: 13000, shopifyPrice: '160' }) }).diffs[0]).toMatchObject({ to: '150.00', why: 'market + 15 %, rounded up' });
   });
@@ -2259,7 +2276,10 @@ test.describe.serial('SHEIN Listings Phase 3 — preview, run, review (server jo
   const finished = async (id) => { await waitFor(async () => { const j = await D.getListingJob(id); return !['queued', 'running'].includes(j.status) && !L.listingJobRunning(); }); return D.getListingJob(id); };
   const variant = async (n) => (await pool.query(`SELECT * FROM shein_listing_variants WHERE row_key = $1`, [gidV(n)])).rows[0];
   let shelf = new Set();
-  const io = () => ({ ...p2IO(L.IO, { shopify: P3, stock: stocked }), recentShelf: async () => shelf });
+  // 2026-11-17 (stage 2): only a MARKET target makes a price Needs update / sendable — the market prices that give P3's
+  // targets (market + 15 %, rounded up): Air Max 7 $129.50 → $149, Women's 7W $112.50 → $130, 8W $95.65 → $110, Toddler 4C $60.50 → $70
+  const MKT = new Map([['IB7936-100|7', 12950], ['DD1503-101|7W', 11250], ['DD1503-101|8W', 9565], ['TD0001-001|4C', 6050]]);
+  const io = () => ({ ...p2IO(L.IO, { shopify: P3, stock: stocked, market: MKT }), recentShelf: async () => shelf });
 
   test.beforeAll(async () => {
     if (!pool || !secretsOk || foreign) return;
@@ -2278,7 +2298,7 @@ test.describe.serial('SHEIN Listings Phase 3 — preview, run, review (server jo
     fake.p2.mall['E2E1-07'] = 2;                  // Air Max US7 stopped on SHEIN while Shopify sells it
     fake.p2.special['E2E2-08'] = 115;             // Women's US8W: SHEIN special $115
     fake.p2.docs.E2ESPU3 = { state: 2 };          // the GS shoe's earlier review closed
-    const snap = await L.startListingJob({ kind: 'snapshot', by: 'e2e-p3', io: { ...testIO(L.IO, { shopify: P3 }) } });
+    const snap = await L.startListingJob({ kind: 'snapshot', by: 'e2e-p3', io: io() });
     jobsMade.add(snap.id);
     await finished(snap.id);
     await pool.query(`UPDATE shein_listing_products SET synced_hash = 'published-by-us' WHERE shopify_product_id = $1`, [gidP(7704)]);   // WE published the GS shoe
@@ -2396,6 +2416,8 @@ test.describe.serial('SHEIN Listings Phase 3 — preview, run, review (server jo
     expect((await (await request.get('/api/shein/listings', { headers: auth.ph })).json()).summary.autoPrice).toMatchObject({ on: true });
     // D8a: the automatic re-sync uses MARKET targets only. Women's 8W without a market price: nothing.
     fake.p2.special['E2E2-08'] = 0;                                              // the special ended: SHEIN $120, Shopify $110
+    // (2026-11-17: re-read WITHOUT market prices first — the stored diffs are what the automatic update reads)
+    { const s0 = await L.startListingJob({ kind: 'snapshot', by: 'e2e-p3', io: { ...testIO(L.IO, { shopify: P3 }), recentShelf: async () => shelf } }); jobsMade.add(s0.id); await finished(s0.id); }
     expect(await L.autoPriceTick({ io: io() })).toEqual({ why: 'no price is off' });
     // with a market price ($95.65 + 15 % → $110), read again: Needs update from the MARKET
     const market = new Map([['DD1503-101|8W', 9565]]);
@@ -2436,7 +2458,7 @@ test.describe.serial('SHEIN Listings Phase 3 — preview, run, review (server jo
 
   test('P4 + S4: a RISE whose answer was lost is never sent again — it waits In review; after 7 days it is an Error that can’t be retried', async () => {
     const P3b = () => { const l = P3(); l.find((x) => x.productId === gidP(7704)).variants.find((v) => v.sku === 'Y5').price = '130.00'; return l; };
-    const ioB = () => ({ ...p2IO(L.IO, { shopify: P3b, stock: stocked }), recentShelf: async () => shelf });
+    const ioB = () => ({ ...p2IO(L.IO, { shopify: P3b, stock: stocked, market: new Map([...MKT, ['GS0001-001|5Y', 11250]]) }), recentShelf: async () => shelf });   // 5Y $112.50 → $130
     const j = await L.startListingJob({ kind: 'preview', by: 'e2e-p3', scope: { productIds: [gidP(7704)], ops: ['price'] }, io: ioB() });
     jobsMade.add(j.id); await finished(j.id);
     expect((await one(j.id, 7704, 'price')).body.productPriceList).toEqual([{ productCode: 'E2E3-5Y', currencyCode: 'USD', shopPrice: 130, site: 'shein-us', riseReason: '4' }]);
@@ -2470,6 +2492,26 @@ test.describe.serial('SHEIN Listings Phase 3 — preview, run, review (server jo
     const again = await L.IO.sheinPriceSave({ productPriceList: [{ productCode: 'E2E1-08', currencyCode: 'USD', shopPrice: 175, site: 'shein-us', riseReason: '4' }] }, { source: 'e2e', by: 'e2e-p3' });
     expect(again.data[0]).toMatchObject({ success: false, status: 0, message: expect.stringMatching(/still in review/) });
     delete fake.p2.priceReview['E2E1-08'];
+  });
+
+  // 2026-11-17 (stage 2, item 4): with NO market price the target is only the Shopify fallback — a person's "Update prices"
+  // sends nothing for it (it used to send the Shopify $149 over SHEIN's price); the plan says how many sizes it left alone
+  test('stage 2 · Update prices never sends a Shopify-fallback price — only a market target goes; the plan notes the rest', async () => {
+    fake.p2.prices['E2E1-07'] = 170;                                            // SHEIN $170 vs Shopify $149, no market price
+    const before = fake.p2.priceCalls.length;
+    const ioN = () => ({ ...p2IO(L.IO, { shopify: P3, stock: stocked }), recentShelf: async () => shelf });   // no market at all
+    const j = await L.startListingJob({ kind: 'preview', by: 'e2e-p3', scope: { productIds: [gidP(7701)], ops: ['price'] }, io: ioN() });
+    jobsMade.add(j.id); await finished(j.id);
+    const it = await one(j.id, 7701, 'price');
+    expect(it).toMatchObject({ status: 'skipped', body: null });
+    expect(it.plan.prices).toEqual([]);
+    expect(it.plan.notes).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'price_no_market', params: { count: 4 } })]));
+    // the same shoe WITH a market price: the market target goes
+    const j2 = await L.startListingJob({ kind: 'preview', by: 'e2e-p3', scope: { productIds: [gidP(7701)], ops: ['price'] }, io: io() });
+    jobsMade.add(j2.id); await finished(j2.id);
+    expect((await one(j2.id, 7701, 'price')).body).toEqual({ productPriceList: [{ productCode: 'E2E1-07', currencyCode: 'USD', shopPrice: 149, site: 'shein-us' }] });
+    expect(fake.p2.priceCalls.length).toBe(before);                            // previews only — nothing sent
+    fake.p2.prices['E2E1-07'] = 149;
   });
 });
 
@@ -2523,13 +2565,16 @@ test.describe('SHEIN Listings — replace live photos: the planner (pure)', () =
     expect(planPhotoEdit({ spu: spu(), fill: link, ip: imagePlan({}), images: conv }).plan.blockers[0]).toMatchObject({ code: 'skc_field_uncopyable', params: { field: 'competing_product_link' } });
     expect(planPhotoEdit({ spu: spu(), fill: null, fillUnread: true, ip: imagePlan({}), images: conv }).body).toBe(null);
   });
-  test('SHEIN rejecting the PHOTOS points at the fix (Fix photos), anything else stays “Send again”', async () => {
+  // 2026-11-17 (stage 2, item 3): the button is the real next step — "Send again" (a disabled button that resubmitted
+  // nothing) is gone; anything not about photos is a PREVIEW of the op that was rejected (nextFor's actions)
+  test('SHEIN rejecting the PHOTOS points at the fix (Fix photos); anything else = a preview of what was rejected', async () => {
     const { isPhotoRejection } = await import('../src/lib/sheinListings.js');
     expect(isPhotoRejection('picture:The image contains watermark information.')).toBe(true);
     expect(isPhotoRejection('Banned:If your product images or titles contain false service promises or false efficacy promises')).toBe(true);
     expect(isPhotoRejection('Sale price too low')).toBe(false);
-    expect(renderBlocker(blocker('review_rejected', { failedReason: 'picture:The image contains watermark information.' })).action).toEqual({ kind: 'fix_photos', label: 'Fix photos' });
-    expect(renderBlocker(blocker('review_rejected', { failedReason: 'price' })).action).toEqual({ kind: 'send_again', label: 'Send again' });
+    expect(renderBlocker(blocker('review_rejected', { failedReason: 'picture:The image contains watermark information.' })).action).toMatchObject({ kind: 'fix_photos', label: 'Fix photos', next: 'preview_photos', fixFirst: 'photos' });
+    expect(renderBlocker(blocker('review_rejected', { failedReason: 'price' })).action).toMatchObject({ kind: 'preview_add_sizes', next: 'preview_add_sizes', ops: ['add_sku'] });
+    expect(renderBlocker(blocker('review_rejected', { failedReason: 'price' })).action.kind).not.toBe('send_again');
   });
 });
 
@@ -2800,7 +2845,9 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
   let L; let D; let savedAuto;
   const posted = [];
   const finished = async (id) => { await waitFor(async () => { const j = await D.getListingJob(id); return !['queued', 'running'].includes(j.status) && !L.listingJobRunning(); }); return D.getListingJob(id); };
-  const io = () => ({ ...p2IO(L.IO, { shopify: P3 }), recentShelf: async () => new Set() });
+  // 2026-11-17 (stage 2): the market prices behind P3's targets (only a MARKET target is Needs update / sent) — as the server test
+  const MKT = new Map([['IB7936-100|7', 12950], ['DD1503-101|7W', 11250], ['DD1503-101|8W', 9565], ['TD0001-001|4C', 6050]]);
+  const io = () => ({ ...p2IO(L.IO, { shopify: P3, market: MKT }), recentShelf: async () => new Set() });
   const shot = async (page, name) => { if (process.env.SHL_SHOTS) await page.screenshot({ path: `${process.env.SHL_SHOTS}/shein-listings-${name}.png`, fullPage: false }); };
   // POST preview / run → answered here, in-process, against the fake SHEIN; auto_price goes to the server.
   async function routeWrites(page) {
@@ -2856,7 +2903,7 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
     fake.p2.mall['E2E1-07'] = 2;                  // Air Max US7 turned off on SHEIN while Shopify sells it
     fake.p2.special['E2E2-08'] = 115;             // Women's US8W: special $115 ≥ the new $110 → skipped
     fake.p2.docs.E2ESPU3 = { state: 2 };
-    const snap = await L.startListingJob({ kind: 'snapshot', by: 'e2e-p3ui', io: testIO(L.IO, { shopify: P3 }) });
+    const snap = await L.startListingJob({ kind: 'snapshot', by: 'e2e-p3ui', io: io() });
     jobsMade.add(snap.id);
     await finished(snap.id);
   });
@@ -2871,9 +2918,9 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
   test('PH: a Needs update size says what changes — SHEIN $160 → $149, turned off → back on, the wrong SKU; ↑ rises flagged; the drawer shows “was …”; auto re-sync is read-only', async ({ page }) => {
     await loginAs(page, 'ph_team');
     await page.setViewportSize({ width: 1320, height: 1000 });
-    // 2026-10-27 decision: the Needs update tile lists every product with a Needs-update size, even one
-    // whose worst size is Blocked (its roll-up chip stays Blocked)
-    await page.goto('/ph/shein-listings?status=out_of_date');
+    // 2026-11-17: a tile = the WHOLE shoe (the 2026-10-27 "any size" list is ?any=1 on the API): a shoe whose worst
+    // size is Blocked is under Blocked — its Needs-update sizes show as the blue side chip, not under the tile
+    await page.goto('/ph/shein-listings?status=blocked');
     const air = page.locator(`.shl-product[data-product="${gidP(7701)}"]`);
     await expect(air).toBeVisible();
     await expect(air.locator('.shl-rollup .ebo-chip').first()).toHaveText('Blocked');
@@ -2933,7 +2980,7 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
     const row = p73.locator('[data-plan="price"] tr', { hasText: 'US4C' });
     await expect(row).toContainText('$60');
     await expect(row).toContainText('↑ up — SHEIN may review it');
-    await expect(row).toContainText('Shopify price (no recent market price)');
+    await expect(row).toContainText('market + 15 %, rounded up');   // 2026-11-17: a person's update sends market targets only (was the Shopify fallback)
     // the cut + the edit of the same shoe, side by side
     const p71 = item(page, 7701, 'price');
     await p71.getByRole('button', { name: /What is sent/ }).click();
@@ -2970,6 +3017,7 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
     await page.locator(`.shl-product[data-product="${gidP(7701)}"] .shl-chk input`).check();
     await noSideScroll(page, 'rows');
     await shot(page, 'phone-update-row');
+    await page.locator('.shl-bar [data-bar="more"]').click();   // 2026-11-17: on a phone the bar is one line (count + the main preview) until More
     await page.locator('.shl-bar').getByRole('button', { name: /^Update prices & sizes/ }).click();
     await expect(sheet(page).locator('[data-proof]')).toBeVisible({ timeout: 20_000 });
     for (const op of ['price', 'edit']) await item(page, 7701, op).getByRole('button', { name: /What is sent/ }).click();
@@ -3359,6 +3407,42 @@ test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fak
     expect(await codes()).toContain('box_unconfirmed');
     expect((await request.post('/api/shein/listing-maps?type=box', { headers: auth.admin, data: { groups } })).status()).toBe(200);   // fixed → confirmed again, recounted
     expect(await codes()).not.toContain('box_unconfirmed');
+  });
+
+  test('(10, 2026-11-17) every Setup save recounts at once (DB only): brand / category / SHEIN detail cleared → the reason is on the shoe now; set again → gone — no Refresh', async ({ request }) => {
+    const ph = async (type, data) => { const r = await request.post(`/api/shein/listing-maps?type=${type}`, { headers: auth.ph, data }); expect(r.status(), `${type} ${data.action}`).toBe(200); return r.json(); };
+    const blockers = async () => (await pool.query(`SELECT blockers FROM shein_listing_variants WHERE row_key = $1`, [gidV(770809)])).rows[0].blockers;
+    const codes = async () => (await blockers()).map((b) => b.code);
+    const needs7000 = async () => (await blockers()).some((b) => b.code === 'missing_attr' && Number(b.params?.attributeId) === 7000);
+    const calls = fake.calls.length;
+    expect(await codes()).not.toContain('brand_unset');
+    expect(await ph('brand', { action: 'clear', vendor: 'E2E Nike' })).toMatchObject({ ok: true, cleared: 1, recomputed: true });
+    expect(await codes()).toContain('brand_unset');
+    expect(await ph('brand', { action: 'set', vendor: 'E2E Nike', brandCode: 'NIKE01' })).toMatchObject({ ok: true, recomputed: true });
+    expect(await codes()).not.toContain('brand_unset');
+    expect(await codes()).not.toContain('no_category');
+    expect(await ph('category', { action: 'clear', productType: 'E2E Sneakers', sizeGroup: 'adult' })).toMatchObject({ ok: true, recomputed: true });
+    expect(await codes()).toContain('no_category');
+    expect(await ph('category', { action: 'set', productType: 'E2E Sneakers', sizeGroup: 'adult', categoryId: P4CAT })).toMatchObject({ ok: true, recomputed: true });
+    expect(await codes()).not.toContain('no_category');
+    expect(await needs7000()).toBe(false);
+    expect(await ph('attr', { action: 'clear', productTypeId: P4TYPE, attributeId: 7000 })).toMatchObject({ ok: true, recomputed: true });
+    expect(await needs7000()).toBe(true);
+    expect(await ph('attr', { action: 'set', productTypeId: P4TYPE, attributeId: 7000, valueIds: [7001] })).toMatchObject({ ok: true, recomputed: true });
+    expect(await needs7000()).toBe(false);
+    expect(fake.calls.length).toBe(calls);                                         // never a SHEIN call
+  });
+
+  test('(10) recomputeStored runs one at a time in a process: calls made meanwhile share ONE follow-up run that starts after it', async () => {
+    const a = L.recomputeStored(); const b = L.recomputeStored(); const c = L.recomputeStored();
+    expect(L.recomputeBusy()).toEqual({ running: true, queued: true });
+    expect(b).toBe(c);
+    expect(a).not.toBe(b);
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(ra.products).toBeGreaterThan(0);
+    expect(rb.products).toBe(ra.products);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(L.recomputeBusy()).toEqual({ running: false, queued: false });
   });
 
   test('associated rules add a requirement (a leather upper needs a lining) → blocked until a person sets it; then the EXACT body, photos converted (assets), 0 writes', async ({ request }) => {
@@ -4324,14 +4408,17 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     const r101 = await request.get(url(tooMany), { headers: auth.ph });
     expect(r101.status()).toBe(400);
     expect((await r101.json()).error).toMatch(/At most 100/);
-    const r = await request.get(url([gidP(7709), gidP(7705), gidP(7708), gidP(7706), gidP(999999)]), { headers: auth.ph });
+    const r = await request.get(url([gidP(7709), gidP(7705), gidP(7708), gidP(7706), gidP(7701), gidP(999999)]), { headers: auth.ph });
     expect(r.status()).toBe(200);
     const j = await r.json();
     const by = new Map(j.products.map((p) => [p.productId, p]));
-    expect([...by.keys()].sort()).toEqual([gidP(7705), gidP(7706), gidP(7709)].sort());
+    // 7708's publish was REJECTED above: it keeps the SPU it was sent as but was never live — offered (2026-11-17;
+    // it used to be skipped as "already on SHEIN")
+    expect([...by.keys()].sort()).toEqual([gidP(7705), gidP(7706), gidP(7708), gidP(7709)].sort());
     expect(j.skipped).toEqual(expect.arrayContaining([
-      expect.objectContaining({ productId: gidP(7708), why: expect.stringMatching(/already on SHEIN/) }),
+      expect.objectContaining({ productId: gidP(7701), why: expect.stringMatching(/already on SHEIN/) }),   // live on SHEIN: still skipped
       expect.objectContaining({ productId: gidP(999999), why: expect.stringMatching(/not in SHEIN Listings/) })]));
+    expect(j.skipped.map((x) => x.productId)).not.toContain(gidP(7708));
     const p9 = by.get(gidP(7709));
     expect(p9).toMatchObject({ productType: 'E2E Sneakers', vendor: 'E2E Nike', sizeGroups: ['adult'], syncable: true, productTypeId: P4TYPE,
       category: expect.objectContaining({ categoryId: P4CAT }), usePhPhotos: false });
@@ -4674,6 +4761,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await page.locator(`.shl-product[data-product="${gidP(7709)}"] .shl-chk input`).check();
     await page.locator(`.shl-product[data-product="${gidP(7705)}"] .shl-chk input`).check();
     const before = posted.length;
+    await page.locator('.shl-bar [data-bar="more"]').click();   // 2026-11-17: on a phone the bar is one line until More
     await page.locator('.shl-bar [data-bar="bulk"]').click();
     const bs = page.getByRole('dialog', { name: 'Bulk edit before publishing' });
     await expect(bs.locator('[data-bulk-row]')).toHaveCount(2, { timeout: 10_000 });
@@ -5392,8 +5480,9 @@ test.describe('SHEIN Listings — the main photo (pure, 2026-11-14)', () => {
     // filed by order, but its outline IS a side view → photo 1, said so
     o = cleanOrder([r('side', 'timestamp', 'side'), r('outsole', 'checked', 'sole')]);
     expect([o.main.angle, o.why]).toEqual(['side', 'side_view_by_order']);
-    // a confirmed side slot not measured yet: unsure for a send, fine for the stored readiness (lenient) — the preview measures it
-    expect(cleanOrder([r('side', 'upload', null)]).unsure).toBe(true);
+    // 2026-11-17 (stage 2, item 7 — this used to be "unsure for a send, fine only for the lenient readiness"): ONE rule for
+    // both — a confirmed side slot is photo 1 unless its outline POSITIVELY reads as a sole or a pair, measured or not
+    expect(cleanOrder([r('side', 'upload', null)])).toMatchObject({ unsure: false, why: 'side_slot' });
     expect(cleanOrder([r('side', 'upload', null)], { lenient: true }).why).toBe('side_slot');
     // a person's pick wins (matched by key, ?query ignored); left out → back to automatic; the left-out ones are not sent
     o = cleanOrder([r('side', 'checked', 'side'), r('diagonal', 'checked', null)], { mainKey: 'https://x/diagonal.png?v=2' });
@@ -5623,5 +5712,722 @@ test.describe('SHEIN Listings — one editor for every shoe (pure)', () => {
     const need = liveShoeLines({ product: { blockers: [] }, variants: [], extra: [renderBlocker({ code: 'missing_attr', params: { attributeId: 1000546, attribute: 'Product Model' } })] });
     expect(need.find((l) => l.key === 'attributes').ok).toBe(false);
     expect(fixFirstLines(need).map((l) => l.key)).toEqual(['attributes']);
+  });
+});
+
+/* ---------------- 2026-11-17 — the list / summary / search / "rejected" API (stage 1 of the page fixes) ---------------- */
+
+test.describe('SHEIN Listings — the list API fixes (pure)', () => {
+  test('(3) a shoe is judged on its COUNTED sizes: a blocker only a 0-stock size has is an idle blocker; no size in stock → every size, as before', () => {
+    const v = (status, qty, codes = [], extra = {}) => ({ status, qty, match: status === 'synced' ? 'sku' : null, shopifyVariantId: `v${Math.random()}`, blockers: codes.map((c) => blocker(c)), ...extra });
+    // synced in stock + a 0-stock size with no SKU: Synced, nothing red on the row, the reason kept greyed
+    const a = productReadiness({}, [v('synced', 1), v('synced', 2), v('blocked', 0, ['no_seller_sku'])]);
+    expect(a).toMatchObject({ status: 'synced', blockers: [], idleBlockers: [{ code: 'no_seller_sku', sizes: 1 }] });
+    // the same reason on an in-stock size too: it is the shoe's (sizes = the counted ones carrying it)
+    const b = productReadiness({}, [v('blocked', 1, ['no_seller_sku']), v('blocked', 0, ['no_seller_sku', 'no_price'])]);
+    expect(b.blockers.map((x) => [x.code, x.sizes])).toEqual([['no_seller_sku', 1]]);
+    expect(b.idleBlockers.map((x) => [x.code, x.sizes])).toEqual([['no_price', 1]]);
+    // nothing in stock: today's rule — every size, no idle list
+    const c = productReadiness({}, [v('blocked', 0, ['no_seller_sku']), v('not_on_shein', 0)]);
+    expect(c).toMatchObject({ status: 'blocked', blockers: [{ code: 'no_seller_sku', sizes: 1 }], idleBlockers: [] });
+    // a SHEIN-only size counts (it is SHEIN's stock); an inactive shoe keeps its shopify_inactive blocker
+    expect(productReadiness({}, [v('shein_only', null), v('blocked', 0, ['wrong_link'])])).toMatchObject({ status: 'shein_only', blockers: [], idleBlockers: [{ code: 'wrong_link' }] });
+    expect(productReadiness({ shopifyStatus: 'DRAFT' }, [v('excluded', 1)]).blockers.map((x) => x.code)).toEqual(['shopify_inactive']);
+    // computeListings writes it: the fixtures' Air Max (7701) has in-stock sizes, so its stored blockers come from them
+    const rows = compute();
+    for (const r of rows) expect(Array.isArray(r.idle_blockers), r.shopify_product_id).toBe(true);
+  });
+
+  test('(4) search: every word, any order; a code without its dash / space; curly quotes and apostrophes; LIKE-safe', () => {
+    const text = (s) => normSearchText(s);
+    const dunk = 'Nike Air Force 1 Low College Pack Midnight Navy (DQ7659-101) DQ7659-101 nike 47118803 t2610181046985804 e2e1-07';
+    const gaz = 'adidas Wmns Gazelle Bold ‘Night Indigo Yellow’ (IH4211) IH4211 adidas';
+    const af1 = "Nike Air Force 1 Low '07 LV8 'Black Gum' (IB6388-001) IB6388-001";
+    const curly = 'Nike Air Force 1 ’07 White (HF2016-100)';
+    for (const q of ['DQ7659 101', 'DQ7659101', 'dq7659-101', 'DQ7659_101', '  dq7659   101 ', '47118803', 't2610181046985804', '2610181046985804', 'college pack', 'pack college', 'midnight NAVY']) {
+      expect(searchMatches(dunk, q), q).toBe(true);
+    }
+    for (const q of ['dq7659 102', 'DQ7659102', 'college packs', 'air max']) expect(searchMatches(dunk, q), q).toBe(false);
+    expect(searchMatches(gaz, 'bold gazelle')).toBe(true);                        // any order
+    expect(searchMatches(gaz, '‘night indigo’')).toBe(true);                     // curly quotes dropped both sides
+    expect(searchMatches(af1, 'air force 1 07')).toBe(true);
+    expect(searchMatches(af1, 'Air Force 1 ’07')).toBe(true);
+    expect(searchMatches(curly, "air force 1 '07")).toBe(true);                  // stored curly, typed straight
+    expect(searchMatches(af1, 'black gum, lv8')).toBe(true);                     // commas dropped
+    expect(text("Air  Force 1 ’07, “White”")).toBe('air force 1 07 white');
+    // what the SQL gets: LIKE patterns, escaped; a code-like word also gets the compacted pattern
+    expect(searchTerms('')).toEqual([]);
+    expect(searchTerms('DQ7659-101 bold')).toEqual([{ word: 'dq7659-101', like: '%dq7659-101%', compact: '%dq7659101%' }, { word: 'bold', like: '%bold%', compact: null }]);
+    expect(searchTerms('50%_off\\')[0]).toEqual({ word: '50%_off\\', like: '%50\\%\\_off\\\\%', compact: '%50\\%off\\\\%' });
+    expect(searchTerms('a a b').map((x) => x.word)).toEqual(['a', 'b']);
+    expect(searchTerms(Array.from({ length: 20 }, (_, i) => `w${i}`).join(' '))).toHaveLength(12);
+  });
+
+  test('(5) every blocker has a short plain label (no placeholders); an unknown code reads as words; the summary uses it', () => {
+    for (const [code, def] of Object.entries(BLOCKERS)) {
+      expect(typeof def.label, code).toBe('string');
+      expect(def.label.length, code).toBeGreaterThan(3);
+      expect(def.label, code).not.toMatch(/\(\s*\)|undefined|null|\?|\$|\{|_|^\s|\s$|\.$/);
+      expect(blockerLabel(code)).toBe(def.label);
+      expect(renderBlocker({ code, params: {} }).label).toBe(def.label);
+    }
+    expect(blockerLabel('no_image')).toBe('Not enough photos');
+    expect(blockerLabel('mixed_size_groups')).toBe('Mixed size groups');
+    expect(blockerLabel('size_not_on_shein')).toBe('SHEIN has no such size');
+    expect(blockerLabel('review_rejected')).toBe('Rejected by SHEIN');
+    expect(blockerLabel('some_new_code')).toBe('Some new code');
+    expect(renderBlocker({ code: 'some_new_code' })).toMatchObject({ label: 'Some new code', title: 'Unknown problem (some_new_code).' });
+  });
+
+  test('(9) cut-over line (c): any finished AUTOMATIC read counts for its EST night — the every-30-min read too; a person’s Refresh doesn’t', async () => {
+    const { evaluateCutover, isAutoSnapshot } = await import('../src/lib/sheinCutover.js');
+    expect(isAutoSnapshot({ started_by: 'auto (every 30 min)' })).toBe(true);
+    expect(isAutoSnapshot({ started_by: 'auto (nightly 03:00 EST)' })).toBe(true);
+    expect(isAutoSnapshot({ started_by: 'Kervy' })).toBe(false);
+    const ticks = { paused_4seller: { by: 'Alex', at: '2026-11-08T14:00:00Z', date: '2026-11-08' }, last_action_4seller: { by: 'Alex', at: '2026-11-08T15:00:00Z', date: '2026-11-01' } };
+    // every 30 minutes from 10:00 to 11:30 EST (15:00–16:30 UTC) on each EST day — never at 03:00
+    const every30 = []; for (let d = Date.parse('2026-11-09T15:00:00Z'); d <= Date.parse('2026-12-08T16:30:00Z'); d += 86_400_000) for (let m = 0; m < 4; m++) every30.push({ id: every30.length + 1, status: 'done', started_by: 'auto (every 30 min)', created_at: new Date(d + m * 1_800_000).toISOString() });
+    const facts = { newProducts: [], interrupted: [], sizes: { snapshot: true, toAdd: 0, sheinBlocked: 0 } };
+    const ok = evaluateCutover({ ticks, facts: { ...facts, nightly: every30 }, now: new Date('2026-12-10T15:00:00Z') });
+    expect(ok.items.find((i) => i.key === 'c')).toMatchObject({ ok: true, title: 'The automatic read ran every night for 30 days', nights: { ran: 30, missed: [] } });
+    // a day with only a person's Refresh is missed; a failed automatic read doesn't count
+    const gap = every30.map((j) => (j.created_at.startsWith('2026-11-20') ? { ...j, started_by: 'Kervy' } : j.created_at.startsWith('2026-11-21') ? { ...j, status: 'failed' } : j));
+    const c = evaluateCutover({ ticks, facts: { ...facts, nightly: gap }, now: new Date('2026-12-10T15:00:00Z') }).items.find((i) => i.key === 'c');
+    expect(c).toMatchObject({ ok: false, nights: { missed: ['2026-11-20', '2026-11-21'] } });
+  });
+
+  test('(8) "Rejected by SHEIN": one row per shoe from our sends — what, SHEIN’s words, when, sizes, and the action that resubmits it', async () => {
+    const { rejectedList, nextFor } = await import('../src/lib/sheinRejected.js');
+    const t = (h) => new Date(Date.parse('2026-11-16T12:00:00Z') + h * 3600_000).toISOString();
+    const rej = (failedReason) => [{ code: 'review_rejected', params: { failedReason } }];
+    const P = (id, extra = {}) => ({ shopify_product_id: id, title: id, style: 'S', vendor: 'Nike', image_url: null, shopify_status: 'ACTIVE', status: 'error', excluded: false, spu: 'tSPU', ...extra });
+    const V = (pid, key, extra = {}) => ({ row_key: key, shopify_product_id: pid, shopify_variant_id: key, shopify_size: key.slice(-2), shopify_qty: 1, excluded: false, shein_sku: null, last_error: null, target_hash: 'h', ...extra });
+    const item = (pid, op, status, at, extra = {}) => ({ id: Math.floor(Math.random() * 1e6), job_id: 7, shopify_product_id: pid, op, status, blockers: [], variant_ids: [], updated_at: at, sent_at: at, error: null, ...extra });
+    const data = {
+      products: [P('new'), P('live'), P('liveFixed'), P('moot'), P('superseded'), P('draft', { shopify_status: 'DRAFT', status: 'excluded' }), P('sizeOnly'), P('pressed', { publish_again_at: t(3), publish_again_by: 'Alex' })],
+      variants: [V('new', 'new-09'), V('new', 'new-10'), V('live', 'live-09', { shein_sku: 'S1' }), V('live', 'live-14'), V('liveFixed', 'lf-09', { shein_sku: 'S2' }), V('liveFixed', 'lf-14'),
+        V('moot', 'moot-09', { shein_sku: 'S3', last_error: { code: 'review_rejected', params: { failedReason: 'x' }, hash: 'h' } }), V('superseded', 'sup-09', { shein_sku: 'S4' }), V('draft', 'd-09'),
+        V('sizeOnly', 'so-09', { shein_sku: 'S5' }), V('sizeOnly', 'so-14', { last_error: { code: 'shein_prevalid', params: { sheinMessage: 'size refused', module: 'sku' }, hash: 'h' } }),
+        V('sizeOnly', 'so-15', { last_error: { code: 'shein_prevalid', params: { sheinMessage: 'old' }, hash: 'stale' } }), V('pressed', 'pr-09')],
+      latest: [
+        item('new', 'publish', 'failed', t(5), { blockers: rej('picture:Image contains promotional information.'), variant_ids: ['new-09', 'new-10'] }),
+        item('live', 'add_sku', 'failed', t(4), { blockers: rej('picture: watermark'), variant_ids: ['live-14'] }),
+        item('liveFixed', 'add_sku', 'failed', t(1), { blockers: rej('picture: watermark'), variant_ids: ['lf-14'] }),
+        item('liveFixed', 'photos', 'done', t(2)),
+        item('moot', 'publish', 'failed', t(1), { blockers: rej('Taboo'), variant_ids: ['moot-09'] }),   // the shoe is live under another SHEIN product
+        item('superseded', 'add_sku', 'done', t(2)),
+        item('draft', 'publish', 'failed', t(1), { blockers: rej('Taboo') }),
+        item('pressed', 'publish', 'failed', t(2), { blockers: [{ code: 'shein_prevalid', params: { sheinMessage: 'Reflection: required', module: 'attr' } }], variant_ids: ['pr-09'] }),
+      ],
+      failed: [],
+    };
+    const ph = rejectedList({ ...data, canWrite: false });
+    expect(ph.map((r) => r.productId)).toEqual(['new', 'live', 'pressed', 'liveFixed', 'sizeOnly']);
+    const by = Object.fromEntries(ph.map((r) => [r.productId, r]));
+    expect(by.new).toMatchObject({ what: 'publish', whatLabel: 'Publish', code: 'review_rejected', reason: 'picture:Image contains promotional information.', isPhoto: true, neverLive: true,
+      sizes: 2, sizeNames: ['09', '10'], jobId: 7, at: t(5), stock: { pairs: 2, sizesInStock: 2 },
+      next: { action: 'publish_again', who: 'admin_or_connect_integrations', canPress: false, fixFirst: 'photos', ops: ['publish'] } });
+    expect(rejectedList({ ...data, canWrite: true }).find((r) => r.productId === 'new').next.canPress).toBe(true);
+    expect(by.pressed).toMatchObject({ code: 'shein_prevalid', reason: 'Reflection: required', module: 'attr', publishAgain: { by: 'Alex' },
+      next: { action: 'preview_publish', who: 'ph_team', confirmNeeds: 'admin_or_connect_integrations', canPress: true, ops: ['publish'] } });
+    expect(by.live).toMatchObject({ what: 'add_sizes', live: true, next: { action: 'preview_photos', fixFirst: 'photos', ops: ['photos'] } });
+    expect(by.liveFixed.next).toMatchObject({ action: 'preview_add_sizes', ops: null });        // photos replaced since → add the sizes again
+    // 2026-11-17 (stage 2, item 2d — this used to hide so-15 because Shopify changed the size since): SHEIN's own answer
+    // stays until a send of it is accepted or a person clears it, whatever Shopify did meanwhile
+    expect(by.sizeOnly).toMatchObject({ what: 'sizes', reason: 'size refused', sizes: 2, sizeNames: ['14', '15'], rejections: [expect.objectContaining({ source: 'size_error' })] });
+    expect(rejectedList({ ...data, includeOff: true }).find((r) => r.productId === 'draft').next).toMatchObject({ action: null, say: expect.stringContaining('Not active on Shopify') });
+    expect(nextFor({ op: 'edit', reason: 'x' }, { product: P('p') })).toMatchObject({ action: 'preview_update', ops: ['price', 'edit'] });
+    expect(nextFor({ op: 'model', reason: 'x' }, { product: P('p') })).toMatchObject({ action: 'preview_model', ops: ['model'] });
+  });
+});
+
+// API level — runs on ANY database (the local copy of production too): its own shoes carry a word no real
+// product has ("zqxshl"), every exact count below is asked WITH that word, and the store-wide checks only
+// compare a count with its own list.
+test.describe.serial('SHEIN Listings — the list API fixes (endpoints)', () => {
+  const ZQ = 'zqxshl';
+  let auth;
+  const ATTRS = 87;
+  const sku = (skuCode, supplierSku, label, valueId) => ({ skuCode, supplierSku, label, valueId });
+  const SPU = (spuName, sizes) => ({ spuName, categoryId: 1001, productTypeId: 501, brandCode: 'NIKE', productMultiNameList: [{ language: 'en', productName: spuName }], dimensionAttributeInfoList: [],
+    skcInfoList: [{ skcName: `${spuName}C`, shelfStatusInfoList: [{ siteAbbr: 'shein-us', shelfStatus: 1 }], skuInfoList: sizes.map((s) => ({ skuCode: s.skuCode, supplierSku: s.supplierSku, mallState: 1,
+      saleAttributeList: [{ attributeId: ATTRS, attributeValueId: s.valueId, attributeValueMultiList: [{ language: 'en', attributeValueName: s.label }] }],
+      priceInfoList: [{ basePrice: 160, specialPrice: 0, currency: 'USD', site: 'shein-us' }] })) }] });
+  const zp = (n, title, variants, extra = {}) => ({ productId: gidP(n), title, handle: `zqx-${n}`, vendor: extra.vendor || 'Zqxbrand', productType: 'Shoes', tags: [], status: extra.status || 'ACTIVE',
+    updatedAt: extra.updatedAt || '2026-11-01T12:00:00Z', image: null, imageCount: 3, style: (title.match(/\(([A-Z0-9-]+)\)/) || [])[1] || null,
+    variants: variants.map(([v, s, size, price, qty]) => ({ variantId: gidV(v), sku: s, size, price: String(price), compareAt: null, qty, barcode: null, weightG: null })) });
+  const IDS = [7791, 7792, 7793, 7794, 7795, 7796, 7797].map(gidP);
+  const get = async (request, qs, who = 'ph') => { const r = await request.get(`/api/shein/listings${qs}`, { headers: auth[who] }); expect(r.status(), qs).toBe(200); return r.json(); };
+  const ids = (j) => j.products.map((p) => Number(p.shopify_product_id.split('/').pop()));
+  const clean = async () => {
+    await pool.query(`DELETE FROM shein_listing_variants WHERE shopify_product_id = ANY($1::text[])`, [IDS]);
+    await pool.query(`DELETE FROM shein_listing_products WHERE shopify_product_id = ANY($1::text[])`, [IDS]);
+    const { rows } = await pool.query(`SELECT id FROM shein_listing_jobs WHERE started_by = 'e2e-zqx'`);
+    await pool.query(`DELETE FROM shein_listing_jobs WHERE id = ANY($1::bigint[])`, [rows.map((r) => r.id)]);
+  };
+
+  test.beforeAll(async () => {
+    if (!pool) return;
+    const { signToken } = await import('../api/_lib/util.js');
+    auth = { ph: { Authorization: `Bearer ${signToken({ uid: 'e2e-ph', username: 'e2e_ph', name: 'E2E PH', role: 'ph_team' })}` },
+      admin: { Authorization: `Bearer ${signToken({ uid: 'admin', username: 'admin', name: 'Alex', role: 'admin' })}` } };
+    await clean();
+    const products = [
+      zp(7791, 'Zqxshl Synced Shoe (ZQ1001-001)', [[779107, 'ZQ7', '7', 160, 1], [779108, 'ZQ8', '8', 160, 2], [779115, '', '15', 160, 0]], { updatedAt: '2026-11-05T12:00:00Z' }),
+      zp(7792, 'Zqxshl Blocked Shoe (ZQ1002-001)', [[779209, '', '9', 100, 1]], { vendor: 'Otherzqx', updatedAt: '2026-11-04T12:00:00Z' }),
+      zp(7793, 'Zqxshl Mixed Shoe (ZQ1003-001)', [[779307, 'ZM7', '7', 160, 1], [779308, '', '8', 160, 1]]),
+      zp(7794, 'adidas Zqxshl Gazelle Bold ‘Night Indigo’ (ZQ7659-101)', [[779409, '779409123', '9', 120, 1]], { vendor: 'ZQXBRAND' }),
+      zp(7795, "Nike Zqxshl Air Force 1 Low '07 Sold Out (ZQ1111-100)", [[779509, '', '9', 100, 0], [779510, 'ZQS10', '10', 100, 0]]),
+      zp(7796, 'Zqxshl Rejected New Shoe (ZQ2002-002)', [[779609, 'ZR9', '9', 110, 1], [779610, 'ZR10', '10', 110, 2]]),
+      zp(7797, 'Zqxshl Draft Rejected (ZQ2003-003)', [[779709, 'ZD9', '9', 110, 1]], { status: 'DRAFT' }),
+    ];
+    const spus = [spuPayload(SPU('t26990001zqx', [sku('E2EZ1-07', 'ZQ7', 'US7', 1), sku('E2EZ1-08', 'ZQ8', 'US8', 2)])), spuPayload(SPU('E2EZQX2', [sku('E2EZ2-07', 'ZM7', 'US7', 1)]))];
+    const { saveListingProducts } = await import('../api/_lib/db.js');
+    await saveListingProducts(computeListings({ products, spus }).filter((r) => IDS.includes(r.shopify_product_id)));
+    // 7796: our publish was rejected — it keeps the SPU it was sent as (never live: no size has a SHEIN SKU)
+    await pool.query(`UPDATE shein_listing_products SET spu = 'E2EZQXREJ', review_version = 'v1' WHERE shopify_product_id = $1`, [gidP(7796)]);
+    // our send records: a run job with a rejected publish (7796, 7797 draft), a rejected add-sizes on a LIVE shoe (7791),
+    // a rejected publish of a shoe that is live anyway (7791 — moot), and a rejection a later send superseded (7793)
+    const { rows: [job] } = await pool.query(`INSERT INTO shein_listing_jobs (kind, mode, status, started_by, finished_at) VALUES ('run', 'run', 'done', 'e2e-zqx', now()) RETURNING id`);
+    jobsMade.add(job.id);
+    const rej = (reason) => JSON.stringify([{ code: 'review_rejected', params: { failedReason: reason } }]);
+    const ins = (pid, op, status, blockers, variants, ago) => pool.query(`INSERT INTO shein_listing_job_items (job_id, seq, shopify_product_id, spu, op, status, blockers, variant_ids, sent_at, updated_at, error)
+      VALUES ($1, 0, $2, 'E2EZQXREJ', $3, $4, $5::jsonb, $6::text[], now() - $7::interval, now() - $7::interval, 'rejected')`, [job.id, gidP(pid), op, status, blockers, variants.map(gidV), ago]);
+    await ins(7796, 'publish', 'failed', rej('picture:Image contains promotional information.'), [779609, 779610], '1 hour');
+    await ins(7797, 'publish', 'failed', rej('Taboo'), [779709], '2 hours');
+    await ins(7791, 'add_sku', 'failed', rej('Reflection: The template attribute under type is required'), [779115], '3 hours');
+    await ins(7791, 'publish', 'failed', rej('Taboo'), [779107], '4 hours');
+    await ins(7793, 'add_sku', 'failed', rej('picture: watermark'), [779308], '6 hours');
+    await ins(7793, 'add_sku', 'done', '[]', [779308], '5 hours');
+  });
+  test.beforeEach(() => { test.skip(!pool, 'needs the database'); });
+  test.afterAll(async () => { if (pool) await clean(); });
+
+  // every count of a summary vs the list it opens, for the same filters (qs = the other filters)
+  async function countsMatch(request, qs) {
+    const j = await get(request, `?pageSize=1${qs}`);
+    const s = j.summary;
+    if (!/[?&]status=/.test(qs)) {   // the tiles ignore the status filter — checked without one
+      let tiles = 0;
+      for (const st of TILE_STATUSES) {
+        expect((await get(request, `?status=${st}&pageSize=1${qs}`)).total, `${qs} ${st}`).toBe(s.byStatus[st].products);
+        expect((await get(request, `?status=${st}&any=1&pageSize=1${qs}`)).total, `${qs} ${st} any`).toBe(s.byStatus[st].anySize);
+        tiles += s.byStatus[st].products;
+      }
+      expect(tiles + s.byStatus.unknown.products, `${qs} tiles = All`).toBe(s.all);
+      expect(j.total, `${qs} All`).toBe(s.all);
+      expect((await get(request, `?status=excluded&pageSize=1${qs}`)).total, `${qs} off`).toBe(s.off);
+    }
+    for (const b of s.brands.slice(0, 4)) expect((await get(request, `?brand=${encodeURIComponent(b.brand)}&pageSize=1${qs}`)).total, `${qs} brand ${b.brand}`).toBe(b.products);
+    for (const b of s.topBlockers.slice(0, 5)) {
+      expect((await get(request, `?blocker=${b.code}&pageSize=1${qs}`)).total, `${qs} reason ${b.code}`).toBe(b.products);
+      expect(b.label).toBe(blockerLabel(b.code));
+    }
+    for (const sh of ['active', 'inactive']) expect((await get(request, `?shopify=${sh}&pageSize=1${qs}`)).total, `${qs} ${sh}`).toBe(j.shopifyCounts[sh]);
+    return s;
+  }
+
+  test('(1) a tile = shoes whose OVERALL status is it; any=1 = at least one counted size in it, the whole-shoe ones first', async ({ request }) => {
+    const s = (await get(request, `?q=${ZQ}`)).summary;
+    expect(s.byStatus.synced).toMatchObject({ products: 1, anySize: 2 });            // 7791 synced; 7793 is Blocked with a synced size
+    expect(s.byStatus.blocked).toMatchObject({ products: 3, anySize: 3 });
+    expect(s.byStatus.not_on_shein).toMatchObject({ products: 2, anySize: 3 });      // + the sold-out 7795 (every size counts when none is in stock)
+    expect(ids(await get(request, `?status=synced&q=${ZQ}`))).toEqual([7791]);
+    expect((await get(request, `?status=synced&q=${ZQ}`)).products.every((p) => p.status === 'synced')).toBe(true);
+    const any = await get(request, `?status=synced&any=1&q=${ZQ}`);
+    expect(any.products.map((p) => [Number(p.shopify_product_id.split('/').pop()), p.status])).toEqual([[7791, 'synced'], [7793, 'blocked']]);
+    expect(any).toMatchObject({ any: true, total: 2 });
+    expect(ids(await get(request, `?status=excluded&q=${ZQ}`))).toEqual([7797]);
+  });
+
+  test('(2) the summary follows the filters (each count = its list), sizes = in-stock only, every reason and brand (no LIMIT)', async ({ request }) => {
+    const s = await countsMatch(request, `&q=${ZQ}`);
+    expect(s).toMatchObject({ all: 6, off: 1, filters: { q: ZQ } });
+    expect(s.store.all).toBeGreaterThanOrEqual(6);                                     // the whole store, no filter
+    expect(s.byStatus.synced).toMatchObject({ sizes: 3, allSizes: 3 });               // 7791's two + 7793's one, all in stock
+    expect(s.byStatus.blocked).toMatchObject({ sizes: 2, allSizes: 4 });              // 0-stock sizes (7791's 15, 7795's 9) not counted
+    expect(s.brands).toEqual([{ brand: 'Zqxbrand', products: 5 }, { brand: 'Otherzqx', products: 1 }]);   // one row per brand, any case (its most used spelling)
+    expect(s.topBlockers).toEqual([{ code: 'no_seller_sku', label: 'No SKU on Shopify', title: 'No SKU on Shopify', products: 3, sizes: 3, level: 'blocked' }]);   // not 7791 (only a 0-stock size)
+    expect(s.shopify).toEqual({ active: 5, inactive: 1 });
+    // with a brand: tiles + reasons follow it, the brand list doesn't
+    const b = (await get(request, `?q=${ZQ}&brand=otherzqx`)).summary;
+    expect([b.all, b.byStatus.blocked.products, b.byStatus.synced.products]).toEqual([1, 1, 0]);
+    expect(b.brands.map((x) => x.products)).toEqual([5, 1]);
+    expect(b.topBlockers.map((x) => [x.code, x.products])).toEqual([['no_seller_sku', 1]]);
+    // with a status: brands + reasons follow it; tiles don't
+    const st = (await get(request, `?q=${ZQ}&status=blocked`)).summary;
+    expect(st.brands.map((x) => [x.brand.toLowerCase(), x.products])).toEqual([['zqxbrand', 2], ['otherzqx', 1]]);
+    expect(st.byStatus.synced.products).toBe(1);
+    // with a reason: tiles follow it, the reason list doesn't
+    const r = (await get(request, `?q=${ZQ}&blocker=no_seller_sku`)).summary;
+    expect([r.all, r.byStatus.blocked.products, r.byStatus.synced.products]).toEqual([3, 3, 0]);
+    expect(r.topBlockers.map((x) => x.code)).toEqual(['no_seller_sku']);
+    // Shopify active: the tiles follow it, the chips don't
+    const a = (await get(request, `?q=${ZQ}&shopify=active`)).summary;
+    expect([a.all, a.byStatus.blocked.products]).toEqual([5, 2]);
+    expect(a.shopify).toEqual({ active: 5, inactive: 1 });
+    // the same equalities with the other filters on, and on the whole store as it is
+    await countsMatch(request, `&q=${ZQ}&brand=zqxbrand`);
+    await countsMatch(request, `&q=${ZQ}&status=blocked`);
+    await countsMatch(request, `&q=${ZQ}&shopify=active&blocker=no_seller_sku`);
+    await countsMatch(request, '');
+    await countsMatch(request, '&shopify=active');
+    await countsMatch(request, '&q=nike');
+  });
+
+  test('(3) the row is judged on its counted sizes: a Synced shoe shows no red reason and isn’t under a 0-stock size’s reason — that one is “idle”', async ({ request }) => {
+    const p = (await get(request, `?q=${ZQ}+synced+shoe`)).products[0];
+    expect(p).toMatchObject({ shopify_product_id: gidP(7791), status: 'synced', blockers: [], worst: null,
+      idleBlockers: [expect.objectContaining({ code: 'no_seller_sku', label: 'No SKU on Shopify', sizes: 1 })] });
+    expect(p.search_norm).toBeUndefined(); expect(p.search_compact).toBeUndefined(); expect(p.search_text).toBeUndefined();
+    expect(ids(await get(request, `?blocker=no_seller_sku&q=${ZQ}`))).toEqual([7795, 7792, 7793]);   // worst first, then title — 7791 isn't here
+    const sold = (await get(request, `?q=${ZQ}+sold+out`)).products[0];                // nothing in stock: judged on every size, as before
+    expect(sold).toMatchObject({ status: 'blocked', worst: expect.objectContaining({ code: 'no_seller_sku' }), idleBlockers: [] });
+  });
+
+  test('(4) search through the API: every word in any order, codes without dash / space, quotes, numeric SKU, SPU with / without its "t", LIKE-safe', async ({ request }) => {
+    const q = async (text) => ids(await get(request, `?status=all&q=${encodeURIComponent(text)}`));
+    for (const text of ['ZQ7659 101', 'ZQ7659101', 'zq7659-101', 'bold gazelle zqxshl', '‘night indigo’ zqxshl', '779409123', 'Night, Indigo zqxshl']) expect(await q(text), text).toEqual([7794]);
+    for (const text of ["air force 1 07 zqxshl", 'Air Force 1 ’07 zqxshl', "AIR FORCE 1 '07 zqxshl"]) expect(await q(text), text).toEqual([7795]);
+    expect(await q('t26990001zqx')).toEqual([7791]);
+    expect(await q('26990001zqx')).toEqual([7791]);
+    expect(await q('zqxshl synced sho')).toEqual([7791]);
+    expect(await q('zqxshl %')).toEqual([]);                                          // % is a character, not "anything"
+    expect(await q('zqxshl _')).toEqual([]);
+    expect(await q('zq7659 999')).toEqual([]);                                        // EVERY word must match
+  });
+
+  test('(6) sort: worst (default) | title | updated | coverage — an unknown sort reads as worst; (7) a page past the end returns the last page', async ({ request }) => {
+    const order = async (sort) => ids(await get(request, `?q=${ZQ}${sort ? `&sort=${sort}` : ''}`));
+    expect(await order('')).toEqual([7795, 7792, 7793, 7794, 7796, 7791]);           // blocked (by title) → not on SHEIN → synced
+    expect(await order('worst')).toEqual(await order(''));
+    expect((await get(request, `?q=${ZQ}&sort=bogus`)).sort).toBe('worst');
+    expect(await order('bogus')).toEqual(await order(''));
+    expect(await order('title')).toEqual([7794, 7795, 7792, 7793, 7796, 7791]);
+    expect((await order('updated')).slice(0, 2)).toEqual([7791, 7792]);
+    expect(await order('coverage')).toEqual([7794, 7792, 7796, 7793, 7795, 7791]);  // 0 % on SHEIN first; nothing in stock counts as 100 %
+    // with any=1 the whole-shoe matches lead, then the rest in the sort's own order
+    expect(ids(await get(request, `?q=${ZQ}&status=not_on_shein&any=1&sort=title`))).toEqual([7794, 7796, 7795]);
+    // paging: the real page, total and pages — never "26–25 of 25"
+    const last = await get(request, `?q=${ZQ}&pageSize=4&page=9`);
+    expect(last).toMatchObject({ page: 2, pages: 2, total: 6, pageSize: 4 });
+    expect(ids(last)).toEqual([7796, 7791]);
+    expect(await get(request, `?q=${ZQ}&pageSize=4&page=2`)).toMatchObject({ page: 2, total: 6 });
+    expect(await get(request, `?q=nothing-matches-${ZQ}&page=3`)).toMatchObject({ page: 1, pages: 1, total: 0, products: [] });
+  });
+
+  test('(8) GET ?rejected=1: the shoes SHEIN rejected, with SHEIN’s words and what resubmits them; the summary counts them; publishSetup offers a rejected never-live shoe', async ({ request }) => {
+    const ph = await get(request, `?rejected=1&q=${ZQ}`);
+    expect(ph.rows.map((r) => [Number(r.productId.split('/').pop()), r.what])).toEqual([[7796, 'publish'], [7791, 'add_sizes']]);   // 7793 superseded, 7791's publish moot, 7797 off
+    expect(ph.rows[0]).toMatchObject({ title: 'Zqxshl Rejected New Shoe (ZQ2002-002)', style: 'ZQ2002-002', vendor: 'Zqxbrand', shopifyStatus: 'ACTIVE', neverLive: true, spu: 'E2EZQXREJ',
+      code: 'review_rejected', reason: 'picture:Image contains promotional information.', isPhoto: true, sizes: 2, stock: { pairs: 3, sizesInStock: 2, sizes: 2 },
+      next: { action: 'publish_again', who: 'admin_or_connect_integrations', canPress: false, fixFirst: 'photos', ops: ['publish'] } });
+    expect(ph.rows[0].jobId).toEqual(expect.any(Number));
+    expect(ph.rows[1]).toMatchObject({ neverLive: false, reason: 'Reflection: The template attribute under type is required', sizes: 1, sizeNames: ['15'], next: { action: 'preview_add_sizes', canPress: true } });
+    expect((await get(request, `?q=${ZQ}`)).summary.rejected).toBe(2);
+    expect((await get(request, `?rejected=1&q=${ZQ}&off=1`)).rows.map((r) => [Number(r.productId.split('/').pop()), r.next.action])).toEqual([[7796, 'publish_again'], [7797, null], [7791, 'preview_add_sizes']]);
+    // an admin may press Publish again; afterwards the next step is the publish preview (PH ok)
+    const admin = await get(request, `?rejected=1&q=${ZQ}`, 'admin');
+    expect(admin.rows[0].next).toMatchObject({ action: 'publish_again', canPress: true });
+    expect((await request.post('/api/shein/listings', { headers: auth.ph, data: { action: 'publish_again', productIds: [gidP(7796)] } })).status()).toBe(403);
+    expect((await request.post('/api/shein/listings', { headers: auth.admin, data: { action: 'publish_again', productIds: [gidP(7796)] } })).status()).toBe(200);
+    const after = (await get(request, `?rejected=1&q=${ZQ}`)).rows[0];
+    expect(after).toMatchObject({ publishAgain: { by: 'Alex' }, next: { action: 'preview_publish', who: 'ph_team', canPress: true, ops: ['publish'] } });
+    // the bulk editor no longer turns it away as "already on SHEIN" (it has an SPU, but SHEIN never took it)
+    const setup = await get(request, `?publishSetup=${encodeURIComponent(gidP(7796))}`);
+    expect(setup.products.map((p) => p.productId)).toEqual([gidP(7796)]);
+    expect(setup.skipped).toEqual([]);
+    const live = await get(request, `?publishSetup=${encodeURIComponent(gidP(7791))}`);
+    expect(live.skipped).toEqual([expect.objectContaining({ productId: gidP(7791), why: expect.stringMatching(/already on SHEIN/) })]);
+    expect((await request.get('/api/shein/listings?rejected=1')).status()).toBe(401);
+  });
+
+  test('(9) the cut-over facts list every finished AUTOMATIC snapshot (every 30 min too), not a person’s Refresh', async () => {
+    const { listingCutoverFacts } = await import('../api/_lib/db.js');
+    const mk = async (by) => { const { rows: [j] } = await pool.query(`INSERT INTO shein_listing_jobs (kind, status, started_by, created_at, finished_at) VALUES ('snapshot', 'done', $1, '2020-01-02T15:00:00Z', '2020-01-02T15:05:00Z') RETURNING id`, [by]); jobsMade.add(j.id); return Number(j.id); };
+    const auto = await mk('auto (every 30 min)'); const nightly = await mk('auto (nightly 03:00 EST)'); const person = await mk('e2e person');
+    const f = await listingCutoverFacts({ since: '2020-01-02T00:00:00Z' });
+    const got = f.nightly.map((j) => Number(j.id));
+    expect(got).toEqual(expect.arrayContaining([auto, nightly]));
+    expect(got).not.toContain(person);
+  });
+});
+
+/* ------------- 2026-11-17 · stage 2 of the page fixes: the status engine + back-end correctness ------------- */
+// docs/context/shein-listings.md → "The status engine (stage 2)". Each test below fails on the code before it.
+test.describe('SHEIN Listings — the status engine (stage 2, pure)', () => {
+  const base = (extra = {}) => ({ shopify: { variantId: 'v', sku: 'A7', size: '7', price: '160', qty: 1 }, match: 'sku', product: { shopifyStatus: 'ACTIVE', onShein: true }, skuCount: 1, ...extra });
+  const row = (size, extra = {}) => ({ sheinSku: 'S7', sellerSku: 'A7', size, basePrice: 160, mallState: 1, spu: 'SPU', ...extra });
+
+  test('(1) a SHEIN SKU with a blank size (or an EUR size) is Blocked “No size on SHEIN”, never Synced — as the walk holds it at 0; a person’s Match-sizes link is trusted, as the walk does', async () => {
+    const blank = variantReadiness(base({ shein: row('') }));
+    expect(blank.status).toBe('blocked');
+    expect(blank.blockers).toEqual([expect.objectContaining({ code: 'shein_size_blank', params: expect.objectContaining({ sku: 'A7', why: 'blank', want: 'US7' }) })]);
+    const r = renderBlocker(blank.blockers[0]);
+    expect(r).toMatchObject({ label: 'No size on SHEIN', level: 'blocked', title: 'SHEIN has no size on this SKU (A7) — automatic sync holds it at 0.', action: { kind: 'open_match', here: true } });
+    expect(r.fix).toContain('US7');
+    expect(variantReadiness(base({ shein: row('EUR42') })).blockers[0]).toMatchObject({ code: 'shein_size_blank', params: { why: 'other_system', sheinSize: 'EUR42' } });
+    expect(variantReadiness(base({ shein: row(''), linkConfirmed: true })).status).toBe('synced');
+    expect(variantReadiness(base({ shein: row('US7') })).status).toBe('synced');
+    // the live walk (sheinFix.js) files the same SKU as no_size / other_system at 0, and sells it once a person linked that SKU
+    const { checkRows } = await import('../src/lib/sheinCheck.js'); const { buildFix } = await import('../src/lib/sheinFix.js');
+    const vs = [{ sku: 'A7', size: '7', qty: 3, productId: 'p', status: 'ACTIVE', productTitle: 'X' }];
+    const walk = (size, decisions) => buildFix(checkRows([{ line: 2, sellerSku: 'A7', size, qty: 3, sheinSku: 'S7' }], vs), vs, { decisions }).rows[0];
+    expect([walk('').reason, walk('').newQty, walk('EUR42').reason]).toEqual(['no_size', 0, 'other_system']);
+    expect(walk('', { S7: { decision: 'link', link_sku: 'A7' } })).toMatchObject({ reason: 'ok', newQty: 3 });
+    // through computeListings: SHEIN's US8W (W8) loses its size → the Women's 8W reads Blocked; linked on Match sizes → Synced
+    const payloads = PAYLOADS(); payloads.find((p) => p.spu === 'E2ESPU2').rows.find((x) => x.sheinSku === 'E2E2-08').size = '';
+    expect(byKey(compute({ spus: payloads })).get(gidV(770208))).toMatchObject({ status: 'blocked', blockers: [expect.objectContaining({ code: 'shein_size_blank' })] });
+    const linked = [...LINKS, { shein_sku: 'E2E2-08', spu: 'E2ESPU2', decision: 'link', link_sku: 'W8' }];
+    expect(byKey(compute({ spus: payloads, links: linked })).get(gidV(770208)).status).toBe('synced');
+  });
+
+  test('(2d) SHEIN’s answer (review_rejected / shein_prevalid) stays when Shopify changes the size — a price change no longer hides it; any other error still expires', () => {
+    const notOn = (lastError) => variantReadiness(base({ shein: null, match: null, product: { shopifyStatus: 'ACTIVE', onShein: true }, targetHash: 'NEW', lastError }));
+    const rej = notOn({ code: 'review_rejected', params: { failedReason: 'picture: watermark' }, hash: 'OLD', op: 'add_sku' });
+    expect(rej.status).toBe('error');
+    expect(rej.blockers[0]).toMatchObject({ code: 'review_rejected', params: { op: 'add_sku' } });
+    expect(notOn({ code: 'shein_prevalid', params: { sheinMessage: 'x' }, hash: 'OLD' }).status).toBe('error');
+    expect(notOn({ code: 'api_error', params: { message: 'timeout' }, hash: 'OLD' }).status).toBe('not_on_shein');
+    expect(notOn({ code: 'api_error', params: { message: 'timeout' }, hash: 'NEW' }).status).toBe('error');
+  });
+
+  test('(2b) an error from a send that ADDED the size (publish / add sizes) is moot once SHEIN sells that size — e.g. live through another SHEIN product; an edit’s error is not', async () => {
+    const { lastErrorShown } = await import('../src/lib/sheinListings.js');
+    const err = (op) => ({ code: 'review_rejected', params: { failedReason: 'Taboo' }, hash: 'h', ...(op ? { op } : {}) });
+    expect(variantReadiness(base({ shein: row('US7'), lastError: err('publish'), targetHash: 'h' })).status).toBe('synced');
+    expect(variantReadiness(base({ shein: row('US7'), lastError: err('add_sku'), targetHash: 'h' })).status).toBe('synced');
+    expect(variantReadiness(base({ shein: row('US7'), lastError: err('edit'), targetHash: 'h' })).status).toBe('error');
+    expect(variantReadiness(base({ shein: null, match: null, lastError: err('publish'), targetHash: 'h' })).status).toBe('error');   // not on SHEIN: it stands
+    // the same rule decides "Rejected by SHEIN": the moot size isn't listed
+    expect([lastErrorShown(err('publish'), { onShein: true }), lastErrorShown(err('publish'), { onShein: false }), lastErrorShown(null)]).toEqual([false, true, false]);
+    const { rejectedList } = await import('../src/lib/sheinRejected.js');
+    const p = { shopify_product_id: 'p', title: 'p', shopify_status: 'ACTIVE', status: 'synced', excluded: false };
+    const v = { row_key: 'v1', shopify_product_id: 'p', shopify_variant_id: 'v1', shopify_size: '7', shopify_qty: 1, excluded: false, shein_sku: 'S1', target_hash: 'h', last_error: err('publish') };
+    expect(rejectedList({ products: [p], variants: [v] })).toEqual([]);
+    expect(rejectedList({ products: [p], variants: [{ ...v, last_error: err('edit') }] }).map((r) => r.productId)).toEqual(['p']);
+  });
+
+  test('(3) the review_rejected / shein_prevalid button is the real next step — the same action “Rejected by SHEIN” offers (nextFor), never the dead “Send again”', async () => {
+    const { nextFor } = await import('../src/lib/sheinRejected.js');
+    const { rejectionAction, REJECTION_NEXT } = await import('../src/lib/sheinListings.js');
+    const product = { shopify_status: 'ACTIVE', status: 'error' };
+    for (const op of ['publish', 'photos', 'model', 'edit', 'price', 'add_sku']) {
+      for (const reason of ['picture:Image contains promotional information.', 'Taboo: sensitive']) {
+        for (const code of ['review_rejected', 'shein_prevalid']) {
+          const params = code === 'review_rejected' ? { failedReason: reason, op } : { sheinMessage: reason, op };
+          const a = renderBlocker(blocker(code, params)).action;
+          const n = nextFor({ op, reason }, { product, neverLive: op === 'publish' });
+          expect(a.next, `${code} ${op} ${reason}`).toBe(n.action);
+          expect(REJECTION_NEXT).toContain(a.next);
+          expect(a.kind).not.toBe('send_again');
+          expect(a.ops, `${op}`).toEqual(n.ops || ['add_sku']);
+        }
+      }
+    }
+    expect(rejectionAction({ op: 'publish', failedReason: 'Taboo' }).action).toMatchObject({ kind: 'publish_again', label: 'Publish again' });
+    expect(rejectionAction({ op: 'add_sku', failedReason: 'picture: watermark' }).action).toMatchObject({ kind: 'fix_photos', next: 'preview_photos', fixFirst: 'photos' });
+    expect(rejectionAction({ op: 'edit', failedReason: 'x' }).action).toMatchObject({ kind: 'preview_update', ops: ['price', 'edit'], label: 'Preview Update prices & sizes' });
+    expect(rejectionAction({ op: 'model', failedReason: 'x' }).action).toMatchObject({ kind: 'preview_model', ops: ['model'] });
+    // the readiness names the op when the stored error predates it: a shoe never on SHEIN → the publish; its SPU live → add sizes; the size on SHEIN → an update
+    const legacy = { code: 'review_rejected', params: { failedReason: 'Taboo' } };
+    const ready = (extra) => variantReadiness(base({ lastError: legacy, ...extra })).blockers[0];
+    expect(renderBlocker(ready({ shein: null, match: null, product: { shopifyStatus: 'ACTIVE', onShein: false } })).action.next).toBe('publish_again');
+    expect(renderBlocker(ready({ shein: null, match: null, product: { shopifyStatus: 'ACTIVE', onShein: true } })).action.next).toBe('preview_add_sizes');
+    expect(renderBlocker(ready({ shein: row('US7') })).action.next).toBe('preview_update');
+  });
+
+  test('(4) a price only against the Shopify FALLBACK is a note (“SHEIN $X · Shopify $Y — no market price to compare”), never Needs update; a Shopify price change without a market price too', () => {
+    const changed = { syncedHash: 'OLD', targetHash: 'NEW', syncedFields: { sku: 'A7', size: '7', price: '170.00', compareAt: null, barcode: null } };
+    const fb = variantReadiness(base({ shein: row('US7', { basePrice: 120 }), targetPrice: { price: 160, from: 'shopify' }, ...changed }));
+    expect(fb).toMatchObject({ status: 'synced', diffs: [] });
+    expect(fb.notes.map((n) => n.code)).toEqual(['price_no_market']);
+    const mk = variantReadiness(base({ shein: row('US7', { basePrice: 120 }), targetPrice: { price: 150, from: 'market' }, ...changed }));
+    expect(mk.status).toBe('out_of_date');
+    expect(mk.diffs.map((d) => [d.field, d.source ?? null])).toEqual([['shein_price', 'market'], ['price', null]]);
+    // a live special against the fallback: the note (with the special), no shein_special diff
+    const sp = variantReadiness(base({ shein: row('US7', { basePrice: 200, specialPrice: 150 }), targetPrice: { price: 170, from: 'shopify' } }));
+    expect(sp).toMatchObject({ status: 'synced', diffs: [], notes: [expect.objectContaining({ code: 'price_no_market', params: expect.objectContaining({ special: '150.00', base: '200.00' }) })] });
+    expect(renderBlocker(blocker('price_no_market', { count: 3 })).title).toBe('3 sizes have no market price — their SHEIN price is left as it is.');
+    // the price planner the preview uses only gets MARKET targets from the server now (buildResync, marketOnly) — nothing to plan
+    expect(planPrice({ spu: SHEIN.E2ESPU1, stored: [{ shopify_variant_id: gidV(770107), shein_sku: 'E2E1-07', match: 'sku', status: 'synced', seller_sku: 'A7', shein_size: 'US7' }], targets: new Map() }).body).toBe(null);
+  });
+
+  test('(5) the price check: PRICE_OUTLIER, the median of the shoe’s other sizes (or the size’s market price); fewer than 3 priced sizes and no market → not judged; confirmed for that exact price only — add sizes, publish, price update and the readiness', async () => {
+    const { PRICE_OUTLIER, priceOutliers, priceTargetsOf, priceCheck } = await import('../src/lib/sheinListings.js');
+    expect(PRICE_OUTLIER).toEqual({ high: 1.5, low: 0.6, minSizes: 3 });
+    const V = (id, price) => ({ variantId: id, size: id, price: String(price) });
+    const out = priceOutliers(priceTargetsOf([V('a', 160), V('b', 155), V('c', 165), V('d', 766), V('e', 80)]));
+    expect([...out.keys()].sort()).toEqual(['d', 'e']);                          // 766 > 1.5 × ~160, 80 < 0.6 × 160
+    expect(out.get('d')).toMatchObject({ price: 766, ref: 157.5, refFrom: 'sizes', ratio: 4.86 });   // the median of 160, 155, 165, 80
+    expect(priceOutliers(priceTargetsOf([V('a', 160), V('d', 766)])).size).toBe(0);   // 2 priced sizes, no market: not judged
+    // a market price judges the size against itself (market + 15 % → 1.15, fine); a Shopify price far from its market is caught
+    expect(priceOutliers(priceTargetsOf([V('a', 160), V('d', 766)], new Map([['d', 70000]]))).size).toBe(0);
+    expect(priceOutliers([{ id: 'x', price: 766, market: 300 }]).get('x')).toMatchObject({ refFrom: 'market', ref: 300 });
+    // the confirmation counts for that exact price only
+    const pc = (ok) => priceCheck('d', '11', out, new Map(ok ? [['d', ok]] : []));
+    expect(pc(null)).toMatchObject({ code: 'price_outlier', params: { size: '11', price: 766, ref: 157.5 } });
+    expect(pc({ price: 766, by: 'Kim', at: '2026-11-17T15:00:00Z' })).toMatchObject({ code: 'price_confirmed', params: { by: 'Kim', price: 766 } });
+    expect(pc({ price: 760, by: 'Kim' }).code).toBe('price_outlier');           // a new price asks again
+    const r = renderBlocker(pc(null));
+    expect(r).toMatchObject({ label: 'Price looks wrong', level: 'blocked', title: '$766 is far from this shoe’s other sizes (~$158) — check the Shopify price.', action: { kind: 'confirm_price', price: 766 } });
+    // add sizes: the outlier size is skipped (not sent), a confirmed one goes
+    const shop = { ...SHOPIFY()[0], variants: [...SHOPIFY()[0].variants.map((v) => (v.sku === 'A12' ? { ...v, price: '766' } : v))] };
+    const stored = compute().flatMap((p) => p.variants).filter((v) => v.shopify_product_id === gidP(7701));
+    const sizes = TEMPLATES().get(501);
+    const add = (priceOk) => planAddSizes({ spu: SHEIN.E2ESPU1, product: shop, stored, sizes, permission: 1, fill: { fill_in_standard_list: [] }, warehouse: { code: 'PS1' }, priceOk });
+    expect(add().plan.skipped.find((x) => x.sku === 'A12').blocker).toMatchObject({ code: 'price_outlier', params: { price: 766 } });
+    expect(add().plan.sizes.map((z) => z.sku)).not.toContain('A12');
+    expect(add(new Map([[gidV(770112), { price: 766, by: 'Kim' }]])).plan.sizes.map((z) => [z.sku, z.price])).toEqual([['A12', 766]]);
+    // publish: the in-stock outlier holds the shoe until confirmed
+    const pp = p4input({ product: { ...p4input().product, variants: [8, 9, 10, 11].map((n) => ({ variantId: gidV(7710 * 100 + n), sku: `RV-${n}`, size: String(n), price: n === 11 ? '766' : '110', qty: 1 })) } });
+    const { planPublish } = await import('../src/lib/sheinPublish.js');
+    const held = planPublish(pp);
+    expect(held.body).toBe(null);
+    expect(held.plan.skipped).toEqual([expect.objectContaining({ size: '11', blocker: expect.objectContaining({ code: 'price_outlier' }) })]);
+    expect(held.checklist.find((l) => l.key === 'prices').ok).toBe(false);
+    const ok = planPublish({ ...pp, priceOk: new Map([[gidV(771011), { price: 766 }]]) });
+    expect(ok.body?.skc_list?.[0]?.sku_list?.length).toBe(4);
+    // the readiness: a Not-on-SHEIN size at $766 → Blocked; a person's price_ok for $766 → back to Not on SHEIN + the note
+    const pricedP = SHOPIFY(); pricedP[0].variants.find((v) => v.sku === 'A12').price = '766';
+    expect(byKey(compute({ products: pricedP })).get(gidV(770112))).toMatchObject({ status: 'blocked', blockers: [expect.objectContaining({ code: 'price_outlier' })] });
+    const prev = { products: new Map(), variants: new Map([[gidV(770112), { price_ok: { price: 766, by: 'Kim', at: '2026-11-17T15:00:00Z' } }]]) };
+    const conf = byKey(compute({ products: pricedP, prev })).get(gidV(770112));
+    expect(conf.status).toBe('not_on_shein');
+    expect(conf.notes.map((n) => n.code)).toContain('price_confirmed');
+    // a price update: an outlier target is skipped unless confirmed
+    const st = [{ shopify_variant_id: gidV(770107), shein_sku: 'E2E1-07', match: 'sku', status: 'out_of_date', seller_sku: 'A7', shein_size: 'US7' }];
+    const outl = new Map([[gidV(770107), { price: 766, ref: 160, refFrom: 'market', ratio: 4.8 }]]);
+    const t766 = new Map([[gidV(770107), { price: 766, from: 'market' }]]);
+    expect(planPrice({ spu: SHEIN.E2ESPU1, stored: st, targets: t766, outliers: outl }).plan.skipped[0].blocker.code).toBe('price_outlier');
+    expect(planPrice({ spu: SHEIN.E2ESPU1, stored: st, targets: t766, outliers: outl, priceOk: new Map([[gidV(770107), { price: 766 }]]) }).body.productPriceList[0].shopPrice).toBe(766);
+  });
+
+  test('(6) a Shopify size SHEIN already sells on the same product under ANOTHER seller SKU is never “Ready” — Blocked “link it instead” (IF6562 7.5W / US7.5W); another colour’s size doesn’t count', () => {
+    const shein = JSON.parse(JSON.stringify(SHEIN));
+    shein.E2ESPU1.skcInfoList[0].skuInfoList.push({ ...shein.E2ESPU1.skcInfoList[0].skuInfoList[0], skuCode: 'E2E1-12', supplierSku: 'OLD12',
+      saleAttributeList: [{ attributeId: ATTR, attributeValueId: 6, attributeValueMultiList: [{ language: 'en', attributeValueName: 'US12' }] }] });
+    const spus = Object.values(shein).map((s) => spuPayload(s));
+    const v = byKey(compute({ spus }));
+    expect(v.get(gidV(770112))).toMatchObject({ status: 'blocked', blockers: [expect.objectContaining({ code: 'size_already_on_shein', params: expect.objectContaining({ sheinSize: 'US12', sellerSku: 'OLD12', sheinSku: 'E2E1-12', to: 'A12' }) })] });
+    expect(renderBlocker(v.get(gidV(770112)).blockers[0])).toMatchObject({ title: 'SHEIN already has US12 under SKU OLD12 — link it instead of adding a second one.', action: { kind: 'open_match', here: true } });
+    expect(v.get('shein:E2E1-12')).toMatchObject({ status: 'shein_only' });
+    // the same size on ANOTHER colour (SKC) of the SPU is another shoe's: not counted
+    const two = JSON.parse(JSON.stringify(SHEIN));
+    two.E2ESPU1.skcInfoList.push({ ...two.E2ESPU1.skcInfoList[0], skcName: 'E2ESKC1B', skuInfoList: [{ ...two.E2ESPU1.skcInfoList[0].skuInfoList[0], skuCode: 'E2E1B-12', supplierSku: 'B12',
+      saleAttributeList: [{ attributeId: ATTR, attributeValueId: 6, attributeValueMultiList: [{ language: 'en', attributeValueName: 'US12' }] }] }] });
+    expect(byKey(compute({ spus: Object.values(two).map((s) => spuPayload(s)) })).get(gidV(770112)).blockers.map((b) => b.code)).not.toContain('size_already_on_shein');
+    expect(byKey(compute()).get(gidV(770112)).status).toBe('not_on_shein');      // nothing on SHEIN in that size: still Ready
+  });
+
+  test('(7) the main photo: ONE rule for the readiness and the preview — a confirmed side slot is photo 1 unless its outline reads as a sole or a pair (a high-top, a shadow, unmeasured: fine)', async () => {
+    const { cleanOrder, viewOf } = await import('../src/lib/sheinCleanPhotos.js');
+    const r = (angle, how, view) => ({ url: `https://x/${angle}.png`, angle, how, view });
+    const highTop = viewOf({ ar: 1.38, fill: 0.62, topM: 0.31, botM: 0.004, gap: 0 });          // ar < 1.45: not read as a side
+    const shadow = viewOf({ ar: 2.0, fill: 0.6, topM: 0.29, botM: 0.08, gap: 0 });             // a shadow under the sole
+    expect([highTop, shadow]).toEqual([null, null]);
+    for (const how of ['upload', 'checked']) {
+      for (const view of [null, highTop, shadow, 'side']) expect(cleanOrder([r('side', how, view), r('diagonal', how, null)]), `${how} ${view}`).toMatchObject({ unsure: false, why: 'side_slot' });
+      for (const view of ['sole', 'pair']) expect(cleanOrder([r('side', how, view)]).unsure, `${how} ${view}`).toBe(true);
+    }
+    expect(cleanOrder([r('side', 'timestamp', null)]).unsure).toBe(true);           // filed only by order: its outline must read as a side view
+    // the readiness and the preview call it the same way (no `lenient` any more)
+    expect(cleanOrder([r('side', 'upload', null)], { lenient: true })).toEqual(cleanOrder([r('side', 'upload', null)]));
+  });
+});
+
+// The stage-2 endpoints + jobs — runs on ANY database: its own shoes (7781–7783, the word "zqxstg") and job rows; the
+// SPU payload it needs is put in the cache for the run (restored by the file's afterAll).
+test.describe.serial('SHEIN Listings — the status engine (stage 2, endpoints + jobs)', () => {
+  const ZS = 'zqxstg';
+  let auth; let L; let D; let snapJob = null; let oldList = null;
+  const IDS = [7781, 7782, 7783].map(gidP);
+  const zs = (n, title, variants) => ({ productId: gidP(n), title, handle: `zqxstg-${n}`, vendor: 'Zqxstg', productType: 'Shoes', tags: [], status: 'ACTIVE', updatedAt: '2026-11-01T12:00:00Z',
+    image: null, imageCount: 3, style: (title.match(/\(([A-Z0-9-]+)\)/) || [])[1] || null,
+    variants: variants.map(([v, s, size, price, qty]) => ({ variantId: gidV(v), sku: s, size, price: String(price), compareAt: null, qty, barcode: null, weightG: null })) });
+  const P1 = (price9 = 766) => zs(7781, 'Zqxstg Live Shoe (ZS1001-001)', [[778107, 'ZS7', '7', 160, 1], [778108, 'ZS8', '8', 160, 1], [778109, 'ZS9', '9', price9, 1], [778110, 'ZS10', '10', 160, 1]]);
+  const SPU_ZS = { spuName: 'E2EZS1', categoryId: 1001, productTypeId: 501, brandCode: 'NIKE', productMultiNameList: [{ language: 'en', productName: 'E2EZS1' }], dimensionAttributeInfoList: [],
+    skcInfoList: [{ skcName: 'E2EZS1C', shelfStatusInfoList: [{ siteAbbr: 'shein-us', shelfStatus: 1 }], skuInfoList: [['E2EZS-07', 'ZS7', 'US7', 1], ['E2EZS-10', 'ZS10', 'US10', 4]].map(([skuCode, supplierSku, label, valueId]) => ({
+      skuCode, supplierSku, mallState: 1, saleAttributeList: [{ attributeId: ATTR, attributeValueId: valueId, attributeValueMultiList: [{ language: 'en', attributeValueName: label }] }],
+      priceInfoList: [{ basePrice: 160, specialPrice: 0, currency: 'USD', site: 'shein-us' }] })) }] };
+  const get = async (request, qs, who = 'ph') => { const r = await request.get(`/api/shein/listings${qs}`, { headers: auth[who] }); expect(r.status(), qs).toBe(200); return r.json(); };
+  const post = (request, data, who = 'ph') => request.post('/api/shein/listings', { headers: auth[who], data });
+  const variant = async (n) => (await pool.query(`SELECT * FROM shein_listing_variants WHERE row_key = $1`, [gidV(n)])).rows[0];
+  const clean = async () => {
+    await pool.query(`DELETE FROM shein_listing_variants WHERE shopify_product_id = ANY($1::text[])`, [IDS]);
+    await pool.query(`DELETE FROM shein_listing_products WHERE shopify_product_id = ANY($1::text[]) OR shopify_product_id = 'shein:E2EZS1'`, [IDS]);
+    await pool.query(`DELETE FROM shein_listing_actions WHERE shopify_product_id = ANY($1::text[])`, [IDS]);
+    const { rows } = await pool.query(`SELECT id FROM shein_listing_jobs WHERE started_by = 'e2e-zs'`);
+    await pool.query(`DELETE FROM shein_listing_jobs WHERE id = ANY($1::bigint[])`, [rows.map((r) => r.id)]);
+  };
+
+  test.beforeAll(async () => {
+    if (!pool) return;
+    L = await import('../api/_lib/shein-listing.js'); D = await import('../api/_lib/db.js');
+    const { signToken } = await import('../api/_lib/util.js');
+    auth = { ph: { Authorization: `Bearer ${signToken({ uid: 'e2e-ph', username: 'e2e_ph', name: 'E2E PH', role: 'ph_team' })}` },
+      admin: { Authorization: `Bearer ${signToken({ uid: 'admin', username: 'admin', name: 'Alex', role: 'admin' })}` },
+      wh: { Authorization: `Bearer ${signToken({ uid: 'e2e-wh', username: 'e2e_wh', name: 'E2E Warehouse', role: 'warehouse' })}` } };
+    await clean();
+    // a finished read (the endpoints recount only after one) + this shoe's SHEIN product in the stored list, as a read leaves them
+    if (!(await D.latestListingJob('snapshot', 'done'))) {
+      const { rows: [j] } = await pool.query(`INSERT INTO shein_listing_jobs (kind, status, started_by, finished_at) VALUES ('snapshot', 'done', 'e2e-zs', now()) RETURNING id`);
+      snapJob = Number(j.id); jobsMade.add(snapJob);
+    }
+    oldList = (await D.getListingCache('spu_list', 'current'))?.payload || null;
+    await D.setListingCache('spu', 'E2EZS1', spuPayload(SPU_ZS), 'e2e-zs');
+    await D.setListingCache('spu_list', 'current', [...(oldList || []).filter((x) => x !== 'E2EZS1'), 'E2EZS1'], 'e2e-zs');
+    await D.saveListingProducts(computeListings({ products: [P1()], spus: [spuPayload(SPU_ZS)] }).filter((r) => IDS.includes(r.shopify_product_id)));
+  });
+  test.beforeEach(() => { test.skip(!pool, 'needs the database'); });
+  test.afterAll(async () => {
+    if (!pool) return;
+    await clean();
+    if (oldList) await D.setListingCache('spu_list', 'current', oldList, 'e2e-zs');
+    else await pool.query(`DELETE FROM shein_listing_cache WHERE kind = 'spu_list' AND key = 'current'`);
+    await pool.query(`DELETE FROM shein_listing_cache WHERE kind = 'spu' AND key = 'E2EZS1'`);
+    if (oldList) await L.recomputeStored().catch(() => {});                          // the stored rows back to the real list
+  });
+
+  test('(5) price_ok: the $766 size is held (Blocked, price_outlier + its button); PH confirms that exact price (409 for another), the size is Ready again with the note; a new price asks again; logged', async ({ request }) => {
+    let d = await get(request, `?product=${encodeURIComponent(gidP(7781))}`);
+    const s9 = d.variants.find((v) => v.row_key === gidV(778109));
+    expect(s9).toMatchObject({ status: 'blocked', blockers: [expect.objectContaining({ code: 'price_outlier', label: 'Price looks wrong', action: { kind: 'confirm_price', label: 'Confirm $766', price: 766 } })] });
+    expect(d.variants.find((v) => v.row_key === gidV(778108)).status).toBe('not_on_shein');
+    expect((await request.post('/api/shein/listings', { headers: auth.wh, data: { action: 'price_ok', variantKey: gidV(778109), price: 766 } })).status()).toBe(403);
+    expect((await post(request, { action: 'price_ok', variantKey: gidV(778109) })).status()).toBe(400);
+    const wrong = await post(request, { action: 'price_ok', variantKey: gidV(778109), price: 700 });
+    expect(wrong.status()).toBe(409);
+    expect((await wrong.json()).error).toMatch(/\$766 now, not \$700/);
+    expect((await post(request, { action: 'price_ok', variantKey: gidV(778108), price: 160 })).status()).toBe(409);   // nothing held there
+    const ok = await post(request, { action: 'price_ok', variantKey: gidV(778109), price: 766 });
+    expect(ok.status()).toBe(200);
+    const okJ = await ok.json();
+    expect(okJ.variant).toMatchObject({ status: 'not_on_shein', price_ok: { price: 766, by: 'E2E PH' } });
+    expect(okJ.variant.notes.map((n) => n.code)).toContain('price_confirmed');
+    d = await get(request, `?product=${encodeURIComponent(gidP(7781))}`);
+    expect(d.actions[0]).toMatchObject({ action: 'price_ok', by: 'E2E PH', row_keys: [gidV(778109)], detail: { size: '9', price: 766 } });
+    // Shopify moves the price to $770: asked again
+    await L.recomputeStored({ replace: [P1(770)] });
+    expect(await variant(778109)).toMatchObject({ status: 'blocked', blockers: [expect.objectContaining({ code: 'price_outlier', params: expect.objectContaining({ price: 770 }) })] });
+    await L.recomputeStored({ replace: [P1(766)] });
+  });
+
+  test('(2c) clear_error: admin / Connect integrations only; clears the stored error, recounts, and writes who / when / what was cleared to the listing log', async ({ request }) => {
+    await D.setVariantsLastError([gidV(778108)], { code: 'review_rejected', params: { failedReason: 'Fixed in Seller Center since' } }, { op: 'add_sku', itemId: 1 });
+    await L.recomputeStored();
+    expect(await variant(778108)).toMatchObject({ status: 'error', last_error: expect.objectContaining({ code: 'review_rejected', op: 'add_sku', at: expect.any(String) }) });
+    expect((await post(request, { action: 'clear_error', variantKeys: [gidV(778108)] })).status()).toBe(403);
+    expect((await post(request, { action: 'clear_error' }, 'admin')).status()).toBe(400);
+    const r = await post(request, { action: 'clear_error', variantKeys: [gidV(778108)], note: 'SHEIN support fixed it' }, 'admin');
+    expect(await r.json()).toMatchObject({ ok: true, cleared: 1, products: [gidP(7781)] });
+    expect(await variant(778108)).toMatchObject({ status: 'not_on_shein', last_error: null });
+    const d = await get(request, `?product=${encodeURIComponent(gidP(7781))}`);
+    expect(d.actions[0]).toMatchObject({ action: 'clear_error', by: 'Alex', row_keys: [gidV(778108)], detail: { note: 'SHEIN support fixed it', was: [expect.objectContaining({ code: 'review_rejected', op: 'add_sku', reason: 'Fixed in Seller Center since' })] } });
+    expect(await (await post(request, { action: 'clear_error', productIds: [gidP(7781)] }, 'admin')).json()).toMatchObject({ cleared: 0 });
+  });
+
+  test('(2a) SHEIN approving a PHOTO change of the shoe clears the rejections its sizes carried from before that send (logged); one that came after stays', async () => {
+    const { rows: [job] } = await pool.query(`INSERT INTO shein_listing_jobs (kind, mode, status, started_by, finished_at) VALUES ('run', 'run', 'done', 'e2e-zs', now()) RETURNING id`);
+    jobsMade.add(job.id);
+    await D.setVariantsLastError([gidV(778108)], { code: 'review_rejected', params: { failedReason: 'picture: watermark' } }, { op: 'add_sku' });
+    await pool.query(`UPDATE shein_listing_variants SET last_error = jsonb_set(last_error, '{at}', to_jsonb((now() - interval '2 hours')::text)) WHERE row_key = $1`, [gidV(778108)]);
+    await D.setVariantsLastError([gidV(778110)], { code: 'shein_prevalid', params: { sheinMessage: 'later' } }, { op: 'edit' });   // after the photo send
+    const { rows: [it] } = await pool.query(`INSERT INTO shein_listing_job_items (job_id, seq, shopify_product_id, spu, op, status, variant_ids, sent_at, version, plan)
+      VALUES ($1, 1, $2, 'E2EZS1', 'photos', 'in_review', '{}', now() - interval '1 hour', 'E2EZSV1', '{}'::jsonb) RETURNING *`, [job.id, gidP(7781)]);
+    const io = { ...L.IO, sheinSpuInfo: async () => null, lastWalkStock: async () => new Map() };
+    await L.applyReview(it, 'approved', { io });
+    expect((await D.getListingItems([it.id]))[0].status).toBe('done');
+    expect((await variant(778108)).last_error).toBe(null);
+    expect((await variant(778110)).last_error).toMatchObject({ code: 'shein_prevalid' });
+    const acts = await D.listListingActions(gidP(7781));
+    expect(acts[0]).toMatchObject({ action: 'auto_clear_error', by: `SHEIN approval (job #${job.id}, photos)`, row_keys: [gidV(778108)] });
+    await D.setVariantsLastError([gidV(778110)], null);
+  });
+
+  test('(2a/2b one-off) db-setup’s stale-rejection fix: an error from before an approved photo change, and an added size that is on SHEIN now, are cleared and logged; idempotent', async () => {
+    const { STALE_REJECTIONS_SQL } = await import('../api/_lib/shein-listing-oneoffs.js');
+    const { rows: [job] } = await pool.query(`INSERT INTO shein_listing_jobs (kind, mode, status, started_by, finished_at) VALUES ('run', 'run', 'done', 'e2e-zs', now()) RETURNING id`);
+    jobsMade.add(job.id);
+    const legacy = (reason) => JSON.stringify({ code: 'review_rejected', params: { failedReason: reason }, hash: 'x' });   // no op, no at: before 2026-11-17
+    const ins = (op, status, variants, ago, blockers = '[]') => pool.query(`INSERT INTO shein_listing_job_items (job_id, seq, shopify_product_id, spu, op, status, variant_ids, sent_at, updated_at, blockers)
+      VALUES ($1, 0, $2, 'E2EZS1', $3, $4, $5::text[], now() - $6::interval, now() - $6::interval, $7::jsonb)`, [job.id, gidP(7781), op, status, variants.map(gidV), ago, blockers]);
+    const rej = JSON.stringify([{ code: 'review_rejected', params: { failedReason: 'x' } }]);
+    await pool.query(`DELETE FROM shein_listing_job_items WHERE shopify_product_id = ANY($1::text[])`, [IDS]);   // the photo approval of the test above
+    await ins('publish', 'failed', [778107], '2 hours', rej);                      // 7 (ON SHEIN now): our duplicate publish was rejected
+    await ins('add_sku', 'failed', [778108], '8 hours', rej);                      // 8: an add-sizes rejected …
+    await ins('photos', 'done', [], '6 hours');                                    // … then SHEIN approved new photos
+    await ins('add_sku', 'failed', [778109], '1 hour', rej);                       // 9: rejected AFTER the photo approval — stands
+    for (const n of [778107, 778108, 778109]) await pool.query(`UPDATE shein_listing_variants SET last_error = $2::jsonb WHERE row_key = $1`, [gidV(n), legacy(`r${n}`)]);
+    const first = (await pool.query(STALE_REJECTIONS_SQL, [IDS])).rows[0];
+    expect(first).toEqual({ sizes: 2, shoes: 1 });
+    expect([(await variant(778107)).last_error, (await variant(778108)).last_error, (await variant(778109)).last_error?.code]).toEqual([null, null, 'review_rejected']);
+    const act = (await D.listListingActions(gidP(7781)))[0];
+    expect(act).toMatchObject({ action: 'auto_clear_error', by: 'db-setup one-off (2026-11-17)' });
+    expect(act.detail.was.map((w) => [w.rowKey, w.why]).sort()).toEqual([[gidV(778107), 'moot_on_shein'], [gidV(778108), 'approved_after']]);
+    expect((await pool.query(STALE_REJECTIONS_SQL, [IDS])).rows[0]).toEqual({ sizes: 0, shoes: 0 });   // idempotent
+    await D.setVariantsLastError([gidV(778109)], null);
+  });
+
+  test('(9) housekeeping: a preview not confirmed in 24 h expires (Confirm refuses it); an interrupted run with every item settled is closed; old snapshot read items are pruned; the rejected list’s index exists', async () => {
+    const job = async (kind, status, ago) => Number((await pool.query(`INSERT INTO shein_listing_jobs (kind, mode, status, started_by, created_at, finished_at, updated_at)
+      VALUES ($1, $2, $3, 'e2e-zs', now() - $4::interval, now() - $4::interval, now() - $4::interval) RETURNING id`, [kind, kind === 'run' ? 'run' : 'dry', status, ago])).rows[0].id);
+    const old = await job('preview', 'awaiting_confirm', '25 hours'); const fresh = await job('preview', 'awaiting_confirm', '1 hour');
+    const settled = await job('run', 'interrupted', '2 hours'); const open = await job('run', 'interrupted', '2 hours');
+    const snapOld = await job('snapshot', 'done', '8 days'); const snapCut = await job('snapshot', 'interrupted', '8 days'); const snapNew = await job('snapshot', 'done', '1 day');
+    for (const id of [old, fresh, settled, open, snapOld, snapCut, snapNew]) jobsMade.add(id);
+    const item = (jobId, op, status) => pool.query(`INSERT INTO shein_listing_job_items (job_id, seq, op, status, spu) VALUES ($1, 1, $2, $3, 'E2EZSX')`, [jobId, op, status]);
+    await item(settled, 'add_sku', 'failed'); await item(settled, 'price', 'done');
+    await item(open, 'add_sku', 'deferred');
+    for (const id of [snapOld, snapCut, snapNew]) { await item(id, 'read', 'done'); await item(id, 'read', 'done'); }
+    await D.markStaleListingJobs();                                                  // runs on every GET + tick
+    const st = async (id) => (await D.getListingJob(id)).status;
+    expect([await st(old), await st(fresh), await st(settled), await st(open)]).toEqual(['expired', 'awaiting_confirm', 'done', 'interrupted']);
+    expect((await D.getListingJob(old)).phase).toMatch(/Expired/);
+    const io = { ...L.IO, walkBusy: async () => false, sheinStatus: async () => ({ connected: false }) };
+    await expect(L.startRunJob({ previewJobId: old, by: 'e2e-zs', io })).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/expired/) });
+    await D.pruneSnapshotItems(7);
+    const n = async (id) => (await pool.query(`SELECT count(*)::int AS n FROM shein_listing_job_items WHERE job_id = $1`, [id])).rows[0].n;
+    expect([await n(snapOld), await n(snapCut), await n(snapNew)]).toEqual([0, 2, 2]);
+    expect((await pool.query(`SELECT indexname FROM pg_indexes WHERE tablename = 'shein_listing_job_items' AND indexname = 'shein_listing_job_items_product_op'`)).rowCount).toBe(1);
+  });
+
+  test('(8) find_clean_photos: angles already recorded → nothing to do (no R2 call); “nothing found” remembered per style (the second click answers at once); only the LAST session of cutouts is scored', async () => {
+    const canvas = await import('@napi-rs/canvas');
+    const CP = await import('../api/_lib/shein-clean-photos.js');
+    const blob = async () => { const c = canvas.createCanvas(600, 300); const g = c.getContext('2d'); g.fillStyle = '#25c'; g.beginPath(); g.ellipse(300, 150, 250, 90, 0, 0, Math.PI * 2); g.fill(); return c.encode('png'); };
+    const solid = async () => { const c = canvas.createCanvas(400, 400); const g = c.getContext('2d'); g.fillStyle = '#c22'; g.fillRect(0, 0, 400, 400); return c.encode('jpeg', 80); };
+    const [cutBuf, phBuf] = [await blob(), await solid()];
+    const T = Date.parse('2026-11-10T15:00:00Z');
+    const ph = [{ angle: 'side', url: 'https://r2.e2e.test/zs/side.jpg', created_at: new Date(T) }, { angle: 'diagonal', url: 'https://r2.e2e.test/zs/diag.jpg', created_at: new Date(T + 2000) }];
+    // an old session (4 cutouts, 3 days before) and the last one (3 cutouts — a re-cut, so not "one per angle": nothing matches)
+    const key = (ts, i) => ({ key: `listings/ZS-STYLE/_cut/${ts}-zs${i}ab.png`, url: `https://r2.e2e.test/listings/ZS-STYLE/_cut/${ts}-zs${i}ab.png` });
+    let keys = [...[0, 1, 2, 3].map((i) => key(T - 3 * 86_400_000 + i * 5000, i)), ...[0, 1, 2].map((i) => key(T - 600_000 + i * 5000, 10 + i))];
+    const loaded = []; let listed = 0;
+    const load = async (u) => { loaded.push(u); return u.includes('/_cut/') ? cutBuf : phBuf; };
+    const list = async () => { listed += 1; return keys; };
+    const memo = new Map(); const fakeMemo = { get: async (s) => memo.get(s) || null, set: async (s, v) => { memo.set(s, v); } };
+    const opts = (recorded = []) => ({ list, load, memo: fakeMemo, readPh: async () => ph, readCutouts: async () => recorded });
+    // already recorded for both uploaded angles → nothing read, R2 not even listed
+    const done = await CP.findCleanPhotos('ZS-STYLE', opts([{ angle: 'side' }, { angle: 'diagonal' }]));
+    expect(done).toMatchObject({ why: 'already_recorded', found: [], recorded: 0 });
+    expect([listed, loaded.length]).toEqual([0, 0]);
+    // first look: only the LAST session's 3 cutouts are scored (+ the 2 uploaded photos), not all 7 — nothing found, remembered
+    const first = await CP.findCleanPhotos('ZS-STYLE', opts());
+    expect(first).toMatchObject({ found: [], confidence: 'none', scored: 3 });
+    expect(loaded.filter((u) => u.includes('/_cut/')).sort()).toEqual(keys.slice(4).map((k) => k.url).sort());
+    expect(memo.get('ZS-STYLE')).toMatchObject({ found: 0 });
+    // the second click: answered at once from the memo (R2 listed — cheap — but nothing downloaded or scored)
+    loaded.length = 0;
+    expect(await CP.findCleanPhotos('ZS-STYLE', opts())).toMatchObject({ why: 'nothing_found_before', cached: true, found: [] });
+    expect(loaded).toEqual([]);
+    // a NEW cutout on R2 (re-branded): looked at again
+    keys = [...keys, key(T - 300_000, 20)];
+    expect((await CP.findCleanPhotos('ZS-STYLE', opts())).cached).toBeUndefined();
+    expect(loaded.length).toBeGreaterThan(0);
+    // redo (the backfill's --redo) always looks
+    loaded.length = 0;
+    expect((await CP.findCleanPhotos('ZS-STYLE', { ...opts([{ angle: 'side' }, { angle: 'diagonal' }]), redo: true })).why).not.toBe('already_recorded');
+    expect(loaded.length).toBeGreaterThan(0);
   });
 });

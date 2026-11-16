@@ -3139,6 +3139,18 @@ await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS size_stat
 // productAnswered). NULL first_seen_at = seen before this column existed (not counted as new).
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ`);
+// 2026-11-17: the blockers that sit ONLY on zero-stock sizes (src/lib/sheinListings.js productReadiness) —
+// shown greyed "(out of stock)"; blockers = what the shoe is judged on (its counted sizes). Filled by the
+// next recompute / Refresh (every 30 min on prod); '[]' until then.
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS idle_blockers JSONB NOT NULL DEFAULT '[]'::jsonb`);
+// The search (2026-11-17, normSearchText / searchTerms in src/lib/sheinListings.js — keep the character sets
+// the same): search_norm = search_text lower-cased, every quote (straight / curly / prime) and comma dropped,
+// whitespace collapsed; search_compact = that without spaces, dashes, underscores (a style code typed
+// "DQ7659101" finds "DQ7659-101"). Generated, so they are filled at once and never drift from search_text.
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS search_norm TEXT
+  GENERATED ALWAYS AS (btrim(regexp_replace(regexp_replace(lower(COALESCE(search_text, '')), '[''"‘’‚‛′″“”„,]', '', 'g'), '[[:space:]]+', ' ', 'g'))) STORED`);
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS search_compact TEXT
+  GENERATED ALWAYS AS (regexp_replace(regexp_replace(lower(COALESCE(search_text, '')), '[''"‘’‚‛′″“”„,]', '', 'g'), '[[:space:]_-]+', '', 'g')) STORED`);
 // One row per Shopify variant (row_key = its gid) or per SHEIN-only size (row_key = shein:<skuCode>).
 // shein_sku is NOT unique at the DB level: the compute assigns each SHEIN SKU to one row, and a
 // SKU moving between products mid-batch must not trip a constraint (Build log).
@@ -3345,6 +3357,38 @@ await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS publish_a
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS publish_again_at TIMESTAMPTZ`);
 // SHEIN image conversion (transform-pic) is an ASSET call: it makes a SHEIN-hosted URL, changes no product.
 await sql(`ALTER TABLE shein_api_log ADD COLUMN IF NOT EXISTS asset BOOLEAN NOT NULL DEFAULT false`);
+// ── SHEIN Listings, stage 2 of the page fixes (2026-11-17; docs/context/shein-listings.md → "The status engine") ──
+// The job statuses — ONE definition, re-applied on every run (+ 'expired': a preview not confirmed within 24 h).
+const SHEIN_JOB_STATUSES = ['queued', 'running', 'awaiting_confirm', 'done', 'stopped', 'failed', 'interrupted', 'expired'];
+await sql(`ALTER TABLE shein_listing_jobs DROP CONSTRAINT IF EXISTS shein_listing_jobs_status_check`);
+await sql(`ALTER TABLE shein_listing_jobs ADD CONSTRAINT shein_listing_jobs_status_check CHECK (status IN (${SHEIN_JOB_STATUSES.map((s) => `'${s}'`).join(',')}))`);
+// A person's "this price is right" for ONE size whose price is far from the shoe's other sizes (price_outlier):
+// { price, by, at } — it only counts for that exact price (a new price asks again). NULL = not confirmed.
+await sql(`ALTER TABLE shein_listing_variants ADD COLUMN IF NOT EXISTS price_ok JSONB`);
+// The listing log: what a PERSON (or a rule) changed on our side — a size's error cleared by hand (clear_error) or by
+// SHEIN approving the shoe's new photos / model (auto_clear_error), a price confirmed (price_ok), a one-off fix.
+// Never a SHEIN call (those are shein_api_log). The drawer reads it (GET ?product= → actions) — so it is LIVE.
+await sql(`
+  CREATE TABLE IF NOT EXISTS shein_listing_actions (
+    id                 BIGSERIAL PRIMARY KEY,
+    at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    by                 TEXT,
+    action             TEXT NOT NULL,
+    shopify_product_id TEXT,
+    row_keys           TEXT[] NOT NULL DEFAULT '{}',
+    detail             JSONB NOT NULL DEFAULT '{}'::jsonb
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS shein_listing_actions_product ON shein_listing_actions (shopify_product_id, id DESC)`);
+// "Rejected by SHEIN" reads the latest run item per (shoe, op) — skip the ~34k snapshot 'read' items a day.
+await sql(`CREATE INDEX IF NOT EXISTS shein_listing_job_items_product_op ON shein_listing_job_items (shopify_product_id, op, id) WHERE op <> 'read'`);
+// One-off (idempotent — a second run finds nothing): the size errors no rule could clear before 2026-11-17 (an approved
+// photo / Product Model change; a size on SHEIN whose error came from a send that tried to ADD it). The SQL + why:
+// api/_lib/shein-listing-oneoffs.js. Each clearing is written to shein_listing_actions.
+{
+  const { STALE_REJECTIONS_SQL } = await import('../api/_lib/shein-listing-oneoffs.js');
+  const c0 = (await pool.query(STALE_REJECTIONS_SQL, [null])).rows[0] || {};
+  if (c0.sizes) console.log(`SHEIN Listings one-off: cleared ${c0.sizes} stale size error(s) on ${c0.shoes} shoe(s) — recount (a Refresh, or any Setup save) to show it`);
+}
 
 // ── Order cancellations (docs/context/cancellations.md) ─────────────────────────────
 // The warehouse sends the bot a picture of an order to cancel; it is read on our server and
@@ -3850,7 +3894,7 @@ const LIVE_TABLES = [
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log', 'presell_entries',
   'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_price_locks', 'stockx_listings', 'stockx_price_locks', 'stockx_price_edits', 'stockx_teach', 'stockx_daily', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
   'shein_order_units', 'shein_shopify_orders', 'shein_live_runs', 'shein_live_items',
-  'shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_jobs', 'shein_listing_job_items', 'product_cutouts',
+  'shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_jobs', 'shein_listing_job_items', 'product_cutouts', 'shein_listing_actions',
   'cancellations', 'cancellation_photos', 'cancellation_events',
   'inbound_issues', 'inbound_issue_events',
   'stock_counts', 'stock_check_scans',

@@ -1,23 +1,31 @@
 // SHEIN Listings → Products tab: one row per product (photo, name, style code, Shopify ↔ SHEIN
 // ids, rolled-up status, "8 of 11 sizes on SHEIN", the worst blocker), expanding to one row per
 // size (Shopify stock / price, SHEIN size, SKU, SHEIN stock / price, status, what to do).
-// Ticked products are in memory only — never restored from the URL.
-import React, { useEffect, useState } from 'react';
-import { CopyText, Pager, RemoteThumb } from '../components/common.jsx';
+// Ticked products are in memory only — never restored from the URL, and dropped whenever the list changes
+// (page, tile, any-size mode, search, brand, reason, Shopify filter, sort — 2026-11-17).
+// Above the list: every filter that is on is a chip with ✕, plus Clear all (the owner: "we filter the errors, but we
+// can't remove the filter"); the reason filter ("What's stopping it") only on Blocked / Error.
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { CopyText, FormModal, Pager, RemoteThumb } from '../components/common.jsx';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
-import { STATUSES, STATUS_ORDER, rowSyncable, rowSyncWhy } from '../lib/sheinListings.js';
+import { useQueryParam } from '../lib/urlstate.js';
+import { STATUSES, STATUS_ORDER, rowSyncable, rowSyncWhy, blockerLabel } from '../lib/sheinListings.js';
 import { TERMS, plain } from '../lib/sheinWords.js';
 import { SheinBulkPublish } from '../components/SheinBulkPublish.jsx';
 import { ModelFixStrip } from '../components/SheinModelFix.jsx';
 import { PH_DATE } from '../lib/format.js';
-import { fmt, money, StatusChip, BlockerSay, FixButton, TONE, NEXT_PHASE, CustomSizeModal, PUBLISH_FIX_KINDS } from '../components/SheinListingsBits.jsx';
+import { fmt, money, StatusChip, BlockerSay, FixButton, TONE, NEXT_PHASE, CustomSizeModal, PUBLISH_FIX_KINDS, REJECTION_PREVIEW_OPS, ActNote,
+  SIZE_PHRASE, REASON_STATUSES, SORTS } from '../components/SheinListingsBits.jsx';
 
+// A tile = shoes whose OWN status (their worst in-stock size) is it (2026-11-17) — every sentence below says so.
 const EMPTY = {
-  '': 'No products match these filters.',
-  blocked: 'Nothing is blocked.', error: 'SHEIN hasn’t refused anything.', out_of_date: 'Nothing needs an update — every listed size matches Shopify.',
-  not_on_shein: 'Every in-stock size is on SHEIN (or blocked).', in_review: 'Nothing is waiting on a SHEIN review.', synced: 'No product is fully in step yet.',
-  shein_only: 'Every SHEIN size is in Shopify.', excluded: 'Nothing is marked “Not listing”.', unknown: 'Every product has been checked.',
+  '': 'No shoes here yet.',
+  blocked: 'No shoe is Blocked — nothing is waiting on a fix.', error: 'No shoe is in Error — nothing SHEIN refused is still standing.',
+  out_of_date: 'No shoe’s own status is Needs update.', not_on_shein: 'No shoe is simply waiting to be listed.',
+  in_review: 'No shoe is waiting on a SHEIN review.', synced: 'No shoe is fully in step with Shopify yet.',
+  shein_only: 'Every SHEIN size is in Shopify.', excluded: 'Nothing is marked “Not listing”.', unknown: 'Every shoe has been checked.',
 };
 
 // The two previews a person can start (they never mix: one partialEdit per product at a time).
@@ -38,7 +46,10 @@ function healthLine(p) {
   const missing = Math.max(0, (c.sizes || 0) - (c.on_shein || 0));
   switch (p.status) {
     case 'synced': return ['ok', 'Every in-stock size is on SHEIN and matches Shopify.'];
-    case 'not_on_shein': return ['muted', p.spu ? `${fmt(missing)} in-stock size${missing === 1 ? ' isn’t' : 's aren’t'} on SHEIN yet. Nothing is wrong — tick it and Preview to add them.` : 'Not on SHEIN yet. Tick it → “Publish new products” to preview it (Details shows what publishing needs).'];
+    case 'not_on_shein':
+      // nothing in stock: the shoe is judged on every size, but there is nothing to add until Shopify has a pair
+      if (!c.sizes) return ['muted', 'Nothing in stock on Shopify — nothing to add until a pair is back.'];
+      return ['muted', p.spu ? `${fmt(missing)} in-stock size${missing === 1 ? ' isn’t' : 's aren’t'} on SHEIN yet. Nothing is wrong — tick it and Preview to add them.` : 'Not on SHEIN yet. Tick it → “Publish new products” to preview it (Details shows what publishing needs).'];
     case 'out_of_date': { const n = c.by?.out_of_date || 0; return ['info', `${n ? `${fmt(n)} size${n === 1 ? '' : 's'} on SHEIN need${n === 1 ? 's' : ''}` : 'On SHEIN, but it needs'} an update (price, a size turned off, or a wrong SKU). Tick it → “Update prices & sizes” to preview the fix.`]; }
     case 'in_review': return ['violet', 'SHEIN is reviewing an earlier edit. Nothing to do.'];
     case 'shein_only': return ['warn', 'Not in Shopify — Shopify has none of these SKUs. Automatic sync holds them at 0.'];
@@ -75,7 +86,14 @@ export function diffText(x) {
       {isRise(x) && <span className="shl-rise"> ↑ SHEIN may review it</span>}
       {x.why && <span className="muted xs"> · {x.why}</span>}</>;
   }
+  if (x.field === 'shein_special') {
+    return <>SHEIN special <span className="shl-was">{money(x.from)}</span> is live → <b>{money(x.to)}</b> only if a preview ends the special
+      {x.base != null && <span className="muted xs"> · regular price {money(x.base)}</span>}</>;
+  }
   if (x.field === 'price' || x.field === 'compareAt') return <>Shopify {x.field === 'price' ? 'price' : 'compare-at'} changed: <span className="shl-was">{money(x.from)}</span> → <b>{money(x.to)}</b></>;
+  if (x.field === 'size') return <>Size changed on Shopify: <span className="shl-was">{x.from || '—'}</span> → <b>{x.to || '—'}</b> <span className="muted xs">(SHEIN still has the old size)</span></>;
+  if (x.field === 'sku') return <>SKU changed on Shopify: <span className="shl-was">{x.from || '—'}</span> → <b>{x.to || '—'}</b> <span className="muted xs">(SHEIN gets the new one with the update)</span></>;
+  if (x.field === 'barcode') return <>Barcode changed on Shopify: <span className="shl-was">{x.from || '—'}</span> → <b>{x.to || '—'}</b></>;
   if (x.field === 'seller_sku') return <>SHEIN has the wrong SKU: <span className="shl-was">{x.from || '—'}</span> → will change to <b>{x.to}</b></>;
   if (x.field === 'mall_state') return <>Turned off on SHEIN — will turn back on <span className="muted xs">(Shopify sells it)</span></>;
   if (x.field === 'listing') return <>Changed on Shopify since the last sync.</>;
@@ -116,8 +134,10 @@ function VariantRow({ v, shopifyUrl, onFix, busy, onUpdate, onMatch }) {
                 onClick={(e) => { e.stopPropagation(); if (typeof onUpdate === 'function') onUpdate(); }}>Preview the update</button>
               : <button type="button" className="btn xs shl-fix" disabled title={NEXT_PHASE}>Preview the update</button>}</div>
         ) : null}
-        {notes.map((n, i) => (
-          <div key={i} className="shl-note"><BlockerSay b={n} compact={!n.fix} />{n.action && <FixButton action={n.action} shopifyUrl={shopifyUrl} busy={busy} onMatch={onMatch} onAct={(k) => onFix(k, v, n)} />}</div>
+        {notes.map((n, i) => (n.code === 'price_no_market'
+          // a quiet note, not a warning: SHEIN's price is left alone until there is a market price (stage 2)
+          ? <div key={i} className="shl-note shl-quiet" data-note={n.code} title={n.fix || undefined}>{n.title}</div>
+          : <div key={i} className="shl-note" data-note={n.code}><BlockerSay b={n} compact={!n.fix} />{n.action && <FixButton action={n.action} shopifyUrl={shopifyUrl} busy={busy} onMatch={onMatch} onAct={(k) => onFix(k, v, n)} />}</div>
         ))}
         {!b && !v.diffs?.length && !notes.length && (v.status === 'not_on_shein'
           ? <span className="muted xs">Ready — tick the product and Preview to add it.</span>
@@ -146,11 +166,25 @@ export function VariantTable({ variants, shopifyUrl, onFix, busy, onUpdate, onMa
   );
 }
 
-// Automatic sync kinds, shared by the product rows and the drawer.
-export function useFixes({ onAct, onSignOut, reload, onOpen }) {
+// The fix buttons' kinds, shared by the product rows and the drawer. `onOpen(at?)` opens (or, in the drawer, moves to)
+// the shoe's Details — at 'photos' for Fix photos; `onDryRun(ids, ops)` starts a preview; `onPublishAgain` (drawer only).
+export function useFixes({ onAct, onSignOut, reload, onOpen, productId = null, onDryRun = null, onPublishAgain = null }) {
   const [custom, setCustom] = useState(null);   // { size, categoryId, suggestion }
   async function onFix(kind, v, b) {
-    if (PUBLISH_FIX_KINDS.includes(kind)) { onOpen?.(); return; }   // the fix is in the drawer's publishing checklist
+    // 2026-11-17: "this outlier price is right" for THIS size at THIS price (PH ok); a new price asks again
+    if (kind === 'confirm_price') {
+      const price = b?.action?.price ?? b?.params?.price;
+      if (await onAct('price_ok', { variantKey: v.row_key, price }, `Size ${v.shopify_size}: ${money(price)} confirmed — it goes with the next preview.`)) reload?.();
+      return;
+    }
+    // a SHEIN rejection's real next step: a preview of what was rejected (reads only)
+    if (kind in REJECTION_PREVIEW_OPS) {
+      if (onDryRun && productId) { const ops = REJECTION_PREVIEW_OPS[kind]; onDryRun([productId], ops || undefined); } else onOpen?.();
+      return;
+    }
+    if (kind === 'fix_photos') { onOpen?.('photos'); return; }
+    if (kind === 'publish_again' && onPublishAgain) { onPublishAgain(); return; }
+    if (PUBLISH_FIX_KINDS.includes(kind)) { onOpen?.(); return; }   // the fix is in the drawer's editor
     if (kind === 'add_custom_size' || kind === 'edit_size_map') {
       setCustom({ size: v.shopify_size, categoryId: b?.params?.categoryId ?? 0, suggestion: b?.params?.suggestion || b?.params?.text || '' });
       return;
@@ -165,19 +199,25 @@ export function useFixes({ onAct, onSignOut, reload, onOpen }) {
   return { onFix, modal };
 }
 
-function ProductRow({ p, open, onToggle, picked, onPick, onOpen, onAct, busy, onSignOut, inJob, onUpdate }) {
+function ProductRow({ p, open, onToggle, picked, onPick, onOpen, onAct, busy, onSignOut, inJob, onUpdate, onDryRun, anyStatus = '' }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState('');
   async function loadVariants() {
     try { const r = await api.sheinListingProduct(p.shopify_product_id); setRows(r.variants || []); setErr(''); }
     catch (e) { if (e.unauthorized) onSignOut(); else setErr(plain(e.message)); }
   }
-  useEffect(() => { if (open && !rows) loadVariants(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  // read again EVERY time it opens (the sizes may have changed since — a stale table was the bug)
+  useEffect(() => { if (open) loadVariants(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   useLive(open ? ['shein_listing_variants', 'shein_size_map'] : [], loadVariants, { mount: false, every: open ? 60_000 : 0 });
-  const { onFix, modal } = useFixes({ onAct, onSignOut, reload: loadVariants, onOpen: () => onOpen(p.shopify_product_id) });
+  const where = `row:${p.shopify_product_id}`;
+  const { onFix, modal } = useFixes({ onAct: (a, x, done) => onAct(a, x, done, where), onSignOut, reload: loadVariants, onOpen: (at) => onOpen(p.shopify_product_id, at),
+    productId: p.shopify_product_id, onDryRun: (ids, ops) => onDryRun(ids, ops, where) });
 
   const tone = TONE[p.status];
-  const w = p.worst && !['note'].includes(p.worst.level) ? p.worst : null;
+  // a Synced shoe never carries a red one-liner (its reasons sit on 0-stock sizes — idleBlockers, greyed below)
+  const w = p.status !== 'synced' && p.worst && !['note'].includes(p.worst.level) ? p.worst : null;
+  const idle = (p.idleBlockers || []).filter((b) => !['note', 'review'].includes(b.level));
+  const anyN = anyStatus ? Number(p.counts?.by?.[anyStatus] || 0) : 0;
   const [ht, hl] = healthLine(p);
   const nSizes = (p.counts?.all || 0) + (p.counts?.shein_only || 0);
   const isSheinOnly = String(p.shopify_product_id).startsWith('shein:');
@@ -202,8 +242,14 @@ function ProductRow({ p, open, onToggle, picked, onPick, onOpen, onAct, busy, on
               {w.sizes > 1 ? `${fmt(w.sizes)} sizes: ` : ''}<b>{w.title}</b> {w.fix}
             </span>
           ) : <span className={`shl-pline ${ht}`}>{hl}</span>}
+          {idle.length > 0 && (
+            <span className="shl-pline shl-idle" data-idle="" title="Only sizes with 0 pairs on Shopify have this — it doesn’t count until they are back in stock.">
+              {idle.map((b) => `${b.label}${b.sizes > 1 ? ` (${fmt(b.sizes)} sizes)` : ''}`).join(' · ')} <span className="shl-idle-tag">(out of stock)</span>
+            </span>
+          )}
         </span>
         <span className="shl-rollup"><StatusChip status={p.status} />
+          {anyStatus && anyStatus !== p.status && anyN > 0 && <span className={`ebo-chip shl-anymatch ${TONE[anyStatus]}`} data-any-match={anyN} title={`The shoe’s own status is ${STATUSES[p.status]?.label}; ${fmt(anyN)} of its sizes are ${STATUSES[anyStatus]?.label}`}>{fmt(anyN)} {STATUSES[anyStatus]?.label.toLowerCase()}</span>}
           {p.status !== 'in_review' && (p.counts?.by?.in_review || 0) > 0 && <span className="ebo-chip violet shl-inrev" title={STATUSES.in_review.meaning}>{fmt(p.counts.by.in_review)} in review</span>}
           {p.status !== 'out_of_date' && (p.counts?.by?.out_of_date || 0) > 0 && <span className="ebo-chip info shl-inrev" data-needs-update="" title="These sizes are on SHEIN but differ (price, turned off, wrong SKU) — tick the product → Update prices & sizes">{fmt(p.counts.by.out_of_date)} need{p.counts.by.out_of_date === 1 ? 's' : ''} an update</span>}
           {inJob > 0 && <span className="ebo-chip info" title="A preview or a send is working on this product right now">In job #{inJob}</span>}</span>
@@ -215,9 +261,10 @@ function ProductRow({ p, open, onToggle, picked, onPick, onOpen, onAct, busy, on
       </div>
       {open && (
         <div className="shl-vwrap">
+          <ActNote where={where} className="shl-pad" />
           {err && <p className="error sm shl-pad">{err}</p>}
           {!rows && !err && <div className="shl-pad"><div className="shl-skel shl-skel-row" /></div>}
-          {rows && <VariantTable variants={rows} shopifyUrl={p.shopifyUrl} onFix={onFix} busy={busy} onUpdate={onUpdate} onMatch={() => onOpen(p.shopify_product_id)} />}
+          {rows && <VariantTable variants={rows} shopifyUrl={p.shopifyUrl} onFix={onFix} busy={busy} onUpdate={onUpdate} onMatch={() => onOpen(p.shopify_product_id, 'match')} />}
           {rows && (
             <div className="shl-vfoot">
               <span className="muted xs">{p.category_id ? `SHEIN category ${p.category_id}` : 'No SHEIN category yet'}{p.review_reason ? ` · SHEIN: ${p.review_reason}` : ''}</span>
@@ -247,31 +294,85 @@ function useInJob(active, onSignOut) {
 
 // The Shopify filter (2026-10-28): active = ACTIVE on Shopify with stock > 0; the rest can't be synced.
 const SHOP_FILTERS = [['', 'All'], ['active', 'Active (in stock)'], ['inactive', 'Inactive or no stock']];
+const SHOP_WORDS = { active: 'Active (in stock)', inactive: 'Inactive or no stock' };
 const BULK_MAX = 100;
+const SORT_WORDS = Object.fromEntries(SORTS);
+const plural = (n, w, many = `${w}s`) => `${fmt(n)} ${n === 1 ? w : many}`;
 
-export function SheinListingsProducts({ setStatusAll, d, status, q, setQ, brand, setBrand, blocker, setBlocker, shop = '', setShop, page, setPage, pageSize, onOpen, onAct, busy, onSignOut, active, onDryRun }) {
+// The search box: typed text → ?q= after a pause. The box follows the URL only when the URL changed on its own (a
+// chip's ✕, Clear all) — never while typing, so "air " keeps its space and "air max" searches "air max".
+export function useSearchBox(q, setQ) {
   const [text, setText] = useState(q);
-  const [open, setOpen] = useState(() => new Set());
-  const [picked, setPicked] = useState(() => new Set());   // in memory only — ticks are never restored
-  const [bulk, setBulk] = useState(null);                   // the bulk-edit sheet: { ids, leftOut, intent } — in memory only
-  const [checking, setChecking] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);   // brand, reason, Shopify: open by itself when one is set
-  const filtersSet = (brand ? 1 : 0) + (blocker ? 1 : 0) + (shop ? 1 : 0);
-  useEffect(() => { setText(q); }, [q]);
+  const textRef = useRef(text);
+  textRef.current = text;
+  useEffect(() => { if (q !== textRef.current.trim()) setText(q); }, [q]);
   useEffect(() => {
-    if (text === q) return undefined;
+    if (text.trim() === q) return undefined;
     const t = setTimeout(() => setQ(text.trim()), 350);
     return () => clearTimeout(t);
   }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
+  return [text, setText];
+}
+
+// Every filter that is on, as a chip: ✕ takes off just that one; Clear all takes them all, the tile included.
+function FilterChips({ chips, onClearAll }) {
+  if (!chips.length) return null;
+  return (
+    <div className="shl-chips" role="group" aria-label="Filters that are on" data-active-filters="">
+      <span className="muted xs shl-chips-lead">Showing only:</span>
+      {chips.map((c) => (
+        <button key={c.key} type="button" className="shl-fchip" data-chip={c.key} aria-label={`Remove filter: ${c.label}`} title="Remove this filter" onClick={c.off}>
+          <span>{c.label}</span><span className="shl-fchip-x" aria-hidden="true">✕</span>
+        </button>
+      ))}
+      <button type="button" className="btn ghost xs shl-clearall" data-chip="all" onClick={onClearAll}>Clear all</button>
+    </div>
+  );
+}
+export { FilterChips };
+
+export function SheinListingsProducts({ d, status, any = false, sort = 'worst', setSort, setStatus, setAny, clearAll, q, setQ, brand, setBrand, blocker, setBlocker, shop = '', setShop,
+  page, setPage, pageSize, onOpen, onAct, busy, onSignOut, active, onDryRun }) {
+  const [text, setText] = useSearchBox(q, setQ);
+  const [open, setOpen] = useState(() => new Set());
+  const [picked, setPicked] = useState(() => new Set());   // in memory only — ticks are never restored
+  const [dropped, setDropped] = useState(0);                // "3 ticks cleared — the list changed" (said once, quietly)
+  const [askOff, setAskOff] = useState(null);               // "Don't list on SHEIN" asks first: the ids it would mark
+  const [barOpen, setBarOpen] = useState(false);            // phone: the bar is one line until it is opened
+  const [bulk, setBulk] = useState(null);                   // the bulk-edit sheet: { ids, leftOut, intent } — in memory only
+  const [checking, setChecking] = useState(false);
+  const [moreRaw, setMore] = useQueryParam('more', '');     // More filters (brand): open / closed, kept in the URL
+  const more = moreRaw === '1';
+  const reasonHere = REASON_STATUSES.includes(status);
+
+  // Ticks belong to the list they were made on: any change of it drops them (and says so once).
+  const listKey = [page, status, any ? 1 : 0, q, brand, blocker, shop, sort].join('|');
+  const lastKey = useRef(listKey);
+  useEffect(() => {
+    if (lastKey.current === listKey) return;
+    lastKey.current = listKey;
+    setBarOpen(false);
+    if (picked.size) { setDropped(picked.size); setPicked(new Set()); }
+  }, [listKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!dropped) return undefined;
+    const t = setTimeout(() => setDropped(0), 6000);
+    return () => clearTimeout(t);
+  }, [dropped]);
 
   const s = d.summary;
   const products = d.products || [];
   const inJob = useInJob(active, onSignOut);
   const toggle = (id) => setOpen((o) => { const n = new Set(o); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const pick = (id, on) => setPicked((o) => { const n = new Set(o); if (on) n.add(id); else n.delete(id); return n; });
-  const pageIds = products.filter((p) => !String(p.shopify_product_id).startsWith('shein:')).map((p) => p.shopify_product_id);
+  const pick = (id, on) => { setDropped(0); setPicked((o) => { const n = new Set(o); if (on) n.add(id); else n.delete(id); return n; }); };
+  // what can be ticked on this page: Shopify shoes not in a running preview / send
+  const pickable = products.filter((p) => !String(p.shopify_product_id).startsWith('shein:') && !inJob.get(p.shopify_product_id));
+  const pageIds = pickable.map((p) => p.shopify_product_id);
   const allPicked = pageIds.length > 0 && pageIds.every((id) => picked.has(id));
-  const pickedRows = products.filter((p) => picked.has(p.shopify_product_id));
+  // THE set every count and every button of the bar acts on: the ticked rows on screen (never a tick that left the page)
+  const pickedRows = pickable.filter((p) => picked.has(p.shopify_product_id));
+  const nPicked = pickedRows.length;
+  const pickedIds = pickedRows.map((p) => p.shopify_product_id);
   const pickedSizes = pickedRows.reduce((n, p) => n + (p.counts?.sizes || 0), 0);
   const pickedBlocked = pickedRows.filter((p) => p.status === 'blocked').length;
   const pickedOff = pickedRows.filter((p) => !p.spu).length;
@@ -286,7 +387,7 @@ export function SheinListingsProducts({ setStatusAll, d, status, q, setQ, brand,
   const pickedUpd = updRows.length;
   const pickedNew = pubRows.length;
   // 2026-11-11: shoes ON SHEIN whose photos can be replaced (the same Shopify gate as every listing sync)
-  const photoRows = pickedRows.filter((p) => isLiveOnShein(p) && !String(p.shopify_product_id).startsWith('shein:') && rowSyncable(p)).slice(0, BULK_MAX);
+  const photoRows = pickedRows.filter((p) => isLiveOnShein(p) && rowSyncable(p)).slice(0, BULK_MAX);
   // a ticked new shoe that still has a ✕ to fix → the button opens the fix step first, never the preview
   const pubNeedsFix = pubRows.filter((p) => ['blocked', 'error'].includes(p.status)).length;
   const deadWhy = [...new Set(deadRows.map(rowSyncWhy))].join(' / ');
@@ -294,13 +395,14 @@ export function SheinListingsProducts({ setStatusAll, d, status, q, setQ, brand,
     ...pickedRows.filter((p) => canPublish(p) && !rowSyncable(p)).map((p) => ({ productId: p.shopify_product_id, title: p.title, why: `${rowSyncWhy(p)} — not sent to SHEIN` })),
     ...rows.slice(BULK_MAX).map((p) => ({ productId: p.shopify_product_id, title: p.title, why: `over ${BULK_MAX} at a time — do it in a second batch` })),
   ];
+  const clearPicks = () => { setPicked(new Set()); setBarOpen(false); };
   const [photoAsk, setPhotoAsk] = useState(null);   // { ids, cover } — the "Replace SHEIN photos" question
   async function photoPreview() {
     const { ids, cover } = photoAsk;
     try {
       if (cover) await api.sheinListingAction({ action: 'publish_choices_bulk', productIds: ids, patch: { skipCover: true } });
       setPhotoAsk(null);
-      if (await onDryRun(ids, ['photos'])) setPicked(new Set());
+      if (await onDryRun(ids, ['photos'], 'bar')) clearPicks();
     } catch (e) { if (e.unauthorized) onSignOut(); else setPhotoAsk({ ...photoAsk, err: plain(e.message) }); }
   }
   const openBulk = (intent) => setBulk({ ids: pubRows.slice(0, BULK_MAX).map((p) => p.shopify_product_id), leftOut: leftOutFor(pubRows), intent });
@@ -312,116 +414,171 @@ export function SheinListingsProducts({ setStatusAll, d, status, q, setQ, brand,
     try {
       const r = await api.sheinPublishSetup(ids);
       const allReady = (r.products || []).length === ids.length && r.products.every((x) => x.ready) && pubRows.length <= BULK_MAX;
-      if (allReady) { if (await onDryRun(ids, ['publish'])) setPicked(new Set()); }
+      if (allReady) { if (await onDryRun(ids, ['publish'], 'bar')) clearPicks(); }
       else setBulk({ ids, leftOut: leftOutFor(pubRows), intent: 'fix' });
     } catch (e) {
       if (e.unauthorized) onSignOut(); else setBulk({ ids, leftOut: leftOutFor(pubRows), intent: 'fix' });
     } finally { setChecking(false); }
   }
   const lead = Math.max(pickedAdd, pickedUpd, pickedNew);
-  const primary = (n, first) => (n && n === lead && first ? 'primary' : 'ghost');
+  const primaryKey = !lead ? '' : pickedAdd === lead ? 'add' : pickedUpd === lead ? 'update' : 'publish';
+  const cls = (k, n) => `btn ${k === primaryKey ? 'primary shl-bar-primary' : 'ghost'}${n ? '' : ' shl-bar-none'}`;
   const running = active ? `Job #${active.id} is running — preview when it finishes` : '';
-  const addTitle = running || (pickedAdd ? `Preview: the in-stock sizes SHEIN doesn’t have yet, added to ${fmt(pickedAdd)} shoe${pickedAdd === 1 ? '' : 's'} already on SHEIN. Nothing is sent.` : 'None of the ticked shoes is on SHEIN with a size missing');
-  const updTitle = running || (pickedUpd ? `Preview: SHEIN prices, sizes turned off on SHEIN and wrong SKUs, for ${fmt(pickedUpd)} product${pickedUpd === 1 ? '' : 's'} that need an update. Nothing is sent.` : 'None of the ticked products needs an update');
+  const addTitle = running || (pickedAdd ? `Preview: the in-stock sizes SHEIN doesn’t have yet, added to ${plural(pickedAdd, 'shoe')} already on SHEIN. Nothing is sent.` : 'None of the ticked shoes is on SHEIN with a size missing');
+  const updTitle = running || (pickedUpd ? `Preview: SHEIN prices, sizes turned off on SHEIN and wrong SKUs, for ${plural(pickedUpd, 'shoe')} that need an update. Nothing is sent.` : 'None of the ticked shoes needs an update');
   const pubTitle = running || (!pickedNew ? (deadRows.some(canPublish) ? 'The ticked new shoes have no Shopify stock (or aren’t active) — nothing to publish' : 'None of the ticked shoes is new to SHEIN')
     : pubNeedsFix ? `${fmt(pubNeedsFix)} of the ${fmt(pickedNew)} still need${pubNeedsFix === 1 ? 's' : ''} fixing — this opens the fix step first (category, brand, details, photos…). Only the ready ones are previewed, and nothing is sent.`
       : `Checks every ticked new shoe first; when all ${fmt(pickedNew)} are ready, previews what SHEIN would receive. Any that still need fixing open the fix step instead. Nothing is sent.`);
+  // the page the server actually returned (a stale ?p= reads the last page)
   const first = d.total ? (page - 1) * pageSize + 1 : 0;
   const last = Math.min(d.total, page * pageSize);
+  const label = STATUSES[status]?.label || '';
+
+  // every filter that is on → a chip
+  const reasonLabel = (code) => (s.topBlockers || []).find((b) => b.code === code)?.label || blockerLabel(code);
+  const chips = [
+    status && { key: 'status', label: status === 'excluded' ? 'Not listing' : status === 'all' ? 'Everything (Not listing too)' : `Status: ${label}`, off: () => setStatus('') },
+    any && status && { key: 'any', label: `Has a ${SIZE_PHRASE[status] || 'size like that'}`, off: () => setAny(false) },
+    q && { key: 'q', label: `Search: “${q}”`, off: () => { setText(''); setQ(''); } },
+    brand && { key: 'brand', label: `Brand: ${brand}`, off: () => setBrand('') },
+    blocker && { key: 'blocker', label: `${TERMS.stopping}: ${reasonLabel(blocker)}`, off: () => setBlocker('') },
+    shop && { key: 'shop', label: `Shopify: ${SHOP_WORDS[shop]}`, off: () => setShop('') },
+    sort !== 'worst' && { key: 'sort', label: `Sort: ${SORT_WORDS[sort]}`, off: () => setSort('worst') },
+  ].filter(Boolean);
+  const narrowed = !!(q || brand || blocker || shop);
+  const bStat = s.byStatus?.[status] || null;
+  const clearEverything = () => { setText(''); clearAll(); };
 
   return (
     <div className="card">
-      <ModelFixStrip active={active} busy={busy} onDryRun={onDryRun} onSignOut={onSignOut} />
+      <ModelFixStrip active={active} busy={busy} onDryRun={(ids, ops) => onDryRun(ids, ops, 'model')} onSignOut={onSignOut} />
+      <ActNote where="model" />
       <div className="ebl-filters shl-filters">
-        <input type="search" className="input" value={text} onChange={(e) => setText(e.target.value)} placeholder="Search name, style code or SKU…" aria-label="Search products" />
-        {filtersSet > 0 || showFilters ? null : <button type="button" className="btn ghost sm shein-filterbtn" aria-expanded="false" onClick={() => setShowFilters(true)}>More filters</button>}
+        <input type="search" className="input" value={text} onChange={(e) => setText(e.target.value)} placeholder="Search name, style code, SKU or SHEIN code…" aria-label="Search products" />
+        {reasonHere && (
+          <select className="input shl-select" value={blocker} onChange={(e) => setBlocker(e.target.value)} aria-label={TERMS.stopping} data-reason-filter="">
+            <option value="">{TERMS.stopping}: any reason</option>
+            {(s.topBlockers || []).map((b) => <option key={b.code} value={b.code}>{b.label} ({plural(b.products, 'shoe')} · {plural(b.sizes, 'size')})</option>)}
+            {blocker && !(s.topBlockers || []).some((b) => b.code === blocker) && <option value={blocker}>{reasonLabel(blocker)}</option>}
+          </select>
+        )}
+        <button type="button" className="btn ghost sm shein-filterbtn" aria-expanded={more} data-more-toggle="" onClick={() => setMore(more ? '' : '1')}>
+          More filters{brand ? ' (1)' : ''} {more ? '▴' : '▾'}</button>
       </div>
-      {(filtersSet > 0 || showFilters) && (<>
-      <div className="ebl-filters shl-filters" data-more-filters="">
-        <select className="input shl-select" value={brand} onChange={(e) => setBrand(e.target.value)} aria-label="Brand">
-          <option value="">All brands</option>
-          {(s.brands || []).map((b) => <option key={b.brand} value={b.brand}>{b.brand} ({fmt(b.products)})</option>)}
-          {brand && !(s.brands || []).some((b) => b.brand === brand) && <option value={brand}>{brand}</option>}
-        </select>
-        <select className="input shl-select" value={blocker} onChange={(e) => setBlocker(e.target.value)} aria-label={TERMS.stopping}>
-          <option value="">{TERMS.stopping}: any</option>
-          {(s.topBlockers || []).map((b) => <option key={b.code} value={b.code}>{b.title.replace(/\.$/, '')} ({fmt(b.products)})</option>)}
-          {blocker && !(s.topBlockers || []).some((b) => b.code === blocker) && <option value={blocker}>{blocker}</option>}
-        </select>
-      </div>
+      {more && (
+        <div className="ebl-filters shl-filters" data-more-filters="">
+          <select className="input shl-select" value={brand} onChange={(e) => setBrand(e.target.value)} aria-label="Brand">
+            <option value="">All brands</option>
+            {(s.brands || []).map((b) => <option key={b.brand} value={b.brand}>{b.brand} ({fmt(b.products)})</option>)}
+            {brand && !(s.brands || []).some((b) => b.brand === brand) && <option value={brand}>{brand}</option>}
+          </select>
+        </div>
+      )}
       {setShop && (
         <div className="seg sm shl-shopfilter" role="group" aria-label="Shopify: active or not" data-shopfilter="">
           <span className="muted xs shl-shopfilter-lead">Shopify:</span>
-          {SHOP_FILTERS.map(([k, label]) => {
+          {SHOP_FILTERS.map(([k, lbl]) => {
             const n = k === 'active' ? d.shopifyCounts?.active : k === 'inactive' ? d.shopifyCounts?.inactive : null;
             return (
               <button key={k || 'all'} type="button" className={`seg-btn${shop === k ? ' on' : ''}`} aria-pressed={shop === k} data-shop={k || 'all'}
                 title={k === 'active' ? 'Active on Shopify with at least one pair in stock — the ones the listing syncs can send' : k === 'inactive' ? 'Draft / archived on Shopify, or 0 pairs — the listing syncs skip them (the stock sync still keeps SHEIN at 0)' : 'Every product'}
-                onClick={() => setShop(k)}>{label}{n != null && <span className="seg-n">{fmt(n)}</span>}</button>
+                onClick={() => setShop(k)}>{lbl}{n != null && <span className="seg-n">{fmt(n)}</span>}</button>
             );
           })}
         </div>
       )}
-      </>)}
+      <FilterChips chips={chips} onClearAll={clearEverything} />
       <div className="shl-listhead">
-        <span className="muted xs">{d.total ? `${fmt(first)}–${fmt(last)} of ${fmt(d.total)} products` : '0 products'}{status ? ` · ${STATUSES[status]?.label || status}` : ''}{shop ? ` · ${shop === 'active' ? 'active on Shopify, in stock' : 'inactive or no stock on Shopify'}` : ''} · worst first · tap a product for its sizes</span>
-        {pageIds.length > 0 && (
-          <label className="shl-pickall"><input type="checkbox" checked={allPicked} onChange={(e) => setPicked((o) => { const n = new Set(o); for (const id of pageIds) { if (e.target.checked) n.add(id); else n.delete(id); } return n; })} /> Select all on this page</label>
-        )}
+        <span className="muted xs shl-listhead-say" data-list-head="">
+          {any && status
+            ? <><b>Shoes with at least one {SIZE_PHRASE[status]}</b> — the chip on each row is the shoe’s own status; the second chip says how many of its sizes are {label}. </>
+            : status && status !== 'all' && status !== 'excluded' ? <><b>Shoes whose own status is {label}</b> (their worst in-stock size). </> : null}
+          {d.total ? `${fmt(first)}–${fmt(last)} of ${plural(d.total, 'shoe')}` : '0 shoes'} · tap a shoe for its sizes
+        </span>
+        <span className="shl-listhead-acts">
+          <label className="shl-sort"><span className="muted xs">Sort</span>
+            <select className="input shl-select" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort">
+              {SORTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+          </label>
+          {pageIds.length > 0 && (
+            <label className="shl-pickall" title={products.length > pageIds.length ? 'Shoes in a running preview / send (and SHEIN-only rows) are skipped' : undefined}>
+              <input type="checkbox" checked={allPicked} onChange={(e) => { setDropped(0); setPicked((o) => { const n = new Set(o); for (const id of pageIds) { if (e.target.checked) n.add(id); else n.delete(id); } return n; }); }} /> Select all on this page</label>
+          )}
+        </span>
       </div>
+      {dropped > 0 && <p className="muted xs shl-dropped" role="status" data-ticks-dropped={dropped}>{plural(dropped, 'tick')} cleared — the list changed.</p>}
       {!products.length && (
-        <div className="empty-state">
-          {!q && !brand && !blocker && status === 'out_of_date' && (s.byStatus?.out_of_date?.sizes || 0) > 0 ? (
-            <>No product needs <i>only</i> an update — but <b>{fmt(s.byStatus.out_of_date.sizes)} size{s.byStatus.out_of_date.sizes === 1 ? '' : 's'}</b> need{s.byStatus.out_of_date.sizes === 1 ? 's' : ''} one inside products that are also blocked (a product shows its worst status). They carry a blue “need an update” chip.
-              <div className="mt"><button type="button" className="btn ghost sm" onClick={() => setStatusAll?.()}>Show all products</button></div></>
-          ) : (q || brand || blocker || shop) ? <>No products match{q ? <> “<b>{q}</b>”</> : ''}{brand ? ` in ${brand}` : ''}{blocker ? ' with that reason' : ''}{shop ? (shop === 'active' ? ' that are active on Shopify with stock' : ' that are inactive or out of stock on Shopify') : ''}{status ? ` among ${STATUSES[status]?.label || status}` : ''}.</> : EMPTY[status] || EMPTY['']}
-          {(q || brand || blocker || shop) && <div className="mt"><button type="button" className="btn ghost sm" onClick={() => { setText(''); setQ(''); setBrand(''); setBlocker(''); setShop?.(''); }}>Clear search and filters</button></div>}
+        <div className="empty-state" data-empty="">
+          {narrowed
+            ? <>No shoes match{q ? <> “<b>{q}</b>”</> : ''}{brand ? ` in ${brand}` : ''}{blocker ? ` stopped by “${reasonLabel(blocker)}”` : ''}{shop ? (shop === 'active' ? ' that are active on Shopify with stock' : ' that are inactive or out of stock on Shopify') : ''}{status ? ` among ${any ? `shoes with a ${SIZE_PHRASE[status]}` : label || status}` : ''}.</>
+            : any && status ? <>No shoe has a {SIZE_PHRASE[status]}.</>
+              : <>{EMPTY[status] || EMPTY['']}
+                {status && bStat && bStat.anySize > 0 && <> But {plural(bStat.anySize, 'shoe has', 'shoes have')} a {SIZE_PHRASE[status]} — their own status is worse.
+                  <span className="shl-block mt"><button type="button" className="btn ghost sm" data-empty-any="" onClick={() => setAny(true)}>Show {bStat.anySize === 1 ? 'it' : `those ${fmt(bStat.anySize)}`}</button></span></>}</>}
+          {chips.length > 0 && <div className="mt"><button type="button" className="btn ghost sm" onClick={clearEverything}>Clear all filters</button></div>}
         </div>
       )}
       {products.map((p) => (
         <ProductRow key={p.shopify_product_id} p={p} open={open.has(p.shopify_product_id)} onToggle={() => toggle(p.shopify_product_id)}
           picked={picked.has(p.shopify_product_id)} onPick={(on) => pick(p.shopify_product_id, on)} onOpen={onOpen} onAct={onAct} busy={busy} onSignOut={onSignOut} inJob={inJob.get(p.shopify_product_id) || 0}
-          onUpdate={active ? 'busy' : () => onDryRun([p.shopify_product_id], UPDATE_OPS)} />
+          onDryRun={onDryRun} anyStatus={any ? status : ''}
+          onUpdate={active ? 'busy' : () => onDryRun([p.shopify_product_id], UPDATE_OPS, `row:${p.shopify_product_id}`)} />
       ))}
-      <Pager page={page} pageSize={pageSize} total={d.total} onPage={setPage} label="products" />
+      <Pager page={page} pageSize={pageSize} total={d.total} onPage={setPage} label="shoes" />
+      {/* the bar's answer once the bar is gone (its action cleared the ticks) */}
+      {nPicked === 0 && <ActNote where="bar" />}
 
-      {picked.size > 0 && (
-        <div className="batch-bar shl-bar">
-          <span className="shl-bar-tot"><b>{fmt(picked.size)} product{picked.size === 1 ? '' : 's'}</b> · {fmt(pickedSizes)} sizes in stock{pickedBlocked ? <span className="muted"> · {fmt(pickedBlocked)} blocked (their blocked sizes are skipped)</span> : null}{pickedOff ? <span className="muted"> · {fmt(pickedOff)} not on SHEIN yet</span> : null}
-            {deadRows.length > 0 && <span className="shl-bar-dead" data-left-out=""> · {fmt(deadRows.length)} left out: {deadWhy} — not sent to SHEIN</span>}</span>
+      {nPicked > 0 && (
+        <div className={`batch-bar shl-bar${barOpen ? ' open' : ''}`} data-bar="">
+          <span className="shl-bar-tot" data-bar-count={nPicked}><b>{plural(nPicked, 'shoe')}</b><span className="shl-bar-extra"> · {plural(pickedSizes, 'size')} in stock</span>
+            <span className="shl-bar-extra">{pickedBlocked ? <span className="muted"> · {fmt(pickedBlocked)} blocked (their blocked sizes are skipped)</span> : null}{pickedOff ? <span className="muted"> · {fmt(pickedOff)} not on SHEIN yet</span> : null}
+              {deadRows.length > 0 && <span className="shl-bar-dead" data-left-out=""> · {fmt(deadRows.length)} left out: {deadWhy} — not sent to SHEIN</span>}</span></span>
+          <button type="button" className="btn ghost sm shl-bar-toggle" aria-expanded={barOpen} data-bar="more" onClick={() => setBarOpen(!barOpen)}>{barOpen ? 'Less ▴' : 'More ▾'}</button>
           <span className="shl-bar-btns">
-            <button type="button" className="btn ghost sm" data-bar="clear" onClick={() => setPicked(new Set())}>Clear</button>
-            <button type="button" className="btn ghost sm" data-bar="off" disabled={!!busy} title="Our records only — nothing changes on SHEIN"
-              onClick={async () => { if (await onAct('exclude', { productIds: [...picked] }, `${fmt(picked.size)} product${picked.size === 1 ? '' : 's'} marked “Don’t list on SHEIN” (our records only).`)) setPicked(new Set()); }}>Don’t list on SHEIN</button>
+            <button type="button" className="btn ghost sm" data-bar="clear" onClick={clearPicks}>Clear</button>
+            <button type="button" className="btn ghost sm" data-bar="off" disabled={!!busy} title="Asks first. Our records only — nothing changes on SHEIN"
+              onClick={() => setAskOff(pickedIds)}>Don’t list on SHEIN</button>
             {pickedNew > 0 && (
               <button type="button" className="btn ghost sm" data-bar="bulk" disabled={!!checking}
-                title={`Set category, brand, SHEIN details, colour, photos and titles for the ${fmt(pickedNew)} ticked shoe${pickedNew === 1 ? '' : 's'} not on SHEIN yet — in one place. Our records only.`}
+                title={`Set category, brand, SHEIN details, photos and titles for the ${plural(pickedNew, 'ticked shoe')} not on SHEIN yet — in one place. Our records only.`}
                 onClick={() => openBulk('edit')}>Bulk edit <span className="shl-bar-n">{fmt(Math.min(pickedNew, BULK_MAX))}</span></button>
             )}
             <span className="shl-bar-lead muted xs">Preview first. Nothing is sent:</span>
-            <button type="button" className={`btn ${primary(pickedAdd, true)}`} disabled={!!busy || !!active || !pickedAdd} title={addTitle} data-dry="add"
-              onClick={async () => { if (await onDryRun(addRows.map((p) => p.shopify_product_id))) setPicked(new Set()); }}>{busy === 'preview' ? 'Starting…' : 'Add missing sizes'}{pickedAdd ? <> <span className="shl-bar-n">{fmt(pickedAdd)}</span></> : null}</button>
-            <button type="button" className={`btn ${primary(pickedUpd, pickedAdd !== lead)}`} disabled={!!busy || !!active || !pickedUpd} title={updTitle} data-dry="update"
-              onClick={async () => { if (await onDryRun(updRows.map((p) => p.shopify_product_id), UPDATE_OPS)) setPicked(new Set()); }}>{busy === 'preview' ? 'Starting…' : 'Update prices & sizes'}{pickedUpd ? <> <span className="shl-bar-n">{fmt(pickedUpd)}</span></> : null}</button>
+            <button type="button" className={cls('add', pickedAdd)} disabled={!!busy || !!active || !pickedAdd} title={addTitle} data-dry="add"
+              onClick={async () => { if (await onDryRun(addRows.map((p) => p.shopify_product_id), undefined, 'bar')) clearPicks(); }}>{busy === 'preview' ? 'Starting…' : 'Add missing sizes'}{pickedAdd ? <> <span className="shl-bar-n">{fmt(pickedAdd)}</span></> : null}</button>
+            <button type="button" className={cls('update', pickedUpd)} disabled={!!busy || !!active || !pickedUpd} title={updTitle} data-dry="update"
+              onClick={async () => { if (await onDryRun(updRows.map((p) => p.shopify_product_id), UPDATE_OPS, 'bar')) clearPicks(); }}>{busy === 'preview' ? 'Starting…' : 'Update prices & sizes'}{pickedUpd ? <> <span className="shl-bar-n">{fmt(pickedUpd)}</span></> : null}</button>
             {photoRows.length > 0 && (
               <button type="button" className="btn ghost sm" data-dry="photos" disabled={!!busy || !!active}
-                title={running || `Preview new photos for the ${fmt(photoRows.length)} ticked shoe${photoRows.length === 1 ? '' : 's'} already on SHEIN — what SHEIN has now → what it would get. Nothing is sent.`}
+                title={running || `Preview new photos for the ${plural(photoRows.length, 'ticked shoe')} already on SHEIN — what SHEIN has now → what it would get. Nothing is sent.`}
                 onClick={() => setPhotoAsk({ ids: photoRows.map((p) => p.shopify_product_id), cover: true })}>Replace SHEIN photos <span className="shl-bar-n">{fmt(photoRows.length)}</span></button>
             )}
-            <button type="button" className={`btn ${primary(pickedNew, pickedAdd !== lead && pickedUpd !== lead)}`} disabled={!!busy || !!active || !pickedNew || checking} title={pubTitle} data-dry="publish" data-needs-fix={pubNeedsFix || undefined}
+            <button type="button" className={cls('publish', pickedNew)} disabled={!!busy || !!active || !pickedNew || checking} title={pubTitle} data-dry="publish" data-needs-fix={pubNeedsFix || undefined}
               onClick={publishOrFix}>{checking ? 'Checking…' : busy === 'preview' ? 'Starting…' : pubNeedsFix ? 'Fix & publish' : 'Publish new products'}{pickedNew ? <> <span className="shl-bar-n">{fmt(pickedNew)}</span></> : null}</button>
           </span>
+          <ActNote where="bar" className="shl-bar-note" />
         </div>
+      )}
+      {askOff && createPortal(
+        <FormModal title={`Don’t list ${plural(askOff.length, 'shoe')} on SHEIN?`} submitLabel={`Don’t list ${plural(askOff.length, 'shoe')}`}
+          message={<>The {plural(askOff.length, 'ticked shoe')} leave{askOff.length === 1 ? 's' : ''} every tile and move{askOff.length === 1 ? 's' : ''} to <b>Not listing</b>. Nothing is sent to SHEIN — this is our records only. “List on SHEIN again” (in Details) undoes it.</>}
+          onClose={() => setAskOff(null)}
+          onSubmit={async () => {
+            const ids = askOff; setAskOff(null);
+            if (await onAct('exclude', { productIds: ids }, `${plural(ids.length, 'shoe')} marked “Don’t list on SHEIN” (our records only).`, 'bar')) clearPicks();
+          }} />,
+        document.body,
       )}
       {bulk && (
         <SheinBulkPublish ids={bulk.ids} leftOut={bulk.leftOut} intent={bulk.intent} active={active} busy={busy} onSignOut={onSignOut}
           onClose={() => setBulk(null)} onOpen={(id) => { setBulk(null); onOpen(id); }}
-          onDryRun={async (ids, ops) => { const r = await onDryRun(ids, ops); if (r) setPicked(new Set()); return r; }} />
+          onDryRun={async (ids, ops) => { const r = await onDryRun(ids, ops, 'bulk'); if (r) clearPicks(); return r; }} />
       )}
       {photoAsk && (
         <div className="modal-overlay" onClick={() => setPhotoAsk(null)}>
           <div className="modal form-modal shl-photo-ask" role="dialog" aria-modal="true" aria-label="Replace SHEIN photos" data-photo-ask="" onClick={(e) => e.stopPropagation()}>
-            <h3 className="modal-title">Replace the SHEIN photos of {fmt(photoAsk.ids.length)} shoe{photoAsk.ids.length === 1 ? '' : 's'}</h3>
+            <h3 className="modal-title">Replace the SHEIN photos of {plural(photoAsk.ids.length, 'shoe')}</h3>
             <p className="sm">Each shoe gets the photos picked for it (its own “Choose photos” in Details: the clean photos — the shoe on white — when its style has them, else the PH edited photos when that is on, else Shopify’s). The preview shows what SHEIN has now next to what it would get — nothing is sent until someone confirms.</p>
             <label className="shl-pub-ph"><input type="checkbox" checked={photoAsk.cover} onChange={(e) => setPhotoAsk({ ...photoAsk, cover: e.target.checked })} />
               <span>First leave out Shopify’s cover photo (photo 1) on all {fmt(photoAsk.ids.length)} <span className="muted xs shl-block">The branded cover — text, a logo or the store name on it — is what SHEIN calls a watermark. Our records only; Shopify isn’t changed.</span></span></label>

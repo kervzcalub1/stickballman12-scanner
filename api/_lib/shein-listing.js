@@ -39,12 +39,12 @@ import {
   getListingProduct, listListingProducts, updateListingItem, markListingItemSending, dueRunItems, runJobsWithDueItems, requeueListingJob,
   setListingJobStatus, listingInflight, markVariantsPublished, setVariantsLastError, verifySizeMap, verifySizeMapById, getPlatformQuotes, listListingJobItems,
   createRunJob, getListingItems, sheinShelfRecords, markVariantsSynced, listingPriceOffProducts, listCategoryMaps, listBrandMaps, setListingPublished, listAttrDefaults, listingShoeBySpu, listListingCategoryPicks,
-  listPublishUnconfirmed, resumeListingJob as resumeJobRow, phPhotoKeys, cleanPhotoRows,
+  listPublishUnconfirmed, resumeListingJob as resumeJobRow, phPhotoKeys, cleanPhotoRows, clearProductRejections, pruneSnapshotItems,
 } from './db.js';
 import { walkActive, pushSpus } from './shein-live.js';
 import {
   spuPayload, templateSizes, computeListings, normalizeWebhookProduct, listingHash, STATUS_ORDER, planAddSizes, summarizePlan, reviewVerdict, stableJson, blocker,
-  planPrice, planEdit, sheinNewSizePrice,
+  planPrice, planEdit, sheinNewSizePrice, priceOutliers, priceTargetsOf, STICKY_ERRORS,
   sizeKey, listingSyncGate, BLOCKERS,
 } from '../../src/lib/sheinListings.js';
 import { parseSize } from '../../src/lib/sheinCheck.js';
@@ -343,7 +343,7 @@ async function publishContext(maps, market) {
   // so the photo count is theirs — and with none, the photo line says so (it read Shopify's count only).
   // Clean photos (2026-11-14): the style's cutouts are the source when it has any (unless switched off) —
   // the same choice the dry run makes (sourcePhotos → photoSourceOf).
-  return (p, pv, excludedVariants) => {
+  return (p, pv, excludedVariants, priceOk = new Map()) => {
     const st = String(p?.style || '').trim().toUpperCase();
     const keys = phCounts.get(st) || new Set();
     const cleanRows = (cleanCounts.get(st) || []).map((r) => ({ ...r, view: r.shape ? viewOf(r.shape) : null }));
@@ -351,14 +351,18 @@ async function publishContext(maps, market) {
     const source = photoSourceOf({ cleanPhotos: pv?.clean_photos ?? null, usePhPhotos: !!pv?.use_ph_photos, cleanCount: cleanKeys.size, phCount: keys.size });
     const ph = source === 'clean' ? null : pv?.use_ph_photos ? keys.size : null;
     // the photos a person left out come off the count of the source in use
-    // + photo 1 must be a confirmed side view (2026-11-14; lenient: a "side" slot not measured yet counts — the preview measures it)
-    const mainUnsure = source === 'clean' && cleanOrder(cleanRows, { mainKey: pv?.clean_main || null, skip: pv?.photo_skip || [], lenient: true }).unsure;
+    // + photo 1 must be a side view (2026-11-14) — the SAME rule the preview applies (cleanOrder; 2026-11-17: a person-confirmed
+    // "side" slot counts unless its outline positively reads as a sole or a pair, measured or not)
+    const mainUnsure = source === 'clean' && cleanOrder(cleanRows, { mainKey: pv?.clean_main || null, skip: pv?.photo_skip || [] }).unsure;
     const prod = source === 'clean' ? { ...p, imageCount: countAfterSkip(cleanKeys.size, pv?.photo_skip, true, cleanKeys), phPhotos: null, photoSource: 'clean', cleanPhotos: cleanKeys.size, cleanMainUnsure: mainUnsure }
       : ph ? { ...p, imageCount: countAfterSkip(ph, pv?.photo_skip, true, keys), phPhotos: ph, photoSource: 'ph_edited', cleanPhotos: cleanKeys.size }
         : { ...p, imageCount: countAfterSkip(p?.imageCount, pv?.photo_skip, false, keys), phPhotos: ph, photoSource: 'shopify', cleanPhotos: cleanKeys.size };
-    return publishReadiness(prod, { ...ctx, productRow: pv, excludedVariants, market });
+    return publishReadiness(prod, { ...ctx, productRow: pv, excludedVariants, market, priceOk });
   };
 }
+
+// A person's price confirmations of a shoe's sizes (shein_listing_variants.price_ok) → Map(variantId → { price, by, at }).
+export const priceOkOf = (variants = []) => new Map((variants || []).filter((v) => v.price_ok && v.shopify_variant_id).map((v) => [v.shopify_variant_id, v.price_ok]));
 
 // The drawer's checklist for a product not on SHEIN, from what is cached (no SHEIN call): lines SHEIN's
 // rules haven't been read for are null ("not read yet"), never ✓.
@@ -366,7 +370,7 @@ export async function readinessChecklist(row, variants = [], io = IO) {
   const p = row?.shopify_json; if (!p) return null;
   const market = await io.marketTargets([p]).catch(() => new Map());
   const fn = await publishContext(await listSizeMaps(), market);
-  return fn(p, row, new Set(variants.filter((v) => v.excluded).map((v) => v.shopify_variant_id))).checklist;
+  return fn(p, row, new Set(variants.filter((v) => v.excluded).map((v) => v.shopify_variant_id)), priceOkOf(variants)).checklist;
 }
 
 // Bulk edit before publishing (2026-10-28): the same readiness for MANY products in one go — one context
@@ -378,7 +382,7 @@ export async function readinessMany(rows, io = IO) {
   const fn = await publishContext(await listSizeMaps(), market);
   const out = new Map();
   for (const r of list) {
-    const x = fn(r.product.shopify_json, r.product, new Set(r.variants.filter((v) => v.excluded).map((v) => v.shopify_variant_id)));
+    const x = fn(r.product.shopify_json, r.product, new Set(r.variants.filter((v) => v.excluded).map((v) => v.shopify_variant_id)), priceOkOf(r.variants));
     out.set(r.product.shopify_product_id, { checklist: x.checklist, category: x.category, titleMax: x.titleMaxRead ? x.titleMax : null, sizeGroup: x.sizeGroup });
   }
   return out;
@@ -386,7 +390,34 @@ export async function readinessMany(rows, io = IO) {
 
 // Recompute from what's stored (a size mapping saved, an exclude, a Shopify webhook): Shopify as
 // last read (shopify_json) with `replace` swapped in, SHEIN as the last snapshot read it. No SHEIN call.
-export async function recomputeStored({ replace = [], io = IO } = {}) {
+// One at a time in this process (2026-11-17): a whole-store recompute blocks the event loop ~160 ms and
+// has no lock, and every Setup save now asks for one. A call while one runs waits for ONE follow-up run
+// that starts after the current one ends (so it sees the caller's save); every call made meanwhile shares
+// that run (their `replace` products merged). → { products } of the run that covered the call.
+const recount = { running: null, queued: null };
+export function recomputeStored({ replace = [], io = IO } = {}) {
+  if (!recount.running) return startRecount(replace, io);
+  if (!recount.queued) {
+    let resolve; let reject;
+    const promise = new Promise((ok, no) => { resolve = ok; reject = no; });
+    recount.queued = { replace: new Map(), io, promise, resolve, reject };
+  }
+  for (const p of replace) recount.queued.replace.set(p.productId, p);
+  recount.queued.io = io;
+  return recount.queued.promise;
+}
+function startRecount(replace, io) {
+  const run = recomputeOnce({ replace, io });
+  recount.running = run;
+  run.catch(() => {}).finally(() => {
+    recount.running = null;
+    const q = recount.queued; recount.queued = null;
+    if (q) startRecount([...q.replace.values()], q.io).then(q.resolve, q.reject);
+  });
+  return run;
+}
+export const recomputeBusy = () => ({ running: !!recount.running, queued: !!recount.queued });
+async function recomputeOnce({ replace = [], io = IO } = {}) {
   const prev = await loadListingPrev();
   const byId = new Map([...prev.products.values()].filter((r) => r.shopify_json).map((r) => [r.shopify_product_id, r.shopify_json]));
   for (const p of replace) byId.set(p.productId, p);
@@ -541,6 +572,8 @@ export function sendState(op, plan) {
   return null;   // add_sku: a new seller SKU is never added twice anyway
 }
 const est = (d) => `${PH_DATETIME.format(d instanceof Date ? d : new Date(d))} EST`;
+// What a stored size error came from (setVariantsLastError meta, 2026-11-17).
+const metaOf = (it) => ({ op: it?.op || null, itemId: it?.id || null, spu: it?.spu || null });
 // No answer worth retrying: the network, SHEIN's 5xx, a rate limit. Anything else SHEIN said is a refusal.
 export const isTransport = (e) => (e?.notConnected || fatal(e)) ? false
   : !!e?.unknownAnswer || (!e?.httpStatus && !e?.sheinCode) || Number(e.httpStatus) >= 500 || Number(e.httpStatus) === 429
@@ -573,7 +606,8 @@ export async function startRunJob({ previewJobId, acceptChanges = false, by, io 
   if (!prev || prev.kind !== 'preview') throw Object.assign(new Error('That isn’t a dry run.'), { status: 400 });
   if (prev.status !== 'awaiting_confirm') {
     throw Object.assign(new Error(prev.status === 'done' && /sent as job/.test(prev.phase || '') ? `That dry run was already run (${prev.phase.replace(/^Confirmed — /, '')}).`
-      : `That dry run isn’t ready to run (it is ${prev.status}).`), { status: 409, job: prev });
+      : prev.status === 'expired' ? 'That preview expired (not confirmed within 24 h) — preview again; nothing was sent.'
+        : `That dry run isn’t ready to run (it is ${prev.status}).`), { status: 409, job: prev });
   }
   const cur = await activeListingJob();
   if (cur) throw Object.assign(new Error(`A SHEIN listing job is already ${cur.status} (#${cur.id}).`), { status: 409, job: cur });
@@ -693,7 +727,7 @@ async function buildItem(it, jctx, io, log) {
   const market = await io.marketTargets([product]).catch(() => new Map());   // the same lookup as the readiness (S9)
   const attrs = await editAttrs(spu, { io, log: lg });
   const { body, plan } = planAddSizes({ spu, product, stored: d.variants, maps: jctx.maps, sizes: tpl, permission: perm == null ? null : Number(perm), customValues: sizes.customValues,
-    sortSupported: fill?.support_sale_attribute_sort === true, fill, fillUnread, taken, market, warehouse: jctx.warehouse, attrs });
+    sortSupported: fill?.support_sale_attribute_sort === true, fill, fillUnread, taken, market, warehouse: jctx.warehouse, attrs, priceOk: priceOkOf(d.variants) });
   plan.reviewOpen = reviewOpen;
   plan.preVersion = docs.get(spuName)?.version || null;   // what SHEIN showed before we sent — a new version later = it arrived (S2)
   plan.title = d.product.title || null;
@@ -882,7 +916,7 @@ async function retryLater(it, e, io) {
   const msg = e.sheinMsg || e.message || 'no answer';
   if (retries >= MAX_RETRIES) {
     await updateListingItem(it.id, { status: 'failed', retries, traceId: e.traceId || null, error: `SHEIN didn’t answer after ${retries} tries: ${msg}`, blockers: [blocker('api_error', { message: msg, traceId: e.traceId || null })] });
-    await setVariantsLastError(it.variant_ids || [], { code: 'api_error', params: { message: msg, traceId: e.traceId || null } });
+    await setVariantsLastError(it.variant_ids || [], { code: 'api_error', params: { message: msg, traceId: e.traceId || null } }, metaOf(it));
     await recomputeAfter(io);
     return;
   }
@@ -972,7 +1006,7 @@ async function publishAnswered(it, b, info, lg, io) {
     const params = { sheinMessage: a.message, module: a.module, traceId: lg.traceId || null };
     await updateListingItem(it.id, { status: 'failed', error: a.message, traceId: lg.traceId || null, response: info, idemKey: null,
       blockers: [blocker('shein_prevalid', params), ...(a.mapped && a.mapped !== 'shein_prevalid' ? [blocker(a.mapped, params)] : [])] });
-    await setVariantsLastError(b.variantIds, { code: 'shein_prevalid', params });
+    await setVariantsLastError(b.variantIds, { code: 'shein_prevalid', params }, metaOf(it));
     await recomputeAfter(io);
     return;
   }
@@ -993,7 +1027,7 @@ function preValidMessages(info) {
 async function refused(it, b, { message, module = null, code = null, traceId = null, response = null }, io = IO) {
   const params = { sheinMessage: message, module, code, traceId };
   await updateListingItem(it.id, { status: 'failed', error: message, traceId, response, idemKey: null, blockers: [blocker('shein_prevalid', params)] });
-  await setVariantsLastError(b.variantIds, { code: 'shein_prevalid', params });
+  await setVariantsLastError(b.variantIds, { code: 'shein_prevalid', params }, metaOf(it));
   await recomputeAfter(io);
 }
 // Did a send we can't be sure about reach SHEIN? Its new seller SKUs exist in the store (incl.
@@ -1123,14 +1157,18 @@ async function buildResync(it, { d, product, spu, payload, spuName, lg, io, jctx
     const live = new Map((product.variants || []).map((v) => [v.variantId, v]));
     const onShein = stored.filter((v) => v.shopify_variant_id && ['sku', 'link', 'published'].includes(v.match));
     const market = await io.marketTargets([product]).catch(() => new Map());   // the readiness's lookup (S9)
-    const targets = new Map(); const shopifyFloor = new Map();
+    const targets = new Map(); const shopifyFloor = new Map(); let noMarket = 0;
     for (const v of onShein) {
       const lv = live.get(v.shopify_variant_id); if (!lv) continue;
-      // D8a: the automatic re-sync uses MARKET targets only (no Shopify fallback)
-      const t = sheinNewSizePrice({ marketCents: market.get(v.shopify_variant_id) ?? null, shopifyPrice: lv.price, marketOnly: !!scope.auto });
+      // MARKET targets only (2026-11-17, a person's preview too — was D8a's automatic re-sync only): against the
+      // Shopify fallback SHEIN is often lower on purpose (SHEIN Reprice); that difference is a note, never sent
+      const t = sheinNewSizePrice({ marketCents: market.get(v.shopify_variant_id) ?? null, shopifyPrice: lv.price, marketOnly: true });
       if (t) targets.set(v.shopify_variant_id, t);
+      else if (Number(lv.price) > 0) noMarket += 1;
       if (Number(lv.price) > 0) shopifyFloor.set(v.shopify_variant_id, Number(lv.price));
     }
+    // the price check over every size of the shoe (live Shopify, left-off sizes out) — the readiness's rule
+    const outliers = priceOutliers(priceTargetsOf(product.variants || [], market, new Set(stored.filter((v) => v.excluded).map((v) => v.shopify_variant_id))));
     let locksUnread = false;
     const search = (await io.sheinSearchProducts({ spuNameList: [spuName] }, lg).catch((e) => { if (fatal(e)) throw e; locksUnread = true; return { data: [] }; })).data.find((x) => String(x.spuName) === spuName);
     if (!search) locksUnread = true;   // no answer for this product → no rise goes (S3)
@@ -1140,8 +1178,9 @@ async function buildResync(it, { d, product, spu, payload, spuName, lg, io, jctx
     }));
     const inflightSkus = new Set((await listingInflight()).filter((x) => x.op === 'price' && x.spu === spuName && x.id !== it.id)
       .flatMap((x) => (x.sku_codes || []).filter((c) => Number(c.status) === 2).map((c) => String(c.skuCode))));
-    const { body, plan } = planPrice({ spu, stored, targets, locks, locksUnread, inflightSkus, endSpecials: !!scope.endSpecials, auto: !!scope.auto, shopifyFloor });
+    const { body, plan } = planPrice({ spu, stored, targets, locks, locksUnread, inflightSkus, endSpecials: !!scope.endSpecials, auto: !!scope.auto, shopifyFloor, outliers, priceOk: priceOkOf(stored) });
     plan.productTitle = d.product.title || null;
+    if (noMarket) { plan.noMarket = noMarket; plan.notes.push(blocker('price_no_market', { count: noMarket })); }
     return { body, plan, hash: body ? bodyHash(body) : null, variantIds: [...new Set(plan.prices.map((x) => x.variantId))], spuName };
   }
   const fill = await fillCache(payload.categoryId, io, lg).catch((e) => { if (fatal(e)) throw e; return null; });
@@ -1186,7 +1225,7 @@ async function priceAnswered(it, b, info, lg, io) {
     return refused(it, b, { message: a.refused.map((x) => `${x.size}: ${x.message}`).join(' | ') || 'SHEIN refused the prices', module: 'price', traceId: lg.traceId || null, response: info }, io);
   }
   const notes = a.refused.map((x) => blocker('shein_note', { sheinMessage: `${x.size}: ${x.message}`, module: 'price' }));
-  for (const x of a.refused) await setVariantsLastError([x.variantId], { code: 'shein_prevalid', params: { sheinMessage: x.message, module: 'price' } });
+  for (const x of a.refused) await setVariantsLastError([x.variantId], { code: 'shein_prevalid', params: { sheinMessage: x.message, module: 'price' } }, metaOf(it));
   const pending = a.accepted.filter((x) => x.status === 2);
   await updateListingItem(it.id, { status: pending.length ? 'in_review' : 'done', skuCodes: a.accepted, response: info, traceId: lg.traceId || null, sentNow: true,
     error: pending.length ? `${pending.length} price rise${pending.length === 1 ? '' : 's'} with SHEIN’s price review.` : null, blockers: notes });
@@ -1219,7 +1258,7 @@ async function settlePrice(item, codes, io, { via }) {
     return { item: item.id, verdict: 'stuck', via };
   }
   const ok = codes.filter((c) => Number(c.status) === 1); const no = codes.filter((c) => Number(c.status) === 3);
-  for (const c of no) await setVariantsLastError([c.variantId], { code: 'review_rejected', params: { failedReason: c.reason || 'no reason given' } });
+  for (const c of no) await setVariantsLastError([c.variantId], { code: 'review_rejected', params: { failedReason: c.reason || 'no reason given' } }, metaOf(item));
   if (!ok.length) {
     await updateListingItem(item.id, { status: 'failed', skuCodes: codes, checkedNow: true, error: no.map((c) => c.reason).filter(Boolean).join(' | ') || 'SHEIN rejected the price',
       blockers: [blocker('review_rejected', { failedReason: no.map((c) => c.reason).filter(Boolean).join(' | ') || 'no reason given' })] });
@@ -1273,6 +1312,16 @@ export async function autoPriceTick({ io = IO, now = new Date() } = {}) {
   return { previewed: job.id };
 }
 
+// 2026-11-17 · SHEIN approved a change it reviews for the WHOLE shoe (photos, Product Model, an edit — partialEdit re-checks
+// every colour): the rejections its sizes carry from before that send no longer stand (a photo approval used to clear
+// nothing — buildPhotoEdit sends no size list — so 27 sizes stayed Error after their photos were approved). DB only.
+export const PRODUCT_LEVEL_OPS = ['photos', 'model', 'edit'];
+async function clearAfterApproval(item) {
+  if (!PRODUCT_LEVEL_OPS.includes(item.op) || !item.shopify_product_id || String(item.shopify_product_id).startsWith('shein:')) return [];
+  return clearProductRejections(item.shopify_product_id, { since: item.sent_at || item.updated_at || new Date().toISOString(), by: `SHEIN approval (job #${item.job_id}, ${item.op})`, reason: `SHEIN approved the ${item.op === 'photos' ? 'new photos' : item.op === 'model' ? 'Product Model' : 'edit'} of this shoe` })
+    .catch((e) => { console.error('[shein-listing] clear after approval', e.message); return []; });
+}
+
 /* SHEIN's review: poll + webhooks */
 // approved → done + 'published' + size map verified + one stock-only step; rejected → failed.
 export async function applyReview(item, verdict, { failedReason = null, code = 'review_rejected', state = null, io = IO } = {}) {
@@ -1280,7 +1329,7 @@ export async function applyReview(item, verdict, { failedReason = null, code = '
   if (verdict === 'rejected') {
     const params = code === 'review_rejected' ? { failedReason: failedReason || 'no reason given' } : { sheinMessage: failedReason || 'SHEIN did not receive it' };
     await updateListingItem(item.id, { status: 'failed', checkedNow: true, documentState: state, error: failedReason || 'SHEIN rejected it', blockers: [blocker(code, params)] });
-    await setVariantsLastError(item.variant_ids || [], { code, params });
+    await setVariantsLastError(item.variant_ids || [], { code, params }, metaOf(item));
     await recomputeAfter(io);
     return { item: item.id, verdict };
   }
@@ -1301,16 +1350,19 @@ export async function applyReview(item, verdict, { failedReason = null, code = '
   }
   if (item.op === 'model') {   // the corrected Product Model is live
     await updateListingItem(item.id, { status: 'done', checkedNow: true, documentState: state ?? 2, error: null, blockers: item.blockers || [] });
+    await clearAfterApproval(item);
     await afterApplied(item, io);
     return { item: item.id, verdict };
   }
   if (item.op === 'photos') {   // the new photos are live: refresh what we know; sizes SHEIN rejected before go again by Add missing sizes
     await updateListingItem(item.id, { status: 'done', checkedNow: true, documentState: state ?? 2, error: null, blockers: item.blockers || [] });
+    await clearAfterApproval(item);
     await afterApplied(item, io);
     return { item: item.id, verdict };
   }
   if (item.op === 'edit' || item.op === 'price') {   // Phase 3: SHEIN took it — refresh what we know, the sizes are in step
     await updateListingItem(item.id, { status: 'done', checkedNow: true, documentState: state ?? 2, error: null, blockers: item.blockers || [] });
+    if (item.op === 'edit') await clearAfterApproval(item);   // a partialEdit: SHEIN re-reviewed the whole shoe and passed it
     await afterApplied(item, io);
     // A stopped SKU keeps no stock on SHEIN (doc 3002047 mall_state) — a size back on sale gets one stock step (S5).
     if ((item.plan?.mallOn || []).length) {
@@ -1334,7 +1386,7 @@ export async function applyReview(item, verdict, { failedReason = null, code = '
     if (Date.now() - seen.getTime() > APPROVED_WAIT_H * 3600_000) {
       const msg = `SHEIN said approved, but the new sizes never showed on SHEIN in ${APPROVED_WAIT_H} h — check the product in Seller Center.`;
       await updateListingItem(item.id, { status: 'failed', checkedNow: true, documentState: 2, error: msg, blockers: [blocker('api_error', { message: msg })] });
-      await setVariantsLastError(item.variant_ids || [], { code: 'api_error', params: { message: msg } });
+      await setVariantsLastError(item.variant_ids || [], { code: 'api_error', params: { message: msg } }, metaOf(item));
       await recomputeAfter(io);
       return { item: item.id, verdict: 'stuck' };
     }
@@ -1508,7 +1560,11 @@ export async function listingTick({ now = new Date(), io = IO } = {}) {
   await kickListingJobs({ io });
   const pruned = await getSetting('shein_api_log_pruned').catch(() => null);
   const today = estDate(now);
-  if (pruned !== today) { await pruneSheinApiLog(90).catch(() => {}); await setSetting('shein_api_log_pruned', today, 'shein-listing').catch(() => {}); }
+  if (pruned !== today) {
+    await pruneSheinApiLog(90).catch(() => {});
+    await pruneSnapshotItems(7).catch((e) => console.error('[shein-listing] prune snapshot items', e.message));   // 2026-11-17: ~34k read items a day
+    await setSetting('shein_api_log_pruned', today, 'shein-listing').catch(() => {});
+  }
 }
 
 export { getListingJob, STATUS_ORDER };

@@ -16,7 +16,7 @@ import { JOB_KIND_WORDS, JOB_WORDS, plain } from '../lib/sheinWords.js';
 export const KIND_LABEL = JOB_KIND_WORDS;
 // A preview says which of the two it is (scope.ops: add sizes, or update prices & sizes).
 export const jobLabel = (j) => (j?.kind === 'preview' ? `Preview · ${isPublishOps(j.scope?.ops) ? 'publish new products' : isPhotoOps(j.scope?.ops) ? 'replace SHEIN photos' : isModelOps(j.scope?.ops) ? 'fix the Product Model' : isUpdateOps(j.scope?.ops) ? 'update prices & sizes' : 'add sizes'}` : KIND_LABEL[j?.kind] || j?.kind);
-const JOB_CHIP = { done: 'ok', running: 'info', queued: '', stopped: '', failed: 'bad', interrupted: 'warn', awaiting_confirm: 'violet' };
+const JOB_CHIP = { done: 'ok', running: 'info', queued: '', stopped: '', failed: 'bad', interrupted: 'warn', awaiting_confirm: 'violet', expired: '' };   // expired: a preview nobody confirmed in 24 h
 const JOB_WORD = JOB_WORDS;
 const ITEM_CHIP = { done: 'ok', failed: 'bad', skipped: '', pending: '', sending: 'info', sent: 'info', in_review: 'violet', deferred: 'warn', changed: 'warn' };
 
@@ -66,7 +66,7 @@ function JobDetail({ id, onBack, onSignOut, canWrite, isAdmin, setJob }) {
     return (
       <>
         <button type="button" className="btn ghost sm shl-back" onClick={onBack}>← All jobs</button>
-        <DryRunView inline jobId={id} canWrite={canWrite} isAdmin={isAdmin} onSwitch={(n) => setJob(String(n))} onSignOut={onSignOut} />
+        <DryRunView key={id} inline jobId={id} canWrite={canWrite} isAdmin={isAdmin} onSwitch={(n) => setJob(String(n))} onSignOut={onSignOut} />
       </>
     );
   }
@@ -158,6 +158,7 @@ export function SheinListingsJobs({ job, setJob, active, canWrite, isAdmin, conn
                     <td data-label="Took">{took(j)}</td>
                     <td data-label="" className="shl-rt-act">
                       <button type="button" className="btn xs" onClick={() => setJob(String(j.id))}>{j.status === 'awaiting_confirm' ? 'Review →' : 'Open'}</button>
+                      {j.status === 'expired' && <span className="muted xs shl-block">Not confirmed in 24 h — preview again.</span>}
                       {canResume && <button type="button" className="btn xs" disabled={!resumeOk || !!busy} title={!resumeOk ? (j.kind === 'probe' && !canWrite ? NEEDS_PRIV : !connected ? 'Connect SHEIN first' : 'A job is already running') : 'Carries on from the first unfinished product'}
                         onClick={() => onAct('resume', { jobId: j.id }, `Job #${j.id} resumed on the server.`)}>Resume</button>}
                     </td>

@@ -17,8 +17,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
-import { CopyText, RemoteThumb } from './common.jsx';
-import { fmt, money, when, StatusChip } from './SheinListingsBits.jsx';
+import { CopyText, FormModal, RemoteThumb } from './common.jsx';
+import { fmt, money, when, StatusChip, ActNote, useBodyLock } from './SheinListingsBits.jsx';
 import { itemStatus, isPhotoRejection, renderBlocker } from '../lib/sheinListings.js';
 import { liveShoeLines, refusedBlockers } from '../lib/sheinShoeEdit.js';
 import { plain } from '../lib/sheinWords.js';
@@ -27,7 +27,22 @@ import { useFixes, UPDATE_OPS, isRise } from '../screens/SheinListingsProducts.j
 import { ShoeEditor } from './SheinPublishBits.jsx';
 import { SheinShoeFix } from './SheinShoeFix.jsx';
 
-export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOut, active, connected, onDryRun, onOpenJob }) {
+// 2026-11-17 (stage 3): keyed by product by the page (a switch loads the new shoe at once); `focus` = 'photos' | 'match'
+// opens it there (a row's Fix photos / Match sizes); the page behind doesn't scroll and closing returns to the same
+// place; an action's answer shows above the footer; Clear this error (admin / Connect integrations) + the listing log.
+const CLEARABLE = ['review_rejected', 'shein_prevalid', 'api_error'];
+// The listing log (shein_listing_actions) in words.
+const ACTION_WORDS = { clear_error: 'cleared an error', auto_clear_error: 'error cleared by itself (SHEIN approved a later change)', price_ok: 'confirmed a price', price_ok_cleared: 'withdrew a price confirmation' };
+function actionLine(a) {
+  const d = a.detail || {};
+  const what = ACTION_WORDS[a.action] || String(a.action || '').replace(/_/g, ' ');
+  const extra = a.action === 'price_ok' && d.price != null ? ` — size ${d.size || '?'} at ${money(d.price)}`
+    : a.action === 'clear_error' && d.note ? ` — “${d.note}”` : '';
+  return `${when(a.at)} · ${a.by || 'the server'} ${what}${extra}`;
+}
+
+export function SheinProductDrawer({ id, focus = '', isAdmin, onClose, onAct, busy, onSignOut, active, connected, onDryRun, onOpenJob }) {
+  useBodyLock(true);
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
   const [setup, setSetup] = useState(null);   // a new shoe's LIVE readiness (GET ?publishSetup=) — the publish safety net
@@ -40,7 +55,7 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
   }
   useEffect(() => { setD(null); setErr(''); setSetup(null); }, [id]);
   useLive(['shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_job_items', 'shein_category_map', 'shein_brand_map', 'app_settings', 'product_cutouts'], load);
-  const { onFix: onFix0, modal } = useFixes({ onAct, onSignOut, reload: load });
+  const publishAgain = async () => { if (await onAct('publish_again', { productIds: [id] }, 'Publish again allowed — check the new preview, then publish.')) onDryRun?.([id], ['publish']); };
   // the editor's open panel ('photos', 'attributes', 'category'…) — lifted here so "Fix photos" anywhere can open it
   const [editOpen, setEditOpen] = useState('');
   // "Fix photos" opens the editor's Photos line — the same picker for every shoe (2026-11-15) — and brings it
@@ -56,6 +71,8 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
     };
     setTimeout(go, 50);
   };
+  const { onFix: onFix0, modal } = useFixes({ onAct, onSignOut, reload: load, productId: id, onDryRun, onPublishAgain: publishAgain,
+    onOpen: (at) => { if (at === 'photos') toPhotos(); } });
   // "Fix photos" (SHEIN rejected the photos) opens this shoe's photo section; "Use clean photos" switches them on; the rest as before
   const onFix = (k, v, b) => (k === 'fix_photos' ? toPhotos()
     : k === 'use_clean_photos' ? onAct?.('publish_choices', { productId: id, photoSource: 'clean' }, 'SHEIN gets the clean photos — checked again by the next preview.')
@@ -63,8 +80,16 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
   const [matchOpen, setMatchOpen] = useState(false);
   const toMatch = () => { setMatchOpen(true); setTimeout(() => document.getElementById('shl-shoe-fix')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); };
   const [fixFirst, setFixFirst] = useState(false);   // "Publish new product" pressed with ✕ lines left → the checklist, not the preview
+  const [askClear, setAskClear] = useState(false);   // Clear this error: asks for a short note first
   const listRef = useRef(null);
   useEffect(() => { setFixFirst(false); setEditOpen(''); }, [id]);
+  // opened from a row's Fix photos / Match sizes: go there once the shoe is loaded
+  const focusDone = useRef(false);
+  useEffect(() => {
+    if (!d || focusDone.current || !focus) return;
+    focusDone.current = true;
+    if (focus === 'photos') toPhotos(); else if (focus === 'match') toMatch();
+  }, [d, focus]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape' && !modal) onClose(); };
     window.addEventListener('keydown', onKey);
@@ -78,6 +103,10 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
   const onShein = plan.filter((v) => v.shein_sku);
   const toAdd = plan.filter((v) => !v.shein_sku);
   const toAddLive = toAdd.filter((v) => Number(v.shopify_qty) > 0);
+  // what "Add missing sizes" can actually add: in stock, not on SHEIN, nothing blocking it (a size SHEIN rejected is re-tried)
+  const addable = toAddLive.filter((v) => ['not_on_shein', 'error'].includes(v.status));
+  // a size's stored error a person may clear (admin / Connect integrations): SHEIN's answer or no answer
+  const withError = variants.filter((v) => v.last_error && CLEARABLE.includes(v.last_error.code) && (v.blockers || []).some((b) => CLEARABLE.includes(b.code)));
   const toUpdate = onShein.filter((v) => v.diffs?.length);
   const isShopify = p && !String(p.shopify_product_id).startsWith('shein:');
   const isNew = isShopify && !p.spu;   // Phase 4: not on SHEIN at all → publish it
@@ -250,6 +279,21 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
                 </section>
               )}
 
+              {(withError.length > 0 || d.actions?.length > 0) && (
+                <section className="shl-d-sec" data-errors="">
+                  <h4 className="shl-h4">Errors &amp; what people changed</h4>
+                  {withError.length > 0 && (
+                    <div className="shl-clear">
+                      <p className="xs">{withError.length === 1 ? `Size ${withError[0].shopify_size || withError[0].shein_size} keeps` : `${fmt(withError.length)} sizes keep`} SHEIN’s last answer until a send of {withError.length === 1 ? 'it' : 'them'} is accepted. Fixed it another way (Seller Center, SHEIN support)? Clear the error — our records only, nothing is sent.</p>
+                      <button type="button" className="btn ghost sm" data-act="clear-error" disabled={!d.canWrite || !!busy} title={d.canWrite ? 'Asks for a short note, then clears the stored error of these sizes (logged).' : NEEDS_PRIV}
+                        onClick={() => setAskClear(true)}>Clear this error{withError.length > 1 ? ` (${fmt(withError.length)} sizes)` : ''}</button>
+                      {!d.canWrite && <span className="muted xs shl-block">{NEEDS_PRIV}.</span>}
+                    </div>
+                  )}
+                  {(d.actions || []).slice(0, 5).map((a, i) => <p key={a.id ?? i} className="xs muted shl-hist" data-action-log={a.action}>{actionLine(a)}</p>)}
+                </section>
+              )}
+
               <section className="shl-d-sec">
                 <h4 className="shl-h4">History</h4>
                 {!d.jobItems?.length && !d.log?.length && <p className="muted xs">Nothing yet{p.last_snapshot_at ? ` — last checked ${when(p.last_snapshot_at)}` : ''}.</p>}
@@ -270,6 +314,7 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
             </>
           )}
         </div>
+        <ActNote where="drawer" className="shl-d-note" />
         <div className="shl-d-foot">
           {p && isShopify && (p.excluded
             ? <button type="button" className="btn ghost sm" disabled={!!busy} onClick={async () => { if (await onAct('include', { productIds: [p.shopify_product_id] }, 'Listed on SHEIN again.')) load(); }}>List on SHEIN again</button>
@@ -282,18 +327,30 @@ export function SheinProductDrawer({ id, isAdmin, onClose, onAct, busy, onSignOu
               onClick={isNew ? publishClick : () => onDryRun?.([p.shopify_product_id], ['publish'])}>{busy === 'preview' ? 'Starting…' : isNew && toFix ? `Fix ${fmt(toFix)} first` : 'Publish new product'}</button>
           )}
           {p && live && (
-            <button type="button" className={`btn ${toUpdate.length && !toAddLive.length ? 'ghost' : 'primary'} sm`} disabled={!!busy || !!why || !toAdd.length} data-dry="add"
-              title={why || (!toAdd.length ? 'Every Shopify size is already on SHEIN' : `Preview: add ${fmt(toAdd.length)} size${toAdd.length === 1 ? '' : 's'} SHEIN doesn’t have. Nothing is sent until someone confirms.`)}
-              onClick={() => onDryRun?.([p.shopify_product_id])}>{busy === 'preview' ? 'Starting…' : 'Add missing sizes'}</button>
+            <button type="button" className={`btn ${toUpdate.length && !addable.length ? 'ghost' : 'primary'} sm`} disabled={!!busy || !!why || !addable.length} data-dry="add" data-addable={addable.length}
+              title={why || (!toAdd.length ? 'Every Shopify size is already on SHEIN'
+                : !addable.length ? `${fmt(toAdd.length)} size${toAdd.length === 1 ? ' isn’t' : 's aren’t'} on SHEIN, but none can be added now — out of stock, or blocked (each size says why)`
+                  : `Preview: add the ${fmt(addable.length)} in-stock size${addable.length === 1 ? '' : 's'} SHEIN doesn’t have. Nothing is sent until someone confirms.`)}
+              onClick={() => onDryRun?.([p.shopify_product_id])}>{busy === 'preview' ? 'Starting…' : `Add missing sizes${addable.length ? ` (${fmt(addable.length)})` : ''}`}</button>
           )}
           {p && live && (
-            <button type="button" className={`btn ${toUpdate.length && !toAddLive.length ? 'primary' : 'ghost'} sm`} disabled={!!busy || !!why || !toUpdate.length} data-dry="update"
+            <button type="button" className={`btn ${toUpdate.length && !addable.length ? 'primary' : 'ghost'} sm`} disabled={!!busy || !!why || !toUpdate.length} data-dry="update"
               title={why || (!toUpdate.length ? 'Nothing on SHEIN differs — no size needs an update' : `Preview: ${fmt(toUpdate.length)} size${toUpdate.length === 1 ? '' : 's'} with a SHEIN price, a size turned off or a wrong SKU. Nothing is sent until someone confirms.`)}
               onClick={() => onDryRun?.([p.shopify_product_id], UPDATE_OPS)}>{busy === 'preview' ? 'Starting…' : 'Update prices & sizes'}</button>
           )}
         </div>
       </aside>
       {modal}
+      {askClear && (
+        <FormModal title="Clear this error?" submitLabel="Clear the error"
+          message={<>The stored SHEIN answer on {withError.length === 1 ? `size ${withError[0].shopify_size || withError[0].shein_size}` : `${fmt(withError.length)} sizes`} is removed from our records and the shoe is checked again. Nothing is sent to SHEIN. Say why, for the log.</>}
+          fields={[{ name: 'note', label: 'Why (a few words)', required: true, placeholder: 'e.g. fixed in Seller Center' }]}
+          onClose={() => setAskClear(false)}
+          onSubmit={async ({ note }) => {
+            setAskClear(false);
+            if (await onAct('clear_error', { variantKeys: withError.map((v) => v.row_key), note: String(note).trim().slice(0, 200) }, (r) => `Error cleared on ${fmt(r?.cleared ?? withError.length)} size${(r?.cleared ?? withError.length) === 1 ? '' : 's'} — logged.`)) load();
+          }} />
+      )}
     </>,
     document.body,
   );

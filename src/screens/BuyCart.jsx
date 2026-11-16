@@ -14,7 +14,7 @@ import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { poHref } from '../lib/poLink.js';
 import { BuyCartProgress } from '../components/BuyCartProgress.jsx';
-import { TopBar, PriceInput, FormModal } from '../components/common.jsx';
+import { TopBar, PriceInput, FormModal, Modal } from '../components/common.jsx';
 import { BuyCartAdd, VerdictChip, lineCall } from '../components/BuyCartAdd.jsx';
 import { BuyCartGiftCards } from '../components/BuyCartGiftCards.jsx';
 import { BuyCartReceipt } from '../components/BuyCartReceipt.jsx';
@@ -51,6 +51,15 @@ const STATUS = {
   // reason and a name — never a false "received" or "refunded".
   written_off: { label: 'Written off — documented loss', cls: 'danger' },
 };
+
+// One line per order in the "which order is it on?" list — enough to recognise the right one.
+const PO_WORD = { draft: 'Draft', shipped: 'Shipped', receiving: 'Receiving', reconciled: 'Reconciled', closed: 'Closed' };
+const linkPoLabel = (o) => [
+  o.po_code, o.created_on, PO_WORD[o.status] || o.status, o.tag_code,
+  `${o.boxes} box${o.boxes === 1 ? '' : 'es'}`, `${o.units} pair${o.units === 1 ? '' : 's'}`,
+  o.dropoffs > 0 ? 'drop-off receipt' : null,
+  o.requests?.length ? `already on it: ${o.requests.join(', ')}` : null,
+].filter(Boolean).join(' · ');
 
 function StatusChip({ status }) {
   const s = STATUS[status] || { label: status, cls: 'muted' };
@@ -1448,6 +1457,8 @@ export function BuyCart({ user, cartId, onBack, onHome = null, onSignOut }) {
   // Two questions that used to be native prompts: how many boxes the PO covers, and why
   // a request is being cancelled.
   const [asking, setAsking] = useState(null);
+  // "Already shipped — link to a purchase order": the buyer's orders to choose from.
+  const [linkOptions, setLinkOptions] = useState(null);
   const [cart, setCart] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
@@ -1465,6 +1476,8 @@ export function BuyCart({ user, cartId, onBack, onHome = null, onSignOut }) {
   const canDecide = mayDecide && decisionsOpen(cart?.status);
   const canIssue = !isBuyer && hasPriv(user, 'issue_gift_cards');
   const canAudit = !isBuyer && hasPriv(user, 'audit_buying');
+  // Linking a request to the order it already shipped on: the buyer, the warehouse, PH, admin.
+  const canLinkPo = isBuyer || ['warehouse', 'ph_team', 'admin', 'superadmin'].includes(role);
   // The cost side is the BUYER'S first — they are the one in the shop who can read the
   // tax off the register — and either desk can then overwrite anything they typed. The
   // control is the trail, not the lock: every version is named in the history. Shelf
@@ -1534,7 +1547,8 @@ export function BuyCart({ user, cartId, onBack, onHome = null, onSignOut }) {
               {cart.buyer_name}{cart.retailer ? ` · ${cart.retailer}` : ''} · opened {estDate(cart.created_at)} EST
             </div>
           </div>
-          <span className="bc-head-chips"><ListChip cart={cart} /><StatusChip status={cart.status} /></span>
+          <span className="bc-head-chips"><ListChip cart={cart} /><StatusChip status={cart.status} />
+            {cart.po && cart.po_linked_at && <span className="po-chip ok" title={`Linked by ${cart.po_linked_by || '—'}`}>Shipped on {cart.po.po_code}</span>}</span>
         </div>
         {/* Where it is, as a row of dots. The status chip above says the column value;
             this says the STOP on the route, including the half that lives on the order. */}
@@ -1580,7 +1594,16 @@ export function BuyCart({ user, cartId, onBack, onHome = null, onSignOut }) {
           <span>Receipt <b>{money(cart.receipt_total)}</b></span>
           <span>Left over <b>{money(cart.balance_remaining)}</b></span>
           {cart.po && (
-            <span>Order <a className="bc-po-link" href={poHref(user, cart.po.id)} title="Open the order — boxes, labels, tracking"><b>{cart.po.po_code}</b></a> ({cart.po.status})</span>
+            <span>Order <a className="bc-po-link" href={poHref(user, cart.po.id)} title="Open the order — boxes, labels, tracking"><b>{cart.po.po_code}</b></a> ({cart.po.status})
+              {cart.po_linked_at && <span className="muted xs"> · linked{cart.po_linked_by ? ` by ${cart.po_linked_by}` : ''}{' '}
+                {canLinkPo && <button type="button" className="bc-linkbtn" disabled={busy === 'unlink'}
+                  onClick={async () => {
+                    if (!window.confirm(`Remove the link between ${cart.cart_code} and ${cart.po.po_code}? The order itself is not changed.`)) return;
+                    setBusy('unlink'); setErr('');
+                    try { await api.cartUnlinkPo(cart.id); await load(); }
+                    catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+                    finally { setBusy(''); }
+                  }}>Unlink</button>}</span>}</span>
           )}
         </div>
         {cart.approved_by && (
@@ -1618,6 +1641,20 @@ export function BuyCart({ user, cartId, onBack, onHome = null, onSignOut }) {
             <button className="btn primary" disabled={busy === 'po'}
               onClick={() => setAsking('po')}>
               {isBuyer ? 'Start packing this shipment' : 'Raise the purchase order'}
+            </button>
+          )}
+          {/* ALREADY SHIPPED on an order the supplier made themselves (they skipped "Start
+              packing"): point the request at that order instead of leaving it "waiting on
+              the shipment" for ever. Buyer, warehouse, PH, admin. */}
+          {canLinkPo && !cart.po_id && ['funded', 'receipted', 'audited'].includes(cart.status) && (
+            <button className="btn" disabled={busy === 'link'}
+              onClick={async () => {
+                setBusy('link'); setErr('');
+                try { setLinkOptions((await api.cartLinkPoOptions(cart.id)).options || []); setAsking('link'); }
+                catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+                finally { setBusy(''); }
+              }}>
+              Already shipped — link to a purchase order
             </button>
           )}
           {/* Only once there is something to close against. It used to sit here, primary
@@ -1678,6 +1715,27 @@ export function BuyCart({ user, cartId, onBack, onHome = null, onSignOut }) {
               type: 'number', value: '1', min: 1, max: 99,
               hint: 'A guess is fine — you can add another box at any point while packing.' }]} />
         )}
+
+        {asking === 'link' && linkOptions && (linkOptions.length === 0 ? (
+          <Modal type="warn" title="No purchase order to link to"
+            message={`${cart.buyer_name} has no purchase order from the last six months. If the boxes haven’t been declared yet, use “${isBuyer ? 'Start packing this shipment' : 'Raise the purchase order'}” instead.`}
+            onClose={() => setAsking(null)}>
+            <button type="button" className="btn primary" onClick={() => setAsking(null)}>OK</button>
+          </Modal>
+        ) : (
+          <FormModal
+            title={`${cart.cart_code} already shipped — which order is it on?`}
+            message="Pick the purchase order these pairs were shipped on. Nothing on the order changes: its boxes, labels and manifest stay as the supplier made them. More than one request can be on the same order."
+            submitLabel="Mark shipped — link it"
+            onClose={() => setAsking(null)}
+            onSubmit={async ({ poId }) => {
+              await api.cartLinkPo(cart.id, Number(poId));
+              setAsking(null); await load();
+            }}
+            fields={[{ name: 'poId', label: 'Purchase order', type: 'select', value: String(linkOptions[0].id),
+              options: linkOptions.map((o) => ({ value: String(o.id), label: linkPoLabel(o) })),
+              hint: 'Newest first. “Drop-off receipt” = the supplier already handed boxes to the courier on that order.' }]} />
+        ))}
 
         {asking === 'reopen' && (
           <FormModal
@@ -1825,7 +1883,8 @@ export function BuyCart({ user, cartId, onBack, onHome = null, onSignOut }) {
           thing that decides whether the last box may ship. */}
       {cart.po_id && (
         <div id="bc-sec-pack" className="bc-sec"><BuyCartPack cart={cart} user={user} onChanged={load} onSignOut={onSignOut}
-          canPack={(isBuyer || canDecide || canAudit) && !['closed', 'cancelled', 'written_off'].includes(cart.status)}
+          // A LINKED order is the supplier's own: its boxes are filled on the purchase order.
+          canPack={!cart.po_linked_at && (isBuyer || canDecide || canAudit) && !['closed', 'cancelled', 'written_off'].includes(cart.status)}
           // Who may ASK for labels is the order's rule, not the request's: the buyer,
           // PH (who buy the labels and may ask on a buyer's behalf) and admin — the same
           // set `po/request-labels` accepts, so the button never leads to a 403.

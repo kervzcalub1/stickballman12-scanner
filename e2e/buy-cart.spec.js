@@ -5555,3 +5555,137 @@ test.describe('re-reading a saved receipt', () => {
     await expect(page.getByRole('button', { name: 'Re-read the receipt' })).toHaveCount(0);
   });
 });
+
+// ── Already shipped: link the request to the supplier's own order (2026-11-17) ─────────────
+// The written path is "Start packing" → the request raises its order. A supplier who ships
+// on an order they made themselves leaves the request "waiting on the shipment" for ever.
+// The buyer, the warehouse or the PH team can point it at that order — and the order itself
+// is never touched by the request.
+test.describe('linking a request to an order that already shipped', () => {
+  const rows = [
+    { sku: LINE.sku, size: LINE.size, qty: 1, unitPrice: 100, totalPrice: 100, source: 'paste' },
+    { sku: 'DD1391-100', size: '10', qty: 1, unitPrice: 100, totalPrice: 100, source: 'paste' },
+  ];
+  async function receipted(request) {
+    const cartId = await newRequest(request, { lines: [LINE] });
+    await call(request, 'approver', 'cart/decide', { cartId, all: true, action: 'approve', qtyAll: LINE.qty });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, card: { code: '6060100000000007777', balance: 400 } });
+    await call(request, 'issuer', 'cart/gift-card', { cartId, fund: true });
+    expect((await call(request, 'buyer', 'cart/receipt', { cartId, receiptTotal: 216.5, subtotal: 200, tax: 16.5, lines: rows })).status).toBe(200);
+    return cartId;
+  }
+  // The order a supplier made on their own: per-box manifest, already shipped.
+  async function ownOrder(who = 'buyer') {
+    const u = people[who];
+    const po = (await pool.query(
+      `INSERT INTO purchase_orders (supplier_name, supplier_user_id, raised_by, expected_boxes, status, order_kind, manifest_scope, tag_code)
+       VALUES ($1, $2, 'supplier', 1, 'shipped', 'shoes', 'box', 'E2E own order') RETURNING id, po_code`, [u.name, u.uid])).rows[0];
+    const box = (await pool.query(`INSERT INTO po_boxes (po_id, box_number, status, tracking_number) VALUES ($1, 1, 'shipped', $2) RETURNING id`,
+      [po.id, `1ZE2ELINK${po.id}`])).rows[0];
+    await pool.query(`INSERT INTO po_lines (po_id, po_box_id, sku, size, qty_expected) VALUES ($1, $2, $3, $4, 1), ($1, $2, 'ZZ-OTHER', '9', 3)`,
+      [po.id, box.id, LINE.sku, LINE.size]);
+    return { id: Number(po.id), code: po.po_code };
+  }
+  const poLines = async (poId) => (await pool.query(`SELECT sku, size, qty_expected::int AS qty, (po_box_id IS NULL) AS order_level FROM po_lines WHERE po_id = $1 ORDER BY sku`, [poId])).rows;
+  test.afterAll(async () => {
+    await pool.query(`UPDATE buy_carts SET po_id = NULL, po_linked_at = NULL, po_linked_by = NULL
+                       WHERE po_id IN (SELECT id FROM purchase_orders WHERE tag_code = 'E2E own order')`);
+    await pool.query(`DELETE FROM purchase_orders WHERE tag_code = 'E2E own order'`);
+  });
+
+  test('buyer or staff link it; the order must be that buyer’s; the order is not changed; unlink undoes it', async ({ request }) => {
+    const cartId = await receipted(request);
+    const po = await ownOrder();
+    const theirs = await ownOrder('buyer2');
+    const before = await poLines(po.id);
+
+    // The choices are the buyer's own orders, newest first, with what identifies them.
+    const opts = await read_(request, 'buyer', `cart/link-po?cartId=${cartId}`);
+    expect(opts.status).toBe(200);
+    const mine = opts.body.options.find((o) => Number(o.id) === po.id);
+    expect(mine).toMatchObject({ po_code: po.code, status: 'shipped', boxes: 1, units: 4, requests: [] });
+    expect(opts.body.options.some((o) => Number(o.id) === theirs.id)).toBe(false);
+
+    // Not another buyer, not a supplier who was never switched on, and never somebody else's order.
+    expect((await call(request, 'buyer2', 'cart/link-po', { cartId, poId: po.id })).status).toBe(403);
+    expect((await call(request, 'shipper', 'cart/link-po', { cartId, poId: po.id })).status).toBe(403);
+    const wrong = await call(request, 'buyer', 'cart/link-po', { cartId, poId: theirs.id });
+    expect(wrong.status).toBe(409);
+    expect(wrong.body.error).toMatch(/isn’t E2E Buyer’s order/);
+    expect((await call(request, 'buyer', 'cart/link-po', { cartId })).status).toBe(400);
+
+    // The buyer links it.
+    const linked = await call(request, 'buyer', 'cart/link-po', { cartId, poId: po.id });
+    expect(linked.status).toBe(200);
+    expect(linked.body.cart).toMatchObject({ po_linked_by: 'E2E Buyer' });
+    expect(Number(linked.body.cart.po_id)).toBe(po.id);
+    expect(linked.body.cart.po).toMatchObject({ po_code: po.code, status: 'shipped' });
+    expect(linked.body.cart.po_linked_at).toBeTruthy();
+    expect(await poLines(po.id)).toEqual(before);                                   // nothing written to the order
+    expect((await pool.query(`SELECT manifest_scope FROM purchase_orders WHERE id = $1`, [po.id])).rows[0].manifest_scope).toBe('box');
+    expect((await pool.query(`SELECT body FROM po_comments WHERE po_id = $1 ORDER BY id DESC LIMIT 1`, [po.id])).rows[0].body).toMatch(/linked buying request BC-\d+ to this order/);
+    // Already has one: neither a second link nor "Start packing".
+    expect((await call(request, 'buyer', 'cart/link-po', { cartId, poId: po.id })).status).toBe(409);
+    expect((await call(request, 'buyer', 'cart/raise-po', { cartId })).status).toBe(409);
+    // The request never packs into a linked order, and taking a shoe off the receipt leaves the order alone.
+    const boxId = (await pool.query(`SELECT id FROM po_boxes WHERE po_id = $1`, [po.id])).rows[0].id;
+    expect((await call(request, 'buyer', 'cart/pack', { cartId, poBoxId: Number(boxId), sku: 'DD1391-100', size: '10', qty: 1 })).status).toBe(409);
+    const lineId = Number(linked.body.cart.receiptLines.find((l) => l.sku === 'DD1391-100').id);
+    expect((await call(request, 'auditor', 'cart/receipt-remove', { cartId, lineIds: [lineId], reason: 'Buyer own purchase' })).status).toBe(200);
+    expect((await call(request, 'auditor', 'cart/receipt-remove', { cartId, lineIds: [lineId], restore: true })).status).toBe(200);
+    expect(await poLines(po.id)).toEqual(before);
+
+    // A second request of the same buyer goes on the SAME order — a week's buying in one shipment.
+    const cart2 = await receipted(request);
+    expect((await call(request, 'approver', 'cart/link-po', { cartId: cart2, poId: po.id })).status).toBe(200);   // warehouse
+    const again = await read_(request, 'bystander', `cart/link-po?cartId=${cart2}`);                              // PH can look
+    expect(again.body.options.find((o) => Number(o.id) === po.id).requests).toHaveLength(2);
+
+    // Unlink: PH staff or the buyer; the order stays as it was.
+    expect((await call(request, 'buyer2', 'cart/link-po', { cartId, unlink: true })).status).toBe(403);
+    const un = await call(request, 'bystander', 'cart/link-po', { cartId, unlink: true });
+    expect(un.status).toBe(200);
+    expect(un.body.cart.po_id).toBeNull();
+    expect(un.body.cart.po_linked_at).toBeNull();
+    expect(await poLines(po.id)).toEqual(before);
+    expect((await call(request, 'buyer', 'cart/link-po', { cartId, unlink: true })).status).toBe(409);   // nothing to unlink
+
+    // Deleting the order lets its linked requests go (cart2 is still on it) instead of failing.
+    const { deletePo } = await import('../api/_lib/db.js');
+    const gone = await deletePo(po.id, { by: 'E2E', role: 'admin', reason: 'e2e' });
+    expect(gone.error).toBeUndefined();
+    const c2 = (await read_(request, 'buyer', `cart/get?id=${cart2}`)).body.cart;
+    expect(c2.po_id).toBeNull();
+    expect(c2.po_linked_at).toBeNull();
+  });
+
+  test('an order RAISED from the request cannot be unlinked, and a request without cards cannot be linked', async ({ request }) => {
+    const cartId = await receipted(request);
+    expect((await call(request, 'buyer', 'cart/raise-po', { cartId })).status).toBe(200);
+    const un = await call(request, 'approver', 'cart/link-po', { cartId, unlink: true });
+    expect(un.status).toBe(409);
+    expect(un.body.error).toMatch(/raised from the request itself/);
+    const fresh = await newRequest(request, { lines: [LINE] });                    // submitted, no cards yet
+    const po = await ownOrder();
+    expect((await call(request, 'buyer', 'cart/link-po', { cartId: fresh, poId: po.id })).status).toBe(409);
+  });
+
+  test('the request page: "Already shipped" → pick the order → Shipped on PO-…, then Unlink', async ({ page, request }) => {
+    const cartId = await receipted(request);
+    const po = await ownOrder();
+    await as(page, 'buyer');
+    await page.goto(`/buying?request=${cartId}`);
+    await page.getByRole('button', { name: 'Already shipped — link to a purchase order' }).click();
+    const dlg = page.getByRole('dialog');
+    await expect(dlg).toContainText('which order is it on?');
+    await dlg.getByRole('combobox').selectOption(String(po.id));
+    await expect(dlg.getByRole('combobox').locator('option:checked')).toContainText(`${po.code} ·`);
+    await dlg.getByRole('button', { name: 'Mark shipped — link it' }).click();
+    await expect(page.locator('.bc-head-chips')).toContainText(`Shipped on ${po.code}`);
+    await expect(page.getByRole('button', { name: 'Already shipped — link to a purchase order' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Start packing this shipment' })).toHaveCount(0);
+    page.once('dialog', (d) => d.accept());
+    await page.getByRole('button', { name: 'Unlink' }).click();
+    await expect(page.getByRole('button', { name: 'Already shipped — link to a purchase order' })).toBeVisible();
+  });
+});

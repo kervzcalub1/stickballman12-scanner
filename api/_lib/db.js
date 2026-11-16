@@ -7176,6 +7176,10 @@ export async function deletePo(poId, { by = null, role = null, reason = null } =
                                                  WHERE x.po_box_id IN (SELECT id FROM po_boxes WHERE po_id = p.id)), '[]'::jsonb)),
                ${by || null}, ${role || null}, now()
           FROM purchase_orders p WHERE p.id = ${poId}`,
+    // Requests that were only LINKED to this order (it was the supplier's own) are let go —
+    // they go back to "waiting on the shipment" and can be linked to the right order.
+    sql`UPDATE buy_carts SET po_id = NULL, po_linked_at = NULL, po_linked_by = NULL, updated_at = now()
+         WHERE po_id = ${poId} AND po_linked_at IS NOT NULL`,
     sql`DELETE FROM purchase_orders WHERE id = ${poId}`,
   ]);
   return { ok: true, po };
@@ -7875,7 +7879,9 @@ export async function savePayoutPreset(p, updatedBy) {
  */
 async function requestCostForPo(poId) {
   const sql = db();
-  const cart = (await sql`SELECT id, cart_code, cost_stack FROM buy_carts WHERE po_id = ${poId} ORDER BY id LIMIT 1`)[0];
+  // Only an order RAISED from the request: a linked one (po_linked_at) is the supplier's own
+  // order, may carry several requests, and keeps the supplier's preset.
+  const cart = (await sql`SELECT id, cart_code, cost_stack FROM buy_carts WHERE po_id = ${poId} AND po_linked_at IS NULL ORDER BY id LIMIT 1`)[0];
   const stack = cart?.cost_stack;
   if (!stack) return null;
   const lines = await sql`
@@ -9595,7 +9601,8 @@ export async function setBuyCartReceiptLinesRemoved({ cartId, lineIds, restore =
          WHERE id = ${cartId}`,
   ];
   // The order was raised from the receipt, so what it says we are owed moves with it.
-  if (cart.po_id) {
+  // Not a LINKED order: its list is the supplier's own manifest, never ours to rewrite.
+  if (cart.po_id && !cart.po_linked_at) {
     for (const l of moving) {
       const sku = String(l.sku || '').trim().toUpperCase();
       const size = String(l.size ?? '').trim() || null;
@@ -9667,6 +9674,43 @@ export async function linkBuyCartPo(cartId, poId, actor) {
   const rows = await sql`UPDATE buy_carts SET po_id = ${poId}, updated_at = now() WHERE id = ${cartId} RETURNING *`;
   await logCartEvent({ cartId, kind: 'po_raised', actor, body: `PO #${poId}` });
   return cartOut(rows[0]);
+}
+
+// LINK a request to an order the supplier already made (they skipped "Start packing" and
+// shipped on their own PO). Nothing on the order changes; several requests may share one.
+export async function linkBuyCartExistingPo(cartId, po, actor) {
+  const sql = db();
+  const by = actor ? (actor.name || actor.username || null) : null;
+  const rows = await sql`
+    UPDATE buy_carts SET po_id = ${po.id}, po_linked_at = now(), po_linked_by = ${by}, updated_at = now()
+     WHERE id = ${cartId} AND po_id IS NULL RETURNING *`;
+  if (!rows[0]) return null;
+  await logCartEvent({ cartId, kind: 'po_linked', actor, body: `Marked shipped — linked to ${po.po_code}` });
+  return cartOut(rows[0]);
+}
+// Undo a link (never an order RAISED from the request — that one is deleted on the PO side).
+export async function unlinkBuyCartPo(cartId, actor) {
+  const sql = db();
+  const rows = await sql`
+    UPDATE buy_carts SET po_id = NULL, po_linked_at = NULL, po_linked_by = NULL, updated_at = now()
+     WHERE id = ${cartId} AND po_id IS NOT NULL AND po_linked_at IS NOT NULL RETURNING *`;
+  if (!rows[0]) return null;
+  await logCartEvent({ cartId, kind: 'po_unlinked', actor, body: 'Purchase order link removed' });
+  return cartOut(rows[0]);
+}
+// The orders a request could be linked to: this buyer's own, newest first, with what a person
+// needs to recognise the right one — labels, pairs, drop-off receipts, requests already on it.
+export async function listPosForCartLink(buyerUserId, limit = 40) {
+  return await db()`
+    SELECT p.id, p.po_code, p.status, p.tag_code, p.supplier_name,
+           (p.created_at AT TIME ZONE 'America/New_York')::date::text AS created_on,
+           (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS boxes,
+           (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS units,
+           (SELECT count(*) FROM po_dropoff_receipts d WHERE d.po_id = p.id)::int AS dropoffs,
+           (SELECT coalesce(array_agg(c.cart_code ORDER BY c.id), '{}') FROM buy_carts c WHERE c.po_id = p.id) AS requests
+      FROM purchase_orders p
+     WHERE p.supplier_user_id = ${buyerUserId} AND p.created_at > now() - interval '180 days'
+     ORDER BY p.created_at DESC, p.id DESC LIMIT ${limit}`;
 }
 
 // ---- Audit + close --------------------------------------------------------
@@ -9796,7 +9840,9 @@ export async function getCartPackState(cartId) {
 
 /** The buying request an order was raised from, if any. Null for an ordinary PO. */
 export async function getCartIdForPo(poId) {
-  const rows = await db()`SELECT id FROM buy_carts WHERE po_id = ${poId} ORDER BY id LIMIT 1`;
+  // RAISED from, not linked to: this id gates the order's shipping on the request's packing
+  // (po/ship), which a linked order — already made, often already gone — must never be.
+  const rows = await db()`SELECT id FROM buy_carts WHERE po_id = ${poId} AND po_linked_at IS NULL ORDER BY id LIMIT 1`;
   return rows[0] ? Number(rows[0].id) : null;
 }
 

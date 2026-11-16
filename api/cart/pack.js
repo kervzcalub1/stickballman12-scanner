@@ -66,6 +66,8 @@ export default async function handler(req, res) {
     if (!isBuyer && !isPrivileged(user.role) && !(await hasCostPrivilege(user)))
       return send(res, 403, { ok: false, error: 'Only the buyer or a buying desk can pack this request.' });
 
+    if (cart.po_linked_at)
+      return send(res, 409, { ok: false, error: 'This request is linked to an order the supplier made themselves — its boxes are filled on the purchase order, not here.' });
     if (!cart.po_id)
       return send(res, 409, { ok: false, error: 'Raise the purchase order first — there are no boxes to pack into yet.' });
 

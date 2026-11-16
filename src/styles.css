@@ -7697,3 +7697,6 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
 .esy-dup-facts dt { color: var(--muted); }
 .esy-dup-facts dd { margin: 0; min-width: 0; }
 .esy-accept { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+
+/* Buying request → "linked to a purchase order" (2026-11-17): the small Unlink beside the order. */
+.bc-linkbtn { background: none; border: 0; padding: 0; color: var(--primary); cursor: pointer; font: inherit; text-decoration: underline; }

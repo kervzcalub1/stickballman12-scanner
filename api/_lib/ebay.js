@@ -520,6 +520,35 @@ export async function fetchEbayOrders({ from, to, modifiedSince }, onPage = () =
   }
   return out;
 }
+// DELIVERED, from eBay itself (2026-11-17 — the owner: eBay Orders must not spend 17TRACK
+// quota; eBay has the parcel's status). The Fulfillment API has no delivered field; the Trading
+// API's GetOrders does: ShippingServiceSelected.ShippingPackageInfo.ActualDeliveryTime, on the
+// order and on each transaction, "returned only after the order has been delivered".
+// One <Order> block → [order ids it answers to, latest ActualDeliveryTime | null]. Pure.
+export function deliveriesFromOrdersXml(xml) {
+  const out = new Map();
+  for (const o of tags(xml, 'Order')) {
+    const times = tags(o, 'ActualDeliveryTime').map((t) => unesc(t).trim()).filter((t) => !Number.isNaN(Date.parse(t))).sort();
+    const at = times.length ? new Date(times[times.length - 1]).toISOString() : null;
+    // The id comes back in eBay's newer form (12-34567-89012) at our compatibility level; the
+    // extended id is the same thing — answer to both so the caller's id always finds its row.
+    for (const id of [tag(o, 'OrderID'), tag(o, 'ExtendedOrderID')].map((v) => unesc(v || '').trim()).filter(Boolean)) out.set(id, at);
+  }
+  return out;
+}
+// → Map(order id → ISO delivered time | null) for the ids eBay answered. Read-only; 50 orders a call.
+export async function fetchEbayDeliveries(orderIds) {
+  const ids = [...new Set((orderIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const out = new Map();
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    const xml = await trading('GetOrders',
+      `<OrderIDArray>${chunk.map((id) => `<OrderID>${id.replace(/[^0-9A-Za-z-]/g, '')}</OrderID>`).join('')}</OrderIDArray>`
+      + '<OrderRole>Seller</OrderRole><Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>1</PageNumber></Pagination>', { guard: 'read' });
+    for (const [id, at] of deliveriesFromOrdersXml(xml)) out.set(id, at);
+  }
+  return out;
+}
 export async function fetchShippingFulfillments(orderId) {
   const j = await rest(HOST.api(), `/sell/fulfillment/v1/order/${encodeURIComponent(orderId)}/shipping_fulfillment`, { label: 'eBay tracking' });
   return j.fulfillments || [];

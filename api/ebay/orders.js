@@ -1,7 +1,8 @@
 // GET  /api/ebay/orders?from=YYYY-MM-DD&to=YYYY-MM-DD -> { ok, orders, sync, canOrders }
 //   orders created in that EST range (default: the last 30 days) plus every one still not
 //   shipped; each line with its photo and style code (Shopify's copy, for the pick list), each
-//   tracking number with the carrier's word (17TRACK).
+//   tracking number with the carrier's word where we have it (numbers registered with 17TRACK
+//   before 2026-11-17 — eBay orders no longer are; `delivered_at` is eBay's own).
 // POST /api/ebay/orders { from? } -> { ok, started }   sync in the background (from = backfill)
 // PH + admin. docs/context/ebay-orders.md
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';

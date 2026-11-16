@@ -7700,3 +7700,114 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
 
 /* Buying request → "linked to a purchase order" (2026-11-17): the small Unlink beside the order. */
 .bc-linkbtn { background: none; border: 0; padding: 0; color: var(--primary); cursor: pointer; font: inherit; text-decoration: underline; }
+
+/* ── SHEIN Listings, stage 3 of the page fixes (2026-11-17): filter chips, whole-shoe tiles, Rejected by SHEIN,
+   answers next to the button, a one-line selection bar on a phone (SheinListings*.jsx, SheinProductDrawer.jsx). ── */
+/* tiles: a cell = the tile + its "more have a … size" link */
+.shl-tilecell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.shl-tilecell > .shc-tile { flex: 1 1 auto; }
+.shl-tiles .shc-tile .shl-tile-sizes { font-size: 11.5px; opacity: 0.85; }
+.shl-tile-more { font-size: 12px; text-align: left; padding: 2px 4px; line-height: 1.3; }
+.shl-tile-more.on { text-decoration: underline; font-weight: 600; }
+.shl-rej-line { margin-top: 6px; }
+/* every filter that is on */
+.shl-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; }
+.shl-chips-lead { margin-right: 2px; }
+.shl-fchip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(79,124,255,0.55);
+  background: rgba(79,124,255,0.12); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; max-width: 100%; text-align: left; }
+.shl-fchip > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.shl-fchip:hover { background: rgba(79,124,255,0.2); }
+.shl-fchip-x { font-size: 12px; color: var(--muted); flex: none; }
+.shl-clearall { flex: none; }
+/* the list head: what this list is + sort + select all */
+.shl-listhead-say { min-width: 0; flex: 1 1 320px; line-height: 1.45; }
+.shl-listhead-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.shl-sort { display: inline-flex; align-items: center; gap: 6px; }
+.shl-sort .shl-select { width: auto; min-width: 0; padding-top: 6px; padding-bottom: 6px; }
+.shl-dropped { margin: 0 0 6px; }
+/* a row: reasons that only sit on out-of-stock sizes; the any-size match; a quiet price note */
+.shl-pline.shl-idle { color: var(--muted); opacity: 0.8; }
+.shl-idle-tag { font-style: italic; }
+.ebo-chip.shl-anymatch { white-space: nowrap; }
+.ebo-chip.shl-anymatch.muted { background: rgba(255,255,255,0.08); color: var(--text); }
+.shl-note.shl-quiet { opacity: 0.85; font-size: 11.5px; }
+/* an action's answer, where it was pressed */
+.shl-actnote { margin: 8px 0 0; overflow-wrap: anywhere; }
+.shl-vwrap > .shl-actnote { margin: 0; }
+.shl-d-note { margin: 0; padding: 8px 16px; border-top: 1px solid var(--border); background: var(--panel); }
+.shl-bar-note { flex: 1 1 100%; margin: 0; }
+/* the selection bar: the phone toggle is hidden on a desk */
+.shl-bar-toggle { display: none; }
+.shl-bar-extra { display: inline; }
+/* drawer: Clear this error */
+.shl-clear { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 0; }
+.shl-clear p { margin: 0; line-height: 1.45; }
+.shl-expired { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 10px; }
+/* Rejected by SHEIN */
+.shl-rejected .er-step-title { margin: 0 0 6px; }
+.shl-rej-lead { margin: 0 0 6px; line-height: 1.5; }
+.shl-rej-limit { margin: 0 0 12px; }
+.shl-rej { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 12px 14px; margin-top: 10px;
+  border: 1px solid var(--border); border-left: 3px solid #ec8f8f; border-radius: 12px; background: rgba(255,255,255,0.015); }
+.shl-rej-main { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.shl-rej-what { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.shl-rej-reason { display: block; padding: 6px 10px; border-radius: 8px; background: rgba(236,143,143,0.10); color: #f0b4b4; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.shl-rej-say { line-height: 1.45; }
+.shl-rej-acts { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 150px; }
+.shl-rej-who { max-width: 200px; line-height: 1.35; }
+.shein-today-reasons { display: inline; }
+@media (max-width: 768px) {
+  .shl-tile-more { min-height: 44px; padding: 6px 4px; }
+  .shl-fchip { min-height: 44px; }
+  .shl-clearall { min-height: 44px; }
+  .shl-pickall { min-height: 44px; }
+  .shl-pickall input { width: 22px; height: 22px; }
+  .shl-listhead-acts { width: 100%; justify-content: space-between; }
+  .shl-sort .shl-select { min-height: 44px; }
+  .shl-rej { grid-template-columns: 44px minmax(0, 1fr); }
+  .shl-rej .shl-thumb { width: 44px; height: 44px; }
+  .shl-rej-acts { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; min-width: 0; }
+  .shl-rej-acts .btn { flex: 1 1 auto; min-height: 44px; }
+  .shl-rej-who { max-width: none; flex: 1 1 100%; }
+  /* the bar floats ABOVE the advisor (right) and keypad (left) buttons, so neither covers it; one line until opened */
+  .shl-bar { bottom: calc(80px + env(safe-area-inset-bottom)); padding: 8px 10px; gap: 6px 8px; }
+  .shl-bar-toggle { display: inline-flex; flex: none; }
+  .shl-bar:not(.open) .shl-bar-extra { display: none; }
+  .shl-bar:not(.open) .shl-bar-btns { width: auto; flex: 1 1 auto; justify-content: flex-end; }
+  .shl-bar:not(.open) .shl-bar-btns > :not(.shl-bar-primary) { display: none; }
+  .shl-bar:not(.open) .shl-bar-btns .btn.shl-bar-primary { flex: 0 1 auto; order: 0; }
+  .shl-bar:not(.open) .shl-bar-tot { flex: 1 1 auto; font-size: 14px; }
+  .shl-bar.open .shl-bar-btns .btn[data-bar="off"] { margin-right: 0; }
+  .shl-bar-btns .btn.shl-bar-none { display: none; }
+}
+/* the drawer / sheet footer keeps clear of the keypad button too (bottom-left, touch screens only) */
+@media (pointer: coarse) { .shl-drawer .shl-d-foot { padding-left: 84px; } }
+/* stage 3 · desk: the Shopify filter buttons size to their words; the sort / reason selects read at list size */
+.shl-shopfilter .seg-btn { flex: 0 0 auto; padding: 6px 12px; }
+.shl-filters [data-reason-filter] { max-width: 380px; }
+.shl-sort .shl-select { font-size: 13px; padding: 4px 8px; max-width: 240px; }
+.shl-tiles > .shc-tile { align-self: start; }
+.shl-tilecell > .shc-tile { flex: 0 0 auto; }
+.shl-rej-acts { width: 180px; }
+/* stage 3 · phone: the tiles within the first screen — the section's lead line goes (the strip says it), notices and
+   banners shrink to a short strip */
+@media (max-width: 768px) {
+  .shein-page [data-section="listings"] > .shein-lead { display: none; }
+  .shl-strip-card { padding-top: 10px; padding-bottom: 10px; }
+  .shl-strip-card .notice { margin-top: 8px; padding: 6px 10px; font-size: 12.5px; line-height: 1.4; }
+  .shl-strip { gap: 4px 12px; }
+  .shl-page > .shl-banner { padding: 8px 12px; gap: 4px 10px; margin-bottom: 12px; }
+  .shl-page > .shl-banner > .muted { font-size: 12px; line-height: 1.4; }
+  .shl-page > .shl-banner.warn .shl-banner-actions { width: auto; margin-left: auto; }
+  .shl-rej-acts { width: auto; }
+  .shl-shopfilter .seg-btn { flex: 1 1 auto; }
+}
+@media (max-width: 768px) {
+  /* the one-line bar: count · the primary preview · More (no wrapping; the toggle never stretches) */
+  .shl-bar:not(.open) { flex-wrap: nowrap; }
+  .shl-bar .btn.shl-bar-toggle { flex: none; order: 2; padding: 8px 10px; }
+  .shl-bar:not(.open) .shl-bar-tot { order: 0; min-width: 0; white-space: nowrap; }
+  .shl-bar:not(.open) .shl-bar-btns { order: 1; flex: 0 1 auto; min-width: 0; }
+  .shl-bar:not(.open) .shl-bar-btns .btn.shl-bar-primary { white-space: nowrap; padding: 8px 10px; }
+  .shl-bar.open .shl-bar-toggle { order: 0; }
+}

@@ -30,9 +30,10 @@ export const LIVE_LOCKS = {
 const LIVE = [   // what a person can change first (photos, details), then what blocks a send, then what is fixed on SHEIN
   ['photos', 'Photos', ['no_image', 'image_rejected', 'photos_need_priv', 'photo_cap_reached', 'clean_main_unsure']],
   ['attributes', 'SHEIN details', ['missing_attr']],
-  ['sizes', 'Every in-stock size has a SHEIN size', ['size_needs_map', 'size_not_on_shein', 'size_unreadable', 'custom_text_invalid', 'no_size_table_value', 'multi_skc_size', 'size_field_retired']],
+  ['sizes', 'Every in-stock size has a SHEIN size', ['size_needs_map', 'size_not_on_shein', 'size_unreadable', 'custom_text_invalid', 'no_size_table_value', 'multi_skc_size', 'size_field_retired',
+    'shein_size_blank', 'size_already_on_shein']],   // 2026-11-17 (stage 2): a blank / non-US SHEIN size; a size SHEIN sells under another SKU
   ['skus', 'SHEIN sizes carry the right SKUs', ['no_seller_sku', 'dup_seller_sku', 'seller_sku_taken', 'wrong_link', 'spu_spans_products']],
-  ['prices', 'Every size has a price', ['no_price']],
+  ['prices', 'Every size has a price', ['no_price', 'price_outlier', 'price_confirmed']],   // + the price check (stage 2; price_no_market stays a quiet note on the size row)
   ['shein', 'SHEIN hasn’t refused anything', ['review_rejected', 'shein_prevalid', 'api_error']],
   ['shopify', 'Active on Shopify', ['shopify_inactive', 'no_shopify_stock']],
   ['category', 'Category', []],

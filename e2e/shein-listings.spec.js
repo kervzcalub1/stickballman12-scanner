@@ -1196,7 +1196,7 @@ test.describe.serial('SHEIN Listings — the page', () => {
   test('ticked products are not restored by a refresh', async ({ page }) => {
     await page.goto('/ph/shein-listings');
     await page.locator(`.shl-product[data-product="${P7702}"] .shl-chk input`).check();
-    await expect(page.locator('.shl-bar')).toContainText('1 product');
+    await expect(page.locator('.shl-bar')).toContainText('1 shoe');   // 2026-11-17: the page counts shoes
     await expect(page.locator('.shl-bar').getByRole('button', { name: /^Add missing sizes/ })).toBeEnabled();    // Phase 2: a preview (reads only)
     expect(page.url()).not.toMatch(/gid|pick|sel=/);
     await page.reload();
@@ -3017,6 +3017,7 @@ test.describe.serial('SHEIN Listings Phase 3 — the page (diffs, Update prices 
     await page.locator(`.shl-product[data-product="${gidP(7701)}"] .shl-chk input`).check();
     await noSideScroll(page, 'rows');
     await shot(page, 'phone-update-row');
+    await page.locator('.shl-bar [data-bar="more"]').click();   // 2026-11-17: on a phone the bar is one line (count + the main preview) until More
     await page.locator('.shl-bar').getByRole('button', { name: /^Update prices & sizes/ }).click();
     await expect(sheet(page).locator('[data-proof]')).toBeVisible({ timeout: 20_000 });
     for (const op of ['price', 'edit']) await item(page, 7701, op).getByRole('button', { name: /What is sent/ }).click();
@@ -4760,6 +4761,7 @@ test.describe.serial('SHEIN Listings Phase 4 — the page (checklist, Setup, Pub
     await page.locator(`.shl-product[data-product="${gidP(7709)}"] .shl-chk input`).check();
     await page.locator(`.shl-product[data-product="${gidP(7705)}"] .shl-chk input`).check();
     const before = posted.length;
+    await page.locator('.shl-bar [data-bar="more"]').click();   // 2026-11-17: on a phone the bar is one line until More
     await page.locator('.shl-bar [data-bar="bulk"]').click();
     const bs = page.getByRole('dialog', { name: 'Bulk edit before publishing' });
     await expect(bs.locator('[data-bulk-row]')).toHaveCount(2, { timeout: 10_000 });

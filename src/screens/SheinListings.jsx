@@ -8,8 +8,12 @@
 // (checklist in the drawer, the Setup tab for what is set once, a store-gate banner when SHEIN
 // refuses new listings).
 //
-// URL (refresh-proof, src/lib/urlstate.js): tab · status · q · brand · blocker · shop (active|inactive on Shopify) · p · product ·
-// job · sz · pt (Setup). Never in the URL: ticked products, the custom-size draft, the preview sheet.
+// URL (refresh-proof, src/lib/urlstate.js): tab (products | rejected | sizes | jobs | setup) · status · any (1 = shoes with
+// at least one size in that status) · q · brand · blocker (only with Blocked / Error) · shop (active|inactive on Shopify) ·
+// sort (worst default | title | updated | coverage) · more (More filters open) · p · product · job · sz · pt (Setup).
+// Never in the URL: ticked products, the custom-size draft, the preview sheet.
+// 2026-11-17 (stage 3, the owner's three points): every filter that is on is a chip with ✕ + Clear all; the reason
+// filter belongs to Blocked / Error only; "Rejected by SHEIN" is its own tab (SheinListingsRejected.jsx).
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ProgressBar, FormModal } from '../components/common.jsx';
@@ -19,9 +23,10 @@ import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { STATUSES, STATUS_CODES } from '../lib/sheinListings.js';
-import { fmt, when, TONE, NEEDS_PRIV } from '../components/SheinListingsBits.jsx';
+import { fmt, when, TONE, NEEDS_PRIV, ActNote, ActNoteContext, SIZE_PHRASE, REASON_STATUSES, SORTS } from '../components/SheinListingsBits.jsx';
 import { SheinListingsProducts } from './SheinListingsProducts.jsx';
 import { SheinListingsSizes } from './SheinListingsSizes.jsx';
+import { SheinListingsRejected } from './SheinListingsRejected.jsx';
 import { SheinListingsJobs, jobLabel } from './SheinListingsJobs.jsx';
 import { SheinProductDrawer } from '../components/SheinProductDrawer.jsx';
 import { DryRunSheet } from '../components/SheinDryRunSheet.jsx';
@@ -35,11 +40,17 @@ const PAGE_SIZE = 25;
 const TILE_ORDER = ['synced', 'not_on_shein', 'out_of_date', 'in_review', 'blocked', 'error', 'shein_only', 'unknown'];
 const ALWAYS_TILES = new Set(['synced', 'not_on_shein', 'out_of_date', 'in_review', 'blocked', 'error']);
 const STALE_MS = 30 * 60 * 1000;
+const NOTE_MS = 6000;   // a success message goes after a few seconds (or with the next action)
+const SORT_KEYS = SORTS.map(([k]) => k);
+const tileTitle = (code, b) => `${STATUSES[code].meaning} The number counts shoes whose own status — their worst in-stock size — is ${STATUSES[code].label}.`
+  + `${b?.inStock ? ` ${fmt(b.inStock)} in-stock size${b.inStock === 1 ? ' is' : 's are'} ${STATUSES[code].label}.` : ''}`;
 
 export function SheinListings({ onSignOut, visible = true }) {
   const go = useSheinNav();
   const [tab, setTab] = useQueryParam('tab', 'products');
   const [statusRaw, setStatus] = useQueryParam('status', '');
+  const [anyRaw, setAny] = useQueryParam('any', '');
+  const [sortRaw, setSort] = useQueryParam('sort', '');
   const [q, setQ] = useQueryParam('q', '');
   const [brand, setBrand] = useQueryParam('brand', '');
   const [blocker, setBlocker] = useQueryParam('blocker', '');
@@ -53,47 +64,65 @@ export function SheinListings({ onSignOut, visible = true }) {
   const status = STATUS_CODES.includes(statusRaw) || statusRaw === 'all' ? statusRaw : '';
   const shop = ['active', 'inactive'].includes(shopRaw) ? shopRaw : '';
   const page = Math.max(1, Number(pRaw) || 1);
-  const tabKey = ['sizes', 'jobs', 'setup'].includes(tab) ? tab : 'products';
+  // any=1 only means something with a tile (never with All / Not listing)
+  const any = anyRaw === '1' && TILE_ORDER.includes(status);
+  const sort = SORT_KEYS.includes(sortRaw) ? sortRaw : 'worst';
+  const tabKey = ['rejected', 'sizes', 'jobs', 'setup'].includes(tab) ? tab : 'products';
   const advOpen = advParam === '1' || tabKey === 'jobs' || tabKey === 'setup';
 
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
   const [loadedAt, setLoadedAt] = useState(null);
   const [busy, setBusy] = useState('');
-  const [msg, setMsg] = useState('');
+  const [note, setNote] = useState(null);     // an action's answer: { where, kind: 'ok' | 'err', text } — shown where it was pressed
   const [sheet, setSheet] = useState(null);   // the preview sheet's job id — in memory only
+  const [focus, setFocus] = useState('');     // the drawer opens on its photos / Match sizes (a row's Fix photos / Match sizes)
   const seq = useRef(0);
+  const pageFix = useRef(0);                  // the page the server corrected a stale ?p= to — not loaded twice
   const gates = useStoreGates(onSignOut);   // Phase 4: what SHEIN last said about new listings
   const cut = useCutover(onSignOut);         // Phase 5: the 4seller switch-over + go-live checklists
 
   async function load() {
     const mine = ++seq.current;
     try {
-      const r = await api.sheinListings({ status, q, brand, blocker, shopify: shop, page, pageSize: PAGE_SIZE });
+      const r = await api.sheinListings({ status, any: any ? 1 : '', q, brand, blocker, shopify: shop, sort: sort === 'worst' ? '' : sort, page, pageSize: PAGE_SIZE });
       if (mine !== seq.current) return;
       setD(r); setErr(''); setLoadedAt(new Date().toISOString());
+      // a page past the end comes back as the last page: say so in the URL (never "26–25 of 25")
+      if (r.page && Number(r.page) !== page) { pageFix.current = Number(r.page); setP(r.page > 1 ? String(r.page) : ''); }
     } catch (e) {
       if (e.unauthorized) onSignOut();
       else if (mine === seq.current) setErr(plain(e.message));
     }
   }
-  useEffect(() => { load(); }, [status, q, brand, blocker, shop, page]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (pageFix.current && pageFix.current === page) { pageFix.current = 0; return; }   // already showing that page
+    pageFix.current = 0;
+    load();
+  }, [status, any, q, brand, blocker, shop, sort, page]); // eslint-disable-line react-hooks/exhaustive-deps
   const active = d?.summary?.activeJob || null;
   useLive(LISTING_TABLES, load, { mount: false, every: active ? 5_000 : 60_000 });
 
-  async function act(action, extra = {}, done = null) {
-    setBusy(action); setErr(''); setMsg('');
+  // `where` = the place the button is (top · adv · bar · drawer · bulk · row:<id> · rej:<id> · sizes · jobs · setup · model):
+  // its answer shows there (<ActNote where>), never as "Couldn't refresh" at the top — that line is for failed loads.
+  async function act(action, extra = {}, done = null, where = 'top') {
+    setBusy(action); setNote(null);
     try {
       const r = await api.sheinListingAction({ action, ...extra });
-      if (done) setMsg(typeof done === 'function' ? done(r) : done);
+      if (done) setNote({ where, kind: 'ok', text: typeof done === 'function' ? done(r) : done });
       await load();
       return r;
     } catch (e) {
       if (e.unauthorized) onSignOut();
-      else setErr(plain(e.message));
+      else setNote({ where, kind: 'err', text: plain(e.message) });
       return null;
     } finally { setBusy(''); }
   }
+  useEffect(() => {
+    if (note?.kind !== 'ok') return undefined;
+    const t = setTimeout(() => setNote(null), NOTE_MS);
+    return () => clearTimeout(t);
+  }, [note]);
 
   const s = d?.summary;
   const canWrite = !!d?.canWrite;
@@ -103,25 +132,39 @@ export function SheinListings({ onSignOut, visible = true }) {
   const stale = lastRead && Date.now() - new Date(lastRead).getTime() > STALE_MS;
   const interrupted = !active && s?.latestSnapshot?.status === 'interrupted' ? s.latestSnapshot : null;
   const toMap = (s?.topBlockers || []).find((b) => b.code === 'size_needs_map')?.sizes || 0;
-  const pickStatus = (code) => { setStatus(status === code ? '' : code); setP(''); if (tabKey !== 'products') setTab(''); };
+  // A tile: the shoes whose own status is it (the same tile again = All). Leaving Blocked / Error drops the reason.
+  const pickStatus = (code) => {
+    const next = status === code && !any ? '' : code;
+    setStatus(next); setAny('');
+    if (!REASON_STATUSES.includes(next)) setBlocker('');
+    setP(''); if (tabKey !== 'products') setTab('');
+  };
+  // A tile's second line: the shoes with at least one size in that status (their own status may be worse).
+  const pickAny = (code) => { setStatus(code); setAny('1'); if (!REASON_STATUSES.includes(code)) setBlocker(''); setP(''); if (tabKey !== 'products') setTab(''); };
+  // Clear all = every filter, the tile included, and the sort back to Worst first.
+  const clearAll = () => { setStatus(''); setAny(''); setQ(''); setBrand(''); setBlocker(''); setShop(''); setSort(''); setP(''); };
   const snapshot = () => act('snapshot', {}, 'Refresh started on the server — it keeps going if you close this tab.');
   // A preview of these products (PH ok, reads only) → the sheet follows it.
   // ops: undefined = add missing sizes (Phase 2); ['price','edit'] = update prices & sizes (Phase 3).
-  async function dryRun(productIds, ops) {
-    const r = await act('preview', ops ? { productIds, ops } : { productIds }, 'Preview started on the server — nothing is sent to SHEIN.');
+  async function dryRun(productIds, ops, where = 'bar') {
+    const r = await act('preview', ops ? { productIds, ops } : { productIds }, 'Preview started on the server — nothing is sent to SHEIN.', where);
     if (r?.job?.id) { setProduct(''); setSheet(r.job.id); }
     return r;
   }
+  const openProduct = (id, at = '') => { setFocus(at || ''); setProduct(id); };
   const isListingJob = (j) => ['preview', 'run'].includes(j?.kind);
   const snapTitle = !connected ? 'Connect SHEIN first (Automatic sync section)' : active ? 'A job is already running' : 'Reads Shopify and SHEIN. Changes nothing.';
 
   const tiles = useMemo(() => {
     if (!s) return [];
-    return TILE_ORDER.filter((c) => ALWAYS_TILES.has(c) || (s.byStatus[c]?.products || 0) > 0)
-      .map((c) => ({ code: c, n: s.byStatus[c]?.products || 0, sizes: s.byStatus[c]?.sizes || 0 }));
+    // the number = shoes whose OWN status is it (= the list it opens); the small line = its in-stock sizes; anySize − products =
+    // shoes with such a size whose own status is worse (the "more have a … size" link → ?any=1)
+    return TILE_ORDER.filter((c) => ALWAYS_TILES.has(c) || (s.byStatus[c]?.products || 0) > 0 || (s.byStatus[c]?.anySize || 0) > 0)
+      .map((c) => { const b = s.byStatus[c] || {}; return { code: c, b, n: b.products || 0, inStock: b.inStock || 0, more: Math.max(0, (b.anySize || 0) - (b.products || 0)) }; });
   }, [s]);
 
   return (
+    <ActNoteContext.Provider value={note}>
     <div className="shl-page">
       {/* connection strip */}
       <div className="card shl-strip-card">
@@ -150,7 +193,7 @@ export function SheinListings({ onSignOut, visible = true }) {
           <p className="notice mt">SHEIN isn’t connected. {canWrite ? <>Connect it in <button type="button" className="shl-linkbtn" onClick={() => go('live')}>Automatic sync</button>, then come back and refresh.</> : 'An admin connects it in Automatic sync.'} What was read before still shows below.</p>
         )}
         {err && d && <p className="notice mt" role="status">Couldn’t refresh: {err} — showing what was loaded {when(loadedAt)}.</p>}
-        {msg && <p className="ebl-ok sm mt">{msg}</p>}
+        <ActNote where="top" />
       </div>
 
       {!d && err && (
@@ -199,11 +242,19 @@ export function SheinListings({ onSignOut, visible = true }) {
               <b>{fmt(s.all)}</b><span>All products</span>
             </button>
             {tiles.map((t) => (
-              <button key={t.code} type="button" className={`shc-tile ${TONE[t.code]}${status === t.code ? ' on' : ''}`} aria-pressed={status === t.code}
-                data-status={t.code} title={STATUSES[t.code].meaning} onClick={() => pickStatus(t.code)}>
-                <b>{fmt(t.n)}</b>
-                <span><i className={`shl-dot ${TONE[t.code]}`} />{STATUSES[t.code].label}{t.sizes ? ` · ${fmt(t.sizes)} size${t.sizes === 1 ? '' : 's'}` : ''}</span>
-              </button>
+              <div key={t.code} className="shl-tilecell">
+                <button type="button" className={`shc-tile ${TONE[t.code]}${status === t.code && !any ? ' on' : ''}`} aria-pressed={status === t.code && !any}
+                  data-status={t.code} title={tileTitle(t.code, t.b)} onClick={() => pickStatus(t.code)}>
+                  <b>{fmt(t.n)}</b>
+                  <span><i className={`shl-dot ${TONE[t.code]}`} />{STATUSES[t.code].label}</span>
+                  {t.inStock > 0 && <span className="shl-tile-sizes">{fmt(t.inStock)} size{t.inStock === 1 ? '' : 's'} in stock</span>}
+                </button>
+                {t.more > 0 && (
+                  <button type="button" className={`shl-linkbtn shl-tile-more${status === t.code && any ? ' on' : ''}`} aria-pressed={status === t.code && any} data-any={t.code}
+                    title={`Shoes with at least one ${SIZE_PHRASE[t.code]} whose own status is worse — the ${fmt(t.n)} above plus these ${fmt(t.more)}`}
+                    onClick={() => pickAny(t.code)}>+{fmt(t.more)} more have a {SIZE_PHRASE[t.code]}</button>
+                )}
+              </div>
             ))}
           </div>
           {s.off > 0 && (
@@ -212,14 +263,21 @@ export function SheinListings({ onSignOut, visible = true }) {
               {' '}— Shopify drafts, or marked “Don’t list on SHEIN”. Not in the counts above.
             </p>
           )}
+          {s.rejected > 0 && (
+            <p className="xs shl-off-line shl-rej-line" data-rejected-line="">
+              <button type="button" className="shl-linkbtn" onClick={() => setTab('rejected')}>{fmt(s.rejected)} shoe{s.rejected === 1 ? '' : 's'} rejected by SHEIN →</button>
+              <span className="muted"> SHEIN’s reason and the button that sends it again.</span>
+            </p>
+          )}
         </div>
       )}
 
       {d && (
         <div className="ebl-tabs seg shl-tabs">
           <span className="shein-tabgroup" role="tablist" aria-label="Shoes on SHEIN">
-            {[['products', 'Shoes', neverRead ? '' : fmt(s.all), ''], ['sizes', 'Sizes', toMap ? `${fmt(toMap)} to map` : '', toMap ? ' warnn' : '']].map(([k, l, n, cls]) => (
-              <button key={k} type="button" role="tab" className={`seg-btn${tabKey === k ? ' on' : ''}`} aria-selected={tabKey === k} onClick={() => setTab(k === 'products' ? '' : k)}>
+            {[['products', 'Shoes', neverRead ? '' : fmt(s.all), ''], ['rejected', 'Rejected', s?.rejected ? fmt(s.rejected) : '', s?.rejected ? ' warnn' : ''],
+              ['sizes', 'Sizes', toMap ? `${fmt(toMap)} to map` : '', toMap ? ' warnn' : '']].map(([k, l, n, cls]) => (
+              <button key={k} type="button" role="tab" className={`seg-btn${tabKey === k ? ' on' : ''}`} aria-selected={tabKey === k} data-tab={k} onClick={() => setTab(k === 'products' ? '' : k)}>
                 {l}{n && <span className={`seg-n${cls}`}>{n}</span>}
               </button>
             ))}
@@ -239,9 +297,10 @@ export function SheinListings({ onSignOut, visible = true }) {
             {/* Stays on the page once registered: Shopify deletes a subscription after repeated failures, and this creates only what's missing. */}
             <button type="button" className="btn ghost sm" disabled={!canWrite || !!busy}
               title={canWrite ? (s?.hooks?.on ? 'Puts back any Shopify update Shopify has removed. Safe to press again.' : 'Shopify tells us when a product’s price, size or SKU changes') : NEEDS_PRIV}
-              onClick={() => act('webhooks', {}, s?.hooks?.on ? 'Shopify product updates checked.' : 'Shopify product updates connected.')}>
+              onClick={() => act('webhooks', {}, s?.hooks?.on ? 'Shopify product updates checked.' : 'Shopify product updates connected.', 'adv')}>
               {busy === 'webhooks' ? 'Connecting…' : (s?.hooks?.on ? 'Reconnect Shopify updates' : 'Connect Shopify updates')}</button></p>
-          <AutoPrice ap={s?.autoPrice} canWrite={canWrite} busy={busy} onAct={act} />
+          <AutoPrice ap={s?.autoPrice} canWrite={canWrite} busy={busy} onAct={(a, x, done) => act(a, x, done, 'adv')} />
+          <ActNote where="adv" />
         </div>
       )}
 
@@ -255,19 +314,28 @@ export function SheinListings({ onSignOut, visible = true }) {
       )}
 
       {d && !neverRead && tabKey === 'products' && (
-        <SheinListingsProducts setStatusAll={() => pickStatus('')} d={d} status={status} q={q} setQ={(v) => { setQ(v); setP(''); }} brand={brand} setBrand={(v) => { setBrand(v); setP(''); }}
-          blocker={blocker} setBlocker={(v) => { setBlocker(v); setP(''); }} shop={shop} setShop={(v) => { setShop(v); setP(''); }} page={page} setPage={(n) => setP(n > 1 ? String(n) : '')} pageSize={PAGE_SIZE}
-          onOpen={(id) => setProduct(id)} onAct={act} busy={busy} onSignOut={onSignOut} active={active} onDryRun={dryRun} />
+        <SheinListingsProducts d={d} status={status} any={any} sort={sort} setSort={(v) => { setSort(v === 'worst' ? '' : v); setP(''); }}
+          setStatus={pickStatus} setAny={(on) => { setAny(on ? '1' : ''); setP(''); }} clearAll={clearAll}
+          q={q} setQ={(v) => { setQ(v); setP(''); }} brand={brand} setBrand={(v) => { setBrand(v); setP(''); }}
+          blocker={blocker} setBlocker={(v) => { setBlocker(v); setP(''); }} shop={shop} setShop={(v) => { setShop(v); setP(''); }}
+          page={Number(d.page) || page} setPage={(n) => setP(n > 1 ? String(n) : '')} pageSize={PAGE_SIZE}
+          onOpen={openProduct} onAct={act} busy={busy} onSignOut={onSignOut} active={active} onDryRun={dryRun} />
       )}
-      {d && tabKey === 'sizes' && (
-        <SheinListingsSizes sz={sz} setSz={setSz} canWrite={canWrite} connected={connected} active={active} onAct={act} busy={busy}
-          goBlocker={(code) => { setBlocker(code); setStatus(''); setP(''); setTab(''); }} onSignOut={onSignOut} />
+      {d && tabKey === 'rejected' && (
+        <SheinListingsRejected q={q} setQ={(v) => { setQ(v); setP(''); }} brand={brand} setBrand={(v) => { setBrand(v); setP(''); }} brands={s?.brands || []}
+          canWrite={canWrite} active={active} busy={busy} onAct={act} onDryRun={dryRun} onOpen={openProduct} onSignOut={onSignOut} />
       )}
+      {d && tabKey === 'sizes' && (<>
+        <ActNote where="sizes" />
+        <SheinListingsSizes sz={sz} setSz={setSz} canWrite={canWrite} connected={connected} active={active} onAct={(a, x, done) => act(a, x, done, 'sizes')} busy={busy}
+          goBlocker={(code) => { setStatus('blocked'); setAny(''); setBlocker(code); setP(''); setTab(''); }} onSignOut={onSignOut} />
+      </>)}
       {d && tabKey === 'setup' && <SheinListingsSetup canWrite={canWrite} gates={gates} cut={cut} onSignOut={onSignOut}
-        onOpenProduct={(id) => setProduct(id)} onOpenJob={(id) => { setTab('jobs'); setJob(String(id)); }} />}
-      {d && tabKey === 'jobs' && (
-        <SheinListingsJobs job={job} setJob={setJob} active={active} canWrite={canWrite} isAdmin={!!d?.isAdmin} connected={connected} onAct={act} busy={busy} onSignOut={onSignOut} />
-      )}
+        onOpenProduct={(id) => openProduct(id)} onOpenJob={(id) => { setTab('jobs'); setJob(String(id)); }} />}
+      {d && tabKey === 'jobs' && (<>
+        <ActNote where="jobs" />
+        <SheinListingsJobs job={job} setJob={setJob} active={active} canWrite={canWrite} isAdmin={!!d?.isAdmin} connected={connected} onAct={(a, x, done) => act(a, x, done, 'jobs')} busy={busy} onSignOut={onSignOut} />
+      </>)}
 
       {d && !neverRead && (
         <details className="card shl-legend">
@@ -281,10 +349,13 @@ export function SheinListings({ onSignOut, visible = true }) {
       )}
 
       {/* Portalled, so a hidden section has to take them off the screen itself. Their state is in the URL / in `sheet`. */}
-      {product && visible && <SheinProductDrawer id={product} isAdmin={!!d?.isAdmin} onClose={() => setProduct('')} onAct={act} busy={busy} onSignOut={onSignOut}
-        active={active} connected={connected} onDryRun={dryRun} onOpenJob={(id) => { setProduct(''); setSheet(id); }} />}
+      {/* keyed by product: switching shoes loads the new one at once, never the last one's state */}
+      {product && visible && <SheinProductDrawer key={product} id={product} focus={focus} isAdmin={!!d?.isAdmin} onClose={() => { setProduct(''); setFocus(''); }}
+        onAct={(a, x, done) => act(a, x, done, 'drawer')} busy={busy} onSignOut={onSignOut}
+        active={active} connected={connected} onDryRun={(ids, ops) => dryRun(ids, ops, 'drawer')} onOpenJob={(id) => { setProduct(''); setSheet(id); }} />}
       {sheet && visible && <DryRunSheet jobId={sheet} canWrite={canWrite} isAdmin={!!d?.isAdmin} onClose={() => setSheet(null)} onSignOut={onSignOut} />}
     </div>
+    </ActNoteContext.Provider>
   );
 }
 

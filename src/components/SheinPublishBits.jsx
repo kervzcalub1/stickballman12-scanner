@@ -810,7 +810,7 @@ export function ShoeEditor({ d, mode = 'publish', lines = null, canWrite, busy, 
             return (
               <div key={l.key} className="shl-fixfirst-row" data-fix-first-line={l.key}>
                 <span className="shl-no" aria-label="Not OK">✕</span>
-                <span><span className="muted xs shl-block">{l.label}</span>{b ? <span className="xs shl-block"><BlockerSay b={b} />{b.sizes?.length > 1 ? <span className="muted"> · sizes {b.sizes.join(', ')}</span> : null}</span> : null}</span>
+                <span><span className="muted xs shl-block">{l.label}</span>{b ? <span className="xs shl-block"><BlockerSay b={b} />{b.sizes?.length ? <span className="muted"> · size{b.sizes.length > 1 ? 's' : ''} {b.sizes.join(', ')}</span> : null}</span> : null}</span>
                 <span className="shl-pub-btns">{pl ? <button type="button" className="btn xs shl-fix" onClick={() => goTo(l.key)}>{pl}</button> : actionOf(l)}</span>
               </div>
             );
@@ -846,7 +846,7 @@ export function ShoeEditor({ d, mode = 'publish', lines = null, canWrite, busy, 
               {l.say && <span className="xs shl-block">{l.say}</span>}
               {l.ok === null && !l.say && !saved && <span className="muted xs shl-block">Not read yet — the preview checks it.</span>}
               {saved && <span className="xs shl-block shl-pub-saved">{live ? 'Saved — preview the change to send it to SHEIN.' : 'Saved — checked again by the next preview.'}</span>}
-              {hard.map((b, i) => <span key={i} className="xs shl-block"><BlockerSay b={b} />{b.sizes?.length > 1 ? <span className="muted"> · sizes {b.sizes.join(', ')}</span> : null}</span>)}
+              {hard.map((b, i) => <span key={i} className="xs shl-block"><BlockerSay b={b} />{b.sizes?.length ? <span className="muted"> · size{b.sizes.length > 1 ? 's' : ''} {b.sizes.join(', ')}</span> : null}</span>)}
               {notes.map((b, i) => <span key={`n${i}`} className="muted xs shl-block"><BlockerSay b={b} compact={!b.fix} /></span>)}
               {l.lock && <span className="muted xs shl-block" data-lock="">Can’t change here: {l.lock}</span>}
               {!live && l.key === 'category' && !group && (groups.length > 1 ? <span className="xs shl-block shl-bad-text">Mixed size groups ({groups.map((g) => GROUP_LABEL[g]).join(', ')}) — split the product on Shopify first.</span> : <span className="xs shl-block muted">No US size we can read, so no size group.</span>)}

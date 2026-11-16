@@ -493,6 +493,11 @@ export const api = {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
     return get(`/api/shein/listings${qs ? `?${qs}` : ''}`);
   },
+  // "Rejected by SHEIN" (2026-11-17): our sends SHEIN refused, one row per shoe + the button that sends it again (DB only)
+  sheinListingsRejected: (params = {}) => {
+    const qs = new URLSearchParams(Object.entries({ rejected: 1, ...params }).filter(([, v]) => v !== '' && v != null)).toString();
+    return get(`/api/shein/listings?${qs}`);
+  },
   sheinListingProduct: (id) => get(`/api/shein/listings?product=${encodeURIComponent(id)}`),
   sheinListingPhotos: (id) => get(`/api/shein/listings?photos=${encodeURIComponent(id)}`),
   sheinListingProbe: () => get('/api/shein/listings?probe=1'),

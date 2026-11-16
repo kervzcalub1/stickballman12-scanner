@@ -10,7 +10,7 @@ import { fmt, when, TONE } from '../components/SheinListingsBits.jsx';
 import { TERMS, plain } from '../lib/sheinWords.js';
 
 // One line of the list: the count, what it is, what's behind it, and the button.
-function Row({ tone, n, what, why, button, onGo, state }) {
+function Row({ tone, n, what, why, button, onGo, state }) {   // `why` may hold links (a blocked row's reasons)
   return (
     <div className={`shein-today-row e-${tone}`} data-today={state}>
       <b className="shein-today-n">{n}</b>
@@ -64,7 +64,9 @@ export function SheinToday({ onSignOut }) {
   const failing = Number(l?.unitCounts?.failing || 0);
   const health = l ? healthLine(l) : null;
   const loading = (!list && !listErr) || (!live && !liveErr);
-  const open = (status) => go('listings', { status, tab: '', p: '', q: '', blocker: '', brand: '', shop: '' });
+  // Every filter of the list is set (or cleared) by the link, so it never lands on a half-filtered list. A count of SIZES
+  // opens the shoes that HAVE such a size (any=1 — their own status may be worse); a reason lands on Blocked with it.
+  const open = (status, { any = false, blocker = '' } = {}) => go('listings', { status, any: any ? '1' : '', blocker, tab: '', p: '', q: '', brand: '', shop: '', sort: '' });
   const nothing = s && l && !neverRead && !failing && !count('not_on_shein', 'sizes') && !count('blocked', 'products') && !count('out_of_date', 'sizes') && !count('error', 'products');
 
   return (
@@ -86,14 +88,16 @@ export function SheinToday({ onSignOut }) {
         <Row tone="muted" n="–" what="SHEIN hasn’t been read yet" why="The list fills in after the first refresh." state="never" button="Go to Shoes on SHEIN" onGo={() => go('listings')} />
       )}
       {s && !neverRead && count('not_on_shein', 'sizes') > 0 && (
-        <Row tone={TONE.not_on_shein} n={fmt(count('not_on_shein', 'sizes'))} what="Sizes not on SHEIN yet" why="In stock on Shopify and ready to list." state="not_on_shein" button="See them" onGo={() => open('not_on_shein')} />
+        <Row tone={TONE.not_on_shein} n={fmt(count('not_on_shein', 'sizes'))} what="Sizes not on SHEIN yet" why="In stock on Shopify and ready to list." state="not_on_shein" button="See them" onGo={() => open('not_on_shein', { any: true })} />
       )}
       {s && !neverRead && count('blocked', 'products') > 0 && (
         <Row tone={TONE.blocked} n={fmt(count('blocked', 'products'))} what={`Shoe${count('blocked', 'products') === 1 ? '' : 's'} blocked`}
-          why={stops.length ? stops.map((b) => `${b.title.replace(/\.$/, '')} (${fmt(b.products)})`).join(' · ') : null} state="blocked" button="See why" onGo={() => open('blocked')} />
+          why={stops.length ? <span className="shein-today-reasons">{stops.map((b, i) => (
+            <React.Fragment key={b.code}>{i > 0 && ' · '}<button type="button" className="shl-linkbtn" data-today-reason={b.code} onClick={() => open('blocked', { blocker: b.code })}>{b.label || b.title} ({fmt(b.products)})</button></React.Fragment>
+          ))}</span> : null} state="blocked" button="See why" onGo={() => open('blocked')} />
       )}
       {s && !neverRead && count('out_of_date', 'sizes') > 0 && (
-        <Row tone={TONE.out_of_date} n={fmt(count('out_of_date', 'sizes'))} what="Wrong sizes, SKUs or prices to fix" why="On SHEIN, but different from Shopify." state="out_of_date" button="Fix them" onGo={() => open('out_of_date')} />
+        <Row tone={TONE.out_of_date} n={fmt(count('out_of_date', 'sizes'))} what="Wrong sizes, SKUs or prices to fix" why="On SHEIN, but different from Shopify." state="out_of_date" button="Fix them" onGo={() => open('out_of_date', { any: true })} />
       )}
       {s && !neverRead && count('error', 'products') > 0 && (
         <Row tone={TONE.error} n={fmt(count('error', 'products'))} what={`Shoe${count('error', 'products') === 1 ? '' : 's'} SHEIN refused`} why="SHEIN’s reason is on each one." state="error" button="See why" onGo={() => open('error')} />

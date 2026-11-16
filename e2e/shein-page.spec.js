@@ -302,7 +302,7 @@ test.describe('SHEIN page — moving around loses nothing', () => {
     await loginAs(page, 'ph_team');
     await page.goto('/ph/shein');
     await page.evaluate(() => { window.__noReload = true; });
-    await panel(page, 'today').locator('[data-today="blocked"]').getByRole('button').click();
+    await panel(page, 'today').locator('[data-today="blocked"]').getByRole('button', { name: 'See why' }).click();   // (its reasons are links too, 2026-11-17)
     await expect(page).toHaveURL(/section=listings/);
     await expect(page).toHaveURL(/status=blocked/);
     await expect(panel(page, 'listings').locator('.shc-tile[data-status="blocked"]')).toHaveAttribute('aria-pressed', 'true');

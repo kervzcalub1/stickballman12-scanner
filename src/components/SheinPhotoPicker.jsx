@@ -10,7 +10,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { RemoteThumb, ImageZoomModal } from './common.jsx';
-import { fmt } from './SheinListingsBits.jsx';
+import { fmt, when } from './SheinListingsBits.jsx';
 import { plain } from '../lib/sheinWords.js';
 import { ANGLE_LABEL } from '../lib/sheinCleanPhotos.js';
 
@@ -62,8 +62,11 @@ export function SheinPhotoPicker({ productId, onSaved, onSignOut, lede = null })
     try {
       const r = await api.sheinListingAction({ action: 'find_clean_photos', productId });
       await load();
+      // 2026-11-17: the server remembers a search that found nothing (until the style's photos change) — say so
       const say = r.found ? `Found ${fmt(r.found)} clean photo${r.found === 1 ? '' : 's'} for ${r.style}${r.recorded < r.found ? ` (${fmt(r.found - r.recorded)} already on file)` : ''}.`
-        : r.cutouts ? `${fmt(r.cutouts)} cut-out${r.cutouts === 1 ? '' : 's'} on file for ${r.style}, but none matched its branded photos — brand it again in the Image Finder.`
+        : r.why === 'already_recorded' ? `Every photo angle of ${r.style} already has its clean photo on file — nothing new to find.`
+          : r.cached ? `Checked ${r.checkedAt ? when(r.checkedAt) : 'before'} — nothing new since: no cut-out matches ${r.style}’s photos. Brand it again in the Image Finder to make new ones.`
+            : r.cutouts ? `${fmt(r.cutouts)} cut-out${r.cutouts === 1 ? '' : 's'} on file for ${r.style}, but none matched its branded photos — brand it again in the Image Finder.`
           : `No cut-outs on file for ${r.style} — brand it in the Image Finder (Upload records the clean photos).`;
       setMsg(say); if (r.recorded) onSaved?.(say);
     } catch (e) { if (e.unauthorized) onSignOut?.(); else setMsg(`Not found: ${plain(e.message)}`); }

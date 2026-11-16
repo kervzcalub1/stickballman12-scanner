@@ -2,7 +2,7 @@
 // chip, a rendered blocker with its fix button, EST times, the custom-size form. Every word a
 // blocker says comes from src/lib/sheinListings.js (BLOCKERS) via the server's renderBlocker —
 // never re-typed here.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api.js';
 import { PH_DATETIME } from '../lib/format.js';
@@ -25,6 +25,16 @@ export const NEEDS_PRIV = 'Needs an admin or the “Connect integrations” priv
 // status → the edge / dot colour of a row or tile.
 export const TONE = { blocked: 'bad', error: 'warn', out_of_date: 'info', not_on_shein: 'muted', shein_only: 'warn', in_review: 'violet', synced: 'ok', excluded: 'muted', unknown: 'muted' };
 
+// "a shoe with at least one ___" — the any-size mode of a tile (?any=1), in words (2026-11-17).
+export const SIZE_PHRASE = {
+  synced: 'synced size', not_on_shein: 'size not on SHEIN', out_of_date: 'size that needs an update', in_review: 'size in review',
+  blocked: 'blocked size', error: 'size in Error', shein_only: 'SHEIN size not in Shopify', unknown: 'size not checked yet',
+};
+// The two views a reason ("What's stopping it") belongs to.
+export const REASON_STATUSES = ['blocked', 'error'];
+// The list's sort (?sort=), default first.
+export const SORTS = [['worst', 'Worst first'], ['title', 'Title A–Z'], ['updated', 'Last updated'], ['coverage', 'Coverage (least on SHEIN first)']];
+
 export function StatusChip({ status }) {
   const s = STATUSES[status] || STATUSES.unknown;
   return <span className={s.chip} title={s.meaning}>{s.label}</span>;
@@ -43,7 +53,12 @@ export function goPath(href) {
 // belongs to a later phase, is shown disabled with NEXT_PHASE.
 // Phase 4: the fixes for publishing a new product live in its drawer's checklist — a row's button opens it.
 export const PUBLISH_FIX_KINDS = ['choose_category', 'set_attr', 'review_title', 'use_ph_photos', 'set_defaults', 'publish_again', 'fix_photos', 'use_clean_photos'];   // fix_photos: the drawer's photo section (2026-11-11); use_clean_photos (2026-11-14)
-const LIVE_KINDS = new Set(['add_custom_size', 'edit_size_map', 'leave_off', 'include', 'open_shopify', 'open_match', 'open_shopify_listings', 'open_seller_center', ...PUBLISH_FIX_KINDS]);
+// 2026-11-17 (stage 3): what resubmits a SHEIN rejection — a preview of exactly what was rejected (PH ok, reads only;
+// the send's Confirm needs an admin / Connect integrations). null = Add missing sizes (no ops).
+export const REJECTION_PREVIEW_OPS = { preview_photos: ['photos'], preview_model: ['model'], preview_update: ['price', 'edit'], preview_add_sizes: null, preview_publish: ['publish'] };
+// confirm_price: "this outlier price is right" for that size (POST price_ok — PH ok)
+const LIVE_KINDS = new Set(['add_custom_size', 'edit_size_map', 'leave_off', 'include', 'open_shopify', 'open_match', 'open_shopify_listings', 'open_seller_center', 'confirm_price',
+  ...Object.keys(REJECTION_PREVIEW_OPS), ...PUBLISH_FIX_KINDS]);
 // open_match with `here`: the fix is this shoe's own "Fix SHEIN sizes" (onMatch — the drawer opens /
 // scrolls to it); without it (another SHEIN product holds the SKU) the SHEIN check page.
 export function FixButton({ action, shopifyUrl, onAct, busy, onMatch }) {
@@ -69,6 +84,28 @@ export function FixButton({ action, shopifyUrl, onAct, busy, onMatch }) {
       : <button type="button" className={cls} disabled title="Shopify Listings is a PH workspace page">{action.label}</button>;
   }
   return <button type="button" className={cls} disabled={!!busy} onClick={(e) => { e.stopPropagation(); onAct?.(k); }}>{action.label}</button>;
+}
+
+// An action's answer, next to the button that was pressed (2026-11-17, stage 3): `act(…, where)` in
+// SheinListings.jsx stores { where, kind: 'ok' | 'err', text }; each place that has buttons renders
+// <ActNote where="…" />. A failed LOAD keeps its own "Couldn't refresh" line at the top.
+export const ActNoteContext = createContext(null);
+export function ActNote({ where, className = '' }) {
+  const n = useContext(ActNoteContext);
+  if (!n || n.where !== where) return null;
+  const err = n.kind === 'err';
+  return <p className={`${err ? 'error' : 'ebl-ok'} sm shl-actnote ${className}`.trim()} role={err ? 'alert' : 'status'} data-act-note={where} data-kind={n.kind}>{err ? `Didn’t go through: ${n.text}` : n.text}</p>;
+}
+
+// While a drawer / sheet is open the page behind it doesn't scroll, and closing it puts the page back where it was.
+export function useBodyLock(on = true) {
+  useEffect(() => {
+    if (!on) return undefined;
+    const y = window.scrollY;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; if (Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y); };
+  }, [on]);
 }
 
 // One rendered blocker / note: what's wrong (bold), what to do, SHEIN's own words.

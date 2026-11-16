@@ -30,7 +30,7 @@ import { ProgressBar, RemoteThumb } from './common.jsx';
 import { renderBlocker, itemStatus, itemRetryable, itemUnconfirmed, itemCanSendAgain, PRICE_FROM, ITEM_NO_ANSWER, OP_LABEL, OP_SAY, PRICE_CODE, isUpdateOps, isPublishOps, isPhotoOps, isModelOps, PUBLISH_WORD } from '../lib/sheinListings.js';
 import { GROUP_LABEL, BOX_LABEL } from './SheinPublishBits.jsx';
 import { cmToIn, gToLb } from '../lib/sheinPublish.js';
-import { fmt, money, when, NEEDS_PRIV } from './SheinListingsBits.jsx';
+import { fmt, money, when, NEEDS_PRIV, useBodyLock } from './SheinListingsBits.jsx';
 import { JOB_WORDS, TERMS, plain } from '../lib/sheinWords.js';
 
 const plural = (n, one, many = `${one}s`) => `${fmt(n)} ${n === 1 ? one : many}`;
@@ -397,6 +397,12 @@ export function DryRunView({ jobId, canWrite, isAdmin, onSwitch, onClose, onSign
               <p className="muted xs">{plain(j.phase) || JOB_WORD[j.status]?.[1] || j.status}. It runs on the server — closing this or the tab doesn’t stop it.</p>
             </div>
           )}
+          {j.status === 'expired' && (
+            <div className="notice sm shl-expired" role="status" data-expired="">
+              <b>This preview expired.</b> Nobody confirmed it within 24 hours, so it can’t be sent — SHEIN and Shopify may have changed since.
+              {kind === 'preview' && items.length > 0 && <> <button type="button" className="btn sm" disabled={!!busy} onClick={() => dryAgain([...new Set(items.map((i) => i.shopify_product_id))])}>{busy === 'preview' ? 'Starting…' : 'Preview again'}</button></>}
+            </div>
+          )}
           {j.status === 'interrupted' && <p className="notice sm">The server restarted mid-job. {kind === 'run' ? 'It carries on by itself on the next tick — nothing is sent twice.' : 'Preview again to finish it.'}</p>}
           {j.error && <p className="error sm">{plain(j.error)}</p>}
 
@@ -529,7 +535,7 @@ export function DryRunView({ jobId, canWrite, isAdmin, onSwitch, onClose, onSign
   );
 }
 
-const JOB_TONE = { done: 'ok', running: 'info', queued: '', stopped: '', failed: 'bad', interrupted: 'warn', awaiting_confirm: 'violet' };
+const JOB_TONE = { done: 'ok', running: 'info', queued: '', stopped: '', failed: 'bad', interrupted: 'warn', awaiting_confirm: 'violet', expired: '' };
 const JOB_WORD = Object.fromEntries(Object.entries(JOB_WORDS).map(([k, w]) => [k, [JOB_TONE[k] ?? '', w]]));
 function JobWord({ job, waitingNow = null }) {
   const [cls, word] = JOB_WORD[job.status] || ['', job.status];
@@ -540,6 +546,7 @@ function JobWord({ job, waitingNow = null }) {
 
 // The overlay. `jobId` can change while it is open (Confirm → the run, Preview again → a new preview).
 export function DryRunSheet({ jobId, canWrite, isAdmin, onClose, onSignOut }) {
+  useBodyLock(true);
   const [id, setId] = useState(jobId);
   useEffect(() => { setId(jobId); }, [jobId]);
   useEffect(() => {
@@ -551,7 +558,8 @@ export function DryRunSheet({ jobId, canWrite, isAdmin, onClose, onSignOut }) {
     <>
       <div className="shl-drawer-bg shl-sheet-bg" onClick={onClose} aria-hidden="true" />
       <aside className="shl-drawer shl-sheet" role="dialog" aria-modal="true" aria-label="Preview and send">
-        <DryRunView jobId={id} canWrite={canWrite} isAdmin={isAdmin} onSwitch={setId} onClose={onClose} onSignOut={onSignOut} />
+        {/* keyed by job: Confirm → the run, Preview again → a new preview — each loads at once, never the last one's state */}
+        <DryRunView key={id} jobId={id} canWrite={canWrite} isAdmin={isAdmin} onSwitch={setId} onClose={onClose} onSignOut={onSignOut} />
       </aside>
     </>,
     document.body,

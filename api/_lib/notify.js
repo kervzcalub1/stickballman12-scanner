@@ -17,7 +17,7 @@
 // seconds later by `priceInBackground`, and a card that goes out first says "not priced"
 // on every pair — which is the one thing the approver most needs and the reason to have
 // a card at all.
-import { getBuyCart, getBuyCartLine, notInWarehouseForSku, lastCartEvent, lastCartEventOf, logCartEvent, createTelegramGroupCard, setTelegramGroupCardMessage, premiumPingPeople, premiumChatForBuyer } from './db.js';
+import { getBuyCart, getBuyCartLine, notInWarehouseForSku, lastCartEvent, lastCartEventOf, logCartEvent, createTelegramGroupCard, setTelegramGroupCardMessage, premiumPingPeople, chatsForBuyer } from './db.js';
 import { alertUsers, at } from './alerts.js';
 import { fundingTarget } from './buycart.js';
 import { stockForPair, stockForSizes, stockSentence } from './buyingStock.js';
@@ -90,13 +90,17 @@ const dollars = (n) => (money(n) == null ? '—' : `${money(n) < 0 ? '-' : ''}$$
 // "Premium shoes"): "⭐ PREMIUM — Andrew is proposing a $10.00 tip per pair". `replies` adds
 // how to answer it by reply (the one-card-per-shoe card); `buttons` = by the tip buttons on a
 // one-size card.
-// Which group a card (or a note about a pair) goes to. A PREMIUM shoe goes to the buyer's
-// own premium group when one is set on their account (Check Access → "Premium shoes chat");
-// everything else — and a buyer with none set — stays in the main approval group.
+// Which group a card (or a note about a request) goes to — one group per SUPPLIER
+// (2026-11-17). A PREMIUM shoe goes to the buyer's premium group when one is set (Check
+// Access → "Set premium chat"); everything else goes to the buyer's OWN buying group (Check
+// Access → "Set buying chat"); a buyer with neither stays in the main approval group
+// (TELEGRAM_CHAT_ID). A failed lookup falls back to the main group — the people who approve
+// are in every group, so a card there is still answered, never lost.
 async function chatFor(cart, isPremium) {
-  if (!isPremium) return telegramChatId();
-  try { return (await premiumChatForBuyer(cart?.buyer_user_id)) || telegramChatId(); }
-  catch (e) { console.warn('[notify] premium chat lookup failed — main group:', e.message); return telegramChatId(); }
+  try {
+    const c = await chatsForBuyer(cart?.buyer_user_id);
+    return (isPremium && c.premium) || c.buying || telegramChatId();
+  } catch (e) { console.warn('[notify] buyer chat lookup failed — main group:', e.message); return telegramChatId(); }
 }
 
 // A PREMIUM shoe calls the people holding `premium_ping` by name (a Telegram mention).
@@ -687,7 +691,7 @@ export async function notifyRequestEvent(cartId, event, actor = null) {
       caption,
     };
     if (direct) {
-      const msg = await sendNote(caption);
+      const msg = await sendNote(caption, await chatFor(cart, false));   // the buyer's own group
       console.log(`[notify] ${cart.cart_code} ${event} → Telegram message ${msg?.message_id}`);
       return { sent: true };
     }

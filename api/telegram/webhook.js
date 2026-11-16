@@ -24,7 +24,7 @@
 // passes a dev card's taps on to TELEGRAM_DEV_FORWARD_URL (the dev tunnel) untouched, so a
 // test card is recorded in the dev database and never in the real one.
 import { send, applySecurity, getJsonBody } from '../_lib/util.js';
-import { dbConfigured, premiumChatIds, recordReplyMiss, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx, createCancellationPhoto, setCancellationPhotoPlatform } from '../_lib/db.js';
+import { dbConfigured, buyerChatIds, recordReplyMiss, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx, createCancellationPhoto, setCancellationPhotoPlatform } from '../_lib/db.js';
 import { telegramConfigured, telegramChatId, cancelChatId, tg, enqueue } from '../_lib/telegram.js';
 import { decideFromTelegram, decideTipFromTelegram } from '../_lib/telegramDecide.js';
 import { notifyEnv } from '../_lib/notify.js';
@@ -62,8 +62,8 @@ async function handleUpdate(update) {
   return null;
 }
 
-// Only the approval groups: the main one, and every buyer's PREMIUM group (users.
-// premium_chat_id, Check Access). The identity check would refuse a stranger anyway; this
+// Only the approval groups: the main one, every buyer's OWN buying group (users.
+// buying_chat_id) and every buyer's PREMIUM group (users.premium_chat_id) — Check Access. The identity check would refuse a stranger anyway; this
 // keeps the bot from answering in chats it was added to by mistake. Read fresh each time
 // (only a message OUTSIDE the main group gets this far — a reply to a card, or a number),
 // so a group set on Check Access answers at once.
@@ -71,7 +71,7 @@ async function inOurChat(chatId) {
   const id = String(chatId ?? '');
   if (!id) return false;
   if (id === telegramChatId()) return true;
-  try { return (await premiumChatIds()).includes(id); } catch { return false; }
+  try { return (await buyerChatIds()).includes(id); } catch { return false; }
 }
 
 async function handleTap(update, cq) {

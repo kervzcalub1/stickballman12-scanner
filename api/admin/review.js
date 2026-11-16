@@ -8,7 +8,7 @@
 // member or an admin who ALSO does that, not instead of it. See docs/context/buy-cart.md.
 
 import { getJsonBody, send, applySecurity } from '../_lib/util.js';
-import { reviewUser, setUserRole, setUserPrivileges, deleteUser, dbConfigured, setUserTelegramId, setUserPremiumChat, getUserById, clearTelegramLinkRequest } from '../_lib/db.js';
+import { reviewUser, setUserRole, setUserPrivileges, deleteUser, dbConfigured, setUserTelegramId, setUserPremiumChat, setUserBuyingChat, getUserById, clearTelegramLinkRequest } from '../_lib/db.js';
 import { PRIVILEGE_KEYS, BUYER_PRIVILEGE_KEYS, requireAccessManager, accessRefusal } from '../_lib/buycart.js';
 
 // `supplier` = external scan-out partner (PO feature); admin-assignable, never at signup.
@@ -97,6 +97,20 @@ export default async function handler(req, res) {
       if (raw !== '' && target.role !== 'supplier')
         return send(res, 400, { ok: false, error: 'A premium chat is for a buyer (supplier) account.' });
       const updated = await setUserPremiumChat(userId, raw || null);
+      return send(res, 200, { ok: true, user: updated });
+    }
+    // A BUYER's own buying-requests group — one Telegram group per supplier. Every card and
+    // note about their requests goes there instead of the main approval group; blank clears
+    // it, so they come back to the main group.
+    if (decision === 'buying_chat') {
+      const raw = String(body.buyingChatId ?? '').trim();
+      if (raw !== '' && !/^-\d{5,20}$/.test(raw))
+        return send(res, 400, { ok: false, error: 'A group chat id is a negative number, like -1001234567890 — send /chatid in the group to get it.' });
+      const target = await getUserById(userId);
+      if (!target) return send(res, 404, { ok: false, error: 'Account not found.' });
+      if (raw !== '' && target.role !== 'supplier')
+        return send(res, 400, { ok: false, error: 'A buying chat is for a buyer (supplier) account.' });
+      const updated = await setUserBuyingChat(userId, raw || null);
       return send(res, 200, { ok: true, user: updated });
     }
     if (decision === 'role') {

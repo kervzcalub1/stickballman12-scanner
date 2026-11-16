@@ -145,6 +145,14 @@ function cleanSuggestion(x) {
   const out = { categoryId: num(x.categoryId), order: num(x.order), vote: num(x.vote), path: x.path == null ? null : String(x.path).slice(0, 500) };
   return Object.values(out).some((v) => v != null) ? out : null;
 }
+// A Setup save (category map, SHEIN details default, brand map) changes what blocks every shoe of that type /
+// vendor: recount at once (DB only — no SHEIN call), so no_category / missing_attr / brand_unset clear (or come
+// back) without waiting for the next Refresh (2026-11-17; the box and size-map saves already did). Coalesced:
+// recomputeStored runs one at a time in this process. A failure never fails the save → recomputed: false.
+async function recountAfterSetup(what) {
+  if (!(await latestListingJob('snapshot', 'done').catch(() => null))) return false;
+  try { await recomputeStored(); return true; } catch (e) { console.error(`[shein-listing] recompute after ${what}`, e.message); return false; }
+}
 async function phase4Maps(req, res, user, type, qs) {
   const by = user.name || user.username || '';
   const { getListingCache, listingPublishTypeUsage, listingVendorUsage } = await import('../_lib/db.js');
@@ -172,12 +180,13 @@ async function phase4Maps(req, res, user, type, qs) {
     const productType = String(b.productType ?? '').trim().slice(0, 200);
     const sizeGroup = String(b.sizeGroup || '');
     if (!SIZE_GROUPS.includes(sizeGroup)) return send(res, 400, { ok: false, error: `sizeGroup: one of ${SIZE_GROUPS.join(', ')}.` });
-    if (b.action === 'clear') return send(res, 200, { ok: true, cleared: await deleteCategoryMap(productType, sizeGroup) });
+    if (b.action === 'clear') { const cleared = await deleteCategoryMap(productType, sizeGroup); return send(res, 200, { ok: true, cleared, recomputed: await recountAfterSetup('category clear') }); }
     if (b.action !== 'set') return send(res, 400, { ok: false, error: 'Unknown action.' });
     if (!leaves) return send(res, 409, { ok: false, error: 'SHEIN’s category tree hasn’t been read yet — an admin reads it (listing-meta ?tree=1&refresh=1) or run a publish dry run.' });
     const leaf = leaves.find((l) => l.categoryId === Number(b.categoryId));
     if (!leaf || leaf.productTypeId == null) return send(res, 400, { ok: false, error: 'That isn’t a last-level SHEIN category (SHEIN only takes products in a leaf).' });
-    return send(res, 200, { ok: true, map: await saveCategoryMap({ productType, sizeGroup, categoryId: leaf.categoryId, productTypeId: leaf.productTypeId, categoryPath: leaf.path, suggestion: cleanSuggestion(b.suggestion) }, by) });
+    const map = await saveCategoryMap({ productType, sizeGroup, categoryId: leaf.categoryId, productTypeId: leaf.productTypeId, categoryPath: leaf.path, suggestion: cleanSuggestion(b.suggestion) }, by);
+    return send(res, 200, { ok: true, map, recomputed: await recountAfterSetup('category map') });
   }
   if (type === 'attr') {
     const body = req.method === 'POST' ? await getJsonBody(req) : null;
@@ -191,7 +200,7 @@ async function phase4Maps(req, res, user, type, qs) {
     if (req.method === 'GET') {
       return send(res, 200, { ok: true, defaults: await listAttrDefaults(ptid), template: parts ? { attributes: parts.product.map(describe), main: parts.main ? describe(parts.main) : null, mainStatus: parts.mainStatus } : null });
     }
-    if (body.action === 'clear') return send(res, 200, { ok: true, cleared: await deleteAttrDefault(ptid, Number(body.attributeId)) });
+    if (body.action === 'clear') { const cleared = await deleteAttrDefault(ptid, Number(body.attributeId)); return send(res, 200, { ok: true, cleared, recomputed: await recountAfterSetup('details clear') }); }
     if (body.action === 'seed') {
       // read-only: one of OUR approved SHEIN products of this type → the values it carries, for a person to review
       const spu = String(body.spu || '').trim();
@@ -222,7 +231,8 @@ async function phase4Maps(req, res, user, type, qs) {
     const extraValues = (Array.isArray(body.extraValues) ? body.extraValues : []).map((x) => String(x).trim().slice(0, 100)).filter(Boolean);
     const bad = attrValueProblem(a, valueIds, extraValues);   // one check, shared with the per-shoe save (listings.js publish_choices attr)
     if (bad) return send(res, 400, { ok: false, error: bad });
-    return send(res, 200, { ok: true, default: await saveAttrDefault({ productTypeId: ptid, attributeId: Number(a.attribute_id), valueIds, extraValues }, by) });
+    const saved = await saveAttrDefault({ productTypeId: ptid, attributeId: Number(a.attribute_id), valueIds, extraValues }, by);
+    return send(res, 200, { ok: true, default: saved, recomputed: await recountAfterSetup('details default') });
   }
   // brand
   const brands = (await getListingCache('brands', 'store'))?.payload || null;
@@ -233,16 +243,18 @@ async function phase4Maps(req, res, user, type, qs) {
   const b = await getJsonBody(req);
   const vendor = String(b.vendor || '').trim().toLowerCase().slice(0, 200);
   if (!vendor) return send(res, 400, { ok: false, error: 'Which vendor?' });
-  if (b.action === 'clear') return send(res, 200, { ok: true, cleared: await deleteBrandMap(vendor) });
+  if (b.action === 'clear') { const cleared = await deleteBrandMap(vendor); return send(res, 200, { ok: true, cleared, recomputed: await recountAfterSetup('brand clear') }); }
   if (b.action === 'no_brand') {
     // D5 (review F2): only a real generic product goes up without a brand — never a known brand
     if (isKnownBrand(vendor)) return send(res, 400, { ok: false, error: `“${vendor}” is a known brand — it can’t go up unbranded. Map it to its SHEIN brand (an admin applies for it in Seller Center if SHEIN doesn’t list it).` });
-    return send(res, 200, { ok: true, map: await saveBrandMap({ vendor, noBrand: true }, by) });
+    const map = await saveBrandMap({ vendor, noBrand: true }, by);
+    return send(res, 200, { ok: true, map, recomputed: await recountAfterSetup('no brand') });
   }
   if (b.action !== 'set') return send(res, 400, { ok: false, error: 'Unknown action.' });
   if (!brands) return send(res, 409, { ok: false, error: 'SHEIN’s brand list hasn’t been read yet (listing-meta ?brands=1&refresh=1, or a publish dry run).' });
   const hit = brands.find((x) => x.brand_code === String(b.brandCode || ''));
   if (!hit) return send(res, 400, { ok: false, error: 'That brand isn’t in SHEIN’s brand list for our store (an admin applies for it in Seller Center).' });
-  return send(res, 200, { ok: true, map: await saveBrandMap({ vendor, brandCode: hit.brand_code, brandName: hit.brand_name }, by) });
+  const map = await saveBrandMap({ vendor, brandCode: hit.brand_code, brandName: hit.brand_name }, by);
+  return send(res, 200, { ok: true, map, recomputed: await recountAfterSetup('brand map') });
 }
 

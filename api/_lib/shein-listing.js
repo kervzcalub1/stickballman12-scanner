@@ -386,7 +386,34 @@ export async function readinessMany(rows, io = IO) {
 
 // Recompute from what's stored (a size mapping saved, an exclude, a Shopify webhook): Shopify as
 // last read (shopify_json) with `replace` swapped in, SHEIN as the last snapshot read it. No SHEIN call.
-export async function recomputeStored({ replace = [], io = IO } = {}) {
+// One at a time in this process (2026-11-17): a whole-store recompute blocks the event loop ~160 ms and
+// has no lock, and every Setup save now asks for one. A call while one runs waits for ONE follow-up run
+// that starts after the current one ends (so it sees the caller's save); every call made meanwhile shares
+// that run (their `replace` products merged). → { products } of the run that covered the call.
+const recount = { running: null, queued: null };
+export function recomputeStored({ replace = [], io = IO } = {}) {
+  if (!recount.running) return startRecount(replace, io);
+  if (!recount.queued) {
+    let resolve; let reject;
+    const promise = new Promise((ok, no) => { resolve = ok; reject = no; });
+    recount.queued = { replace: new Map(), io, promise, resolve, reject };
+  }
+  for (const p of replace) recount.queued.replace.set(p.productId, p);
+  recount.queued.io = io;
+  return recount.queued.promise;
+}
+function startRecount(replace, io) {
+  const run = recomputeOnce({ replace, io });
+  recount.running = run;
+  run.catch(() => {}).finally(() => {
+    recount.running = null;
+    const q = recount.queued; recount.queued = null;
+    if (q) startRecount([...q.replace.values()], q.io).then(q.resolve, q.reject);
+  });
+  return run;
+}
+export const recomputeBusy = () => ({ running: !!recount.running, queued: !!recount.queued });
+async function recomputeOnce({ replace = [], io = IO } = {}) {
   const prev = await loadListingPrev();
   const byId = new Map([...prev.products.values()].filter((r) => r.shopify_json).map((r) => [r.shopify_product_id, r.shopify_json]));
   for (const p of replace) byId.set(p.productId, p);

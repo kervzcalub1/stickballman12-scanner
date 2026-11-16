@@ -3368,6 +3368,42 @@ test.describe.serial('SHEIN Listings Phase 4 — publish (server jobs vs the fak
     await request.post('/api/shein/listing-maps?type=attr', { headers: auth.ph, data: { action: 'set', productTypeId: P4TYPE, attributeId: 7200, valueIds: [7201] } });
     fake.writes.length = 0; const before = fake.p4.transforms.length;
     job = await preview([7708]);
+  test('(10, 2026-11-17) every Setup save recounts at once (DB only): brand / category / SHEIN detail cleared → the reason is on the shoe now; set again → gone — no Refresh', async ({ request }) => {
+    const ph = async (type, data) => { const r = await request.post(`/api/shein/listing-maps?type=${type}`, { headers: auth.ph, data }); expect(r.status(), `${type} ${data.action}`).toBe(200); return r.json(); };
+    const blockers = async () => (await pool.query(`SELECT blockers FROM shein_listing_variants WHERE row_key = $1`, [gidV(770809)])).rows[0].blockers;
+    const codes = async () => (await blockers()).map((b) => b.code);
+    const needs7000 = async () => (await blockers()).some((b) => b.code === 'missing_attr' && Number(b.params?.attributeId) === 7000);
+    const calls = fake.calls.length;
+    expect(await codes()).not.toContain('brand_unset');
+    expect(await ph('brand', { action: 'clear', vendor: 'E2E Nike' })).toMatchObject({ ok: true, cleared: 1, recomputed: true });
+    expect(await codes()).toContain('brand_unset');
+    expect(await ph('brand', { action: 'set', vendor: 'E2E Nike', brandCode: 'NIKE01' })).toMatchObject({ ok: true, recomputed: true });
+    expect(await codes()).not.toContain('brand_unset');
+    expect(await codes()).not.toContain('no_category');
+    expect(await ph('category', { action: 'clear', productType: 'E2E Sneakers', sizeGroup: 'adult' })).toMatchObject({ ok: true, recomputed: true });
+    expect(await codes()).toContain('no_category');
+    expect(await ph('category', { action: 'set', productType: 'E2E Sneakers', sizeGroup: 'adult', categoryId: P4CAT })).toMatchObject({ ok: true, recomputed: true });
+    expect(await codes()).not.toContain('no_category');
+    expect(await needs7000()).toBe(false);
+    expect(await ph('attr', { action: 'clear', productTypeId: P4TYPE, attributeId: 7000 })).toMatchObject({ ok: true, recomputed: true });
+    expect(await needs7000()).toBe(true);
+    expect(await ph('attr', { action: 'set', productTypeId: P4TYPE, attributeId: 7000, valueIds: [7001] })).toMatchObject({ ok: true, recomputed: true });
+    expect(await needs7000()).toBe(false);
+    expect(fake.calls.length).toBe(calls);                                         // never a SHEIN call
+  });
+
+  test('(10) recomputeStored runs one at a time in a process: calls made meanwhile share ONE follow-up run that starts after it', async () => {
+    const a = L.recomputeStored(); const b = L.recomputeStored(); const c = L.recomputeStored();
+    expect(L.recomputeBusy()).toEqual({ running: true, queued: true });
+    expect(b).toBe(c);
+    expect(a).not.toBe(b);
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(ra.products).toBeGreaterThan(0);
+    expect(rb.products).toBe(ra.products);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(L.recomputeBusy()).toEqual({ running: false, queued: false });
+  });
+
     it = await one(job.id, 7708);
     expect(job).toMatchObject({ status: 'awaiting_confirm', counts: expect.objectContaining({ publishable: 1, publish_sizes: 4, shein_writes: 0 }) });
     const { rows: [lg] } = await pool.query(`SELECT count(*) FILTER (WHERE write)::int AS writes, count(*) FILTER (WHERE asset)::int AS assets FROM shein_api_log WHERE job_id = $1`, [job.id]);

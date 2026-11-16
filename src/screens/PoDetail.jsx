@@ -22,7 +22,7 @@ import { PoManifestImport } from '../components/PoManifestImport.jsx';
 import { carrierName } from '../lib/carriers.js';
 import { TrackingLink } from '../components/TrackingLink.jsx';
 import { DeliveryStatus } from '../components/DeliveryStatus.jsx';
-import { PoScanModal, PoLineRow, PoLineHeader, PoOrderLineRows } from '../components/PoScanModal.jsx';
+import { PoScanModal, PoLineRow, PoLineHeader, PoOrderLineRows, PoBulkRemove } from '../components/PoScanModal.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLinkBatchModal } from '../components/PoLinkBatch.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
@@ -82,6 +82,9 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
   const [delReason, setDelReason] = useState('');
   const [delBusy, setDelBusy] = useState(false);
   const [lineBusy, setLineBusy] = useState(null);       // po_line id currently being saved
+  // Lines ticked for "Remove N items" — one set for the order (line ids are unique).
+  const [picked, setPicked] = useState(() => new Set());
+  const pickLine = (l, on) => setPicked((cur) => { const n = new Set(cur); if (on) n.add(Number(l.id)); else n.delete(Number(l.id)); return n; });
   const [delLine, setDelLine] = useState(null);         // { line } — remove confirm
 
   const load = () => api.poGet(poId)
@@ -377,6 +380,9 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                     <span className="po-ov-label-units">{unitsByBox.get('order') || 0} unit{(unitsByBox.get('order') || 0) === 1 ? '' : 's'}</span>
                     <span className="muted xs">One list for the whole purchase — no per-box breakdown. Warehouse still receives box by box.</span>
                   </div>
+                  {orderLines.length > 0 && canEditLines(po) && (
+                    <PoBulkRemove lines={orderLines} picked={picked} setPicked={setPicked} onRemoved={load} onSignOut={onSignOut} />
+                  )}
                   {orderLines.length > 0 && (
                     <ul className={`po-lines po-ov-lines${canEditLines(po) ? ' editable' : ''}`}>
                       {canEditLines(po) && <PoLineHeader boxesOrder={boxesOrder} />}
@@ -386,7 +392,7 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                           // that has several sizes — the same rows the supplier's card shows.
                           <PoOrderLineRows poId={po.id} lines={orderLines} boxesOrder={boxesOrder}
                             isBusy={(l) => lineBusy === Number(l.id)} onSave={patchLine}
-                            attributionOf={lineAttribution} onApplied={load} onSignOut={onSignOut} />
+                            attributionOf={lineAttribution} onApplied={load} onSignOut={onSignOut} picked={picked} onPick={pickLine} />
                         )
                         : orderLines.map((l) => (
                           <li key={l.id}>
@@ -522,6 +528,9 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                     <TrackingTimeline events={box.tracking_events} status={box.tracking_status} />
                   )}
 
+                  {boxLines.length > 0 && canEditLines(po, box) && (
+                    <PoBulkRemove lines={boxLines} picked={picked} setPicked={setPicked} onRemoved={load} onSignOut={onSignOut} />
+                  )}
                   {boxLines.length > 0 && (
                     /* Editable for staff, on the same terms as entering the list in the first
                        place: a manifest typed off a message gets a size wrong, a qty wrong, or
@@ -533,7 +542,8 @@ export function PoDetail({ poId, pos = [], onBack, onHome, onSignOut }) {
                       {canEditLines(po, box)
                         ? boxLines.map((l) => (
                           <PoLineRow key={l.id} line={l} disabled={lineBusy === Number(l.id)} boxesOrder={boxesOrder}
-                            attribution={lineAttribution(l)} onSave={(patch) => patchLine(l, patch)} />
+                            attribution={lineAttribution(l)} onSave={(patch) => patchLine(l, patch)}
+                            picked={picked.has(Number(l.id))} onPick={pickLine} />
                         ))
                         : boxLines.map((l) => (
                           <li key={l.id}>

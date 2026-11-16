@@ -700,6 +700,8 @@ export const api = {
   // "Shelf price ea — all sizes": one price (null = clear) on every size of one SKU in the
   // whole-order list — same gate as poLine on one of those lines.
   poLinePrice: (poId, sku, unitCost) => post('/api/po/line-price', { poId, sku, unitCost }),
+  // Remove several manifest lines at once — the same gate as one line's ✕, all or nothing.
+  poLinesRemove: (lineIds) => post('/api/po/lines-remove', { lineIds }),
   // Empty-box orders: one carton size across many lines at once. The per-line edit is
   // still `poLine({ dimensions })` — this is the "they all ship in the same box" case.
   poLinesDimensions: (lineIds, dimensions) => post('/api/po/lines-dimensions', { lineIds, dimensions }),

@@ -766,6 +766,18 @@ pairs, an editable **Shelf price ea**) → one **Add N pairs** → `POST /api/po
     identical (any order `draft`/`receiving`, boxes allowed, always on-behalf).
   - Not verified: a real Bluetooth gun on iOS (the app's ⌨ on-screen keypad — `SoftKeypad`,
     mounted for suppliers too — covers typing a SKU / size when iOS hides the keyboard).
+- **Remove several lines at once** (2026-11-17, asked by the PH team: a supplier who had to
+  split an order — different name tags on the labels — was pressing × once per line). Every
+  EDITABLE manifest list has a tick box per line and a bar above it (`PoBulkRemove` in
+  `PoScanModal.jsx`): **Select all N · Clear (n) · ✕ Remove n items** (confirm says items +
+  units). On: the supplier's per-label lines and Order manifest card, staff's PO detail
+  whole-order list and per-label lines. The screen keeps ONE set of ticked line ids; each
+  list's bar acts on its own lines. Server: **`POST /api/po/lines-remove {lineIds}`** (≤ 500,
+  one order) — every line passes **`poLineEditBlock`**, the same gate as one × (`po/line
+  {qty:0}`), and **nothing is removed unless all of them may** (a line of another order, a
+  line already gone or a shut list refuses the whole request). A confirmed store list gets one
+  system comment naming what went, as a single correction does. Removal is a DELETE, as the ×
+  is — no undo. No schema change.
 - E2E: `e2e/po-paste.spec.js`, `e2e/po-order-scan.spec.js`.
 
 ## Who may write a manifest, and when (`manifestEditBlock`)

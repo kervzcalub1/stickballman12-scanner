@@ -21,7 +21,7 @@ import { carrierName } from '../lib/carriers.js';
 import { readParam, writeParam } from '../lib/urlstate.js';
 import { subStatusLabel, subStatusTone } from '../lib/trackstatus.js';
 import { Icon } from '../components/NavIcons.jsx';
-import { PoScanModal, PoLineRow, PoLineHeader, PoOrderLineRows } from '../components/PoScanModal.jsx';
+import { PoScanModal, PoLineRow, PoLineHeader, PoOrderLineRows, PoBulkRemove } from '../components/PoScanModal.jsx';
 import { ManifestPrint } from '../components/ManifestPrint.jsx';
 import { PoLabelsFile, PoLabelDownload } from '../components/PoLabelsFile.jsx';
 import { PoDropoffReceipts, PoDropoffChip } from '../components/PoDropoffReceipts.jsx';
@@ -183,6 +183,9 @@ export function SupplierApp({ user, onSignOut }) {
   const [packedBox, setPackedBox] = useState(null);
   const [busy, setBusy] = useState(false);
   const [lineBusy, setLineBusy] = useState(null); // po_line id currently being saved
+  // Lines ticked for "Remove N items" — one set for the open order (line ids are unique).
+  const [picked, setPicked] = useState(() => new Set());
+  const pickLine = (l, on) => setPicked((cur) => { const n = new Set(cur); if (on) n.add(Number(l.id)); else n.delete(Number(l.id)); return n; });
   // Written procedures. Suppliers have no home screen to hang a card on, so Help
   // is a top-bar toggle over the list rather than a route.
   const [help, setHelp] = useState(false);
@@ -725,11 +728,12 @@ export function SupplierApp({ user, onSignOut }) {
                   {lines.length > 0 && (
                     canDeclare ? (
                       <>
+                        <PoBulkRemove lines={lines} picked={picked} setPicked={setPicked} disabled={busy} onRemoved={refreshDetail} onSignOut={onSignOut} />
                         <ul className="po-lines po-lines-edit">
                           <PoLineHeader boxesOrder={boxesOrder} />
                           {lines.map((l) => (
                             <PoLineRow key={l.id} line={l} disabled={busy || lineBusy === Number(l.id)} boxesOrder={boxesOrder}
-                              onSave={(patch) => patchLine(l, patch)}
+                              onSave={(patch) => patchLine(l, patch)} picked={picked.has(Number(l.id))} onPick={pickLine}
                               attribution={l.entered_on_behalf ? `Entered for you by ${staffLabel}` : null} />
                           ))}
                         </ul>
@@ -849,6 +853,9 @@ export function SupplierApp({ user, onSignOut }) {
                   {!orderLines.length && (
                     <p className="muted sm">Have one list for the whole order, not split into boxes yet? Scan every box into it, or paste it, instead of filling each box — then just close and ship the boxes.</p>
                   )}
+                  {orderLines.length > 0 && canEdit && (
+                    <PoBulkRemove lines={orderLines} picked={picked} setPicked={setPicked} disabled={busy} onRemoved={refreshDetail} onSignOut={onSignOut} />
+                  )}
                   {orderLines.length > 0 && (canEdit ? (
                     <ul className="po-lines po-lines-edit">
                       <PoLineHeader boxesOrder={boxesOrder} />
@@ -857,7 +864,7 @@ export function SupplierApp({ user, onSignOut }) {
                       <PoOrderLineRows poId={po.id} lines={orderLines} boxesOrder={boxesOrder}
                         isBusy={(l) => busy || lineBusy === Number(l.id)} onSave={patchLine}
                         attributionOf={(l) => (l.entered_on_behalf ? `Entered for you by ${staffLabel}` : null)}
-                        onApplied={refreshDetail} onSignOut={onSignOut} />
+                        onApplied={refreshDetail} onSignOut={onSignOut} picked={picked} onPick={pickLine} />
                     </ul>
                   ) : (
                     <ul className="po-lines">

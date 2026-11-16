@@ -524,6 +524,7 @@ export const api = {
   presellCompete: () => get('/api/presell-listings/compete'),
   presellFulfill: (params = {}) => get(`/api/presell-listings/fulfill?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString()}`),
   presellFulfillSync: () => post('/api/presell-listings/fulfill', { action: 'sync' }),
+  presellFulfillMark: (ids, step, on = true) => post('/api/presell-listings/fulfill', { action: 'mark', ids, step, on }),
   // Every shipping label of ONE platform in one PDF → { blob, filename, included, missing }.
   presellLabelsPdf: async (platform, ids, withDoc = null) => {
     const t = getToken();

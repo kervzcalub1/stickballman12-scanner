@@ -24,6 +24,8 @@ always shipped (a failed payout is not a cancelled sale).
 `order_status` (the platform's word), `ship_state` (NULL = not read yet), `ship_by`, `carrier`,
 `tracking_number`, `tracking_url`, `label_url`, `ship_docs` JSONB (StockX: thermal / letter /
 labelOnly / additionalRequired), `ship_state_at`. Index on the open ones.
+`ship_state` is `to_ship | shipped | cancelled | unknown`; `label_printed_at/_by`, `packed_at/_by`
+= the warehouse's side (below).
 
 ## The sync (`api/_lib/presell-fulfill.js` `syncFulfillment`)
 - **Read-only GETs**, so safe on any environment. The worker runs it every **2 min** where
@@ -82,6 +84,31 @@ choose which orders go in.
 - No schema change. Checked 2026-11-16 on real links from a prod copy: 4 Alias (288 x 450 pt pages)
   and 4 StockX (label-only PDFs, 812 x 1218 pt = 4 x 6 ratio) merged in 2–3 s. **Not checked: a real
   print on the thermal printer** (StockX pages are large; print "fit to page").
+
+## Monitoring only — what the warehouse has done (2026-11-17, owner)
+The owner's intent for this tab: **watch the orders, handle nothing**. That was already true of
+the code — every marketplace call here is a GET; StockX and Alias make the label themselves at
+the sale, which is why the warehouse "found labels nobody created". What was missing was the
+warehouse's side, which neither platform reports:
+- **`presell_sales.label_printed_at/_by`, `packed_at/_by`.** `progressOf` → `new` (label not
+  printed) → `printed` → `packed` (boxed, waiting for UPS; the platform moves it to shipped by
+  itself). Each order to ship has **🖨 Mark printed** / **📦 Mark packed** (who + EST time shown,
+  **×** undoes; un-printing clears packed too; packing implies printed); ticked orders can be
+  marked together. **Downloading a labels PDF stamps its orders printed** (first time only, the
+  person who downloaded). `POST /api/presell-listings/fulfill { action:'mark', ids, step, on }`
+  — warehouse / PH / admin, only orders still to ship, **nothing is sent to a marketplace**.
+- **Warehouse:** row under the totals — `Label not printed n · Printed, not packed n · Packed —
+  waiting for UPS n`; each is a filter (`?step=`), and the pick list follows it.
+- **StockX `DONOTSHIP` = cancelled** (`shipStateOf`). It was not on the cancel list, fell through
+  to "shipped" (29 orders on prod, 11-17), and a shipped order is never read again — `db:setup`
+  re-files the rows already stored that way. Not verified with StockX what exactly triggers it;
+  on our data every one flipped 1–2 days after its ship-by.
+- **"Can't be read"** (`ship_state = 'unknown'`, view shown only when there are some): a sale
+  never read back, over **7 days** old, whose order the platform answers **404** for
+  (`unreadable`) is settled with the status it had in the sale event instead of sitting in To
+  ship and being asked for every 10 min — 53 Alias sales from 10-10…10-12, before this sync
+  existed. Not counted as shipped (so "where is the pair" is unchanged). Any other failure (an
+  outage, a fresh sale) keeps being retried.
 
 ## Pick list (`pickListPdf` / `pickListCsv` in `src/lib/presellReport.js`)
 Letter **portrait**, ASCII only: totals box, then a bar per SKU + size ("3 to ship: 2 set aside,

@@ -2582,6 +2582,16 @@ await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS ship_state_at TIME
 // "sold 8, arrived 5 → 3 orders at risk" can be counted per order (docs/store-orders-plan.md).
 await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS po_id BIGINT REFERENCES purchase_orders(id) ON DELETE SET NULL`);
 await sql(`CREATE INDEX IF NOT EXISTS presell_sales_to_ship_idx ON presell_sales (ship_by) WHERE ship_state IS NULL OR ship_state = 'to_ship'`);
+// 2026-11-17 — monitoring only (owner): what the WAREHOUSE has done with an order to ship.
+// Neither platform reports it: a labels-PDF download stamps "printed", the rest is ticked.
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS label_printed_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS label_printed_by TEXT`);
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS packed_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE presell_sales ADD COLUMN IF NOT EXISTS packed_by TEXT`);
+// StockX DONOTSHIP was read as "shipped" (the status was not on the cancel list); a shipped
+// order is never read again, so the rows already filed that way are put right here. Idempotent.
+await sql(`UPDATE presell_sales SET ship_state = 'cancelled', ship_state_at = coalesce(ship_state_at, now())
+            WHERE platform = 'stockx' AND upper(order_status) IN ('DONOTSHIP', 'DO_NOT_SHIP') AND ship_state = 'shipped'`);
 // Pre-sell HISTORY (owner, 2026-11-13: "when did I enter a pre-sale, what shoes and sizes"):
 // one row per time pairs were ENTERED — a List new call (kind 'new'; one paste can be several
 // calls, tied together by run_id) or a Stock → Pairs… raise (kind 'pairs'). `lines` = what was

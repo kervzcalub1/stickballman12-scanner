@@ -19,7 +19,7 @@ import { parsePresellPaste } from '../lib/presellPaste.js';
 import { calcPayout, DEFAULT_FEE_PCT } from '../lib/payout.js';
 import { parseTrackingList, saleNet, pairsLeft, listableOn, pairsOwed, presellUnitCost, costBasis, costNote, COST_REASON } from '../lib/presellDetails.js';
 import { COMP_MODES, compFloor } from '../lib/presellCompete.js';
-import { assignWhere, pickGroups, fulfillTotals, urgency, timeLeft, labelLink, WHERE } from '../lib/presellFulfill.js';
+import { assignWhere, pickGroups, fulfillTotals, urgency, timeLeft, labelLink, WHERE, PROGRESS, progressOf } from '../lib/presellFulfill.js';
 import { boxOrder, boxSummary, boxState, shortTrack } from '../lib/presellBoxes.js';
 
 // The cost stack fields a supplier preset carries (payout_presets), in the order the
@@ -2056,12 +2056,17 @@ function HistoryTab({ onSignOut }) {
 // 10.5s at once), most urgent ship-by first, where each pair is, the label to print — and the
 // same thing as a printable pick list (PDF / CSV).
 const SHIP_VIEW = [['to_ship', 'To ship'], ['shipped', 'Shipped'], ['cancelled', 'Cancelled']];
+// Sales the platform no longer returns (never read, over a week old) — shown only when there are some.
+const UNKNOWN_VIEW = ['unknown', 'Can’t be read'];
 const UPLAT = { alias: 'Alias', stockx: 'StockX' };
 
 function FulfillTab({ onSignOut }) {
   const [view, setView] = useQueryParam('ship', 'to_ship');
   const [q, setQ] = useQueryParam('fq', '');
   const [only, setOnly] = useQueryParam('where', '');
+  // What the warehouse has done with it: '' | new (label not printed) | printed | packed.
+  const [stepRaw, setStep] = useQueryParam('step', '');
+  const step = PROGRESS[stepRaw] ? stepRaw : '';
   // Alias and StockX parcels are packed and handed over apart, so the list splits by platform.
   const [platRaw, setPlat] = useQueryParam('plat', '');
   const plat = UPLAT[platRaw] ? platRaw : '';
@@ -2081,7 +2086,8 @@ function FulfillTab({ onSignOut }) {
   // "Where" is worked out over BOTH platforms (they share the set-aside pairs), then narrowed.
   const allRows = useMemo(() => (d ? (view === 'to_ship' ? assignWhere(d.rows) : d.rows) : null), [d, view]);
   const rows = useMemo(() => (allRows && plat ? allRows.filter((x) => x.platform === plat) : allRows), [allRows, plat]);
-  const shown = useMemo(() => (rows && only && view === 'to_ship' ? rows.filter((x) => x.where === only) : rows), [rows, only, view]);
+  const shown = useMemo(() => (rows && view === 'to_ship'
+    ? rows.filter((x) => (!only || x.where === only) && (!step || progressOf(x) === step)) : rows), [rows, only, step, view]);
   const groups = useMemo(() => (shown ? pickGroups(shown) : []), [shown]);
   const tot = useMemo(() => fulfillTotals(rows || [], now), [rows, now]);
   const platN = useMemo(() => ({ alias: (allRows || []).filter((x) => x.platform === 'alias').length, stockx: (allRows || []).filter((x) => x.platform === 'stockx').length }), [allRows]);
@@ -2118,13 +2124,23 @@ function FulfillTab({ onSignOut }) {
     finally { setBusy(''); }
   }
 
+  // Printed / packed are OUR notes on an order — nothing is sent to StockX or Alias.
+  async function mark(ids, what, on = true) {
+    if (!ids.length) return;
+    setBusy(`mark-${what}`); setError(''); setNote('');
+    try { await api.presellFulfillMark(ids, what, on); await load(); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusy(''); }
+  }
+  const pickedIds = useMemo(() => withLabel.filter((x) => picked.has(Number(x.id))).map((x) => Number(x.id)), [withLabel, picked]);
+
   async function check() {
     setBusy('sync'); setNote('');
     try {
       const r = await api.presellFulfillSync();
       const p = r.lastPass;
       setNote(!r.done ? 'Still reading the orders — the list updates by itself as they come in.'
-        : `Read ${p.read} order${p.read === 1 ? '' : 's'}, ${p.changed} changed${p.errors?.length ? ` · ${p.errors.length} couldn’t be read` : ''}${p.stoppedBy ? ` · stopped: ${p.stoppedBy} — the rest on the next pass` : ''}.`);
+        : `Read ${p.read} order${p.read === 1 ? '' : 's'}, ${p.changed} changed${p.settled ? ` · ${p.settled} old order${p.settled === 1 ? '' : 's'} the platform no longer returns moved to “Can’t be read”` : ''}${p.errors?.length ? ` · ${p.errors.length} couldn’t be read` : ''}${p.stoppedBy ? ` · stopped: ${p.stoppedBy} — the rest on the next pass` : ''}.`);
       await load();
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setBusy(''); }
@@ -2134,7 +2150,7 @@ function FulfillTab({ onSignOut }) {
     try {
       const rep = await import('../lib/presellReport.js');
       const at = new Date();
-      const scope = [plat && `Platform: ${UPLAT[plat]}`, only && `Only: ${WHERE[only].word}`, q.trim() && `Search: ${q.trim()}`].filter(Boolean).join('  |  ');
+      const scope = [plat && `Platform: ${UPLAT[plat]}`, only && `Only: ${WHERE[only].word}`, step && `Only: ${PROGRESS[step]}`, q.trim() && `Search: ${q.trim()}`].filter(Boolean).join('  |  ');
       const blob = fmt === 'csv'
         ? new Blob([rep.pickListCsv(shown, at.getTime())], { type: 'text/csv;charset=utf-8' })
         : (await rep.pickListPdf(shown, { generatedAt: `Generated ${estDate(at)} ${estTime(at)} EST`, scope, now: at.getTime() })).output('blob');
@@ -2154,7 +2170,7 @@ function FulfillTab({ onSignOut }) {
           pack the pair, hand it to UPS; the order moves on once UPS scans it. Miss the <b>ship-by</b> and the platform cancels the sale.
         </p>
         <div className="ff-bar">
-          <Seg label="Orders" value={view} onChange={setView} options={SHIP_VIEW.map(([k, t]) => [k, t, c[k] || 0])} />
+          <Seg label="Orders" value={view} onChange={setView} options={[...SHIP_VIEW, ...(c.unknown > 0 || view === 'unknown' ? [UNKNOWN_VIEW] : [])].map(([k, t]) => [k, t, c[k] || 0])} />
           <input className="input ff-search" placeholder="Search SKU, name, order #, tracking" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search orders" />
           <button type="button" className="btn sm" disabled={!!busy} onClick={check}>{busy === 'sync' ? 'Checking…' : '↻ Check status now'}</button>
           {view === 'to_ship' && <>
@@ -2179,6 +2195,8 @@ function FulfillTab({ onSignOut }) {
           {view === 'to_ship' && withLabel.length > 0 && <>
             <button type="button" className="btn sm ghost" disabled={!!busy || pickedN === withLabel.length} onClick={() => setPicked(new Set(withLabel.map((x) => Number(x.id))))}>Tick all</button>
             {pickedN > 0 && <button type="button" className="btn sm ghost" disabled={!!busy} onClick={() => setPicked(new Set())}>Clear ({pickedN})</button>}
+            {pickedN > 0 && <button type="button" className="btn sm ghost" disabled={!!busy} onClick={() => mark(pickedIds, 'printed')}>🖨 Mark {pickedN} printed</button>}
+            {pickedN > 0 && <button type="button" className="btn sm ghost" disabled={!!busy} onClick={() => mark(pickedIds, 'packed')}>📦 Mark {pickedN} packed</button>}
             <span className="muted xs">{pickedN ? `${pickedN} ticked — the PDFs hold only these.` : 'Tick orders to put only those in the PDF; none ticked = all on screen.'}</span>
           </>}
         </div>
@@ -2203,10 +2221,22 @@ function FulfillTab({ onSignOut }) {
             {tot.noLabel > 0 && <span className="muted xs">{tot.noLabel} without a label yet</span>}
           </div>
         )}
+        {view === 'to_ship' && rows?.length > 0 && (
+          <div className="ff-tot ff-steps" role="group" aria-label="What the warehouse has done">
+            <span className="muted xs">Warehouse:</span>
+            {[['new', tot.notPrinted], ['printed', tot.printed], ['packed', tot.packed]].map(([k, n]) => (
+              <button key={k} type="button" className={`ff-step ${k}${step === k ? ' on' : ''}`} aria-pressed={step === k}
+                onClick={() => setStep(step === k ? '' : k)} title={step === k ? 'Show all' : `Only: ${PROGRESS[k]}`}>
+                {PROGRESS[k]} <b>{n}</b>
+              </button>
+            ))}
+            <span className="muted xs">Our own notes — nothing is sent to StockX or Alias. Downloading a labels PDF marks its orders printed.</span>
+          </div>
+        )}
       </div>
       {error && <div className="error mt">{error}</div>}
       {shown == null ? <div className="card"><p className="muted">Loading…</p></div>
-        : !shown.length ? <div className="card"><p className="muted">{view === 'to_ship' ? (only || q || plat ? 'Nothing matches.' : 'Nothing to ship — every pre-sell order has gone. 🎉') : 'None.'}</p></div>
+        : !shown.length ? <div className="card"><p className="muted">{view === 'to_ship' ? (only || step || q || plat ? 'Nothing matches.' : 'Nothing to ship — every pre-sell order has gone. 🎉') : 'None.'}</p></div>
           : groups.map((g) => (
             <div className="card ff-group" key={g.key}>
               <div className="ff-ghead">
@@ -2217,14 +2247,15 @@ function FulfillTab({ onSignOut }) {
                 </div>
                 <div className="ff-gcount"><b>{g.orders.length}</b> <span className="muted xs">{view === 'to_ship' ? 'to ship' : 'order'}{g.orders.length === 1 || view === 'to_ship' ? '' : 's'}</span></div>
               </div>
-              {g.orders.map((x) => <FulfillOrder key={x.id} x={x} now={now} toShip={view === 'to_ship'} picked={picked.has(Number(x.id))} onPick={() => togglePick(Number(x.id))} />)}
+              {g.orders.map((x) => <FulfillOrder key={x.id} x={x} now={now} toShip={view === 'to_ship'} picked={picked.has(Number(x.id))} onPick={() => togglePick(Number(x.id))}
+                busy={!!busy} onMark={(what, on) => mark([Number(x.id)], what, on)} />)}
             </div>
           ))}
     </>
   );
 }
 
-function FulfillOrder({ x, now, toShip, picked, onPick }) {
+function FulfillOrder({ x, now, toShip, picked, onPick, busy, onMark }) {
   const u = urgency(x.ship_by, now);
   const label = labelLink(x);
   const docs = x.ship_docs || {};
@@ -2245,7 +2276,7 @@ function FulfillOrder({ x, now, toShip, picked, onPick }) {
         {toShip ? (x.ship_by
           ? <span className={u === 'overdue' ? 'ff-late' : u === 'today' ? 'ff-soon' : ''}>Ship by <b>{when(x.ship_by)}</b> · {timeLeft(x.ship_by, now)}</span>
           : <span className="muted">No ship-by yet</span>)
-          : <span className="muted">{x.ship_state === 'shipped' ? 'Shipped' : 'Cancelled'}{x.ship_state_at ? ` · seen ${when(x.ship_state_at)}` : ''}</span>}
+          : <span className="muted">{x.ship_state === 'shipped' ? 'Shipped' : x.ship_state === 'unknown' ? `The platform no longer returns this order${x.order_status ? ` — it said ${x.order_status} at the sale` : ''}` : `Cancelled${x.order_status ? ` — ${x.order_status}` : ''}`}{x.ship_state_at ? ` · seen ${when(x.ship_state_at)}` : ''}</span>}
         <span className="muted xs"> · sold {when(x.sold_at || x.created_at)} · {money(x.price_cents)}</span>
       </div>
       <div className="ff-o-ship">
@@ -2258,6 +2289,18 @@ function FulfillOrder({ x, now, toShip, picked, onPick }) {
         {docs.thermal && <a className="btn sm ghost" href={docs.thermal} target="_blank" rel="noreferrer" title="StockX’s shipping instructions, 4×6 thermal">Instructions 4×6</a>}
         {docs.letter && <a className="btn sm ghost" href={docs.letter} target="_blank" rel="noreferrer" title="StockX’s shipping instructions, letter paper">Letter</a>}
       </div>
+      {toShip && (
+        <div className="ff-o-steps">
+          {x.label_printed_at
+            ? <span className="ff-step printed on">🖨 Printed · {x.label_printed_by || '—'} · {when(x.label_printed_at)}
+              <button type="button" className="ff-undo" disabled={busy} onClick={() => onMark('printed', false)} aria-label={`Order ${x.order_id}: not printed after all`}>×</button></span>
+            : <button type="button" className="btn xs ghost" disabled={busy} onClick={() => onMark('printed', true)} aria-label={`Mark order ${x.order_id} printed`}>🖨 Mark printed</button>}
+          {x.packed_at
+            ? <span className="ff-step packed on">📦 Packed · {x.packed_by || '—'} · {when(x.packed_at)}
+              <button type="button" className="ff-undo" disabled={busy} onClick={() => onMark('packed', false)} aria-label={`Order ${x.order_id}: not packed after all`}>×</button></span>
+            : <button type="button" className="btn xs ghost" disabled={busy} onClick={() => onMark('packed', true)} aria-label={`Mark order ${x.order_id} packed`}>📦 Mark packed</button>}
+        </div>
+      )}
       {(docs.additionalRequired || (x.order_status && !/LABEL_GENERATED|^CREATED$/.test(x.order_status) && toShip) || (x.where === 'transit' && (x.transit_note || x.expected_on))) && (
         <div className="muted xs">
           {docs.additionalRequired && <span className="error xs">StockX needs extra documents — print the full instructions, not the label only. </span>}

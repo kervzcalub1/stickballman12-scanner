@@ -11257,7 +11257,7 @@ export async function listPresellHistory({ from = null, to = null, sku = null, l
 // Sales whose order still needs reading: never read (ship_state NULL) or still to ship.
 // Newest-due first so a short pass (a 429) spends itself on what matters.
 export async function presellSalesToTrack(limit = 300) {
-  return await db()`SELECT id, platform, order_id, ship_state, ship_docs IS NOT NULL AS has_docs
+  return await db()`SELECT id, platform, order_id, ship_state, sold_at, created_at, ship_docs IS NOT NULL AS has_docs
                       FROM presell_sales WHERE ship_state IS NULL OR ship_state = 'to_ship'
                      ORDER BY ship_by ASC NULLS FIRST, id ASC LIMIT ${limit}`;
 }
@@ -11279,6 +11279,37 @@ export async function updatePresellSaleShip(id, f) {
     RETURNING id`;
   return r.length > 0;
 }
+// A never-read sale the platform no longer returns: settled as 'unknown' with the status it
+// had in the sale event, so it leaves To ship and the sync stops asking (presellFulfill.js).
+export async function settlePresellSaleUnreadable(id) {
+  const r = await db()`
+    UPDATE presell_sales SET ship_state = 'unknown', order_status = coalesce(order_status, raw->>'status'), ship_state_at = now()
+     WHERE id = ${id} AND ship_state IS NULL RETURNING id`;
+  return r.length > 0;
+}
+// What the WAREHOUSE did with an order: step 'printed' | 'packed', on / off, who and when.
+// Packing an order also counts its label as printed. Only orders still to ship.
+export async function markPresellSalesProgress(ids, step, on, by) {
+  const list = [...new Set((ids || []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  if (!list.length) return 0;
+  const sql = db();
+  let r;
+  if (step === 'printed' && on) {
+    r = await sql`UPDATE presell_sales SET label_printed_at = now(), label_printed_by = ${by}
+                   WHERE id = ANY(${list}::bigint[]) AND label_printed_at IS NULL AND (ship_state IS NULL OR ship_state = 'to_ship') RETURNING id`;
+  } else if (step === 'printed') {
+    r = await sql`UPDATE presell_sales SET label_printed_at = NULL, label_printed_by = NULL, packed_at = NULL, packed_by = NULL
+                   WHERE id = ANY(${list}::bigint[]) AND label_printed_at IS NOT NULL AND (ship_state IS NULL OR ship_state = 'to_ship') RETURNING id`;
+  } else if (on) {
+    r = await sql`UPDATE presell_sales SET packed_at = now(), packed_by = ${by},
+                         label_printed_at = coalesce(label_printed_at, now()), label_printed_by = coalesce(label_printed_by, ${by})
+                   WHERE id = ANY(${list}::bigint[]) AND packed_at IS NULL AND (ship_state IS NULL OR ship_state = 'to_ship') RETURNING id`;
+  } else {
+    r = await sql`UPDATE presell_sales SET packed_at = NULL, packed_by = NULL
+                   WHERE id = ANY(${list}::bigint[]) AND packed_at IS NOT NULL AND (ship_state IS NULL OR ship_state = 'to_ship') RETURNING id`;
+  }
+  return r.length;
+}
 // The label links of the named orders of ONE platform (labels PDF, presell-labels.js).
 export async function presellSalesForLabels(ids, platform) {
   return await db()`SELECT id, platform, order_id, label_url, ship_docs
@@ -11291,6 +11322,7 @@ export async function listPresellFulfill({ view = 'to_ship', q = null, limit = 2
   const rows = await db()`
     SELECT x.id, x.stock_id, x.platform, x.order_id, x.price_cents, x.payout_cents, x.sold_at, x.created_at,
            x.order_status, x.ship_state, x.ship_by, x.carrier, x.tracking_number, x.tracking_url, x.label_url, x.ship_docs, x.ship_state_at,
+           x.label_printed_at, x.label_printed_by, x.packed_at, x.packed_by,
            s.sku, s.name, s.image, s.size, s.qty, s.sold, s.in_transit, s.arrived_at, s.arrived_qty, s.released_qty,
            s.expected_on, s.transit_note, s.supplier, po.po_code, l.external_id,
            (SELECT count(*) FROM presell_sales y WHERE y.stock_id = x.stock_id AND y.ship_state = 'shipped')::int AS shipped_n
@@ -11303,6 +11335,7 @@ export async function listPresellFulfill({ view = 'to_ship', q = null, limit = 2
     SELECT count(*) FILTER (WHERE ship_state IS NULL OR ship_state = 'to_ship')::int AS to_ship,
            count(*) FILTER (WHERE ship_state = 'shipped')::int AS shipped,
            count(*) FILTER (WHERE ship_state = 'cancelled')::int AS cancelled,
+           count(*) FILTER (WHERE ship_state = 'unknown')::int AS unknown,
            count(*) FILTER (WHERE ship_state IS NULL)::int AS unread
       FROM presell_sales`;
   return { rows, counts: counts[0] };

@@ -4,7 +4,7 @@
 // server now). Spec: scratchpad plan/phase4-spec.md (API specialist, 2026-10-27); docs/shein-listings-plan.md
 // §3 Phase 4, §4.2 blockers 11–19, D4/D5/D6/D7/D12. No I/O, no clock — it runs in the browser too.
 import { parseSize } from './sheinCheck.js';
-import { withAttrs, blocker, BLOCKERS, listingSyncGate, resolveSize, validateCustomText, customTextConflict, sheinNewSizePrice, templateSizes, sizeSort, renderBlocker } from './sheinListings.js';
+import { withAttrs, blocker, BLOCKERS, listingSyncGate, resolveSize, validateCustomText, customTextConflict, sheinNewSizePrice, templateSizes, sizeSort, renderBlocker, priceOutliers, priceTargetsOf, priceCheck } from './sheinListings.js';
 import { modelFromTitle, PRODUCT_MODEL_ATTR_ID } from './sheinModel.js';
 
 const trim = (v) => String(v ?? '').trim();
@@ -560,7 +560,7 @@ const LINES = [
   [11, 'size_chart', 'Size chart', ['size_table_not_yet', 'no_size_table_value']],
   [12, 'sizes', 'Sizes', ['size_needs_map', 'size_not_on_shein', 'custom_unconfirmed', 'size_unchecked', 'custom_text_invalid', 'size_unreadable', 'size_already_on_shein', 'nothing_to_add']],
   [13, 'skus', 'Seller SKUs', ['no_seller_sku', 'dup_seller_sku', 'seller_sku_taken']],
-  [14, 'prices', 'Prices', ['no_price']],
+  [14, 'prices', 'Prices', ['no_price', 'price_outlier']],
   [15, 'box', 'Box size / weight', ['no_weight', 'box_unconfirmed', 'unit_unverified']],
   [16, 'photos', 'Photos', ['no_image', 'image_rejected', 'photos_need_priv', 'photo_cap_reached', 'clean_main_unsure']],
   [17, 'fields', 'SHEIN extra fields', ['fill_required']],
@@ -588,7 +588,7 @@ export function planPublish(input) {
   const {
     product, productRow = {}, gates = {}, category = null, fill = null, template = null, assoc = [], attrDefaults = [], brand = null,
     maps = [], permission = null, customValues = [], market = new Map(), box = null, images = null, taken = new Set(), inFlight = false,
-    unconfirmed = null, rejected = null, skuCounts = new Map(), unknown = [], readiness = false,
+    unconfirmed = null, rejected = null, skuCounts = new Map(), unknown = [], readiness = false, priceOk = new Map(),
   } = input;
   const blockers = []; const notes = [];
   let brandUnread = false;   // N2: SHEIN's brand list wasn't read — the Brand line is "not read yet" and nothing is sendable
@@ -711,6 +711,8 @@ export function planPublish(input) {
   plan.sizeAttributeId = sizeAttr;
   const ctx = { categoryId: category?.categoryId, attributeId: sizeAttr, values: parts.size?.values || null, permission, sizeTable: false, customValues, maps };
   const used = new Set();
+  // a price far from the shoe's other sizes is held until a person confirms it (2026-11-17; PRICE_OUTLIER)
+  const outliers = priceOutliers(priceTargetsOf(variants, market));
   for (const v of variants) {
     const sku = trim(v.sku);
     const skip = (b) => plan.skipped.push({ variantId: v.variantId, size: v.size, sku, blocker: b });
@@ -731,9 +733,11 @@ export function planPublish(input) {
     if (used.has(key)) { skip(blocker('size_already_on_shein', { size: v.size, sheinSize: res.label })); continue; }
     const price = sheinNewSizePrice({ marketCents: market.get(v.variantId) ?? null, shopifyPrice: v.price });
     if (!price) { blockers.push(blocker('no_price', { size: v.size }, 'price')); continue; }
+    const pc = priceCheck(v.variantId, v.size, outliers, priceOk);
+    if (pc?.code === 'price_outlier') { skip(pc); continue; }
     used.add(key);
     plan.sizes.push({ variantId: v.variantId, size: v.size, sku, sheinSize: res.label, kind: res.kind, valueId: res.valueId ?? null, source: res.source, mapId: res.map?.id ?? null,
-      sizeKey: res.key, price: price.price, priceFrom: price.from, qty: v.qty ?? null });
+      sizeKey: res.key, price: price.price, priceFrom: price.from, qty: v.qty ?? null, ...(pc ? { priceConfirmed: pc.params } : {}) });
   }
   const inStockSkipped = plan.skipped.filter((x) => Number(variants.find((v) => v.variantId === x.variantId)?.qty) > 0);
   for (const x of inStockSkipped) blockers.push({ ...x.blocker, params: { ...(x.blocker.params || {}), size: x.size } });
@@ -807,7 +811,7 @@ export { summarizePlan as summarizePublish } from './sheinListings.js';
 // for a product not on SHEIN. → { productBlockers, sizeFor: Map(variantId → resolveSize-like) }.
 // Size / SKU / price problems stay with their variant; the rest is the product's.
 const VARIANT_CODES = new Set(['size_needs_map', 'size_not_on_shein', 'size_unreadable', 'custom_text_invalid', 'custom_unconfirmed', 'size_unchecked', 'size_already_on_shein',
-  'no_price', 'no_seller_sku', 'dup_seller_sku', 'seller_sku_taken', 'nothing_to_add']);
+  'no_price', 'no_seller_sku', 'dup_seller_sku', 'seller_sku_taken', 'nothing_to_add', 'price_outlier', 'price_confirmed']);
 export function publishReadiness(product, ctx = {}) {
   const groups = [...new Set((product.variants || []).map((v) => sizeGroupOf(v.size)).filter(Boolean))];
   const row = groups.length === 1 ? (ctx.categoryMaps || []).find((m) => m.shopify_product_type === String(product.productType || '') && m.size_group === groups[0]) : null;
@@ -823,10 +827,11 @@ export function publishReadiness(product, ctx = {}) {
     brand: bm ? { code: bm.brand_code, name: bm.brand_name, noBrand: !!bm.no_brand, listed: !bm.brand_code ? true : !ctx.brands ? null : ctx.brands.some((b) => b.brand_code === bm.brand_code) } : null,
     unconfirmed: ctx.unconfirmed?.get?.(product.productId) || null,
     maps: ctx.maps || [], permission: perm == null ? null : Number(perm), customValues: (parts?.size?.values || []).filter((v) => v.custom).map((v) => v.label),
-    market: ctx.market || new Map(), box: ctx.box || null, images: null, readiness: true,
+    market: ctx.market || new Map(), box: ctx.box || null, images: null, readiness: true, priceOk: ctx.priceOk || new Map(),
   });
   const sizeFor = new Map();
-  for (const z of plan.sizes) sizeFor.set(z.variantId, { key: z.sizeKey, kind: z.kind, valueId: z.valueId, label: z.sheinSize, source: z.source, blocker: null, note: z.kind === 'custom' ? blocker('custom_size', { size: z.size, text: z.sheinSize }) : null });
+  for (const z of plan.sizes) sizeFor.set(z.variantId, { key: z.sizeKey, kind: z.kind, valueId: z.valueId, label: z.sheinSize, source: z.source, blocker: null,
+    note: z.kind === 'custom' ? blocker('custom_size', { size: z.size, text: z.sheinSize }) : z.priceConfirmed ? blocker('price_confirmed', z.priceConfirmed) : null });
   for (const x of plan.skipped) {
     const level = BLOCKERS[x.blocker?.code]?.level;
     sizeFor.set(x.variantId, { key: null, kind: null, valueId: null, label: null, source: null, blocker: ['note', 'review'].includes(level) ? null : x.blocker, note: ['note', 'review'].includes(level) ? x.blocker : null });

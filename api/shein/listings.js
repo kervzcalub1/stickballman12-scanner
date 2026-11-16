@@ -53,6 +53,11 @@
 //   publish_again { productIds }  admin or Connect integrations: re-publish after SHEIN rejected the first one -> { ok, products }
 //   look_again { itemIds }  (PH, read-only) a publish SHEIN didn't confirm: looked up (seller SKUs / document state) -> { ok, results:[{id, found, sendAgainOk, looks}] }
 //   send_again { itemIds }  admin or Connect integrations: only after a second look ≥ 30 min after the send found nothing -> { ok, results }
+//   2026-11-17 (stage 2):
+//   clear_error { variantKeys? | productIds?, note? }  admin or Connect integrations: a size's stored error cleared by hand (logged
+//     in shein_listing_actions; DB only, recount) -> { ok, cleared, products }
+//   price_ok { variantKey, price | null }  PH ok (like the size spellings): "this outlier price is right" for that size, tied to that
+//     exact price (null withdraws it); 409 when the size isn't held for that price -> { ok, variant }
 // GET ?product= also returns `checklist` — the 18 publish requirement lines from the SERVER planner
 //   (the last dry run's, else the stored readiness with the unread lines as null).
 //   retry { itemIds }                      admin or Connect integrations: an item that got no
@@ -66,7 +71,7 @@ import {
   getSetting, setSetting, getListingItems, updateListingItem, requeueListingJob, resumeListingJob,
   lastPreviewItem, markPublishAgain, setListingPublishChoices, setListingCategoryPick, setListingAttrOverride, lastPublishRunItem,
   getListingProductsMany, setListingPublishChoicesMany, listCategoryMaps, listListingCache, setListingCoverSkip, productPhotosForSku,
-  cleanPhotoKeys, addListingPhotoSkips, sheinModelReportData,
+  cleanPhotoKeys, addListingPhotoSkips, sheinModelReportData, listListingActions, clearVariantErrors, setVariantPriceOk,
 } from '../_lib/db.js';
 import { cleanPhotosFor, findCleanPhotos, shopifyPhCopies, ensureShapes } from '../_lib/shein-clean-photos.js';
 import { modelReportFrom } from '../_lib/shein-model-report.js';
@@ -81,7 +86,7 @@ import { renderBlocker, STATUS_CODES, STATUS_ORDER, TILE_STATUSES, BLOCKERS, sum
 import { rejectedList } from '../../src/lib/sheinRejected.js';
 
 const isAdminRole = (u) => u?.role === 'admin' || u?.role === 'superadmin';
-const PRIV_ACTIONS = new Set(['probe', 'webhooks', 'run', 'retry', 'auto_price', 'publish_again', 'send_again']);
+const PRIV_ACTIONS = new Set(['probe', 'webhooks', 'run', 'retry', 'auto_price', 'publish_again', 'send_again', 'clear_error']);
 const PREVIEW_MAX = 300;
 const BULK_MAX = 100;   // bulk edit before publishing: products per read / save
 const SHOP_FILTERS = ['active', 'inactive'];
@@ -260,7 +265,8 @@ export default async function handler(req, res) {
     if (pid) {
       const d = await getListingProduct(pid);
       if (!d) return send(res, 404, { ok: false, error: 'That product isn’t in SHEIN Listings (yet) — re-read Shopify + SHEIN.' });
-      const [items, log, pubRun] = await Promise.all([listingItemsForProduct(pid, d.product.spu, 5), d.product.spu ? listSheinApiLog({ spu: d.product.spu, limit: 20 }) : [], lastPublishRunItem(pid)]);
+      const [items, log, pubRun, actions] = await Promise.all([listingItemsForProduct(pid, d.product.spu, 5), d.product.spu ? listSheinApiLog({ spu: d.product.spu, limit: 20 }) : [], lastPublishRunItem(pid),
+        listListingActions(pid, 20)]);
       let checklist = null; let checklistFrom = null;
       // + a shoe SHEIN rejected (never live): fixing it (category, details, photos) happens before Publish again (2026-11-11)
       if (!String(pid).startsWith('shein:') && (!d.product.spu || neverLive(d))) {
@@ -287,7 +293,9 @@ export default async function handler(req, res) {
         // never live on SHEIN (not on it, or our publish was rejected) → no live-shoe tools (add sizes, photo swap…)
         neverLive: !String(pid).startsWith('shein:') && neverLive(d), lastPublishRun: pubRun ? itemOut(pubRun) : null,
         jobItems: items.map((i) => ({ ...(isAdmin ? i : { ...i, body: undefined, response: undefined }), summary: summarizePlan(i.plan) || i.error || null })),
-        log: log.map((l) => (isAdmin ? l : { ...l, request: undefined, response: undefined })) });
+        log: log.map((l) => (isAdmin ? l : { ...l, request: undefined, response: undefined })),
+        // the listing log (2026-11-17): what a person / a rule changed on OUR side — clear_error, price_ok, auto_clear_error, one-offs
+        actions });
     }
     if (qs.get('rejected') === '1') {
       // "Rejected by SHEIN" (2026-11-17): what SHEIN rejected / refused of OUR sends, one row per shoe, with what
@@ -559,7 +567,9 @@ export default async function handler(req, res) {
         if (!d.product.style) return send(res, 409, { ok: false, error: 'This shoe has no style code — no clean photos can be matched to it.' });
         const r = await findCleanPhotos(d.product.style, { write: true, by });
         if (r.recorded) await recountAfterChoices();
-        return send(res, 200, { ok: true, style: r.sku, cutouts: r.cutouts, angles: r.angles || 0, found: r.found.length, recorded: r.recorded, confidence: r.confidence });
+        // + why: 'already_recorded' (nothing to do — no R2 call) · 'nothing_found_before' (cached: true, answered at once) · …
+        return send(res, 200, { ok: true, style: r.sku, cutouts: r.cutouts, angles: r.angles || 0, found: r.found.length, recorded: r.recorded, confidence: r.confidence,
+          why: r.why || null, cached: !!r.cached, checkedAt: r.checkedAt || null, scored: r.scored ?? null });
       }
       case 'look_again': {
         const itemIds = (Array.isArray(b.itemIds) ? b.itemIds : []).map(Number).filter((x) => Number.isInteger(x) && x > 0).slice(0, 50);
@@ -577,6 +587,38 @@ export default async function handler(req, res) {
         const productIds = ids(b.productIds, 100);
         if (!productIds.length) return send(res, 400, { ok: false, error: 'Which products?' });
         return send(res, 200, { ok: true, products: await markPublishAgain(productIds, by) });
+      }
+      case 'clear_error': {
+        // the cases the rules can't know (e.g. fixed in Seller Center): a person clears a size's stored error — logged
+        const variantKeys = ids(b.variantKeys, 2000); const productIds = ids(b.productIds, 100);
+        if (!variantKeys.length && !productIds.length) return send(res, 400, { ok: false, error: 'Which sizes? (variantKeys or productIds)' });
+        const keys = [...variantKeys];
+        for (const pid of productIds) { const d = await getListingProduct(pid); for (const v of d?.variants || []) if (v.last_error) keys.push(v.row_key); }
+        const note = t(b.note, 300);
+        const rows = keys.length ? await clearVariantErrors([...new Set(keys)], { by, note }) : [];
+        if (rows.length && await latestListingJob('snapshot', 'done')) await recomputeStored();   // DB only — no SHEIN call
+        return send(res, 200, { ok: true, cleared: rows.length, products: [...new Set(rows.map((r) => r.shopify_product_id))] });
+      }
+      case 'price_ok': {
+        // a person confirms an outlier price for ONE size (price_outlier): tied to that exact price — a new price asks again
+        const key = t(b.variantKey, 200);
+        if (!key) return send(res, 400, { ok: false, error: 'Which size? (variantKey)' });
+        const pid0 = (await listingVariantProductIds([key]))[0];
+        const d = pid0 ? await getListingProduct(pid0) : null;
+        const v = d?.variants.find((x) => x.row_key === key && x.shopify_variant_id);
+        if (!v) return send(res, 404, { ok: false, error: 'That size isn’t in SHEIN Listings.' });
+        if (b.price === null) await setVariantPriceOk(key, null, { by });
+        else {
+          const price = Number(b.price);
+          if (b.price === undefined || b.price === '' || !Number.isFinite(price) || price <= 0 || price > 100000) return send(res, 400, { ok: false, error: 'price: the price you checked, in dollars (or null to withdraw it).' });
+          const held = (v.blockers || []).find((x) => x.code === 'price_outlier');
+          if (!held) return send(res, 409, { ok: false, error: 'This size’s price isn’t held as far from the others — nothing to confirm (reload).' });
+          if (Math.abs(Number(held.params?.price) - price) >= 0.005) return send(res, 409, { ok: false, error: `The price is $${held.params?.price} now, not $${price} — check it again.` });
+          await setVariantPriceOk(key, price, { by });
+        }
+        if (await latestListingJob('snapshot', 'done')) await recomputeStored();   // DB only — no SHEIN call
+        const after = (await getListingProduct(pid0))?.variants.find((x) => x.row_key === key) || null;
+        return send(res, 200, { ok: true, variant: after ? variantOut(after) : null });
       }
       case 'auto_price': {
         if (typeof b.on !== 'boolean') return send(res, 400, { ok: false, error: 'on: true or false.' });

@@ -4,8 +4,8 @@
 // (review_rejected) or refused at its pre-check (shein_prevalid), or whose sizes still carry such an answer
 // as their last error. SHEIN's own words, when, which job, how many sizes, and `next` = the one action that
 // resubmits it and who may press it. Nothing here changes how an error expires or is cleared (the engine's
-// variantReadiness owns that) — it only shows what is stored.
-import { isPhotoRejection, OP_LABEL } from './sheinListings.js';
+// variantReadiness owns that) — it only shows what is stored, by the SAME rule (lastErrorShown, 2026-11-17).
+import { isPhotoRejection, OP_LABEL, lastErrorShown } from './sheinListings.js';
 
 export const REJECT_CODES = ['review_rejected', 'shein_prevalid'];
 // The order a shoe's rejections are judged in when it has several (the first decides `next`).
@@ -83,12 +83,13 @@ export function rejectedList({ latest = [], failed = [], products = [], variants
     }
     // sizes whose last error is a SHEIN rejection the readiness still shows (unchanged since), not covered above
     const mootPublish = new Set(items.filter((i) => i.op === 'publish' && i.status === 'failed' && !neverLive).flatMap((i) => i.variant_ids || []));
-    const errV = vs.filter((v) => REJECT_CODES.includes(v.last_error?.code) && !v.excluded && (!v.last_error.hash || v.last_error.hash === v.target_hash)
+    const errV = vs.filter((v) => REJECT_CODES.includes(v.last_error?.code) && !v.excluded && lastErrorShown(v.last_error, { onShein: !!v.shein_sku, targetHash: v.target_hash })
       && !covered.has(v.row_key) && !mootPublish.has(v.row_key));
     if (errV.length) {
       const from = failed.find((i) => i.shopify_product_id === p.shopify_product_id && errV.some((v) => (i.variant_ids || []).includes(v.row_key))) || null;
       const s = sheinReason(errV[0].last_error);
-      rejections.push({ op: from?.op || null, what: REJECTED_WHAT[from?.op ?? null] || 'sizes', whatLabel: from ? (OP_LABEL[from.op] || from.op) : 'Sizes', ...s,
+      const op = from?.op || errV[0].last_error?.op || null;   // the send it came from (stored on the error since 2026-11-17)
+      rejections.push({ op, what: REJECTED_WHAT[op ?? null] || 'sizes', whatLabel: op ? (OP_LABEL[op] || op) : 'Sizes', ...s,
         at: iso(from?.updated_at), sentAt: null, jobId: from ? Number(from.job_id) : null, itemId: from ? Number(from.id) : null, source: 'size_error', variantIds: errV.map((v) => v.row_key) });
     }
     if (!rejections.length) continue;

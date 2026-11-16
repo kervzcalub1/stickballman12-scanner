@@ -34,6 +34,7 @@ const sz = (p) => p?.size || 'this size';
 const cat = (p) => p?.categoryName || (p?.categoryId ? `SHEIN category ${p.categoryId}` : 'this category');
 const said = (p) => (p?.sheinMessage ? ` SHEIN said: “${p.sheinMessage}”` : '');
 const shopifyLink = { kind: 'open_shopify', label: 'Open in Shopify ↗' };
+const refUsd = (p) => (p?.ref != null && Number.isFinite(Number(p.ref)) ? Math.round(Number(p.ref)) : '?');   // price_outlier's reference, whole dollars
 
 // BLOCKERS[code] = { level: blocked|error|review|note, scope: store|product|variant,
 //   applies: [publish|edit|add_sizes|always], title(params), fix(params), action }.
@@ -167,12 +168,15 @@ export const BLOCKERS = {
     title: () => 'SHEIN retired this product’s size field; sizes can’t be added.', fix: () => 'It has to be listed again as a new product.', action: null },
   review_open: { label: 'SHEIN reviewing an earlier change', level: 'review', scope: 'product', applies: ['edit', 'add_sizes'],
     title: (p) => `SHEIN is reviewing an earlier edit${p?.sentAt ? ` (sent ${p.sentAt} EST)` : ''}.`, fix: () => 'We retry after the review closes.', action: { kind: 'check_review', label: 'Check now' } },
+  // 2026-11-17 (stage 2): the button is the REAL next step — the same one "Rejected by SHEIN" offers (nextFor,
+  // src/lib/sheinRejected.js): `p.op` = what was sent (publish · add_sku · photos · model · edit · price), set by
+  // the readiness from the stored error. See rejectionAction below.
   review_rejected: { label: 'Rejected by SHEIN', level: 'error', scope: 'product', applies: ['publish', 'edit', 'add_sizes', 'photos'],
     title: (p) => `SHEIN rejected it: “${p?.failedReason || p?.sheinMessage || 'no reason given'}”.`,
-    fix: (p) => (isPhotoRejection(p?.failedReason || p?.sheinMessage) ? 'The photos have text, a logo or the store name on them. Fix photos: leave those out, then send the new photos (Replace SHEIN photos, or Publish again for a new shoe).' : 'Fix it, then send again.'),
-    action: (p) => (isPhotoRejection(p?.failedReason || p?.sheinMessage) ? { kind: 'fix_photos', label: 'Fix photos' } : { kind: 'send_again', label: 'Send again' }) },
+    fix: (p) => rejectionAction(p).say,
+    action: (p) => rejectionAction(p).action },
   shein_prevalid: { label: 'Refused by SHEIN’s pre-check', level: 'error', scope: 'product', applies: ['publish', 'edit', 'add_sizes'],
-    title: (p) => `SHEIN pre-check: ${p?.module ? `${p.module}: ` : ''}${p?.sheinMessage || 'refused'}.`, fix: () => 'Usually a person has to fix the listing.', action: null },
+    title: (p) => `SHEIN pre-check: ${p?.module ? `${p.module}: ` : ''}${p?.sheinMessage || 'refused'}.`, fix: (p) => rejectionAction(p).say, action: (p) => rejectionAction(p).action },
   price_locked: { label: 'Price locked by a promotion', level: 'note', scope: 'variant', applies: ['edit'],
     title: () => 'In a SHEIN promotion: price can’t go up.', fix: () => 'Wait for the promotion to end.', action: null },
   shelf_locked: { label: 'Shelf locked by a promotion', level: 'note', scope: 'variant', applies: ['edit'],
@@ -199,9 +203,35 @@ export const BLOCKERS = {
   excluded_by_person: { label: 'Left off by a person', level: 'note', scope: 'variant', applies: ['always'],
     title: (p) => `Not listing — ${p?.by || 'a person'} chose not to list it on SHEIN${p?.at && !Number.isNaN(new Date(p.at).getTime()) ? ` (${PH_DATE.format(new Date(p.at))} EST)` : ''}.`, fix: () => '', action: { kind: 'include', label: 'List on SHEIN again' } },
   // Added in Phase 2 (add sizes — docs/shein-listings-plan.md → Build log).
-  size_already_on_shein: { label: 'SHEIN already has this size', level: 'blocked', scope: 'variant', applies: ['add_sizes'],
-    title: (p) => `SHEIN already has ${p?.sheinSize || 'this size'}${p?.sellerSku ? ` (SKU ${p.sellerSku})` : ''}.`,
-    fix: () => 'Change the SKU on that SHEIN size to this one (Match sizes) instead of adding a second one.', action: { kind: 'open_match', label: 'Match sizes', here: true } },
+  // 2026-11-17: also from the READINESS (a Shopify size "Not on SHEIN" whose size SHEIN already sells on the same
+  // product under another SKU — IF6562 7.5W / US7.5W) — params { size, sheinSize, sellerSku (SHEIN's), sheinSku, to (ours) }
+  size_already_on_shein: { label: 'SHEIN already has this size', level: 'blocked', scope: 'variant', applies: ['add_sizes', 'publish'],
+    title: (p) => `SHEIN already has ${p?.sheinSize || 'this size'}${p?.sellerSku ? ` under SKU ${p.sellerSku}` : ''} — link it instead of adding a second one.`,
+    fix: (p) => `Change the SKU on that SHEIN size${p?.to ? ` to ${p.to}` : ' to this one'} (Match sizes), then preview this shoe — never a second ${p?.sheinSize || 'size'}.`, action: { kind: 'open_match', label: 'Match sizes', here: true } },
+  // 2026-11-17 (stage 2) · a SHEIN SKU we matched by its seller SKU, whose SIZE on SHEIN is blank (or not a US size:
+  // EUR / CN / a range). The live stock walk holds it at 0 (sheinFix.js buildFix → reason no_size / other_system) unless
+  // a person linked that exact SKU on Match sizes — so the page must not call it Synced. params { sku, sheinSize, size, why }
+  shein_size_blank: { label: 'No size on SHEIN', level: 'blocked', scope: 'variant', applies: ['always'],
+    title: (p) => (p?.why === 'other_system' ? `SHEIN lists this SKU${p?.sku ? ` (${p.sku})` : ''} as “${p?.sheinSize || '?'}” — not a US size, so automatic sync holds it at 0.`
+      : `SHEIN has no size on this SKU${p?.sku ? ` (${p.sku})` : ''} — automatic sync holds it at 0.`),
+    fix: (p) => `Set its size to ${p?.want || 'the Shopify size'} in SHEIN Seller Center, or confirm the SKU on Match sizes (a person’s link is trusted).`,
+    action: { kind: 'open_match', label: 'Match sizes', here: true } },
+  // 2026-11-17 (stage 2) · a price far from the shoe's other sizes (PRICE_OUTLIER) — nothing goes to SHEIN with it
+  // until a person confirms THAT price for THAT size (POST {action:'price_ok'}); a new price asks again.
+  // params { size, price, ref, refFrom 'sizes'|'market', ratio }
+  price_outlier: { label: 'Price looks wrong', level: 'blocked', scope: 'variant', applies: ['publish', 'add_sizes', 'edit'],
+    title: (p) => `$${p?.price ?? '?'} is far from ${p?.refFrom === 'market' ? 'this size’s market price' : 'this shoe’s other sizes'} (~$${refUsd(p)}) — check the Shopify price.`,
+    fix: () => 'Fix the price on Shopify — or, if it is right, confirm it for this size. A different price asks again.',
+    action: (p) => ({ kind: 'confirm_price', label: `Confirm $${p?.price ?? ''}`, price: p?.price ?? null }) },
+  price_confirmed: { label: 'Price confirmed by a person', level: 'note', scope: 'variant', applies: ['publish', 'add_sizes', 'edit'],
+    title: (p) => `$${p?.price ?? '?'} confirmed for this size${p?.by ? ` by ${p.by}` : ''}${p?.at && !Number.isNaN(new Date(p.at).getTime()) ? ` (${PH_DATE.format(new Date(p.at))} EST)` : ''} — far from the other sizes (~$${refUsd(p)}).`,
+    fix: () => '', action: null },
+  // 2026-11-17 (stage 2) · SHEIN's price vs the Shopify FALLBACK (no fresh market price): shown, never "Needs update",
+  // never sent by Update prices. params { shein, shopify, special?, count? (a plan's note: how many sizes) }
+  price_no_market: { label: 'No market price to compare', level: 'note', scope: 'variant', applies: ['edit'],
+    title: (p) => (p?.count != null ? `${p.count} size${Number(p.count) === 1 ? ' has' : 's have'} no market price — their SHEIN price is left as it is.`
+      : `SHEIN $${p?.shein ?? '?'} · Shopify $${p?.shopify ?? '?'} — no market price to compare.`),
+    fix: () => 'Update prices only follows the market (+ 15 %). Change it with Prices (SHEIN Reprice) or in Seller Center if it is wrong.', action: null },
   // 2026-11-14: correcting the Product Model of a live shoe (op 'model')
   model_unsure: { label: 'Product Model unclear', level: 'blocked', scope: 'product', applies: ['model'],
     title: (p) => `We can’t tell this shoe’s Product Model from its title${p?.guess ? ` (our guess: “${p.guess}”)` : ''} — nothing is sent.`,
@@ -291,6 +321,87 @@ export function renderBlocker(b) {
     title: def.title(params), fix: def.fix(params), action: action || null, sheinSaid: params.sheinMessage || null };
 }
 export const blocker = (code, params = {}, field = null) => ({ code, field, params });
+
+// What resubmits a SHEIN rejection (review_rejected) / pre-check refusal (shein_prevalid) — the blocker's button.
+// The SAME routing as "Rejected by SHEIN" (nextFor in src/lib/sheinRejected.js; `next` = its action name):
+//   op publish → Publish again (a NEW product; admin / Connect integrations) — photos first when SHEIN named them
+//   op photos  → fix the photos, preview Replace SHEIN photos       op model → preview the Product Model fix
+//   op edit / price → preview Update prices & sizes               op add_sku (or unknown) → preview Add missing sizes,
+//   or — when SHEIN named the photos — fix them and Replace SHEIN photos first (an approved photo send clears it).
+// p = the blocker's params ({ op, failedReason | sheinMessage }). → { action: { kind, label, next, ops, fixFirst }, say }
+// `kind` stays one the page already draws where one exists (fix_photos, publish_again); preview_* are new (stage 3).
+export const REJECTION_NEXT = ['publish_again', 'preview_photos', 'preview_model', 'preview_update', 'preview_add_sizes'];
+export function rejectionAction(p = {}) {
+  const op = p?.op || null;
+  const photo = isPhotoRejection(p?.failedReason || p?.sheinMessage);
+  const a = (kind, label, next, ops, fixFirst = null) => ({ kind, label, next, ops, fixFirst });
+  const photoSay = 'The photos have text, a logo or the store name on them. Fix photos: leave those out (or use the clean photos), ';
+  if (op === 'publish') {
+    return photo ? { action: a('fix_photos', 'Fix photos', 'publish_again', ['publish'], 'photos'), say: `${photoSay}then an admin presses Publish again — SHEIN gets it as a new product.` }
+      : { action: a('publish_again', 'Publish again', 'publish_again', ['publish']), say: 'Fix what SHEIN said in the shoe’s Details, then an admin presses Publish again (a new product) and confirms its preview.' };
+  }
+  if (op === 'photos') return { action: a(photo ? 'fix_photos' : 'preview_photos', photo ? 'Fix photos' : 'Replace SHEIN photos', 'preview_photos', ['photos'], 'photos'), say: `${photo ? photoSay : 'Fix what SHEIN said about the photos, '}then preview Replace SHEIN photos — an admin confirms it.` };
+  if (op === 'model') return { action: a('preview_model', 'Preview the Product Model fix', 'preview_model', ['model']), say: 'Check the Product Model in the shoe’s SHEIN details, preview the fix again — an admin confirms it.' };
+  if (op === 'edit' || op === 'price') return { action: a('preview_update', 'Preview Update prices & sizes', 'preview_update', ['price', 'edit']), say: 'Fix what SHEIN said, preview Update prices & sizes again — an admin confirms it.' };
+  if (photo) return { action: a('fix_photos', 'Fix photos', 'preview_photos', ['photos'], 'photos'), say: `${photoSay}then Replace SHEIN photos (an admin confirms). Once SHEIN approves them, this size can be added again.` };
+  return { action: a('preview_add_sizes', 'Preview Add missing sizes', 'preview_add_sizes', ['add_sku']), say: 'Fix what SHEIN said, then preview Add missing sizes again (it re-tries this size) — an admin confirms it.' };
+}
+
+// The two answers from SHEIN that stay on a size until a send of it is ACCEPTED or a person / an approved photo
+// or model change clears them (2026-11-17): a Shopify edit (a price change) no longer makes them disappear.
+export const STICKY_ERRORS = ['review_rejected', 'shein_prevalid'];
+// Is a size's stored last error still shown? (the readiness AND "Rejected by SHEIN" — one rule)
+//   onShein: the size is on SHEIN now (matched by SKU / link / published). An error from a send that ADDED it (a
+//   publish, an add-sizes) is moot once SHEIN sells it anyway (e.g. our duplicate publish was rejected while the shoe
+//   is live through another SHEIN product). Every other error (api_error, …) still expires when Shopify changes the size.
+export function lastErrorShown(err, { onShein = false, targetHash = null } = {}) {
+  if (!err || !err.code) return false;
+  if (onShein && ['publish', 'add_sku'].includes(err.op)) return false;
+  if (STICKY_ERRORS.includes(err.code)) return true;
+  return !err.hash || err.hash === targetHash;
+}
+
+/* ------------------------------- price sanity ------------------------------- */
+// 2026-11-17 (stage 2): a $766 Shopify price on one size went to SHEIN while the shoe's other sizes were ~$160.
+// Before ANY send that prices a size (publish, add sizes, price update) the size's target is judged against the
+// median target of the shoe's OTHER sizes that have one — or, when the size has a market price, against that.
+// Outside [low × ref, high × ref] → `price_outlier`, never sent until a person confirms that exact price.
+// Fewer than `minSizes` priced sizes and no market price → not judged.
+export const PRICE_OUTLIER = { high: 1.5, low: 0.6, minSizes: 3 };
+const median = (xs) => { const s = [...xs].sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+// The target of every Shopify size of a shoe (left-off sizes out): [{ id, size, price, from, market (dollars|null) }]
+export function priceTargetsOf(variants = [], market = new Map(), excluded = new Set()) {
+  return (variants || []).filter((v) => v?.variantId && !excluded.has(v.variantId)).map((v) => {
+    const mc = market.get(v.variantId);
+    const t = sheinNewSizePrice({ marketCents: mc ?? null, shopifyPrice: v.price });
+    return { id: v.variantId, size: v.size, price: t?.price ?? null, from: t?.from ?? null, market: Number(mc) > 0 ? Math.round(Number(mc)) / 100 : null };
+  });
+}
+// → Map(id → { price, ref, refFrom: 'market' | 'sizes', ratio }) for the sizes out of range.
+export function priceOutliers(targets = [], { high = PRICE_OUTLIER.high, low = PRICE_OUTLIER.low, minSizes = PRICE_OUTLIER.minSizes } = {}) {
+  const out = new Map();
+  const priced = targets.filter((t) => Number(t.price) > 0);
+  for (const t of priced) {
+    let ref = null; let refFrom = null;
+    if (Number(t.market) > 0) { ref = Number(t.market); refFrom = 'market'; }
+    else {
+      const others = priced.filter((o) => o.id !== t.id).map((o) => Number(o.price));
+      if (others.length + 1 < minSizes) continue;
+      ref = median(others); refFrom = 'sizes';
+    }
+    const ratio = Number(t.price) / ref;
+    if (ratio > high || ratio < low) out.set(t.id, { price: Number(t.price), ref: Math.round(ref * 100) / 100, refFrom, ratio: Math.round(ratio * 100) / 100 });
+  }
+  return out;
+}
+// A person's confirmation counts for exactly that price (to the cent).
+export const priceConfirmed = (ok, price) => !!ok && ok.price != null && Math.abs(Number(ok.price) - Number(price)) < 0.005;
+// The blocker (or, confirmed, the note) for a size whose price is an outlier — null when it isn't one.
+export function priceCheck(id, size, outliers = new Map(), priceOk = new Map()) {
+  const o = outliers.get(id); if (!o) return null;
+  const ok = priceOk.get(id) || null;
+  return priceConfirmed(ok, o.price) ? blocker('price_confirmed', { size, ...o, by: ok.by || null, at: ok.at || null }) : blocker('price_outlier', { size, ...o }, 'price');
+}
 
 /* --------------------------------- search --------------------------------- */
 // The list's search (2026-11-17): what people type → words that must ALL match, in any order.
@@ -583,7 +694,10 @@ export function matchStore({ products = [], sheinRows = [], links = [] }) {
 //   excluded, excludedBy, skuCount, spans: { spu, count } | null, size: resolveSize() (not-on-SHEIN sizes),
 //   lastError: { code, params, hash } | null, targetHash, syncedHash, syncedFields, locks: { price, shelf },
 //   inflight: { jobId, itemId, sentAt } | null — a Phase 2 run item carrying this size is sending / in SHEIN's review,
-//   targetPrice: { price, from } | null — D4's SHEIN price for this size (Phase 3) }
+//   targetPrice: { price, from } | null — D4's SHEIN price for this size (Phase 3),
+//   (2026-11-17) linkConfirmed — a person linked this exact SHEIN SKU on Match sizes (a blank / EUR size is trusted then),
+//   priceCheck — priceCheck() for this size (price_outlier blocker / price_confirmed note) | null,
+//   sheinHas — { sheinSize, sellerSku, sheinSku }: SHEIN already sells this size on the shoe's SPU under another SKU }
 // → { status, blockers, notes, diffs }   (plan Appendix B.3, in this order)
 export function variantReadiness(v) {
   const blockers = []; const notes = []; const diffs = [];
@@ -605,16 +719,24 @@ export function variantReadiness(v) {
   const sku = trim(s.sku);
   if (!sku) blockers.push(blocker('no_seller_sku', { size: s.size }, 'sku'));
   else if ((v.skuCount || 1) > 1) blockers.push(blocker('dup_seller_sku', { sku, count: v.skuCount }, 'sku'));
-  if (v.shein && ['wrong_size', 'wrong_group'].includes(compareSize(v.shein.size, s.size))) {
+  const verdict = v.shein ? compareSize(v.shein.size, s.size) : null;
+  if (['wrong_size', 'wrong_group'].includes(verdict)) {
     blockers.push(blocker('wrong_link', { sheinSize: v.shein.size, size: s.size, sku: v.shein.sellerSku, spu: v.shein.spu }, 'size'));
+  }
+  // 2026-11-17: SHEIN has no (US) size on the SKU — the walk sells 0 there unless a person linked that exact SKU
+  if (['blank', 'other_system'].includes(verdict) && !v.linkConfirmed) {
+    blockers.push(blocker('shein_size_blank', { sku: v.shein.sellerSku || null, sheinSize: v.shein.size || null, size: s.size, want: suggestCustomSpelling(s.size, []) || s.size, why: verdict }, 'size'));
   }
   if (v.spans) blockers.push(blocker('spu_spans_products', v.spans, 'spu'));
   if (blockers.length) return done('blocked');
   // 3½ · Phase 2: we sent this size (or its relink) and SHEIN hasn't answered the review yet
   if (v.inflight) { notes.push(blocker('review_open', { sentAt: v.inflight.sentAt || null, jobId: v.inflight.jobId || null })); return done('in_review'); }
-  // 4 · our last attempt was refused, and nothing changed since
-  if (v.lastError && (!v.lastError.hash || v.lastError.hash === v.targetHash)) {
-    blockers.push(blocker(v.lastError.code || 'api_error', v.lastError.params || {}, v.lastError.field || null));
+  // 4 · our last attempt was refused — SHEIN's own answer stays until a send is accepted or it is cleared (2026-11-17);
+  // anything else until Shopify changes the size. `op` (what was sent) picks the blocker's button: when the stored
+  // error predates it, inferred — on SHEIN → an update, its shoe on SHEIN → add sizes, else → the publish.
+  if (lastErrorShown(v.lastError, { onShein: !!v.shein, targetHash: v.targetHash })) {
+    const op = v.lastError.op || (v.shein ? 'edit' : prod.onShein ? 'add_sku' : 'publish');
+    blockers.push(blocker(v.lastError.code || 'api_error', { ...(v.lastError.params || {}), op }, v.lastError.field || null));
     return done('error');
   }
   const inStock = Number(s.qty) > 0;
@@ -632,19 +754,32 @@ export function variantReadiness(v) {
     const base = v.shein.basePrice != null ? Number(v.shein.basePrice) : null;
     const special = Number(v.shein.specialPrice) > 0 ? Number(v.shein.specialPrice) : null;
     const pays = special ?? base;
+    // 2026-11-17: only a MARKET target makes a price "Needs update" (and only those are sent by Update prices). Against
+    // the Shopify fallback (no fresh market price) SHEIN is often lower ON PURPOSE (SHEIN Reprice) — a note, not a diff.
+    const market = v.targetPrice?.from === 'market';
     if (v.targetPrice && pays != null && Math.abs(Number(v.targetPrice.price) - pays) > 0.5) {
+      if (!market) notes.push(blocker('price_no_market', { shein: money(pays), shopify: money(v.targetPrice.price), ...(special != null ? { special: money(special), base: money(base) } : {}) }));
       // R2: Needs update (not Synced) with its own diff field — the auto re-sync only picks `shein_price`
-      if (special != null) {
+      else if (special != null) {
         notes.push(blocker('special_live', { special, base, to: Number(v.targetPrice.price) }));
         diffs.push({ field: 'shein_special', from: money(pays), to: money(v.targetPrice.price), special: money(special), base: money(base), source: v.targetPrice.from,
           why: `SHEIN special ${money(special)} is live — only a preview that ends the special changes it` });
       }
-      else diffs.push({ field: 'shein_price', from: money(pays), to: money(v.targetPrice.price), source: v.targetPrice.from, why: v.targetPrice.from === 'market' ? 'market + 15 %, rounded up' : 'the Shopify price (no recent market price)' });
+      else diffs.push({ field: 'shein_price', from: money(pays), to: money(v.targetPrice.price), source: v.targetPrice.from, why: 'market + 15 %, rounded up' });
     }
     if (v.syncedHash && v.targetHash && v.syncedHash !== v.targetHash) {
       const was = v.syncedFields || {}; const now = variantFields(s);
-      for (const f of ['price', 'compareAt', 'size', 'sku', 'barcode']) if ((was[f] ?? null) !== (now[f] ?? null)) diffs.push({ field: f, from: was[f] ?? null, to: now[f] ?? null, why: 'changed on Shopify' });
-      if (!diffs.length) diffs.push({ field: 'listing', from: null, to: null, why: 'changed on Shopify' });
+      const changed = ['price', 'compareAt', 'size', 'sku', 'barcode'].filter((f) => (was[f] ?? null) !== (now[f] ?? null));
+      // a Shopify PRICE change with no market price: nothing would send it (Update prices follows the market) — the
+      // price_no_market note above says what SHEIN and Shopify charge; it isn't "Needs update" on its own
+      for (const f of changed) if (!(f === 'price' && !market)) diffs.push({ field: f, from: was[f] ?? null, to: now[f] ?? null, why: 'changed on Shopify' });
+      if (!changed.length && !diffs.length) diffs.push({ field: 'listing', from: null, to: null, why: 'changed on Shopify' });
+    }
+    // a price we WOULD send (a market price diff) that is far from the shoe's other sizes: held for a person
+    if (diffs.some((d) => d.field === 'shein_price')) {
+      const pc = v.priceCheck || null;
+      if (pc?.code === 'price_outlier') { blockers.push(pc); return done('blocked'); }
+      if (pc) notes.push(pc);
     }
     return done(diffs.length ? 'out_of_date' : 'synced');
   }
@@ -656,7 +791,11 @@ export function variantReadiness(v) {
   for (const b of v.publishBlockers || []) (isNote(b) ? notes : blockers).push(b);
   if (v.size?.blocker) blockers.push(v.size.blocker);
   if (v.size?.note) notes.push(v.size.note);
+  // 2026-11-17: SHEIN already sells this size on the same product under another seller SKU — relink, never a 2nd one
+  if (v.sheinHas && !v.size?.blocker) blockers.push(blocker('size_already_on_shein', { size: s.size, sheinSize: v.sheinHas.sheinSize || null, sellerSku: v.sheinHas.sellerSku || null, sheinSku: v.sheinHas.sheinSku || null, to: sku || null }, 'size'));
   if (!(Number(s.price) > 0)) blockers.push(blocker('no_price', { size: s.size }, 'price'));
+  // the price this size would go up at, far from the shoe's other sizes → held until a person confirms it
+  else if (v.priceCheck) (isNote(v.priceCheck) ? notes : blockers).push(v.priceCheck);
   if (prod.onShein && Number(prod.skcCount) > 1) blockers.push(blocker('multi_skc_size', { size: s.size, skcCount: prod.skcCount }));
   return done(blockers.some((b) => !isNote(b)) ? 'blocked' : 'not_on_shein');
 }
@@ -815,13 +954,15 @@ export function templateSizes(templateInfo, productTypeId, sizeAttrId = null) {
 //                carry over.
 //   inflight     Map(variantId → { jobId, itemId, sentAt }) — Phase 2 run items sending / in review
 //   market       Map(variantId → market cents) — D4's target price (Phase 3); none → the Shopify price
-//   publish      (product, prevRow, excludedVariants) → { productBlockers, sizeFor } — Phase 4's readiness for a
+//   publish      (product, prevRow, excludedVariants, priceOk) → { productBlockers, sizeFor } — Phase 4's readiness for a
 //                product NOT on SHEIN (src/lib/sheinPublish.js publishReadiness, cache only); absent = Phase 1's note
 export function computeListings({ products = [], spus = [], links = [], maps = [], templates = new Map(), permissions = new Map(), customValues = [], prev = {}, inflight = new Map(), market = new Map(), publish = null }) {
   const prevP = prev.products || new Map(); const prevV = prev.variants || new Map();
   const sheinRows = spus.flatMap((s) => s.rows || []);
   const bySpu = new Map(spus.map((s) => [s.spu, s]));
   const m = matchStore({ products, sheinRows, links });
+  // SHEIN SKUs a person linked to the seller SKU SHEIN shows now (Match sizes) — the walk trusts their size (sheinFix.js)
+  const confirmedLinks = new Set((links || []).filter((l) => l.decision !== 'delist' && trim(l.link_sku)).map((l) => `${l.shein_sku}|${trim(l.link_sku)}`));
   const outP = []; const outV = [];
   const productIdsBySpu = new Map();
 
@@ -848,11 +989,17 @@ export function computeListings({ products = [], spus = [], links = [], maps = [
     const payload = spu ? bySpu.get(spu) : null;
     if (spu) { const a = productIdsBySpu.get(spu) || []; a.push(p.productId); productIdsBySpu.set(spu, a); }
     const ctx = sizeCtxFor(payload);
-    const prodCtx = { excluded: !!pv.excluded, shopifyStatus: p.status || null, onShein: !!payload, skcCount: payload?.skcCount || 0, reviewState: payload?.reviewState ?? null, sizeFieldRetired: !!ctx.retired,
+    // the colours (SKCs) of the SPU this shoe's sizes are on — another colour's sizes belong to another shoe
+    const mySkcs = new Set(matched.filter((x) => x.row.spu === spu).map((x) => x.row.skc));
+    const prodCtx ={ excluded: !!pv.excluded, shopifyStatus: p.status || null, onShein: !!payload, skcCount: payload?.skcCount || 0, reviewState: payload?.reviewState ?? null, sizeFieldRetired: !!ctx.retired,
       sizeTable: !!payload?.hasSizeTable };
     const vrows = [];
     const excludedVariants = new Set((p.variants || []).filter((v) => prevV.get(v.variantId)?.excluded).map((v) => v.variantId));
-    const pub = !payload && publish && !pv.excluded && String(p.status || '').toUpperCase() === 'ACTIVE' ? publish(p, pv, excludedVariants) : null;
+    // a person's "this price is right" per size (POST price_ok), tied to the exact price (2026-11-17)
+    const priceOk = new Map((p.variants || []).filter((v) => prevV.get(v.variantId)?.price_ok).map((v) => [v.variantId, prevV.get(v.variantId).price_ok]));
+    const pub = !payload && publish && !pv.excluded && String(p.status || '').toUpperCase() === 'ACTIVE' ? publish(p, pv, excludedVariants, priceOk) : null;
+    // the price check over the shoe's sizes (a publish judges its own — planPublish — with the same helpers)
+    const outliers = pub ? new Map() : priceOutliers(priceTargetsOf(p.variants, market, excludedVariants));
     for (const v of p.variants || []) {
       const hit = m.byVariant.get(v.variantId) || null;
       const row = hit?.row || null;
@@ -864,12 +1011,18 @@ export function computeListings({ products = [], spus = [], links = [], maps = [
       const syncedFields = onShein ? (before.synced_hash && before.shein_sku === row.sheinSku ? before.synced_fields : variantFields(v)) : null;
       const spanSet = row ? m.spuProducts.get(row.spu) : null;
       const size = onShein ? null : pub ? (pub.sizeFor.get(v.variantId) || { key: sizeKey(v.size), kind: null, note: blocker('size_unchecked', { size: String(v.size), reason: 'no_category' }) }) : resolveSize(v.size, ctx);
+      // SHEIN already sells this size on the shoe's SPU under ANOTHER seller SKU (same value id, or the same size by text)
+      const sheinHas = !onShein && payload ? (payload.rows || []).find((x) => mySkcs.has(x.skc) && x.sellerSku !== trim(v.sku)
+        && ((size?.valueId != null && x.sizeValueId != null && Number(x.sizeValueId) === Number(size.valueId)) || compareSize(x.size, v.size) === 'ok')) || null : null;
       const r = variantReadiness({
         shopify: v, shein: row, match: hit?.match || null, product: prodCtx, excluded: !!before.excluded, excludedBy: before.excluded_by || null, excludedAt: before.excluded_at || null,
         skuCount: m.skuCount.get(trim(v.sku)) || 0, spans: spanSet && spanSet.size > 1 ? { spu: row.spu, count: spanSet.size } : null,
         size, lastError: before.last_error || null, targetHash, syncedHash, syncedFields, locks: row?.locks || null,
         inflight: inflight.get(v.variantId) || null, publishBlockers: !onShein && pub ? pub.productBlockers : null,
         targetPrice: row ? sheinNewSizePrice({ marketCents: market.get(v.variantId) ?? null, shopifyPrice: v.price }) : null,
+        linkConfirmed: !!row && confirmedLinks.has(`${row.sheinSku}|${row.sellerSku}`),
+        priceCheck: priceCheck(v.variantId, v.size, outliers, priceOk),
+        sheinHas: sheinHas ? { sheinSize: sheinHas.size || null, sellerSku: sheinHas.sellerSku || null, sheinSku: sheinHas.sheinSku || null } : null,
       });
       // A size we added (Phase 2) stays 'published' once SHEIN shows it under its own SKU —
       // sheinLastWalkFacts() reads those rows so the live stock push reaches it before the next walk.
@@ -1000,7 +1153,8 @@ const imageOf = (s) => {
 //              `code` = the US default type-1 warehouseCode → stock_info_list.supplier_warehouse_id)
 // Out: { body | null, plan } — body is EXACTLY what partialEdit gets; plan is what a person reads.
 //   attrs      attributePatch() (src/lib/sheinPublish.js): the product's details + the required ones it lacks
-export function planAddSizes({ spu, product, stored = [], maps = [], sizes = null, permission = null, customValues = [], sortSupported = false, fill = null, fillUnread = false, taken = new Set(), market = new Map(), warehouse = null, attrs = null }) {
+//   priceOk    Map(variantId → { price, by, at }) — a person's confirmation of an outlier price (2026-11-17)
+export function planAddSizes({ spu, product, stored = [], maps = [], sizes = null, permission = null, customValues = [], sortSupported = false, fill = null, fillUnread = false, taken = new Set(), market = new Map(), warehouse = null, attrs = null, priceOk = new Map() }) {
   const plan = { spu: spu?.spuName || null, skc: null, sizes: [], relinks: [], skipped: [], blockers: [], notes: [], sortSent: false, sizeTable: false, sibling: null };
   if (!spu?.spuName) { plan.blockers.push(blocker('not_on_shein_product')); return { body: null, plan }; }
   const payload = spuPayload(spu);
@@ -1039,6 +1193,8 @@ export function planAddSizes({ spu, product, stored = [], maps = [], sizes = nul
   const ctx = { categoryId: payload.categoryId, attributeId: sizeAttr, values: sizes?.values || null, permission, sizeTable: false, customValues, maps };
   const templateCustom = new Set([...(customValues || []), ...(sizes?.values || []).filter((v) => v.custom).map((v) => v.label)].map((t) => String(t).toLowerCase()));
   const skip = (r, v, b) => plan.skipped.push({ variantId: r.shopify_variant_id || r.row_key, size: v?.size ?? r.shopify_size ?? null, sku: v?.sku ?? r.seller_sku ?? null, blocker: b });
+  // the price check over every size of the shoe (live Shopify), left-off sizes out — the readiness's rule (2026-11-17)
+  const outliers = priceOutliers(priceTargetsOf(product?.variants || [], market, new Set(stored.filter((x) => x.excluded).map((x) => x.shopify_variant_id))));
 
   // Relinks pending for this product (shein_links → stored match 'link'): ride in the same call.
   const relinkAway = new Set();
@@ -1094,6 +1250,9 @@ export function planAddSizes({ spu, product, stored = [], maps = [], sizes = nul
     const sites = usdSites(sib.s);
     const price = sheinNewSizePrice({ marketCents: market.get(r.shopify_variant_id) ?? null, shopifyPrice: v.price });
     if (!price) { skip(r, v, blocker('no_price', { size: v.size }, 'price')); continue; }
+    const pc = priceCheck(r.shopify_variant_id, v.size, outliers, priceOk);
+    if (pc?.code === 'price_outlier') { skip(r, v, pc); continue; }
+    if (pc) plan.notes.push(pc);
     used.set(key, { size: res.label, sellerSku: sku }); if (res.label) used.set(`t:${squash(res.label)}`, { size: res.label, sellerSku: sku });
     plan.sizes.push({
       variantId: r.shopify_variant_id, size: v.size, sizeKey: res.key, sku, sheinSize: res.label, kind: res.kind, valueId: res.valueId ?? null, source: res.source, mapId: res.map?.id ?? null,
@@ -1161,7 +1320,10 @@ const usable = (r) => r.shopify_variant_id && !r.excluded && onSheinMatch.has(r.
 // Compared with the price a shopper PAYS (special when > 0). Under a live special nothing is sent
 // unless endSpecials — then shopPrice = target WITHOUT specialPrice (that is what ends a special).
 // Out: { body: { productPriceList } | null, plan: { op:'price', prices, skipped, blockers, notes } }.
-export function planPrice({ spu, stored = [], targets = new Map(), locks = new Map(), locksUnread = false, inflightSkus = new Set(), endSpecials = false, auto = false, shopifyFloor = new Map() }) {
+// (2026-11-17) outliers = priceOutliers() over the shoe's sizes, priceOk = a person's confirmations: an outlier target is
+// skipped (price_outlier) unless confirmed for that exact price. `targets` are MARKET targets for a person's preview too
+// now (the caller) — a Shopify-fallback difference is a note on the page, never sent.
+export function planPrice({ spu, stored = [], targets = new Map(), locks = new Map(), locksUnread = false, inflightSkus = new Set(), endSpecials = false, auto = false, shopifyFloor = new Map(), outliers = new Map(), priceOk = new Map() }) {
   const plan = { op: 'price', spu: spu?.spuName || null, prices: [], skipped: [], blockers: [], notes: [], auto: !!auto, endSpecials: !!endSpecials };
   if (!spu?.spuName) { plan.blockers.push(blocker('not_on_shein_product')); return { body: null, plan }; }
   const raw = new Map(rawSkus(spu).map((x) => [String(x.raw.skuCode), x]));
@@ -1191,6 +1353,9 @@ export function planPrice({ spu, stored = [], targets = new Map(), locks = new M
       if (inflightSkus.has(String(r.shein_sku))) { skip(blocker('review_open', {})); continue; }
       if (rise && locksUnread) { skip(blocker('price_lock_unread', { size })); continue; }
       if (rise && locks.get(x.skc)?.price) { skip(blocker('price_locked', { size })); continue; }
+      const pc = priceCheck(r.shopify_variant_id, size, outliers, priceOk);   // judged on the TARGET (what the page shows)
+      if (pc?.code === 'price_outlier') { skip(pc); continue; }
+      if (pc) plan.notes.push(pc);
       const warn = !!locks.get(x.skc)?.warn;
       plan.prices.push({ variantId: r.shopify_variant_id, skuCode: String(r.shein_sku), skc: x.skc, size, site, currency: 'USD', from: pays, base, to, special: null,
         endsSpecial: special, rise, priceFrom: t0.from, capped, lockWarn: warn });

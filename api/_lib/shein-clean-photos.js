@@ -119,18 +119,37 @@ export function assignCutouts(angles, cuts, scores, ts) {
 
 // Find (and with `write`, record) a style's clean photos on R2. → { sku, cutouts, found: [...], recorded, confidence, why }
 //   list(prefix) → [{ key }] · load(url) → Buffer — injectable (tests never reach R2).
-export async function findCleanPhotos(sku, { write = false, by = null, list = null, load = defaultLoad, maxCutouts = 20 } = {}) {
+// 2026-11-17 (stage 2: it took ~40 s, found nothing and did it all again on every click):
+//   · the style's recorded cutouts (product_cutouts) already cover every uploaded angle → nothing to do, no R2 call
+//     (why 'already_recorded'; `redo` looks anyway — the backfill's --redo);
+//   · "nothing found" is remembered per style (cache kind 'clean_find'), keyed on the newest cutout + the newest upload:
+//     the same click again answers at once (why 'nothing_found_before', cached: true) until either changes;
+//   · only the LAST session of cutouts before the upload is scored (recoverCutouts' session — the only cutouts that can
+//     be in the set; ≤ maxCutouts), not the newest 20 of everything ever staged.
+//   readPh / readCutouts / memo are injectable too (tests fake them; the defaults read our DB).
+const memoDefault = { get: (style) => getListingCache('clean_find', style).then((r) => r?.payload || null), set: (style, v) => setListingCache('clean_find', style, v, 'find clean photos') };
+export async function findCleanPhotos(sku, { write = false, by = null, list = null, load = defaultLoad, maxCutouts = 20, redo = false,
+  readPh = (s) => productPhotosForSku(s, 'ph_edited'), readCutouts = productCutoutsForSku, memo = memoDefault } = {}) {
   const style = String(sku || '').trim();
   if (!style) return { sku: style, cutouts: 0, found: [], recorded: 0, confidence: 'none', why: 'no_sku' };
+  const ph = (await readPh(style)).filter((p) => SHOE_ANGLES.includes(p.angle));
+  if (!redo && ph.length) {
+    const have = new Set((await readCutouts(style).catch(() => [])).map((r) => r.angle));
+    if (ph.every((p) => have.has(p.angle))) return { sku: style, cutouts: null, angles: ph.length, found: [], recorded: 0, confidence: 'recorded', why: 'already_recorded', covered: have.size };
+  }
   const lister = list || ((prefix) => (r2Configured() ? listObjects(prefix) : Promise.resolve([])));
   const keys = await lister(cutoutPrefix(style));
   const cuts = keys.map((k) => ({ url: k.url || publicUrl(k.key), ts: cutoutKeyTime(k.key || k.url) })).filter((c) => c.ts).sort((a, b) => a.ts - b.ts);
-  const ph = (await productPhotosForSku(style, 'ph_edited')).filter((p) => SHOE_ANGLES.includes(p.angle));
   const ts = recoverCutouts({ cutouts: cuts, ph: ph.map((p) => ({ angle: p.angle, at: new Date(p.created_at).getTime() })) });
   if (!ph.length || !cuts.length) return { sku: style, cutouts: cuts.length, found: [], recorded: 0, confidence: 'none', why: ts.why };
-  // only cutouts staged before the upload can be in it; the newest `maxCutouts` of them
+  const memoKey = `${cuts[cuts.length - 1].ts}|${Math.max(...ph.map((p) => new Date(p.created_at).getTime()))}|${cuts.length}`;
+  if (!redo) {
+    const seen = await memo.get(style).catch(() => null);
+    if (seen?.key === memoKey && Number(seen.found) === 0) return { sku: style, cutouts: cuts.length, angles: ph.length, found: [], recorded: 0, confidence: 'none', why: 'nothing_found_before', cached: true, checkedAt: seen.at || null };
+  }
+  // only cutouts staged before the upload can be in it: the last session of them (else the newest `maxCutouts`)
   const start = Math.min(...ph.map((p) => new Date(p.created_at).getTime()));
-  const cand = cuts.filter((c) => c.ts < start).slice(-maxCutouts);
+  const cand = (ts.session?.length ? ts.session : cuts.filter((c) => c.ts < start)).slice(-maxCutouts);
   // a few at a time (each is a download + a decode)
   const pool = async (items, fn, n = 4) => { const out = new Array(items.length); let i = 0;
     await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const j = i++; out[j] = await fn(items[j]).catch(() => null); } }));
@@ -143,7 +162,8 @@ export async function findCleanPhotos(sku, { write = false, by = null, list = nu
   let recorded = 0;
   if (write) for (const f of found) if (await recordCutout({ sku: style, angle: f.angle, url: f.url, origin: 'recovered', how: f.how, takenAt: f.takenAt, createdBy: by, shape: f.shape })) recorded += 1;
   const confidence = !found.length ? 'none' : found.every((f) => f.how === 'checked') ? 'checked' : 'mixed';
-  return { sku: style, cutouts: cuts.length, angles: ph.length, found, recorded, confidence, why: ts.why };
+  if (!found.length) await memo.set(style, { key: memoKey, found: 0, scored: cand.length, at: new Date().toISOString() }).catch(() => {});
+  return { sku: style, cutouts: cuts.length, angles: ph.length, scored: cand.length, found, recorded, confidence, why: ts.why };
 }
 
 /* --------------------------------- photo signatures --------------------------------- */

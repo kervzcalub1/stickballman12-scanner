@@ -12306,9 +12306,39 @@ export async function finishListingJob(id, owner, { status, phase = null, counts
 }
 // A running job whose lease ran out (the process died / was redeployed) → interrupted.
 export async function markStaleListingJobs() {
-  return await db()`UPDATE shein_listing_jobs SET status = 'interrupted', updated_at = now(), finished_at = now(),
+  const rows = await db()`UPDATE shein_listing_jobs SET status = 'interrupted', updated_at = now(), finished_at = now(),
       phase = 'Interrupted (the server restarted) — Resume carries on from the first unfinished product'
     WHERE status = 'running' AND (lease_until IS NULL OR lease_until < now()) RETURNING id`;
+  // 2026-11-17 housekeeping (cheap, on every GET + tick): stale previews expire, finished interrupted runs close
+  await expireListingPreviews().catch(() => {});
+  await closeSettledRuns().catch(() => {});
+  return rows;
+}
+// A preview (dry run) nobody confirmed within 24 h no longer says what SHEIN would get (Shopify / SHEIN moved on): it
+// becomes 'expired' — Confirm (startRunJob) and Resume both refuse it; the person previews again. → ids
+export const PREVIEW_EXPIRE_H = 24;
+export async function expireListingPreviews(hours = PREVIEW_EXPIRE_H) {
+  return (await db()`UPDATE shein_listing_jobs SET status = 'expired', updated_at = now(),
+      phase = 'Expired — not confirmed within ' || ${hours}::int || ' h; preview again (nothing was sent)'
+    WHERE kind = 'preview' AND status = 'awaiting_confirm' AND COALESCE(finished_at, updated_at) < now() - make_interval(hours => ${hours}::int) RETURNING id`).map((r) => Number(r.id));
+}
+// A run cut off by a restart whose items have ALL settled (none pending / sending / deferred) has nothing to resume:
+// it is closed ('done', the phase says it was interrupted) instead of reading "interrupted" for ever (cut-over line d). → ids
+export async function closeSettledRuns() {
+  return (await db()`UPDATE shein_listing_jobs j SET status = 'done', updated_at = now(),
+      phase = 'Finished — a restart interrupted it after every item had settled (closed by itself)'
+    WHERE j.kind = 'run' AND j.status = 'interrupted'
+      AND NOT EXISTS (SELECT 1 FROM shein_listing_job_items i WHERE i.job_id = j.id AND i.status IN ('pending','sending','deferred')) RETURNING j.id`).map((r) => Number(r.id));
+}
+// Snapshot read items older than `days` (one per SHEIN product per read, ~34k a day at every 30 min): only the job's
+// counts are kept. A queued / running / interrupted snapshot keeps its items (Resume needs them). → rows deleted
+export async function pruneSnapshotItems(days = 7) {
+  const r = await db()`WITH gone AS (
+      DELETE FROM shein_listing_job_items i USING shein_listing_jobs j
+       WHERE j.id = i.job_id AND j.kind = 'snapshot' AND i.op = 'read' AND j.status NOT IN ('queued','running','interrupted')
+         AND COALESCE(j.finished_at, j.created_at) < now() - make_interval(days => ${days}::int) RETURNING 1
+    ) SELECT count(*)::int AS n FROM gone`;
+  return r[0]?.n || 0;
 }
 export async function requestListingStop(id) {
   const rows = await db()`UPDATE shein_listing_jobs SET stop_requested = true, updated_at = now() WHERE id = ${id} AND status IN ('queued','running') RETURNING *`;
@@ -12512,12 +12542,70 @@ export async function listingPriceOffProducts({ marketOnly = false, limit = 300 
   return (await db()`SELECT DISTINCT shopify_product_id FROM shein_listing_variants
     WHERE status = 'out_of_date' AND diffs @> ${want}::jsonb AND shopify_product_id NOT LIKE 'shein:%' ORDER BY 1 LIMIT ${limit}`).map((r) => r.shopify_product_id);
 }
-// Our last attempt on these variants (rendered as Error with SHEIN's words until Shopify changes).
-export async function setVariantsLastError(variantIds, err) {
+// Our last attempt on these variants (rendered as Error with SHEIN's words — lastErrorShown in src/lib/sheinListings.js).
+// meta (2026-11-17) = { op, itemId, spu } of the send it came from: `op` picks the blocker's button and makes an error
+// from a send that ADDED the size moot once SHEIN sells it anyway; `at` (now) lets an approved photo / model change
+// clear only the rejections that came before it.
+export async function setVariantsLastError(variantIds, err, meta = {}) {
   if (!variantIds.length) return;
-  await db()`UPDATE shein_listing_variants SET last_error = CASE WHEN ${err == null ? null : JSON.stringify(err)}::jsonb IS NULL THEN NULL
-      ELSE ${err == null ? null : JSON.stringify(err)}::jsonb || jsonb_build_object('hash', target_hash) END, updated_at = now()
+  const e = err == null ? null : JSON.stringify({ ...err, ...(meta.op ? { op: meta.op } : {}), ...(meta.itemId ? { itemId: Number(meta.itemId) } : {}), ...(meta.spu ? { spu: meta.spu } : {}) });
+  await db()`UPDATE shein_listing_variants SET last_error = CASE WHEN ${e}::jsonb IS NULL THEN NULL
+      ELSE ${e}::jsonb || jsonb_build_object('hash', target_hash, 'at', now()) END, updated_at = now()
     WHERE row_key = ANY(${variantIds}::text[])`;
+}
+// 2026-11-17 · SHEIN approved a change of the WHOLE shoe (new photos, the Product Model, an edit): the rejections its
+// sizes still carry from BEFORE that send (review_rejected / shein_prevalid — set before `since`, or with no time and
+// no failed send of the size after `since`) are cleared, and each clearing is written to the listing log. → row keys
+export async function clearProductRejections(productId, { since, by, reason = null, codes = ['review_rejected', 'shein_prevalid'] } = {}) {
+  const sql = db();
+  const rows = await sql`WITH hit AS (
+      SELECT v.row_key, v.last_error FROM shein_listing_variants v
+       WHERE v.shopify_product_id = ${productId} AND v.last_error->>'code' = ANY(${codes}::text[])
+         AND (CASE WHEN v.last_error ? 'at' THEN (v.last_error->>'at')::timestamptz <= ${since}::timestamptz
+              ELSE NOT EXISTS (SELECT 1 FROM shein_listing_job_items f JOIN shein_listing_jobs fj ON fj.id = f.job_id
+                                WHERE fj.kind = 'run' AND f.status = 'failed' AND f.updated_at > ${since}::timestamptz AND v.row_key = ANY(f.variant_ids)) END)
+       FOR UPDATE
+    ), done AS (
+      UPDATE shein_listing_variants v SET last_error = NULL, updated_at = now() FROM hit WHERE v.row_key = hit.row_key RETURNING hit.row_key, hit.last_error
+    )
+    SELECT * FROM done`;
+  if (rows.length) await logListingAction({ action: 'auto_clear_error', by, productId, rowKeys: rows.map((r) => r.row_key), detail: { reason, was: rows.map((r) => ({ rowKey: r.row_key, code: r.last_error?.code || null, op: r.last_error?.op || null })) } });
+  return rows.map((r) => r.row_key);
+}
+// The listing log (2026-11-17): what a PERSON (or a rule) changed on our side — clear an error, confirm a price, a
+// one-off fix. Never a SHEIN call (those are shein_api_log). shein_listing_actions, newest first per shoe.
+export async function logListingAction({ action, by = null, productId = null, rowKeys = [], detail = {} }) {
+  const [r] = await db()`INSERT INTO shein_listing_actions (action, by, shopify_product_id, row_keys, detail)
+    VALUES (${action}, ${by}, ${productId}, ${rowKeys}::text[], ${JSON.stringify(detail || {})}::jsonb) RETURNING *`;
+  return r;
+}
+export async function listListingActions(productId, limit = 20) {
+  try { return await db()`SELECT * FROM shein_listing_actions WHERE shopify_product_id = ${productId} ORDER BY id DESC LIMIT ${limit}`; } catch { return []; }
+}
+// A person clears a size's stored error by hand (POST clear_error) — the cases the rules can't know. Logged per shoe.
+// → [{ row_key, shopify_product_id, last_error (the one cleared) }]
+export async function clearVariantErrors(rowKeys, { by, note = null } = {}) {
+  const rows = await db()`WITH hit AS (
+      SELECT row_key, shopify_product_id, last_error FROM shein_listing_variants WHERE row_key = ANY(${rowKeys}::text[]) AND last_error IS NOT NULL FOR UPDATE
+    ), done AS (
+      UPDATE shein_listing_variants v SET last_error = NULL, updated_at = now() FROM hit WHERE v.row_key = hit.row_key RETURNING hit.*
+    )
+    SELECT * FROM done`;
+  const byProduct = new Map();
+  for (const r of rows) { const a = byProduct.get(r.shopify_product_id) || []; a.push(r); byProduct.set(r.shopify_product_id, a); }
+  for (const [pid, list] of byProduct) {
+    await logListingAction({ action: 'clear_error', by, productId: pid, rowKeys: list.map((r) => r.row_key),
+      detail: { note, was: list.map((r) => ({ rowKey: r.row_key, code: r.last_error?.code || null, op: r.last_error?.op || null, reason: r.last_error?.params?.failedReason || r.last_error?.params?.sheinMessage || r.last_error?.params?.message || null })) } });
+  }
+  return rows;
+}
+// A person confirms an outlier price for one size (POST price_ok) — tied to that exact price; null clears it. Logged.
+export async function setVariantPriceOk(rowKey, price, { by }) {
+  const ok = price == null ? null : { price: Math.round(Number(price) * 100) / 100, by, at: new Date().toISOString() };
+  const [r] = await db()`UPDATE shein_listing_variants SET price_ok = ${ok == null ? null : JSON.stringify(ok)}::jsonb, updated_at = now()
+    WHERE row_key = ${rowKey} AND shopify_variant_id IS NOT NULL RETURNING row_key, shopify_product_id, shopify_size, price_ok`;
+  if (r) await logListingAction({ action: price == null ? 'price_ok_cleared' : 'price_ok', by, productId: r.shopify_product_id, rowKeys: [rowKey], detail: { size: r.shopify_size, price: ok?.price ?? null } });
+  return r || null;
 }
 // SHEIN confirmed this size: our map row is verified, a custom value gets the id SHEIN gave it.
 export async function verifySizeMapById(id, attributeValueId = null) {
@@ -12749,7 +12837,7 @@ export async function loadListingPrev() {
   const [products, variants] = await Promise.all([
     // + the publish choices (title / colour / PH photos): the stored readiness of a new shoe is judged on them too
     db()`SELECT shopify_product_id, excluded, excluded_by, excluded_at, shopify_hash, shopify_json, computed_hash, spu, review_version, title_override, skc_value_id, use_ph_photos, clean_photos, clean_main, photo_skip, category_pick_id, category_pick_ptid, category_pick_path, attr_overrides FROM shein_listing_products`,
-    db()`SELECT row_key, shein_sku, match, excluded, excluded_by, excluded_at, synced_hash, synced_fields, last_error FROM shein_listing_variants`,
+    db()`SELECT row_key, shein_sku, match, excluded, excluded_by, excluded_at, synced_hash, synced_fields, last_error, price_ok FROM shein_listing_variants`,
   ]);
   return { products: new Map(products.map((r) => [r.shopify_product_id, r])), variants: new Map(variants.map((r) => [r.row_key, r])) };
 }

@@ -70,7 +70,7 @@ async function worker() {
   while (next < styles.length) {
     const sku = styles[next++];
     try {
-      const r = await findCleanPhotos(sku, { write: apply, by: 'clean-photos backfill' });
+      const r = await findCleanPhotos(sku, { write: apply, by: 'clean-photos backfill', redo });
       i += 1;
       tally[r.confidence] = (tally[r.confidence] || 0) + 1; tally.photos += r.found.length; tally.recorded += r.recorded;
       if (r.found.length < (r.angles || 0)) misses.push(`${sku} ${r.found.length}/${r.angles} (${r.cutouts} cutouts)`);

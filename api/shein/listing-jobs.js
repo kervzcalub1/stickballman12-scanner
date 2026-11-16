@@ -9,7 +9,7 @@ import { dbConfigured, listListingJobs, getListingJob, activeListingJob, listLis
 import { listingJobRunning, userThrottle } from '../_lib/shein-listing.js';
 import { summarizePlan } from '../../src/lib/sheinListings.js';
 
-const STATUSES = ['queued', 'running', 'awaiting_confirm', 'done', 'stopped', 'failed', 'interrupted'];
+const STATUSES = ['queued', 'running', 'awaiting_confirm', 'done', 'stopped', 'failed', 'interrupted', 'expired'];   // + expired (2026-11-17): a preview not confirmed in 24 h
 const ITEM_STATUSES = ['pending', 'sending', 'sent', 'in_review', 'done', 'skipped', 'deferred', 'changed', 'failed'];
 export const ALL_MAX = 20_000;
 const jobOut = (j) => (j ? { ...j, lease_owner: undefined } : null);

@@ -40,6 +40,7 @@ export const STATUS_WORDS = {
 export const JOB_WORDS = {
   done: 'Done', running: 'Running', queued: 'Queued', stopped: 'Stopped', failed: 'Failed',
   interrupted: 'Interrupted', awaiting_confirm: 'Waiting for you',
+  expired: 'Expired',   // 2026-11-17: a preview not confirmed within 24 h — preview again
 };
 export const JOB_KIND_WORDS = {
   snapshot: 'Refresh from SHEIN', probe: 'Ask SHEIN which sizes it allows', recheck: 'Shopify change check',

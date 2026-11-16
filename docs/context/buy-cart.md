@@ -895,6 +895,28 @@ whole request.
   (closed / re-opened) stay in the main group. The bot must be in the group. `e2e/buy-cart.spec.js`
   "a buyer’s premium group…".
 
+- **Already shipped → link the request to the supplier's own order (2026-11-17, owner).** The
+  written path is receipt → "Start packing" → `cart/raise-po`. A supplier who skips it and ships
+  on an order they made themselves (labels requested, drop-off receipt on file) left the request
+  "waiting on the shipment" for ever — on the 11-13 copy only **3 of 37** requests had ever been
+  through the written path, and one of Andrew's POs (105–122 pairs) covers several of his requests
+  (15–46 pairs each). So: **"Already shipped — link to a purchase order"** on the request (no order
+  yet, status `funded` / `receipted` / `audited`) → pick from the buyer's orders of the last 180 days
+  (`listPosForCartLink`: code, date, status, tag, boxes, pairs, drop-off receipt, requests already on
+  it) → `POST /api/cart/link-po { cartId, poId }`. **Who:** the buyer (own request), the warehouse,
+  the PH team, an admin — no privilege needed. **Rules:** the order must be that buyer's
+  (`supplier_user_id`), a shoes order; **several requests may share one order**; **nothing on the
+  order changes**. `buy_carts.po_linked_at` / `po_linked_by` mark a LINK as opposed to an order
+  RAISED from the receipt, and a linked order is never written to or gated by the request:
+  `getCartIdForPo` (the ship gate in `po/ship`) and `requestCostForPo` (the request's cost stack on
+  the order) ignore linked requests, `setBuyCartReceiptLinesRemoved` leaves the order's lines alone,
+  `cart/pack` refuses (409), the Pack section is read-only. The request shows **Shipped on PO-…**
+  and the order line gets **Unlink** (`{ cartId, unlink:true }` — a link only; a raised order → 409).
+  Both sides get a note (`buy_cart_events` `po_linked` / `po_unlinked`, a system comment on the PO).
+  Deleting the order lets its linked requests go (`deletePo`). Known limit: the request's
+  "packed" count matches receipt pairs to the order's boxes by SKU + size, so on a shared order the
+  same pair can count for two requests. E2E: `buy-cart.spec.js` → "linking a request to an order
+  that already shipped".
 - **One group per SUPPLIER (2026-11-17, owner: "a separate Telegram group chat for every supplier
   for buying requests"):** `users.buying_chat_id` (set per SUPPLIER on Check Access → Telegram
   column → **Set buying chat**; `/chatid` in the group gives it; `api/admin/review`

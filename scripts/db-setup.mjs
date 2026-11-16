@@ -1858,6 +1858,12 @@ await sql(`
   )
 `);
 await sql(`CREATE INDEX IF NOT EXISTS buy_cart_events_cart_idx ON buy_cart_events (cart_id, id DESC)`);
+// 2026-11-17: a request can be LINKED to a purchase order the supplier already made and shipped
+// (they skipped "Start packing"). po_linked_at marks a link, as opposed to an order RAISED from
+// the receipt: a linked order is the supplier's own — the request never writes to it and never
+// gates it, and several requests may sit on one order.
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS po_linked_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE buy_carts ADD COLUMN IF NOT EXISTS po_linked_by TEXT`);
 // ---------------------------------------------------------------------------
 // THE CONTROL STANDARD (Supplier & Buyer Accountability deck, Sept 2026)
 //

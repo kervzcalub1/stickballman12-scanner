@@ -635,6 +635,10 @@ export const api = {
   cartSaveReceipt: (cartId, lines, receiptTotal, subtotal = null, tax = null) =>
     post('/api/cart/receipt', { cartId, lines, receiptTotal, subtotal, tax }),
   cartRaisePo: (cartId, boxes) => post('/api/cart/raise-po', { cartId, boxes }),
+  // Already shipped on the supplier's own order: link the request to it (or undo the link).
+  cartLinkPoOptions: (cartId) => get(`/api/cart/link-po?cartId=${encodeURIComponent(cartId)}`),
+  cartLinkPo: (cartId, poId) => post('/api/cart/link-po', { cartId, poId }),
+  cartUnlinkPo: (cartId) => post('/api/cart/link-po', { cartId, unlink: true }),
   // Two sign-offs, not one: the money can be reconciled the day the receipt lands, the
   // goods only once the boxes are in the building. See api/cart/audit.js.
   cartAuditAddCard: (cartId, card) => post('/api/cart/audit-extras', { cartId, action: 'add_card', card }),

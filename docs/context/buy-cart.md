@@ -895,6 +895,21 @@ whole request.
   (closed / re-opened) stay in the main group. The bot must be in the group. `e2e/buy-cart.spec.js`
   "a buyer’s premium group…".
 
+- **One group per SUPPLIER (2026-11-17, owner: "a separate Telegram group chat for every supplier
+  for buying requests"):** `users.buying_chat_id` (set per SUPPLIER on Check Access → Telegram
+  column → **Set buying chat**; `/chatid` in the group gives it; `api/admin/review`
+  `decision:'buying_chat'`, must be negative, supplier accounts only). `chatFor` (notify.js) now
+  reads `chatsForBuyer`: a premium shoe → the buyer's premium group if set, **else their own buying
+  group**, else `TELEGRAM_CHAT_ID`; everything else — cards, "not buying", qty changed, **and the
+  request-level notes (closed / re-opened)** — → their own buying group, else `TELEGRAM_CHAT_ID`.
+  A buyer with none set stays in the main group, so nothing moves until a group is typed in:
+  the main group is Andrew's simply by leaving his blank. The webhook answers in every such group
+  (`inOurChat` → `buyerChatIds()` = buying + premium groups). The bot AND every approver must be
+  in each group — a tap is still checked against the tapper's linked account. A card already sent
+  stays answerable where it is (the group card row keeps its chat) as long as that group is still
+  somebody's. `e2e/buy-cart.spec.js` "a buyer’s own buying group…". **Needs db:setup** (one
+  `ADD COLUMN`).
+
 > **Stale below:** "The BUYER writes it first" (the section above) was reversed on 2026-09-11 — the
 > buyer is refused by `canWriteCosts` and never reads the stack. Only the tax RATE
 > (`funding_tax_pct`) reaches them.

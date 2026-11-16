@@ -196,6 +196,9 @@ export const api = {
   // A buyer's premium-shoes Telegram group (their premium cards go there). Empty clears it.
   adminSetPremiumChat: (userId, premiumChatId) =>
     post('/api/admin/review', { userId, decision: 'premium_chat', premiumChatId }),
+  // A buyer's OWN buying-requests Telegram group (all their cards go there). Empty clears it.
+  adminSetBuyingChat: (userId, buyingChatId) =>
+    post('/api/admin/review', { userId, decision: 'buying_chat', buyingChatId }),
   adminDeleteUser: (userId) => post('/api/admin/review', { userId, decision: 'delete' }),
   adminResetPassword: (userId) => post('/api/admin/reset-password', { userId }),
   // App settings (price margin, …). GET is any authed user; POST is admin/superadmin.

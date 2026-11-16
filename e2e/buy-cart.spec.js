@@ -3464,6 +3464,61 @@ test.describe('Telegram, direct: the card, the tap, and "More…"', () => {
     }
   });
 
+  // One Telegram group per SUPPLIER (users.buying_chat_id, 2026-11-17): every card and note
+  // about THEIR requests goes to their own group; a buyer with none set stays in the main one.
+  test('a buyer’s own buying group gets ALL their cards and notes; replies there count; premium still goes to the premium group', async ({ request }) => {
+    const BUYING_CHAT = -1007770002;
+    const PREMIUM_CHAT = -1007770003;
+    const H = () => ({ Authorization: `Bearer ${signToken({ uid: 'admin', username: 'admin', name: 'Admin', role: 'admin' })}` });
+    const set = (decision, field, value, userId = people.buyer.uid) => request.post('/api/admin/review', { headers: H(), data: { userId, decision, [field]: value } });
+    expect((await set('buying_chat', 'buyingChatId', '12345')).status()).toBe(400);                       // not a group id
+    expect((await set('buying_chat', 'buyingChatId', String(BUYING_CHAT), people.approver.uid)).status()).toBe(400); // not a buyer
+    const done = await set('buying_chat', 'buyingChatId', String(BUYING_CHAT));
+    expect(done.ok(), await done.text()).toBeTruthy();
+    expect((await done.json()).user.buying_chat_id).toBe(String(BUYING_CHAT));
+    try {
+      // An ordinary shoe: the card is in the buyer's own group, and so is its row.
+      const plain = await groupCard(request);
+      expect(String(plain.card.chat_id)).toBe(String(BUYING_CHAT));
+      expect(String(plain.row.chat_id)).toBe(String(BUYING_CHAT));
+      // A reply IN that group is read like one in the main group.
+      const upd = replyUpdate(plain.row, '9 x 1');
+      upd.message.chat.id = BUYING_CHAT; upd.message.reply_to_message.chat.id = BUYING_CHAT;
+      await hook(request, upd);
+      expect(await statuses(plain.cartId)).toEqual({ 9: 'approved ×1', '9.5': 'rejected', 10: 'rejected' });
+      // The request-level note (list closed) follows the buyer too.
+      const keep = { ...process.env };
+      Object.assign(process.env, { TELEGRAM_BOT_TOKEN: 'e2e-fake-token', TELEGRAM_CHAT_ID: String(CHAT), TELEGRAM_API_BASE: 'http://127.0.0.1:5198', MAKE_WEBHOOK_URL: '' });
+      try {
+        const { notifyRequestEvent } = await import('../api/_lib/notify.js');
+        const t0 = calls.length;
+        expect((await notifyRequestEvent(plain.cartId, 'buying_request_closed')).sent).toBe(true);
+        const notes = since(t0).filter((c) => c.method === 'sendMessage');
+        expect(notes.length).toBe(1);
+        expect(String(notes[0].body.chat_id)).toBe(String(BUYING_CHAT));
+      } finally {
+        for (const k of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'MAKE_WEBHOOK_URL']) {
+          if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k];
+        }
+      }
+      // A premium shoe with NO premium group set also goes to the buyer's own group…
+      const prem = await groupCard(request, PREMIUM_RUN);
+      expect(String(prem.card.chat_id)).toBe(String(BUYING_CHAT));
+      // …and to the premium group once one is set.
+      expect((await set('premium_chat', 'premiumChatId', String(PREMIUM_CHAT))).ok()).toBeTruthy();
+      const prem2 = await groupCard(request, PREMIUM_RUN);
+      expect(String(prem2.card.chat_id)).toBe(String(PREMIUM_CHAT));
+      // Removed → back in the main group.
+      expect((await set('premium_chat', 'premiumChatId', '')).ok()).toBeTruthy();
+      expect((await set('buying_chat', 'buyingChatId', '')).ok()).toBeTruthy();
+      const back = await groupCard(request);
+      expect(String(back.card.chat_id)).toBe(String(CHAT));
+    } finally {
+      await set('premium_chat', 'premiumChatId', '');
+      await set('buying_chat', 'buyingChatId', '');
+    }
+  });
+
   test('a tap from another chat is ignored', async ({ request }) => {
     const cartId = await newRequest(request, { lines: [LINE] });
     const line = (await read_(request, 'approver', `cart/get?id=${cartId}`)).body.cart.lines[0];

@@ -183,7 +183,7 @@ export async function findUserByUsername(username) {
 export async function listUsers() {
   return await db()`
     SELECT id, name, username, role, status, privileges, created_at, reviewed_at, reviewed_by,
-           must_change_password, reset_requested_at, telegram_user_id, premium_chat_id
+           must_change_password, reset_requested_at, telegram_user_id, premium_chat_id, buying_chat_id
     FROM users
     ORDER BY (reset_requested_at IS NOT NULL) DESC, (status = 'pending') DESC, created_at DESC
     LIMIT 500
@@ -8810,17 +8810,31 @@ export async function setUserPremiumChat(userId, chatId) {
   return rows[0] || null;
 }
 
-// Where a buyer's PREMIUM cards go — their own group when set, else null (= the main group).
-export async function premiumChatForBuyer(buyerUserId) {
-  if (!buyerUserId) return null;
-  const rows = await db()`SELECT premium_chat_id FROM users WHERE id = ${buyerUserId} AND status = 'approved'`;
-  return rows[0]?.premium_chat_id || null;
+// A buyer's OWN buying-requests group (users.buying_chat_id) — one Telegram group per
+// supplier. Blank = none: their cards stay in the main approval group.
+export async function setUserBuyingChat(userId, chatId) {
+  const rows = await db()`
+    UPDATE users SET buying_chat_id = ${chatId}
+     WHERE id = ${userId}
+     RETURNING id, name, username, role, status, privileges, telegram_user_id, premium_chat_id, buying_chat_id`;
+  return rows[0] || null;
 }
 
-// Every buyer's premium group — the webhook answers in these as well as the main group.
-export async function premiumChatIds() {
-  const rows = await db()`SELECT DISTINCT premium_chat_id FROM users WHERE premium_chat_id IS NOT NULL AND status = 'approved'`;
-  return rows.map((r) => String(r.premium_chat_id));
+// Where a buyer's cards go: { buying, premium } — each their own group when set, else null.
+export async function chatsForBuyer(buyerUserId) {
+  if (!buyerUserId) return { buying: null, premium: null };
+  const rows = await db()`SELECT buying_chat_id, premium_chat_id FROM users WHERE id = ${buyerUserId} AND status = 'approved'`;
+  return { buying: rows[0]?.buying_chat_id || null, premium: rows[0]?.premium_chat_id || null };
+}
+
+// Every group the bot answers in besides the main one: each buyer's own buying group and
+// each buyer's premium group.
+export async function buyerChatIds() {
+  const rows = await db()`
+    SELECT buying_chat_id AS id FROM users WHERE buying_chat_id IS NOT NULL AND status = 'approved'
+    UNION
+    SELECT premium_chat_id AS id FROM users WHERE premium_chat_id IS NOT NULL AND status = 'approved'`;
+  return rows.map((r) => String(r.id));
 }
 
 export async function getUserById(userId) {

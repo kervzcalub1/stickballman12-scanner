@@ -24,7 +24,8 @@ export function CheckAccess({ user: viewer, onHome, onSignOut }) {
   const [confirm, setConfirm] = useState(null); // { u, action: 'reject' | 'delete' } | null
   const [tempPw, setTempPw] = useState(null);    // { u, password } — shown once after a reset
   const [linking, setLinking] = useState(null);
-  const [premiumFor, setPremiumFor] = useState(null);   // a buyer whose premium chat is being set  // the user whose Telegram id is being asked for
+  const [premiumFor, setPremiumFor] = useState(null);   // a buyer whose premium chat is being set
+  const [buyingFor, setBuyingFor] = useState(null);     // a buyer whose own buying group is being set
   const [waiting, setWaiting] = useState([]);    // Telegram accounts that tapped and aren't linked
   const isMobile = useMediaQuery('(max-width: 600px)');
 
@@ -72,6 +73,12 @@ export function CheckAccess({ user: viewer, onHome, onSignOut }) {
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setBusyId(null); }
   }
+  async function setBuyingChat(u, chatId) {
+    setBusyId(u.id); setError(''); setBuyingFor(null);
+    try { await api.adminSetBuyingChat(u.id, chatId); await load(); }
+    catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setBusyId(null); }
+  }
   async function togglePriv(u, key) {
     const held = Array.isArray(u.privileges) ? u.privileges : [];
     const next = held.includes(key) ? held.filter((k) => k !== key) : [...held, key];
@@ -114,11 +121,34 @@ export function CheckAccess({ user: viewer, onHome, onSignOut }) {
   // a group chat is not an identity — everybody in the group can press one — so a tap is
   // only recorded once the number that pressed it is tied to somebody here.
   const Telegram = ({ u }) => {
-    // A BUYER isn't linked (they approve nothing) — but they can have their own group for
-    // PREMIUM shoes, where those cards go instead of the main approval group.
+    // A BUYER isn't linked (they approve nothing) — but each one can have their OWN group
+    // for their buying requests (every card and note goes there instead of the main
+    // approval group), and a second one for PREMIUM shoes.
     if (u.role === 'supplier') {
       if (!(u.privileges || []).includes('request_buying')) return <span className="muted sm">Buyers don’t approve anything</span>;
       return (
+        <>
+        <div className="tg-link">
+          <span className="muted sm">Buying requests chat:</span>
+          {u.buying_chat_id ? (
+            <>
+              <span className="tg-id mono">{u.buying_chat_id}</span>
+              <button type="button" className="btn sm ghost" disabled={busyId === u.id || locked(u)}
+                aria-label={`Change the buying chat of ${u.name || u.username}`}
+                onClick={() => setBuyingFor(u)}>Change</button>
+              <button type="button" className="btn sm ghost" disabled={busyId === u.id || locked(u)}
+                aria-label={`Remove the buying chat of ${u.name || u.username}`}
+                onClick={() => setBuyingChat(u, '')}>Remove</button>
+            </>
+          ) : (
+            <>
+              <span className="muted sm">main group</span>
+              <button type="button" className="btn sm ghost" disabled={busyId === u.id || locked(u)}
+                title="Their buying requests’ cards go to this group instead of the main approval group"
+                onClick={() => setBuyingFor(u)}>Set buying chat</button>
+            </>
+          )}
+        </div>
         <div className="tg-link">
           <span className="muted sm">Premium shoes chat:</span>
           {u.premium_chat_id ? (
@@ -135,6 +165,7 @@ export function CheckAccess({ user: viewer, onHome, onSignOut }) {
               onClick={() => setPremiumFor(u)}>Set premium chat</button>
           )}
         </div>
+        </>
       );
     }
     const held = u.telegram_user_id ? String(u.telegram_user_id) : '';
@@ -287,6 +318,19 @@ export function CheckAccess({ user: viewer, onHome, onSignOut }) {
         </section>
       )}
 
+      {buyingFor && (
+        <FormModal
+          title={`Buying requests chat for ${buyingFor.name || buyingFor.username}`}
+          message="Every approval card and note about THIS buyer’s requests goes to this Telegram group instead of the main buying group. Add the bot and everyone who approves to the group, send /chatid there, and paste the number it replies with."
+          submitLabel="Save"
+          onClose={() => setBuyingFor(null)}
+          onSubmit={({ buyingChatId }) => setBuyingChat(buyingFor, String(buyingChatId || '').trim())}
+          fields={[{
+            name: 'buyingChatId', label: 'Group chat id', required: true, value: buyingFor.buying_chat_id || '',
+            placeholder: '-1001234567890',
+            hint: 'A group id starts with a minus sign.',
+          }]} />
+      )}
       {premiumFor && (
         <FormModal
           title={`Premium shoes chat for ${premiumFor.name || premiumFor.username}`}

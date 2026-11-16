@@ -196,6 +196,9 @@ await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_username TEXT`);
 // Their premium cards go there instead of the main approval group; everything else stays in
 // the main group. Set per supplier on Check Access (`/chatid` in the group gives the id).
 await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS premium_chat_id TEXT`);
+// A buyer's OWN buying-requests group (2026-11-17): one Telegram group per supplier. Blank =
+// their cards stay in the main approval group (TELEGRAM_CHAT_ID).
+await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS buying_chat_id TEXT`);
 await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_linked_at TIMESTAMPTZ`);
 await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_broken_at TIMESTAMPTZ`);
 await sql(`ALTER TABLE users ADD COLUMN IF NOT EXISTS alerts_muted BOOLEAN NOT NULL DEFAULT false`);

@@ -47,8 +47,15 @@ async function fetchLabel(url) {
 
 // sales: rows of presell_sales (id, order_id, label_url, ship_docs), ALREADY in print order.
 // -> { bytes | null, included: [order_id], missing: [{ order_id, reason }] }
-export async function mergeLabels(sales, { fetcher = fetchLabel } = {}) {
-  const jobs = sales.map((s) => ({ s, url: labelLink(s), buf: null, reason: null }));
+// with: 'label' = the label alone · 'instructions' = StockX's "Attach Shipping Label to Shipping
+// Box" sheet (order #, shoe, size, ship-by) WITH the label, 4 x 6 thermal; the letter sheet if
+// there is no thermal one; the bare label if StockX gave neither — a parcel never loses its label.
+export const docLink = (s, withDoc = 'label') => (
+  withDoc === 'instructions' ? (s?.ship_docs?.thermal || s?.ship_docs?.letter || labelLink(s)) : labelLink(s)
+);
+
+export async function mergeLabels(sales, { fetcher = fetchLabel, with: withDoc = 'label' } = {}) {
+  const jobs = sales.map((s) => ({ s, url: docLink(s, withDoc), buf: null, reason: null }));
   let next = 0;
   async function worker() {
     for (;;) {

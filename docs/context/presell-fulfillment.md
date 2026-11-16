@@ -63,6 +63,11 @@ choose which orders go in.
   still worked out over both platforms first — they share the set-aside pairs.
 - **🏷 Alias labels PDF (n)** and **🏷 StockX labels PDF (n)** (To ship view): ONE PDF per platform,
   one label after the other, in the pick list's order. On Both, both buttons show.
+- **📄 StockX instructions + labels PDF (n)** (2026-11-16, same day): for each StockX order,
+  StockX's own "Attach Shipping Label to Shipping Box" sheet (order #, shoe, size, style code,
+  ship-by) **with its label**, 4 x 6 — `{ with: 'instructions' }` → `docLink`: `ship_docs.thermal`,
+  else `.letter`, else the bare label (a parcel never loses its label). StockX only (Alias → 400);
+  hidden on the Alias view. Same ticks, same order, same limits.
 - **Tick boxes** on every order that has a label, plus **Tick all** / **Clear (n)**. Something
   ticked → the PDFs hold only the ticked orders (`(n ticked)`); nothing ticked → every order on
   screen. Ticks are page state, not in the URL.

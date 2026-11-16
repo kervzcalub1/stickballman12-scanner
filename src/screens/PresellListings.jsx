@@ -2098,21 +2098,22 @@ function FulfillTab({ onSignOut }) {
   }, [withLabel, picked, pickedN]);
   const extraDocs = useMemo(() => (shown || []).filter((x) => x.platform === 'stockx' && x.ship_docs?.additionalRequired).length, [shown]);
 
-  async function labels(p) {
+  // withDoc 'instructions' (StockX): its shipping-instructions sheet + the label, per order.
+  async function labels(p, withDoc = null) {
     const ids = labelIds[p];
     if (!ids.length) return;
     if (ids.length > 300) { setError(`${ids.length} ${UPLAT[p]} labels is too many for one file — search or filter first (300 at most).`); return; }
-    setBusy(`labels-${p}`); setError(''); setNote('');
+    setBusy(`labels-${p}${withDoc ? '-doc' : ''}`); setError(''); setNote('');
     try {
-      const r = await api.presellLabelsPdf(p, ids);
+      const r = await api.presellLabelsPdf(p, ids, withDoc);
       const url = URL.createObjectURL(r.blob);
       const a = document.createElement('a');
       a.href = url; a.download = r.filename; a.click();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
       const miss = r.missing || [];
-      setNote(`${UPLAT[p]}: ${r.included} ${pickedN ? 'ticked ' : ''}label${r.included === 1 ? '' : 's'} in the PDF, in pick-list order.`
+      setNote(`${UPLAT[p]}: ${r.included} ${pickedN ? 'ticked ' : ''}${withDoc ? 'instruction sheet' : 'label'}${r.included === 1 ? '' : 's'}${withDoc ? ' (each with its label)' : ''} in the PDF, in pick-list order.`
         + (miss.length ? ` ${miss.length} NOT included — open ${miss.length === 1 ? 'its' : 'their'} own 🏷 Label: ${miss.slice(0, 12).map((m) => m.order_id).join(', ')}${miss.length > 12 ? '…' : ''}.` : '')
-        + (p === 'stockx' && extraDocs ? ` ${extraDocs} StockX order${extraDocs === 1 ? ' needs' : 's need'} extra documents — print ${extraDocs === 1 ? 'its' : 'their'} full instructions too.` : ''));
+        + (p === 'stockx' && extraDocs && !withDoc ? ` ${extraDocs} StockX order${extraDocs === 1 ? ' needs' : 's need'} extra documents — print ${extraDocs === 1 ? 'its' : 'their'} full instructions too.` : ''));
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message || 'Could not build the labels PDF.'); }
     finally { setBusy(''); }
   }
@@ -2169,6 +2170,12 @@ function FulfillTab({ onSignOut }) {
               {busy === `labels-${p}` ? 'Building…' : `🏷 ${UPLAT[p]} labels PDF (${labelIds[p].length}${pickedN ? ' ticked' : ''})`}
             </button>
           ))}
+          {view === 'to_ship' && plat !== 'alias' && (
+            <button type="button" className="btn sm" disabled={!!busy || !labelIds.stockx.length} onClick={() => labels('stockx', 'instructions')}
+              title="One PDF: for each StockX order, StockX’s “Attach Shipping Label to Shipping Box” sheet (order #, shoe, size, ship-by) and its label, 4 x 6">
+              {busy === 'labels-stockx-doc' ? 'Building…' : `📄 StockX instructions + labels PDF (${labelIds.stockx.length}${pickedN ? ' ticked' : ''})`}
+            </button>
+          )}
           {view === 'to_ship' && withLabel.length > 0 && <>
             <button type="button" className="btn sm ghost" disabled={!!busy || pickedN === withLabel.length} onClick={() => setPicked(new Set(withLabel.map((x) => Number(x.id))))}>Tick all</button>
             {pickedN > 0 && <button type="button" className="btn sm ghost" disabled={!!busy} onClick={() => setPicked(new Set())}>Clear ({pickedN})</button>}

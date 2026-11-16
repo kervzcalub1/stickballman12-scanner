@@ -6,7 +6,7 @@ Every SHEIN screen is one page with one home card ("SHEIN"), sections in `?secti
 | Section | `section=` | What it is | Its own params |
 |---|---|---|---|
 | Today | `today` | Health line + counts with a button each. Reads `api/shein/listings` + `api/shein/live`, nothing new; a failed read says "couldn't read this", never 0 | none |
-| Shoes on SHEIN | `listings` | `SheinListings.jsx` | `tab status q brand blocker shop p product job sz pt adv sizeadv` |
+| Shoes on SHEIN | `listings` | `SheinListings.jsx` | `tab status any q brand blocker shop sort more p product job sz pt adv sizeadv` |
 | Orders | `orders` | `SheinOrders.jsx`: every SHEIN order + its state, tick → Download pick list (`shein-live-fix.md` → 1a). PH + admin only | `odays ostate oq` |
 | Fix problems | `check` | `SheinCheck.jsx` (+ Match, Fix) | `chk fixadv` |
 | Prices | `reprice` | `SheinReprice.jsx` | `priceadv` |
@@ -57,7 +57,8 @@ back end + page; Phase 4 (publish new products) back end AND page; Phase 5 (4sel
 (`/ph/shein-listings`, `/shein-listings`), **and Phase 2's BACK END (add missing sizes to shoes
 already on SHEIN — the first SHEIN write, `partialEdit`)**, back end AND page (dry run → review sheet
 → confirm → job card) — see "Phase 2" below — **and Phase 3 (Needs update → Synced: prices, sizes turned
-off on SHEIN, wrong SKUs; auto re-sync price), back end AND page** — see "Phase 3". Not merged. **Wording (user, 2026-10-27):** statuses read
+off on SHEIN, wrong SKUs; auto re-sync price), back end AND page** — see "Phase 3". All of it is merged and live; the page fixes of
+2026-11-17 are in "The list API", "The status engine (stage 2)" and "The page (stage 3)". **Wording (user, 2026-10-27):** statuses read
 Needs update / Not in Shopify / Not listing (codes `out_of_date` / `shein_only` / `excluded` unchanged);
 buttons "Don't list on SHEIN" / "List on SHEIN again"; "SHEIN has the wrong SKU: A → will change to B";
 "SHEIN size" vs "Custom size".
@@ -78,7 +79,8 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
 | `api/_lib/shein-worker.js` | `sheinTick()` also calls `listingTick()` (own try/catch) |
 | `e2e/shein-listings.spec.js` | Engine fixtures, the log hook, the snapshot job vs a fake SHEIN, webhooks, the endpoints, **the page**, Phase 2 jobs + **the Phase 2 page** (POST preview/run/retry answered in-process via `page.route`) |
 | `src/screens/SheinListings.jsx` | The page shell: connection strip, job banners, status tiles (= `?status=` filters), tabs, the legend; `LISTING_TABLES` for `useLive` |
-| `src/screens/SheinListingsProducts.jsx` | Products tab: filters, product rows → size rows (`VariantTable`), the selection bar (Dry run, Don't list on SHEIN), `useFixes` (custom size / don't list / list again), `useInJob` |
+| `src/screens/SheinListingsProducts.jsx` | Products tab: filters + `FilterChips` + `useSearchBox`, product rows → size rows (`VariantTable`), the selection bar (previews, Don't list on SHEIN), `useFixes` (custom size / don't list / list again / confirm a price / a rejection's preview), `useInJob` |
+| `src/screens/SheinListingsRejected.jsx` | 2026-11-17: the **Rejected** tab (`?tab=rejected`) — `GET ?rejected=1`, one row per shoe + its one button |
 | `src/screens/SheinListingsSizes.jsx` | Sizes tab: `ProbePanel` (Ask SHEIN) + our size → SHEIN size per category, "Add as a custom size", Clear |
 | `src/screens/SheinListingsJobs.jsx` | Jobs tab: running job, history, Resume, one job's items (`?job=`) + CSV |
 | `src/components/SheinProductDrawer.jsx` | Details drawer (`?product=`): **Edit this shoe** (`ShoeEditor`, the same for every shoe — see “One editor for every shoe”), what SHEIN will receive, history (dry runs / sends → Open the sheet), the two dry runs (Add missing sizes · Update prices & sizes), "was …" diffs |
@@ -212,7 +214,7 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
   > 0 · Not checked yet when > 0; small line = sizes) + "Not listing (n)" link → tabs Products · Sizes (n to
   map) · Jobs (n running) → "What do the statuses mean?" legend.
 - **Products:** search (debounced → `?q=`), brand, reason (= `?blocker=`, from `topBlockers`), 25 a
-  page (`?p=`). A row: tick, photo, name, style (copy), vendor, Shopify ↗, SHEIN SPU (copy), roll-up
+  page (`?p=`) — see "The page (stage 3)" for the filters as they are now. A row: tick, photo, name, style (copy), vendor, Shopify ↗, SHEIN SPU (copy), roll-up
   chip, "4 of 6 sizes on SHEIN" + a bar coloured by status, the worst blocker one-liner (or a status
   sentence), Details, "▸ n sizes". Expanded: one row per size — Size · Shopify stock · Price · SHEIN
   size (or what we'd send: standard / custom, new) · Seller SKU · SHEIN stock · price · Status · What
@@ -246,12 +248,12 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
   `?job=` renders the sheet's view inline.
 - **States:** first-load skeleton; never read ("Nothing read yet" + Check all listings); not
   connected / not configured notices; refresh error keeps the old data with an amber strip; per-filter
-  empty text with "Clear search and filters".
+  empty text with "Clear all filters" (stage 3 — whole-shoe sentences).
 - **Live:** `useLive` on `shein_listing_products/variants/jobs/job_items` + `shein_size_map` (5 s
   fallback while a job runs). Times through `PH_DATETIME` + literal "EST".
-- **URL keys:** `tab` (products default | sizes | jobs) · `status` (§4.1 codes, `excluded` = Not listing) ·
-  `q` · `brand` · `blocker` · `p` · `product` · `job` · `sz`. Never: ticks, the custom-size draft, the
-  dry-run sheet.
+- **URL keys:** `tab` (products default | rejected | sizes | jobs | setup) · `status` (§4.1 codes, `excluded` = Not listing) ·
+  `any` · `q` · `brand` · `blocker` · `shop` · `sort` · `more` · `p` · `product` · `job` · `sz`. Never: ticks, the custom-size
+  draft, the dry-run sheet.
 - **Mobile < 768 px:** tiles 2 columns, product rows and size rows become cards, every small table
   becomes label/value cards (`.shl-rtable`), 44 px tap targets, no horizontal scroll at 390 px (e2e).
 
@@ -1223,7 +1225,7 @@ every time; previews and interrupted runs that never went away. The page itself 
 wrong" (action kind `confirm_price` + `price`), `price_confirmed` "Price confirmed by a person" (note), `price_no_market` "No
 market price to compare" (note); `size_already_on_shein` now also on the readiness (label unchanged, new title / fix, params
 `to`, `sheinSku`); `review_rejected` / `shein_prevalid` actions with kinds `fix_photos` · `publish_again` (both drawn today) ·
-`preview_photos` · `preview_model` · `preview_update` · `preview_add_sizes` (new — today's page draws them disabled) and
+`preview_photos` · `preview_model` · `preview_update` · `preview_add_sizes` (live buttons since stage 3) and
 `next` / `ops` / `fixFirst`. New actions: `clear_error`, `price_ok` (above). GET `?product=` → `actions` (the listing log,
 newest 20) and each variant's `price_ok`; job status `expired` (`JOB_WORDS.expired` "Expired"; `listing-jobs?status=expired`
 accepted); a price plan's `noMarket` + the `price_no_market {count}` note.
@@ -1244,6 +1246,39 @@ and closes settled runs; the first daily prune removes old snapshot items.
 **Not built (item 10, report only):** sizes SHEIN has only as a near match (4455 women's "6W" → SHEIN "US6"; 8824 "5Y" →
 "US5") — a person can already map one on the Sizes tab (`listing-maps set {attributeValueId}` accepts `ok_suffix` /
 `check_group`); nothing maps it automatically. See the stage 2 report for the numbers and the risk.
+
+## The page (stage 3 of the page fixes, 2026-11-17)
+**Why (the owner):** (a) "we filter the errors, but we can't remove the filter"; (b) "when we go to all products, the filter
+contains the errors … the filters for error should only be seen on the blockers or the with-errors items"; (c) "user should be
+able to see the rejected products based on SHEIN status … can a rejected product be fixed and resubmitted?". Plus the audit:
+the tiles' meaning changed in stage 1, ticks survived a list change, errors showed as "Couldn't refresh" at the top, stale
+drawers / sheets, the search ate a trailing space, the phone bar took 40 % of the screen. Files: `SheinListings.jsx`,
+`SheinListingsProducts.jsx`, `SheinListingsRejected.jsx` (new), `SheinProductDrawer.jsx`, `SheinDryRunSheet.jsx`,
+`SheinListingsJobs.jsx`, `SheinListingsBits.jsx`, `SheinToday.jsx`, `SheinPhotoPicker.jsx`, `SheinPublishBits.jsx`,
+`src/lib/sheinShoeEdit.js` (line groups), `src/api.js` (`sheinListingsRejected`), styles (`shl-` block at the end of
+`styles.css`). No engine / API / DB change.
+
+| What | How |
+|---|---|
+| Filter chips | Under the controls, "Showing only:" one chip per filter that is on — tile (`Status: Blocked`, `Not listing`), any-size (`Has a synced size`), `Search: “…”`, `Brand: …`, `What’s stopping it: <label>`, `Shopify: …`, a non-default `Sort: …` — ✕ takes off that one; **Clear all** takes off every one, the tile included (`FilterChips`, `[data-active-filters] [data-chip=…]`). More filters (brand) opens and closes (`?more=1`). All in the URL. |
+| Reason filter | Only when the tile is Blocked or Error (`REASON_STATUSES`); options = `summary.topBlockers` `label (n shoes · n sizes)`. A reason still applied elsewhere (an old link) is a chip, so it can be removed. Leaving Blocked / Error for another tile drops it. Sizes → "Show the products" and Today's reason links land on `status=blocked&blocker=…`; Today's size counts open `any=1`. |
+| Tiles | Number = `byStatus[c].products` (= the list total it opens); small line = `inStock` sizes; when `anySize > products` a link under the tile "+n more have a synced size" → `status=c&any=1`. Tooltip says it counts shoes by their own (worst in-stock) status. Same tile again = All; the any link's tile is not "pressed" (the link is). |
+| Any-size mode | List head "Shoes with at least one synced size — the chip on each row is the shoe’s own status…"; each row a second chip `n synced` (`[data-any-match]`). |
+| Empty states | Whole-shoe sentences (`EMPTY`); a tile with no shoes but `anySize > 0` says "But n shoes have a … size — their own status is worse" + **Show those n** (→ any). Filters on → "No shoes match …" + Clear all filters. |
+| Rejected | A **tab** (`?tab=rejected`, count = `summary.rejected`, red) + a line under the tiles. Not a tile: a tile is a status that adds up to All, and a rejected shoe can be Error, Blocked or Synced through other sizes. Rows: photo, title, style, brand, Shopify ↗, Live on SHEIN / Never accepted, "<what> rejected", when (EST) + send #, sizes, SHEIN's words, stock, `next.say`, other rejections; ONE primary button = `next` (`publish_again` → POST publish_again then the publish preview; PH sees it disabled + "Only an admin … can press Publish again"; `preview_*` → `preview {productIds, ops}` exactly as elsewhere, `preview_add_sizes` without ops), **Fix photos** when `fixFirst = photos`, **Details**. Lead: "sent from here and refused … Yes, each one can be fixed and sent again"; the limit: "sent by another tool … SHEIN’s API doesn’t give us its list". Search + brand = the list's `q` / `brand`. |
+| Selection | The bar counts and acts on `pickedRows` = ticked rows on screen not in a running job. Any change of page / tile / any / q / brand / reason / Shopify / sort drops the ticks: "n ticks cleared — the list changed." (once, 6 s). Select all skips shoes in a running job (their box is disabled). **Don't list on SHEIN** asks first (FormModal naming the count). |
+| Sort | `?sort=` worst (default, not in the URL) · title · updated · coverage, a select in the list head; a chip when not default. |
+| Shopify filter | Always visible (not behind More filters). |
+| Page | The answer's `page` is used for the range + pager and written back to `?p=` (a stale `?p=9` of 6 shoes → page 1, `p` dropped; not loaded twice). |
+| Answers | `act(action, extra, done, where)`; the note `{where, kind, text}` (context `ActNoteContext`) renders by `<ActNote where>`: `top` (strip: Refresh, Resume, Stop), `adv` (webhooks, automatic price), `bar` (+ below the list once the bar is gone), `bulk`, `drawer` (above its footer), `row:<id>` (size rows: Confirm price, custom size, a row's preview), `rej:<id>`, `model`, `sizes`, `jobs`. Errors stay until the next action; successes go after 6 s. "Couldn’t refresh: …" is for failed loads only. |
+| Stale views | `<SheinProductDrawer key={product}>`, `<DryRunView key={jobId}>` (sheet + Jobs); a product row re-reads its sizes every time it opens. Drawer / sheet lock the page scroll and restore it on close (`useBodyLock`). |
+| Search | `useSearchBox`: the box follows the URL only when the URL changed on its own — "air " keeps its space. Placeholder "Search name, style code, SKU or SHEIN code…". |
+| Stage-2 renders | Product row: `idleBlockers` greyed "label (out of stock)" (`[data-idle]`), never the red one-liner on a Synced row; `healthLine` for a Not-on-SHEIN shoe with nothing in stock says so (was "0 in-stock sizes aren’t on SHEIN"). Size row: `price_outlier` → **Confirm $X** (`confirm_price` → `price_ok {variantKey, price}`, PH ok) and the `price_confirmed` note; `price_no_market` a quiet one-line note; `shein_size_blank` / `size_already_on_shein` → Match sizes (opens the drawer AT Fix SHEIN sizes, `focus='match'`). Rejection kinds `preview_photos/model/update/add_sizes` are live buttons (`REJECTION_PREVIEW_OPS`), `fix_photos` opens the drawer at its photos, `publish_again` in the drawer = record + preview. Drawer: the live shoe's editor groups `shein_size_blank`, `size_already_on_shein` under Sizes and `price_outlier`, `price_confirmed` under Prices (`sheinShoeEdit.js`), each line names its size(s); **Errors & what people changed**: Clear this error (admin / Connect integrations; asks a note → `clear_error {variantKeys, note}`; PH disabled with who) + the newest 5 `actions`; "Add missing sizes (n)" counts in-stock, not-blocked sizes. Jobs / sheet: **Expired** chip + "Not confirmed in 24 h"; an expired preview says so with **Preview again**. Find clean photos from memory: "Checked <when> — nothing new since". `diffText` words for `shein_special`, `size`, `sku`, `barcode`. |
+| Phone (≤ 768 px) | The selection bar is ONE line (count · the main preview · More ▾), floats 80 px up so the advisor / keypad buttons never cover it; the rest behind More. The section lead is hidden, notices / banners shrink; tiles start ≈ 615–655 px down on the local copy (not connected + an interrupted banner; less on prod). Chips, Select all, the tile links and sort are 44 px targets; drawer footer clear of both floating buttons (`pointer: coarse` for the keypad). |
+
+e2e: `e2e/shein-listings-filters.spec.js` (9 tests, its own shoes "zqflt" 7761–7766; every POST answered by `page.route`;
+skips on a database with real SHEIN rows). Changed for the new words / phone bar: `shein-listings.spec.js` ("1 shoe", More ▾
+before a hidden bar button at 390 px ×2) and `shein-page.spec.js` (Today's blocked row has reason links — click "See why").
 
 ## Security gates (security review + Phase 4 re-review, 2026-10-27)
 - **Writes:** every SHEIN write (run, retry, probe, webhooks, auto_price, publish_again, send_again, box sizes,

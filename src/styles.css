@@ -6248,6 +6248,21 @@ button.ff-where.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .sx-shoe b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sx-nums { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .sx-call { font-size: 13px; }
+.sx-teach { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.sx-x { background: none; border: 0; color: inherit; cursor: pointer; padding: 0 0 0 6px; font-size: 13px; line-height: 1; }
+.sx-daily-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.sx-daily-h { margin: 0; font-size: 16px; }
+.sx-daily-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sx-daily-status { margin: 8px 0 4px; }
+.sx-daily-form { margin: 8px 0; }
+.sx-daily-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin: 10px 0; }
+.sx-tile { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); text-align: left; font-size: 13px; }
+.sx-tile > b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.sx-tile.act { cursor: pointer; }
+.sx-tile.act:hover { border-color: var(--primary); }
+.sx-tile.warn > b { color: #d7a35c; }
+.sx-days td, .sx-days th { white-space: nowrap; }
 @media (max-width: 768px) {
   .sx-row { grid-template-columns: auto minmax(0, 1fr) auto; }
   .sx-nums, .sx-call { grid-column: 2 / 4; }

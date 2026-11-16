@@ -36,6 +36,8 @@ export default async function handler(req, res) {
       offset: Math.max(0, Math.min(500, Math.round(Number(b.offset) || 0))),
       minProfit: Number.isFinite(Number(b.minProfit)) ? Math.max(0, Math.min(500, Number(b.minProfit))) : 5,
       allowNoCost: b.allowNoCost === true,
+      // The no-cost guard: a cut up to this % goes without a cost on file (0 = none does).
+      maxCutNoCost: Number.isFinite(Number(b.maxCutNoCost)) ? Math.max(0, Math.min(90, Math.round(Number(b.maxCutNoCost)))) : 0,
     };
     const rows = await listStockxListings(ids);
     const byId = new Map(rows.map((r) => [String(r.listing_id), r]));
@@ -49,7 +51,7 @@ export default async function handler(req, res) {
       if (p.state !== 'change' && p.state !== 'floored') { skipped.push({ listingId: id, state: p.state, why: p.why }); continue; }
       edits.push({ listing_id: id, product_name: r.product_name, style_id: r.style_id, size: r.size, old_amount: r.amount,
         new_amount: p.price, standard_lowest: r.standard_lowest, direct_lowest: r.direct_lowest,
-        rule: `${ruleLabel(rule, opts.offset)}${p.state === 'floored' ? ` (floor $${p.floor})` : ''} · min profit $${opts.minProfit}` });
+        rule: `${ruleLabel(rule, opts.offset)}${p.state === 'floored' ? ` (floor $${p.floor})` : ''} · min profit $${opts.minProfit}${p.noCost ? ' · no cost' : ''}` });
     }
     const queued = await queueStockxEdits(edits, by);
     return send(res, 200, { ok: true, queued: queued.length, skipped });

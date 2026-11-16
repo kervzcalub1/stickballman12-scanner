@@ -238,6 +238,12 @@ import('./api/_lib/stockx-reprice-worker.js')
   .then((m) => m.startStockxRepriceWorker())
   .catch((e) => console.error('[stockx-reprice] failed to start:', e.message));
 
+// StockX DAILY price update — once a day: read the market, save the day's picture and (when an
+// admin turned it on) lower the asks by the rules. Production only (STOCKX_DAILY=on/off).
+import('./api/_lib/stockx-daily-worker.js')
+  .then((m) => m.startStockxDailyWorker())
+  .catch((e) => console.error('[stockx-daily] failed to start:', e.message));
+
 // Gift card files — read on the server, so closing the page never stops it (docs/context/buy-cart.md).
 import('./api/_lib/gc-read-worker.js')
   .then((m) => m.startCardReadWorker())

@@ -13917,24 +13917,91 @@ export async function listStockxListings(listingIds = null) {
     WITH ic AS (
       SELECT upper(btrim(sku)) AS sku, regexp_replace(coalesce(size, ''), '[^0-9.]', '', 'g') AS sz, round(avg(cost), 2) AS cost
         FROM items WHERE cost > 0 AND coalesce(btrim(sku), '') <> '' GROUP BY 1, 2
+    ), isty AS (
+      -- No pair of THAT size has a cost: the style's other sizes cost the same or close to it.
+      SELECT upper(btrim(sku)) AS sku, round(avg(cost), 2) AS cost
+        FROM items WHERE cost > 0 AND coalesce(btrim(sku), '') <> '' GROUP BY 1
     )
     SELECT s.*,
            (k.listing_id IS NOT NULL) AS locked, k.note AS lock_note, k.locked_by, k.locked_at,
            (pl.id IS NOT NULL) AS presell,
-           coalesce(ps.unit_cost, ic.cost) AS cost,
-           CASE WHEN ps.unit_cost IS NOT NULL THEN 'presell' WHEN ic.cost IS NOT NULL THEN 'stock' END AS cost_source,
+           coalesce(ps.unit_cost, ic.cost, isty.cost) AS cost,
+           CASE WHEN ps.unit_cost IS NOT NULL THEN 'presell' WHEN ic.cost IS NOT NULL THEN 'stock' WHEN isty.cost IS NOT NULL THEN 'style' END AS cost_source,
+           t.min_price, coalesce(t.big_cut_ok, false) AS big_cut_ok, t.note AS teach_note, t.taught_by, t.taught_at,
            le.status AS last_status, le.new_amount AS last_amount, le.old_amount AS last_old, le.requested_at AS last_at, le.error AS last_error
       FROM stockx_listings s
       LEFT JOIN stockx_price_locks k ON k.listing_id = s.listing_id
       LEFT JOIN presell_listings pl ON pl.platform = 'stockx' AND pl.external_id = s.listing_id AND pl.status IN ('live', 'pending', 'off')
       LEFT JOIN presell_stock ps ON ps.id = pl.stock_id
       LEFT JOIN ic ON ic.sku = upper(btrim(s.style_id)) AND ic.sz = regexp_replace(coalesce(s.size, ''), '[^0-9.]', '', 'g')
+      LEFT JOIN isty ON isty.sku = upper(btrim(s.style_id))
+      LEFT JOIN stockx_teach t ON t.variant_id = s.variant_id
       LEFT JOIN LATERAL (
         SELECT status, new_amount, old_amount, requested_at, error FROM stockx_price_edits e
          WHERE e.listing_id = s.listing_id ORDER BY e.id DESC LIMIT 1
       ) le ON true
      WHERE (${ids}::text[] IS NULL AND s.ended_at IS NULL) OR s.listing_id = ANY(${ids || []}::text[])
      ORDER BY s.product_name, s.size, s.listing_id`;
+}
+
+// ---- StockX daily price update (2026-11-16, docs/context/stockx-reprice.md) ---------------
+// What people TEACH the daily run, kept per SIZE (variant) — a StockX listing id changes every
+// time the listing is re-made, a size doesn't. min_price = never ask less than this;
+// big_cut_ok = a big cut with no cost on file was looked at and may go.
+export async function setStockxTeach(variantIds, { minPrice, bigCutOk, note = null, by = null } = {}) {
+  const ids = [...new Set((variantIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return 0;
+  const setMin = minPrice !== undefined;
+  const setOk = bigCutOk !== undefined;
+  return (await db()`
+    INSERT INTO stockx_teach (variant_id, min_price, big_cut_ok, note, taught_by)
+    SELECT x, ${setMin ? minPrice : null}::numeric, ${setOk ? !!bigCutOk : false}::boolean, ${note}::text, ${by}::text FROM unnest(${ids}::text[]) AS x
+    ON CONFLICT (variant_id) DO UPDATE SET
+      min_price = CASE WHEN ${setMin}::boolean THEN EXCLUDED.min_price ELSE stockx_teach.min_price END,
+      big_cut_ok = CASE WHEN ${setOk}::boolean THEN EXCLUDED.big_cut_ok ELSE stockx_teach.big_cut_ok END,
+      note = coalesce(EXCLUDED.note, stockx_teach.note), taught_by = EXCLUDED.taught_by, taught_at = now()
+    RETURNING variant_id`).length;
+}
+export async function clearStockxTeach(variantIds) {
+  const ids = [...new Set((variantIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return 0;
+  return (await db()`DELETE FROM stockx_teach WHERE variant_id = ANY(${ids}::text[]) RETURNING variant_id`).length;
+}
+
+// One row per EST day: the picture at that day's market read (`stats`, src/lib/stockxReprice.js
+// dailyStats) and what the automatic run did with it (`auto`).
+export async function saveStockxDaily(day, { stats, auto } = {}) {
+  const s = stats === undefined ? null : JSON.stringify(stats);
+  const a = auto === undefined ? null : JSON.stringify(auto);
+  await db()`
+    INSERT INTO stockx_daily (day, stats, auto, pulled_at)
+    VALUES (${day}::date, ${s}::jsonb, ${a}::jsonb, CASE WHEN ${s}::text IS NULL THEN NULL ELSE now() END)
+    ON CONFLICT (day) DO UPDATE SET
+      stats = coalesce(EXCLUDED.stats, stockx_daily.stats),
+      pulled_at = coalesce(EXCLUDED.pulled_at, stockx_daily.pulled_at),
+      auto = coalesce(EXCLUDED.auto, stockx_daily.auto), updated_at = now()`;
+}
+export async function getStockxDaily(day) {
+  return (await db()`SELECT day::text AS day, stats, auto, pulled_at FROM stockx_daily WHERE day = ${day}::date`)[0] || null;
+}
+// The last days, newest first, each with what was really lowered that day (the log) and how
+// many listings left StockX (sold or taken down).
+export async function listStockxDaily(limit = 14) {
+  return await db()`
+    SELECT d.day::text AS day, d.stats, d.auto, d.pulled_at,
+           coalesce(e.lowered, 0)::int AS lowered, coalesce(e.cut, 0)::float AS cut, coalesce(e.failed, 0)::int AS failed,
+           coalesce(g.gone, 0)::int AS gone
+      FROM stockx_daily d
+      LEFT JOIN LATERAL (
+        SELECT count(*) FILTER (WHERE x.status = 'done') AS lowered,
+               sum(x.old_amount - x.new_amount) FILTER (WHERE x.status = 'done') AS cut,
+               count(*) FILTER (WHERE x.status = 'failed') AS failed
+          FROM stockx_price_edits x WHERE (x.requested_at AT TIME ZONE 'America/New_York')::date = d.day
+      ) e ON true
+      LEFT JOIN LATERAL (
+        SELECT count(*) AS gone FROM stockx_listings l WHERE (l.ended_at AT TIME ZONE 'America/New_York')::date = d.day
+      ) g ON true
+     ORDER BY d.day DESC LIMIT ${limit}`;
 }
 
 export async function setStockxLocks(listingIds, { note = null, by = null } = {}) {

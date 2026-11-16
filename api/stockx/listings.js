@@ -9,6 +9,7 @@
 import { send, applySecurity, rateLimit, requireRole, getJsonBody } from '../_lib/util.js';
 import { dbConfigured, setSetting, getSetting, saveStockxListings, setStockxMarket, stockxLiveVariants, listStockxListings, stockxQueueSummary } from '../_lib/db.js';
 import { stockxConfigured, stockxActiveListingsPage, stockxMarketByProgramme } from '../_lib/stockx.js';
+import { recordStockxDay } from '../_lib/stockx-daily.js';
 
 export const PULL_KEY = 'stockx_pull';
 const STALE_MS = 30 * 60 * 1000;   // a "running" pull older than this died with the process
@@ -42,9 +43,11 @@ export async function runStockxPull(by) {
     };
     await Promise.all([lane(), lane(), lane()]);
     await put({ state: 'done', finishedAt: new Date().toISOString(), listings: rows.length, sizes: variants.length, ended, marketFailed: failed, lastError });
+    return { ok: true, listings: rows.length, sizes: variants.length, ended, marketFailed: failed };
   } catch (e) {
     console.error('[stockx/pull]', e.message);
     await put({ state: 'failed', finishedAt: new Date().toISOString(), error: e.message });
+    return { ok: false, error: e.message };
   }
 }
 
@@ -69,6 +72,7 @@ export default async function handler(req, res) {
   if (!stockxConfigured()) return send(res, 503, { ok: false, error: 'StockX isn’t set up on this server.' });
   if (last?.state === 'running' && Date.now() - Date.parse(last.startedAt) < STALE_MS)
     return send(res, 409, { ok: false, error: `${last.by || 'Someone'} is pulling from StockX right now.` });
-  runStockxPull(user.name || user.username || "");
+  // A pull by hand also refreshes today's picture (the daily record) — it changes no price.
+  runStockxPull(user.name || user.username || "").then((r) => (r.ok ? recordStockxDay() : null)).catch((e) => console.error('[stockx/pull] day record', e.message));
   return send(res, 200, { ok: true, started: true });
 }

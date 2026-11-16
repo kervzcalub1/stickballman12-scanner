@@ -6,11 +6,14 @@ import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { loadEnv, loginAs } from './helpers/auth.js';
 import { signToken } from '../api/_lib/util.js';
-import { planListing, floorPrice, rulePrice, gapPct } from '../src/lib/stockxReprice.js';
+import { planListing, floorPrice, rulePrice, gapPct, dailyStats } from '../src/lib/stockxReprice.js';
+import { cleanAuto, autoEdits } from '../api/_lib/stockx-daily.js';
+import { dailyDue } from '../api/_lib/stockx-daily-worker.js';
 
 loadEnv();
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const q = (t, v) => pool.query(t, v).then((r) => r.rows);
+const ADMIN = { Authorization: `Bearer ${signToken({ uid: 'sx-admin', username: 'sx_admin', name: 'SX Admin', role: 'admin' })}` };
 const PH = { Authorization: `Bearer ${signToken({ uid: 'sx-ph', username: 'sx_ph', name: 'SX PH', role: 'ph_team' })}` };
 const stamp = `${Date.now()}`.slice(-7);
 const ID = (n) => `e2e-sx-${stamp}-${n}`;
@@ -42,6 +45,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await q(`DELETE FROM stockx_price_edits WHERE listing_id LIKE $1`, [`e2e-sx-${stamp}-%`]);
   await q(`DELETE FROM stockx_price_locks WHERE listing_id LIKE $1`, [`e2e-sx-${stamp}-%`]);
+  await q(`DELETE FROM stockx_teach WHERE variant_id LIKE $1`, [`e2e-sx-${stamp}-%`]);
   await q(`DELETE FROM stockx_listings WHERE listing_id LIKE $1`, [`e2e-sx-${stamp}-%`]);
   await q(`DELETE FROM items WHERE sku = $1`, [SKU]);
   await pool.end();
@@ -124,4 +128,101 @@ test('the page: filters to what would drop, picks them, queues the reprice', asy
   await expect(page.getByText(/Sending to StockX: 2 waiting/)).toBeVisible();
   await page.getByRole('button', { name: 'Stop the rest' }).click();
   await expect(page.getByText(/2 queued changes stopped/)).toBeVisible();
+});
+
+// ---- The daily, automatic update (2026-11-16) ------------------------------------------------
+// ~87 % of the real listings have no cost on file, so the floor could not be checked and the
+// tool refused them. With no cost the guard is the size of the cut; a bigger cut waits for a
+// person, whose answer is remembered per size.
+test('no cost: a small cut follows the market, a big one waits — until a person teaches it (pure)', () => {
+  const row = { amount: 60, standard_lowest: 48, highest_bid: 40, cost: null };
+  expect(planListing(row, { maxCutNoCost: 30 })).toMatchObject({ state: 'change', price: 48, noCost: true });      // 20 % off
+  const big = { ...row, amount: 170 };
+  expect(planListing(big, { maxCutNoCost: 30 })).toMatchObject({ state: 'no_cost', target: 48 });                  // 72 % off
+  expect(planListing(big, { maxCutNoCost: 30 }).why).toMatch(/cut is 72 %/);
+  expect(planListing({ ...big, big_cut_ok: true }, { maxCutNoCost: 30 })).toMatchObject({ state: 'change', price: 48 });
+  // "Never ask less than $100" is a floor of its own — and the higher of it and the cost floor wins.
+  expect(planListing({ ...big, min_price: 100 }, { maxCutNoCost: 30 })).toMatchObject({ state: 'floored', price: 100 });
+  expect(planListing({ ...big, cost: 30, min_price: 100 })).toMatchObject({ state: 'floored', price: 100 });
+  expect(planListing({ ...big, cost: 30, min_price: 20 })).toMatchObject({ state: 'change', price: 48 });
+  expect(planListing({ ...big, min_price: 200 }).state).toBe('below_floor');
+  // already under the market with no cost: kept, not "to look at"
+  expect(planListing({ ...row, amount: 45 }, { maxCutNoCost: 30 }).state).toBe('kept');
+
+  const st = dailyStats([row, big, { ...big, cost: 30 }, { ...big, locked: true }, { ...row, amount: 45 }, { ...big, ended_at: 'x' }]);
+  expect(st).toMatchObject({ active: 5, over: 4, ready: 2, readyNoCost: 1, review: 1, reviewUsd: 122, locked: 1, kept: 1 });
+  expect(st.bands).toMatchObject({ b25: 1, b50p: 3 });
+
+  // The automatic run queues exactly what the rules lower — never one already on its way.
+  const s = cleanAuto({ on: true });
+  expect(s).toMatchObject({ on: true, rule: 'standard', minProfit: 5, maxCutNoCost: 30, hour: 9 });
+  expect(cleanAuto({ on: 'yes', hour: 99, maxCutNoCost: -4, rule: 'nope' })).toMatchObject({ on: false, hour: 23, maxCutNoCost: 0, rule: 'standard' });
+  const edits = autoEdits([{ ...row, listing_id: 'a' }, { ...big, listing_id: 'b' }, { ...big, cost: 30, listing_id: 'c' }, { ...big, cost: 30, listing_id: 'd', last_status: 'queued' }], s);
+  expect(edits.map((e) => [e.listing_id, e.new_amount])).toEqual([['a', 48], ['c', 48]]);
+  expect(edits[0].rule).toMatch(/^Daily auto · Match the Standard lowest ask · no cost$/);
+
+  // Once the hour has come and today has no run; a failed run is tried again after 30 min, 3 times.
+  const at = (h) => new Date(`2026-11-17T${String(h + 5).padStart(2, '0')}:10:00Z`);   // EST = UTC−5 in November
+  expect(dailyDue(s, null, at(8))).toBe(false);
+  expect(dailyDue(s, null, at(9))).toBe(true);
+  expect(dailyDue(s, { auto: { queued: 3 } }, at(12))).toBe(false);
+  expect(dailyDue(s, { auto: { failed: 'x', tries: 1, at: at(9).toISOString() } }, at(9))).toBe(false);
+  expect(dailyDue(s, { auto: { failed: 'x', tries: 1, at: at(9).toISOString() } }, at(10))).toBe(true);
+  expect(dailyDue(s, { auto: { failed: 'x', tries: 3, at: at(9).toISOString() } }, at(12))).toBe(false);
+});
+
+test('teaching a size, and who may touch the automatic switch', async ({ request }) => {
+  const reprice = (data) => request.post('/api/stockx/reprice', { headers: PH, data }).then((r) => r.json());
+  const teach = (t, headers = PH) => request.post('/api/stockx/daily', { headers, data: { teach: { variantIds: [ID(5)], ...t } } });
+  // #5: $150 vs Standard $50, no cost → a 67 % cut waits.
+  const held = await reprice({ listingIds: [ID(5)], maxCutNoCost: 30 });
+  expect(held.queued).toBe(0);
+  expect(held.skipped[0]).toMatchObject({ state: 'no_cost' });
+  // "Never under $90" → it goes, held at $90.
+  expect((await (await teach({ minPrice: 90, note: 'paid 70' })).json()).count).toBe(1);
+  const row = (await (await request.get('/api/stockx/listings', { headers: PH })).json()).rows.find((r) => r.listing_id === ID(5));
+  expect(row).toMatchObject({ min_price: '90.00', big_cut_ok: false, teach_note: 'paid 70', taught_by: 'SX PH' });
+  expect((await reprice({ listingIds: [ID(5)], maxCutNoCost: 30 })).queued).toBe(1);
+  expect((await q(`SELECT new_amount FROM stockx_price_edits WHERE listing_id = $1 ORDER BY id DESC LIMIT 1`, [ID(5)]))[0].new_amount).toBe('90.00');
+  await q(`UPDATE stockx_price_edits SET status = 'cancelled' WHERE listing_id = $1 AND status = 'queued'`, [ID(5)]);
+  // Forget it → it waits again; "this big cut is fine" → it goes to the market price.
+  expect((await (await teach({ clear: true })).json()).count).toBe(1);
+  expect((await reprice({ listingIds: [ID(5)], maxCutNoCost: 30 })).queued).toBe(0);
+  await teach({ bigCutOk: true });
+  expect((await reprice({ listingIds: [ID(5)], maxCutNoCost: 30 })).queued).toBe(1);
+  expect((await q(`SELECT new_amount, rule FROM stockx_price_edits WHERE listing_id = $1 ORDER BY id DESC LIMIT 1`, [ID(5)]))[0]).toMatchObject({ new_amount: '50.00' });
+  await q(`UPDATE stockx_price_edits SET status = 'cancelled' WHERE listing_id = $1 AND status = 'queued'`, [ID(5)]);
+  await teach({ clear: true });
+  expect((await teach({ minPrice: 'abc' })).status()).toBe(400);
+
+  // The switch and the rules are an admin's; nothing here turns it ON, and a dev server never runs it.
+  const before = (await (await request.get('/api/stockx/daily', { headers: PH })).json());
+  expect(before.settings).toMatchObject({ rule: 'standard' });
+  expect(before.enabledHere).toBe(false);
+  expect((await request.post('/api/stockx/daily', { headers: PH, data: { settings: { on: true } } })).status()).toBe(403);
+  expect((await request.post('/api/stockx/daily', { headers: PH, data: { run: true } })).status()).toBe(403);
+  const set = await (await request.post('/api/stockx/daily', { headers: ADMIN, data: { settings: { maxCutNoCost: 25 } } })).json();
+  expect(set.settings).toMatchObject({ maxCutNoCost: 25, on: before.settings.on, changedBy: 'SX Admin' });
+  await request.post('/api/stockx/daily', { headers: ADMIN, data: { settings: { maxCutNoCost: before.settings.maxCutNoCost } } });
+  expect([409, 503]).toContain((await request.post('/api/stockx/daily', { headers: ADMIN, data: { run: true } })).status());
+});
+
+test('the page: the daily card, the ones to look at, and teaching one from its row', async ({ page }) => {
+  await loginAs(page, 'ph_team');
+  await page.goto('/ph/stockx-listings');
+  await expect(page.locator('.sx-daily')).toContainText('Daily price update');
+  await expect(page.locator('.sx-daily')).toContainText(/AUTOMATIC — (ON|OFF)/);
+  await expect(page.locator('.sx-daily').getByRole('button', { name: /Turn it o/ })).toHaveCount(0);   // PH: no switch
+  await page.getByLabel('Search StockX listings').fill(NAME);
+  await page.locator('.sx-tile.warn').click();                                  // "to look at"
+  await expect(page.locator('.sx-row')).toHaveCount(1);
+  await expect(page.locator('.sx-row')).toContainText('the cut is 67 %');
+  await page.getByRole('button', { name: /^OK to lower .* to \$50$/ }).click();
+  await expect(page.locator('.sx-row')).toHaveCount(0);                         // no longer waiting
+  await page.getByLabel('Which listings').selectOption('');
+  const row = page.locator('.sx-row', { hasText: `${SKU}-NC` });
+  await expect(row).toContainText('→ $50');
+  await expect(row).toContainText('Big cut OK’d');
+  await row.getByRole('button', { name: /^Forget what was taught/ }).click();
+  await expect(page.locator('.sx-row', { hasText: `${SKU}-NC` })).toHaveCount(0);   // waits again
 });

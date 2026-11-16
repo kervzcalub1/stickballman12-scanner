@@ -19,7 +19,9 @@ const CameraScanner = lazy(() => import('./CameraScanner.jsx'));
 // corrected and the qty nudged (or the line removed at ×0). Size commits on blur/Enter;
 // qty posts on each ± tap. The parent reloads the PO after each save. `attribution` is an
 // optional trailing note (e.g. "entered by …") shown under the product name.
-export function PoLineRow({ line, disabled, onSave, attribution, boxesOrder = false }) {
+// `picked` / `onPick` (optional): a tick box in front of the name, for removing several lines
+// at once with `PoBulkRemove`.
+export function PoLineRow({ line, disabled, onSave, attribution, boxesOrder = false, picked = false, onPick = null }) {
   const [size, setSize] = useState(String(line.size ?? ''));
   useEffect(() => { setSize(String(line.size ?? '')); }, [line.size]);
   const commitSize = () => {
@@ -56,8 +58,13 @@ export function PoLineRow({ line, disabled, onSave, attribution, boxesOrder = fa
     onSave({ [field]: n });
   };
   return (
-    <li className={`po-line-edit${boxesOrder ? ' boxes' : ''}`}>
+    <li className={`po-line-edit${boxesOrder ? ' boxes' : ''}${picked ? ' picked' : ''}`}>
       <div className="po-line-head">
+        {onPick && (
+          <input type="checkbox" className="po-line-pick" checked={picked} disabled={disabled}
+            onChange={(e) => onPick(line, e.target.checked)}
+            aria-label={`Pick ${line.sku} size ${line.size} to remove`} />
+        )}
         <span className="po-line-name">{line.name || line.sku}</span>
         <span className="po-line-meta">{line.sku}</span>
       </div>
@@ -135,7 +142,7 @@ export function PoLineHeader({ boxesOrder = false }) {
 // size gets a "Shelf price ea — all sizes" row above its sizes (`po/line-price`, one
 // request, the same gate as one row's price). Each size keeps its own price field, so one
 // size can still differ. Used by the supplier's order card and staff's PO detail.
-export function PoOrderLineRows({ poId, lines, boxesOrder = false, isBusy, onSave, attributionOf, onApplied, onSignOut }) {
+export function PoOrderLineRows({ poId, lines, boxesOrder = false, isBusy, onSave, attributionOf, onApplied, onSignOut, picked = null, onPick = null }) {
   const groups = [];
   const byKey = new Map();
   for (const l of lines) {
@@ -150,9 +157,47 @@ export function PoOrderLineRows({ poId, lines, boxesOrder = false, isBusy, onSav
       : null,
     ...g.lines.map((l) => (
       <PoLineRow key={l.id} line={l} disabled={isBusy(l)} boxesOrder={boxesOrder}
-        onSave={(patch) => onSave(l, patch)} attribution={attributionOf(l)} />
+        onSave={(patch) => onSave(l, patch)} attribution={attributionOf(l)}
+        picked={!!picked && picked.has(Number(l.id))} onPick={onPick} />
     )),
   ]).filter(Boolean);
+}
+
+// Remove SEVERAL lines of one list at once (asked 2026-11-17: a supplier who had to split an
+// order was pressing × once per line). The screen keeps ONE set of ticked line ids — line ids
+// are unique across the order's lists — and each editable list shows this bar over its own
+// lines: tick all, clear, and "Remove N". One request, `po/lines-remove`: every line passes
+// the same gate a single × does, and nothing goes unless all of them may.
+export function PoBulkRemove({ lines, picked, setPicked, disabled = false, onRemoved, onSignOut }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const ids = lines.map((l) => Number(l.id));
+  const mine = lines.filter((l) => picked.has(Number(l.id)));
+  const units = mine.reduce((n, l) => n + (Number(l.qty_expected) || 0), 0);
+  const all = lines.length > 0 && mine.length === lines.length;
+  const setMany = (on) => setPicked((cur) => { const n = new Set(cur); for (const id of ids) { if (on) n.add(id); else n.delete(id); } return n; });
+  const remove = async () => {
+    if (!mine.length || busy) return;
+    if (!window.confirm(`Remove ${mine.length} item${mine.length === 1 ? '' : 's'} (${units} unit${units === 1 ? '' : 's'}) from this manifest? This can’t be undone.`)) return;
+    setBusy(true); setErr('');
+    try {
+      await api.poLinesRemove(mine.map((l) => Number(l.id)));
+      setMany(false);
+      onRemoved();
+    } catch (e) { if (e.unauthorized) return onSignOut(); setErr(e.message); }
+    finally { setBusy(false); }
+    return undefined;
+  };
+  if (lines.length < 2) return null;
+  return (
+    <div className="po-bulk-remove" data-testid="po-bulk-remove">
+      <label className="po-bulk-all"><input type="checkbox" checked={all} disabled={disabled || busy} onChange={(e) => setMany(e.target.checked)} /> Select all {lines.length}</label>
+      {mine.length > 0 && <button type="button" className="btn sm ghost" disabled={busy} onClick={() => setMany(false)}>Clear ({mine.length})</button>}
+      <button type="button" className="btn sm ghost danger" disabled={disabled || busy || !mine.length} onClick={remove}>
+        {busy ? 'Removing…' : `✕ Remove ${mine.length || ''} item${mine.length === 1 ? '' : 's'}`.replace('  ', ' ')}</button>
+      {err && <span className="error sm">{err}</span>}
+    </div>
+  );
 }
 
 // One SKU's price state (one price / mixed / n unpriced) and the box that sets it on every

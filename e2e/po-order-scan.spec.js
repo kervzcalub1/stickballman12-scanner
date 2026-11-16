@@ -393,3 +393,62 @@ test('the supplier portal: "Shelf price ea — all sizes" per SKU on the order m
   expect(await costs(po.id)).toMatchObject({ 'DZ5485-612 9': null, 'DZ5485-612 10': null, 'DZ5485-612 10.5': null });
   expect(await noSideScroll(page)).toBeLessThanOrEqual(0);
 });
+
+// ---- Remove several lines at once (2026-11-17) ------------------------------------------------
+// A supplier who had to split an order was pressing × once per line. One request removes the
+// ticked lines — through the same gate as one ×, and nothing goes unless every line may.
+const lineIds = async (poId) => (await q('SELECT id FROM po_lines WHERE po_id = $1 ORDER BY id', [poId])).map((r) => Number(r.id));
+const removeMany = (request, tok, ids) => request.post('/api/po/lines-remove', { headers: hdr(tok), data: { lineIds: ids } });
+
+test('lines-remove: many at once, all or nothing, the same gate as one ×', async ({ request }) => {
+  const { po } = await order();
+  for (const s of ['8', '9', '10', '11']) await addLine(po.id, 'DZ5485-612', s);
+  const ids = await lineIds(po.id);
+  expect((await removeMany(request, WH, ids)).status()).toBe(403);                 // warehouse: not their page
+  expect((await removeMany(request, otherTok, ids)).status()).toBe(403);           // someone else's order
+  expect((await removeMany(request, supTok, [])).status()).toBe(400);
+  // one line of ANOTHER order in the selection → nothing is removed
+  const two = await order();
+  await addLine(two.po.id, 'FQ1111-400', '8');
+  const mixed = await removeMany(request, supTok, [...ids.slice(0, 2), ...(await lineIds(two.po.id))]);
+  expect(mixed.status()).toBe(400);
+  expect((await lineIds(po.id)).length).toBe(4);
+  // a line that is already gone → refused whole, the rest stay
+  expect((await removeMany(request, supTok, [ids[0], 999999999])).status()).toBe(404);
+  expect((await lineIds(po.id)).length).toBe(4);
+  // the supplier removes three of the four in one go
+  const ok = await removeMany(request, supTok, ids.slice(0, 3));
+  expect(await ok.json()).toMatchObject({ ok: true, removed: 3, units: 3 });
+  expect(await lines(po.id)).toMatchObject([{ sku: 'DZ5485-612', size: '11' }]);
+  // once the order is reconciled the list is shut — for the bulk removal as for one line
+  await q(`UPDATE purchase_orders SET status = 'reconciled' WHERE id = $1`, [po.id]);
+  const shut = await removeMany(request, PH, await lineIds(po.id));
+  const one = await request.post('/api/po/line', { headers: hdr(PH), data: { lineId: (await lineIds(po.id))[0], qty: 0 } });
+  expect(shut.status()).toBe(one.status());
+  expect((await shut.json()).error).toBe((await one.json()).error);
+  expect((await lineIds(po.id)).length).toBe(1);
+});
+
+test('the supplier portal: tick lines on the order manifest → Remove N items', async ({ page }) => {
+  const { po } = await order();
+  for (const s of ['8', '9', '10']) await addLine(po.id, 'DZ5485-612', s);
+  await addLine(po.id, 'FQ1111-400', '8');
+  await portal(page, po);
+  const card = page.locator('.card.po-box').filter({ hasText: 'Order manifest' });
+  const bar = card.getByTestId('po-bulk-remove');
+  await expect(bar.getByRole('button', { name: /Remove/ })).toBeDisabled();
+  await card.getByLabel('Pick DZ5485-612 size 8 to remove').check();
+  await card.getByLabel('Pick FQ1111-400 size 8 to remove').check();
+  page.once('dialog', (d) => { expect(d.message()).toContain('Remove 2 items (2 units)'); d.accept(); });
+  await bar.getByRole('button', { name: '✕ Remove 2 items' }).click();
+  await expect(card.locator('li.po-line-edit')).toHaveCount(2);
+  expect((await lines(po.id)).map((l) => l.size)).toEqual(['10', '9']);
+  // Select all → Clear → nothing removed; a dismissed confirm removes nothing either.
+  await bar.getByLabel('Select all 2').check();
+  page.once('dialog', (d) => d.dismiss());
+  await bar.getByRole('button', { name: '✕ Remove 2 items' }).click();
+  await bar.getByRole('button', { name: 'Clear (2)' }).click();
+  await expect(bar.getByRole('button', { name: /Remove/ })).toBeDisabled();
+  expect((await lines(po.id)).length).toBe(2);
+  expect(await noSideScroll(page)).toBeLessThanOrEqual(0);
+});

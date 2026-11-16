@@ -2880,6 +2880,10 @@ await sql(`
     synced_at         TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS ebay_orders_created_idx ON ebay_orders (created_at DESC)`);
+// 2026-11-17: delivered comes from eBay itself (Trading GetOrders ActualDeliveryTime), not
+// 17TRACK — eBay orders no longer spend tracking quota. delivery_checked_at = last asked.
+await sql(`ALTER TABLE ebay_orders ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE ebay_orders ADD COLUMN IF NOT EXISTS delivery_checked_at TIMESTAMPTZ`);
 // Every money movement on the eBay account (Finances API) — the sales report / statement.
 await sql(`
   CREATE TABLE IF NOT EXISTS ebay_transactions (

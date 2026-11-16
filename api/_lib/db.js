@@ -11689,6 +11689,31 @@ export async function listEbayOrders(fromTs, toTs) {
             AND created_at > now() - interval '60 days')
      ORDER BY created_at DESC`;
 }
+// Shipped orders eBay hasn't told us are delivered yet — the ones to ask about (sync step 4).
+// Only recent ones: a parcel 45 days out that eBay never marked delivered will not be.
+export async function ebayOrdersAwaitingDelivery(limit = 600) {
+  return await db()`
+    SELECT order_id FROM ebay_orders
+     WHERE delivered_at IS NULL AND coalesce(cancel_state, '') <> 'CANCELED'
+       AND (status = 'FULFILLED' OR jsonb_array_length(fulfillments) > 0)
+       AND created_at > now() - interval '45 days'
+     ORDER BY delivery_checked_at ASC NULLS FIRST, created_at DESC LIMIT ${limit}`;
+}
+// What eBay answered: delivered_at for the delivered ones; every id asked is stamped checked.
+// Writes a row only when something is worth writing (ebay_orders is a live table) — the
+// checked stamp moves at most once an hour for an order that is still on its way.
+export async function setEbayOrderDeliveries(rows) {
+  const list = (rows || []).filter((r) => r && r.order_id);
+  if (!list.length) return 0;
+  const r = await db()`
+    UPDATE ebay_orders o SET delivered_at = coalesce(x.delivered_at, o.delivered_at), delivery_checked_at = now()
+      FROM jsonb_to_recordset(${JSON.stringify(list)}::jsonb) AS x(order_id text, delivered_at timestamptz)
+     WHERE o.order_id = x.order_id
+       AND ((x.delivered_at IS NOT NULL AND o.delivered_at IS DISTINCT FROM x.delivered_at)
+            OR o.delivery_checked_at IS NULL OR o.delivery_checked_at < now() - interval '1 hour')
+    RETURNING o.order_id, o.delivered_at`;
+  return r.filter((x) => x.delivered_at).length;
+}
 export async function ebayOrdersCreatedBetween(fromTs, toTs) {
   return await db()`SELECT * FROM ebay_orders WHERE created_at >= ${fromTs}::timestamptz AND created_at < ${toTs}::timestamptz ORDER BY created_at`;
 }

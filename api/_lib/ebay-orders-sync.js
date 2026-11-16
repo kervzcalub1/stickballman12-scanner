@@ -5,15 +5,15 @@
 //   2. tracking — each order's shipping fulfillments, re-read only when eBay's count
 //      differs from what we hold;
 //   3. photos — sold shoes whose listing has left our pull (GetItem, once per item);
-//   4. tracking numbers shipped in the last 30 days go to 17TRACK (claim-then-register,
-//      so a number is only ever registered once) for delivered / in-transit;
+//   4. delivered — eBay's own word (Trading GetOrders → ActualDeliveryTime) for every shipped
+//      order not delivered yet. Until 2026-11-17 the tracking numbers went to 17TRACK for
+//      this; eBay orders no longer spend that quota (owner);
 //   5. money — Finances transactions for the same window (needs `sell.finances`; a refusal
 //      is kept on the run, it doesn't fail the orders).
 // Progress + coverage live in app_settings 'ebay_orders_sync'.
 import { getSetting, setSetting, saveEbayOrders, ebayOrderFulfillmentCounts, setEbayOrderFulfillments,
-  saveEbayTransactions, ebayItemsWithoutImage, saveEbayItemImage, claimForTracking } from './db.js';
-import { fetchEbayOrders, fetchShippingFulfillments, fetchEbayTransactions, ebayItemPicture, ebayStatus } from './ebay.js';
-import { registerWarehouseTracking } from './tracking.js';
+  saveEbayTransactions, ebayItemsWithoutImage, saveEbayItemImage, ebayOrdersAwaitingDelivery, setEbayOrderDeliveries } from './db.js';
+import { fetchEbayOrders, fetchShippingFulfillments, fetchEbayTransactions, ebayItemPicture, ebayStatus, fetchEbayDeliveries } from './ebay.js';
 import { orderFromApi, fulfillmentsFromApi, transactionFromApi } from '../../src/lib/ebayOrders.js';
 import { estDayStart } from '../../src/lib/ebayCoupons.js';
 import { estToday } from '../../src/lib/format.js';
@@ -58,13 +58,11 @@ export async function runEbayOrdersSync({ by = 'auto', fromYmd = null } = {}) {
     const held = await ebayOrderFulfillmentCounts(orders.map((o) => o.order_id));
     const need = orders.filter((o) => o.fulfillment_count > 0 && held.get(o.order_id) !== o.fulfillment_count);
     let done = 0;
-    const numbers = [];
     await put({ state: 'running', step: 'tracking', done, total: need.length });
     await pool(need, 6, async (o) => {
       try {
         const fs = fulfillmentsFromApi(await fetchShippingFulfillments(o.order_id));
         await setEbayOrderFulfillments(o.order_id, fs);
-        for (const f of fs) if (f.number && f.shipped_at && Date.now() - Date.parse(f.shipped_at) < 30 * 86400_000) numbers.push(f.number);
       } catch (e) { console.warn('[ebay-orders] fulfillments', o.order_id, e.message); }
       if (++done % 20 === 0) await put({ state: 'running', step: 'tracking', done, total: need.length });
     });
@@ -75,8 +73,21 @@ export async function runEbayOrdersSync({ by = 'auto', fromYmd = null } = {}) {
     await put({ state: 'running', step: 'photos', done, total: missing.length });
     await pool(missing, 4, async (id) => { await saveEbayItemImage(id, await ebayItemPicture(id)); done++; });
 
-    // Delivered / in transit, from the carriers (17TRACK; once per number).
-    if (numbers.length) await registerWarehouseTracking(numbers, { claim: claimForTracking, label: 'ebay-orders' });
+    // Delivered, from eBay. Its own catch: a refusal here (the Trading day budget, an outage)
+    // must not fail the orders, the photos or the money.
+    let delivered = null; let deliveryAsked = 0; let deliveryAnswered = 0; let deliveryError = null;
+    try {
+      const waiting = (await ebayOrdersAwaitingDelivery()).map((r) => r.order_id);
+      deliveryAsked = waiting.length;
+      await put({ state: 'running', step: 'delivery', done: 0, total: waiting.length });
+      if (waiting.length) {
+        const got = await fetchEbayDeliveries(waiting);
+        // How many of the ids we asked about eBay answered BY THAT ID — 0 of many means the id
+        // forms don't match (it would otherwise look like "nothing delivered yet").
+        deliveryAnswered = waiting.filter((id) => got.has(id)).length;
+        delivered = await setEbayOrderDeliveries(waiting.filter((id) => got.has(id)).map((id) => ({ order_id: id, delivered_at: got.get(id) })));
+      } else delivered = 0;
+    } catch (e) { deliveryError = e.message; console.warn('[ebay-orders] delivery', e.message); }
 
     // Money.
     let txCount = null; let financeError = null;
@@ -94,7 +105,7 @@ export async function runEbayOrdersSync({ by = 'auto', fromYmd = null } = {}) {
     keep.lastOrdersAt = startedAt;
     if (backfill && (!keep.coveredFrom || from.toISOString() < keep.coveredFrom)) keep.coveredFrom = from.toISOString();
     await put({ state: 'done', finishedAt: new Date().toISOString(), orders: orders.length, tracking: need.length, photos: missing.length,
-      registered: numbers.length, transactions: txCount, financeError, backfill });
+      deliveryAsked, deliveryAnswered, delivered, deliveryError, transactions: txCount, financeError, backfill });
     return { ok: true };
   } catch (e) {
     console.error('[ebay-orders] sync', e.message);

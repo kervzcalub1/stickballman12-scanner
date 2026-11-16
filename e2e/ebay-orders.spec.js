@@ -157,3 +157,45 @@ test.describe('eBay Orders + Sales report pages', () => {
     await expect(page.getByText('eBay connected as stickballman12')).toBeVisible();
   });
 });
+
+// ---- Delivered comes from eBay itself, not 17TRACK (2026-11-17) --------------------------------
+// The owner: eBay Orders must not spend 17TRACK quota — eBay knows where its parcels are. The
+// Fulfillment API has no delivered field; Trading GetOrders has ActualDeliveryTime.
+test.describe('eBay orders: delivered from eBay, nothing sent to 17TRACK', () => {
+  test('GetOrders → the delivered time per order; an order still on its way answers null', async () => {
+    const { deliveriesFromOrdersXml } = await import('../api/_lib/ebay.js');
+    const xml = `<?xml version="1.0"?><GetOrdersResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack><OrderArray>
+      <Order><OrderID>12-34567-89012</OrderID><OrderStatus>Completed</OrderStatus>
+        <ShippingServiceSelected><ShippingService>UPSGround</ShippingService><ShippingPackageInfo><ScheduledDeliveryTimeMax>2026-10-18T07:00:00.000Z</ScheduledDeliveryTimeMax><ActualDeliveryTime>2026-10-16T18:22:00.000Z</ActualDeliveryTime></ShippingPackageInfo></ShippingServiceSelected>
+        <TransactionArray><Transaction><OrderLineItemID>327090839752-10085486977305</OrderLineItemID>
+          <ShippingServiceSelected><ShippingPackageInfo><ActualDeliveryTime>2026-10-16T18:22:00.000Z</ActualDeliveryTime></ShippingPackageInfo></ShippingServiceSelected></Transaction></TransactionArray>
+        <ExtendedOrderID>12-34567-89012</ExtendedOrderID></Order>
+      <Order><OrderID>12-99999-00001</OrderID><ShippingServiceSelected><ShippingPackageInfo><ScheduledDeliveryTimeMax>2026-10-20T07:00:00.000Z</ScheduledDeliveryTimeMax></ShippingPackageInfo></ShippingServiceSelected></Order>
+      <Order><OrderID>110555000111-2200333444</OrderID><ExtendedOrderID>12-77777-00002</ExtendedOrderID>
+        <TransactionArray><Transaction><ShippingServiceSelected><ShippingPackageInfo><ActualDeliveryTime>2026-10-15T12:00:00.000Z</ActualDeliveryTime></ShippingPackageInfo></ShippingServiceSelected></Transaction>
+          <Transaction><ShippingServiceSelected><ShippingPackageInfo><ActualDeliveryTime>2026-10-17T09:30:00.000Z</ActualDeliveryTime></ShippingPackageInfo></ShippingServiceSelected></Transaction></TransactionArray></Order>
+    </OrderArray></GetOrdersResponse>`;
+    const got = deliveriesFromOrdersXml(xml);
+    expect(got.get('12-34567-89012')).toBe('2026-10-16T18:22:00.000Z');
+    expect(got.has('12-99999-00001')).toBe(true);
+    expect(got.get('12-99999-00001')).toBeNull();                      // answered, not delivered yet
+    expect(got.get('12-77777-00002')).toBe('2026-10-17T09:30:00.000Z');  // by the extended id; the LAST parcel's time
+    expect(got.has('nope')).toBe(false);
+  });
+
+  test('eBay saying delivered makes the order Delivered — no carrier word needed', () => {
+    const shipped = { ...orderFromApi(API_ORDER), status: 'FULFILLED', fulfillments: [{ number: '1Z999', shipped_at: '2026-10-12T15:00:00Z' }] };
+    const late = new Date('2026-10-20T12:00:00Z');
+    expect(shipState(shipped, {}, late)).toBe('late_delivery');                                        // nothing says delivered
+    expect(shipState({ ...shipped, delivered_at: '2026-10-16T18:22:00.000Z' }, {}, late)).toBe('delivered');
+    expect(shipState({ ...shipped, delivered_at: '2026-10-16T18:22:00.000Z', cancel_state: 'CANCELED' }, {}, late)).toBe('cancelled');
+    expect(shipState(shipped, { '1Z999': { status: 'Delivered' } }, late)).toBe('delivered');          // an old 17TRACK answer still counts
+  });
+
+  test('the eBay orders sync no longer registers anything with 17TRACK', async () => {
+    const fs = await import('node:fs/promises');
+    const src = await fs.readFile(new URL('../api/_lib/ebay-orders-sync.js', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/tracking\.js|registerWarehouseTracking|registerTracking|claimForTracking/);
+    expect(src).toMatch(/fetchEbayDeliveries/);
+  });
+});

@@ -55,9 +55,11 @@ export const fulfillmentsFromApi = (list) => (list || []).map((f) => ({
 //   to_ship      not shipped, still time
 //   late_delivery shipped, the latest delivery estimate has passed and the carrier hasn't said delivered (bad)
 //   shipped      shipped (in transit / no carrier word yet)
-//   delivered    every tracking number delivered
+//   delivered    eBay says delivered (`delivered_at`), else every tracking number delivered
 //   cancelled
-// `tracking` = { [number]: { status } } from shipment_tracking (17TRACK).
+// `delivered_at` is eBay's own (Trading GetOrders ActualDeliveryTime, sync step 4). `tracking` =
+// { [number]: { status } } from shipment_tracking — numbers registered with 17TRACK before
+// 2026-11-17 still answer; nothing new is registered for eBay orders.
 export const SHIP_STATES = {
   late: ['Late — not shipped', 'bad'], due_today: ['Ship today', 'warn'], to_ship: ['To ship', 'info'],
   late_delivery: ['Delivery late', 'bad'], shipped: ['Shipped', 'ok'], delivered: ['Delivered', 'ok'], cancelled: ['Cancelled', 'muted'],
@@ -72,6 +74,7 @@ export function shipState(o, tracking = {}, now = new Date()) {
     if (due < now) return 'late';
     return ymd(estCivil(due)) === ymd(estCivil(now)) ? 'due_today' : 'to_ship';
   }
+  if (o.delivered_at) return 'delivered';
   const nums = fs.map((f) => f.number).filter(Boolean);
   const delivered = nums.length > 0 && nums.every((n) => /delivered/i.test(tracking[n]?.status || ''));
   if (delivered) return 'delivered';

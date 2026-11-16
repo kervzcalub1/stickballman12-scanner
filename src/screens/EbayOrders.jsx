@@ -27,7 +27,7 @@ export function trackUrl(number, carrier) {
   if (c.includes('DHL')) return `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${n}`;
   return `https://t.17track.net/en#nums=${n}`;
 }
-const STEP = { orders: 'Reading orders', tracking: 'Reading tracking', photos: 'Finding photos', money: 'Reading sales & fees' };
+const STEP = { orders: 'Reading orders', tracking: 'Reading tracking', photos: 'Finding photos', delivery: 'Asking eBay what was delivered', money: 'Reading sales & fees' };
 const FILTERS = ['all', 'late', 'due_today', 'to_ship', 'late_delivery', 'shipped', 'delivered', 'cancelled'];
 const RANGES = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['ytd', 'This year']];
 
@@ -121,7 +121,8 @@ export function EbayOrders({ isAdmin, onSignOut, onConnect }) {
             ? <button type="button" className="btn primary" disabled={busy} onClick={() => sync(`${today.slice(0, 4)}-01-01`)}>Load this year’s orders from eBay</button>
             : <button type="button" className="btn" disabled={busy || running} onClick={() => sync()}>{running ? 'Syncing…' : '↻ Sync now'}</button>}
           {running && <span className="muted sm">{STEP[s.step] || 'Working'}… {s.total ? `${fmt(s.done)} of ${fmt(s.total)}` : s.done ? fmt(s.done) : ''}</span>}
-          {!running && s?.state === 'done' && <span className="muted sm">Synced {when(s.finishedAt)}{s.by && s.by !== 'auto' ? ` by ${s.by}` : ''} · checks again every 30 min</span>}
+          {!running && s?.state === 'done' && <span className="muted sm">Synced {when(s.finishedAt)}{s.by && s.by !== 'auto' ? ` by ${s.by}` : ''} · checks again every 30 min{s.deliveryError ? '' : s.deliveryAsked > 0 ? ` · delivery: asked eBay about ${fmt(s.deliveryAsked)} shipped order${s.deliveryAsked === 1 ? '' : 's'}, ${fmt(s.deliveryAnswered || 0)} answered, ${fmt(s.delivered || 0)} newly delivered` : ''}</span>}
+          {!running && s?.state === 'done' && s.deliveryError && <span className="error xs">Delivery status could not be read from eBay: {s.deliveryError}</span>}
           {!running && s?.state === 'failed' && <span className="error xs">Last sync failed {when(s.finishedAt)}: {s.error}{s.needsReconnect && isAdmin ? ' ' : ''}{s.needsReconnect && isAdmin && <button type="button" className="btn xs" onClick={onConnect}>Connect eBay again</button>}</span>}
         </div>
         {never && <p className="muted xs">The first load reads every order since Jan 1 with its tracking — a few minutes for a busy year. After that it only reads what changed.</p>}
@@ -187,7 +188,8 @@ export function EbayOrders({ isAdmin, onSignOut, onConnect }) {
                           </div>
                         )) : <span className="muted">—</span>}
                       </td>
-                      <td data-label="Status"><span className={`ebo-chip ${tone}`}>{label}</span></td>
+                      <td data-label="Status"><span className={`ebo-chip ${tone}`}>{label}</span>
+                        {o.delivered_at && <div className="muted xs">eBay: delivered {estDate(o.delivered_at)}</div>}</td>
                     </tr>
                   );
                 })}

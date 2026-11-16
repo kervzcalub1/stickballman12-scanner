@@ -6,11 +6,13 @@ Built 2026-10-13. Same page as eBay Listings (`/ph/ebay-listings` in the PH work
 ## Orders (PH + admin)
 A table of every eBay order: photo · order # (links to Seller Hub) + date + total · buyer
 username · the shoe(s): title, **SKU**, **size**, qty · eBay's **ship-by** · **tracking** (number
-linked to the carrier, carrier, shipped date, and the carrier's word from 17TRACK) · status.
+linked to the carrier, carrier, shipped date, and — for numbers registered before 2026-11-17 —
+the carrier's word from 17TRACK) · status (+ "eBay: delivered <date>").
 
 Status (`shipState`, `src/lib/ebayOrders.js`), judged against eBay's own dates, in EST:
 **Late — not shipped** (ship-by passed) · **Ship today** · To ship · Shipped · **Delivery late**
-(shipped, past eBay's latest delivery estimate, carrier hasn't said delivered) · Delivered ·
+(shipped, past eBay's latest delivery estimate, eBay hasn't said delivered) · Delivered (eBay's
+`delivered_at`) ·
 Cancelled. Plus a "shipped late" note when the first shipment came after ship-by. Late ones
 sort first; filter chips count each. The list = orders placed in the period (7/30/90 days, this
 year) **plus every order still waiting to ship** (last 60 days), so a late one can't hide.
@@ -63,9 +65,20 @@ If the period starts before what's loaded, the page offers **Load from <date>** 
    years); afterwards only what eBay changed since the last run (−15 min overlap).
 2. Tracking — `shipping_fulfillment` per order, only when eBay's fulfillment count differs from ours.
 3. Photos — our listings pull first; sold-out items via Trading `GetItem` once (`ebay_item_images`).
-4. Tracking numbers shipped in the last 30 days → 17TRACK (`registerWarehouseTracking` +
-   `claimForTracking`: once per number, never from the dev server). Status lands in
-   `shipment_tracking` via the existing webhook.
+4. **Delivered — from eBay itself** (2026-11-17, owner: eBay Orders must not spend 17TRACK
+   quota). The Fulfillment API has no delivered field; **Trading `GetOrders`** does:
+   `ShippingServiceSelected.ShippingPackageInfo.ActualDeliveryTime` (order + each transaction),
+   returned only once delivered. `ebayOrdersAwaitingDelivery` = shipped, not cancelled, no
+   `delivered_at`, created in the last 45 days (≤ 600) → `fetchEbayDeliveries` (50 ids a call,
+   `guard: 'read'` on the Trading day budget) → `setEbayOrderDeliveries` (`ebay_orders.delivered_at`,
+   `delivery_checked_at`; a row is written only when delivered or not checked for an hour — the
+   table is live). The run records `deliveryAsked / deliveryAnswered / delivered / deliveryError`
+   and the page prints them after "Synced …": **asked N, 0 answered = eBay returned the orders
+   under another id form** — look there first. Its own catch: it never fails the rest of the sync.
+   **Nothing is registered with 17TRACK any more.** Numbers registered before 11-17 still answer
+   from `shipment_tracking` (the tracking cell's carrier word, and `shipState`'s fallback).
+   **Not verified against the live account** (dev is not connected to eBay): that eBay fills
+   `ActualDeliveryTime` for our carriers, and that it returns the order id in the 12-34567-89012 form.
 5. Money — Finances `getTransactions` for the window (≤ 36 months a query), upserted by
    (transaction_id, type). A finances refusal is recorded (`financeError`) without failing orders.
 

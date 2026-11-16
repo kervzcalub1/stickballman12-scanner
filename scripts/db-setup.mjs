@@ -2805,6 +2805,27 @@ await sql(`ALTER TABLE stockx_price_edits ADD CONSTRAINT stockx_price_edits_stat
            CHECK (status IN ('queued','sent','done','failed','cancelled'))`);
 await sql(`CREATE INDEX IF NOT EXISTS stockx_price_edits_status_idx ON stockx_price_edits (status, id)`);
 await sql(`CREATE INDEX IF NOT EXISTS stockx_price_edits_listing_idx ON stockx_price_edits (listing_id, id DESC)`);
+// StockX DAILY price update (2026-11-16). `stockx_teach` = what people teach the automatic run,
+// per SIZE (variant — a listing id changes when the listing is re-made): never ask less than
+// min_price; big_cut_ok = a big cut with no cost on file was looked at and may go.
+// `stockx_daily` = one row per EST day: the picture at the market read + what the run did.
+await sql(`
+  CREATE TABLE IF NOT EXISTS stockx_teach (
+    variant_id TEXT PRIMARY KEY,
+    min_price  NUMERIC(12,2),
+    big_cut_ok BOOLEAN NOT NULL DEFAULT false,
+    note       TEXT,
+    taught_by  TEXT,
+    taught_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS stockx_daily (
+    day        DATE PRIMARY KEY,
+    stats      JSONB,
+    auto       JSONB,
+    pulled_at  TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
 // eBay coded coupons made / paused / resumed / deleted from here (2026-10-13,
 // docs/context/ebay-coupons.md). eBay holds the coupons; this is who did what, and the
 // exact request when one was created.
@@ -3804,7 +3825,7 @@ const LIVE_TABLES = [
   'lost_pkg_runs',
   'email_receipts', 'user_purchase_emails',
   'presell_stock', 'presell_listings', 'presell_sales', 'presell_comp_sku', 'presell_comp_log', 'presell_entries',
-  'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_price_locks', 'stockx_listings', 'stockx_price_locks', 'stockx_price_edits', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
+  'ebay_listings', 'ebay_listing_ends', 'ebay_price_edits', 'ebay_price_locks', 'stockx_listings', 'stockx_price_locks', 'stockx_price_edits', 'stockx_teach', 'stockx_daily', 'ebay_coupon_log', 'ebay_orders', 'shein_links',
   'shein_order_units', 'shein_shopify_orders', 'shein_live_runs', 'shein_live_items',
   'shein_listing_products', 'shein_listing_variants', 'shein_size_map', 'shein_listing_jobs', 'shein_listing_job_items', 'product_cutouts',
   'cancellations', 'cancellation_photos', 'cancellation_events',

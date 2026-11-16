@@ -3139,6 +3139,18 @@ await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS size_stat
 // productAnswered). NULL first_seen_at = seen before this column existed (not counted as new).
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ`);
 await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ`);
+// 2026-11-17: the blockers that sit ONLY on zero-stock sizes (src/lib/sheinListings.js productReadiness) —
+// shown greyed "(out of stock)"; blockers = what the shoe is judged on (its counted sizes). Filled by the
+// next recompute / Refresh (every 30 min on prod); '[]' until then.
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS idle_blockers JSONB NOT NULL DEFAULT '[]'::jsonb`);
+// The search (2026-11-17, normSearchText / searchTerms in src/lib/sheinListings.js — keep the character sets
+// the same): search_norm = search_text lower-cased, every quote (straight / curly / prime) and comma dropped,
+// whitespace collapsed; search_compact = that without spaces, dashes, underscores (a style code typed
+// "DQ7659101" finds "DQ7659-101"). Generated, so they are filled at once and never drift from search_text.
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS search_norm TEXT
+  GENERATED ALWAYS AS (btrim(regexp_replace(regexp_replace(lower(COALESCE(search_text, '')), '[''"‘’‚‛′″“”„,]', '', 'g'), '[[:space:]]+', ' ', 'g'))) STORED`);
+await sql(`ALTER TABLE shein_listing_products ADD COLUMN IF NOT EXISTS search_compact TEXT
+  GENERATED ALWAYS AS (regexp_replace(regexp_replace(lower(COALESCE(search_text, '')), '[''"‘’‚‛′″“”„,]', '', 'g'), '[[:space:]_-]+', '', 'g')) STORED`);
 // One row per Shopify variant (row_key = its gid) or per SHEIN-only size (row_key = shein:<skuCode>).
 // shein_sku is NOT unique at the DB level: the compute assigns each SHEIN SKU to one row, and a
 // SKU moving between products mid-batch must not trip a constraint (Build log).

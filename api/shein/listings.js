@@ -1,10 +1,14 @@
 // SHEIN Listings (docs/context/shein-listings.md, docs/shein-listings-plan.md Appendix B.5).
 // PH + admin. Phase 0/1: nothing here writes to SHEIN.
 //
-// GET  /api/shein/listings?status=&blocker=&q=&brand=&page=1&pageSize=50&sort=worst|title|updated|coverage
-//        -> { ok, connected, configured, canWrite, isAdmin, summary, products, total, page, pageSize }
+// GET  /api/shein/listings?status=&any=&blocker=&q=&brand=&page=1&pageSize=50&sort=worst|title|updated|coverage
+//        -> { ok, connected, configured, canWrite, isAdmin, summary, products, total, page, pages, pageSize, sort, any }
 //        &shopify=active|inactive  (2026-10-28) active = ACTIVE on Shopify with stock > 0; inactive = the rest;
 //        the answer carries shopifyCounts { active, inactive } for the same filters
+//        2026-11-17: status=<tile> = shoes whose OVERALL status is it (any=1 = at least one counted size in it);
+//        q = every word, any order (codes without dashes / spaces too); the summary follows the filters; a page
+//        past the end returns the last page (page says which). Full contract: docs/context/shein-listings.md.
+// GET  /api/shein/listings?rejected=1[&q=&brand=&off=1] -> { ok, rows, total, canWrite, isAdmin } — "Rejected by SHEIN"
 // GET  /api/shein/listings?product=<gid>   -> { ok, product, variants, jobItems, log, canWrite, isAdmin }
 // GET  /api/shein/listings?publishSetup=<gid,gid,…>  (≤ 100; PH ok; DB only) bulk edit before publishing ->
 //        { ok, products:[{ productId, title, titleOverride, style, vendor, productType, imageUrl, shopifyStatus, inStock,
@@ -57,11 +61,11 @@
 // DB, enforced for probe / webhooks) → rateLimit → getJsonBody.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import {
-  dbConfigured, listListingProducts, listingSummary, getListingProduct, listingItemsForProduct, listSheinApiLog, getListingCache, getListingJob,
+  dbConfigured, listListingProducts, listingSummaryCounts, rejectedListingData, getListingProduct, listingItemsForProduct, listSheinApiLog, getListingCache, getListingJob,
   activeListingJob, latestListingJob, markStaleListingJobs, requestListingStop, cancelQueuedListingJob, setListingExcluded, listingVariantProductIds,
   getSetting, setSetting, getListingItems, updateListingItem, requeueListingJob, resumeListingJob,
   lastPreviewItem, markPublishAgain, setListingPublishChoices, setListingCategoryPick, setListingAttrOverride, lastPublishRunItem,
-  listingShopifyCounts, getListingProductsMany, setListingPublishChoicesMany, listCategoryMaps, listListingCache, setListingCoverSkip, productPhotosForSku,
+  getListingProductsMany, setListingPublishChoicesMany, listCategoryMaps, listListingCache, setListingCoverSkip, productPhotosForSku,
   cleanPhotoKeys, addListingPhotoSkips, sheinModelReportData,
 } from '../_lib/db.js';
 import { cleanPhotosFor, findCleanPhotos, shopifyPhCopies, ensureShapes } from '../_lib/shein-clean-photos.js';
@@ -73,13 +77,15 @@ import { sheinStatus } from '../_lib/shein.js';
 import { shopifyAdminStore, shopifyEnsureWebhooks, shopifyListingProduct } from '../_lib/shopify.js';
 import { startListingJob, startRunJob, resumeJob, recomputeStored, kickListingJobs, PREVIEW_OPS, readAutoPrice, setAutoPrice, lookAgainPublish, sendAgainPublish, readinessChecklist, readinessMany, userThrottle } from '../_lib/shein-listing.js';
 import { hasPrivilege } from '../_lib/buycart.js';
-import { renderBlocker, STATUS_CODES, STATUS_ORDER, TILE_STATUSES, BLOCKERS, summarizePlan, rowSyncable } from '../../src/lib/sheinListings.js';
+import { renderBlocker, STATUS_CODES, STATUS_ORDER, TILE_STATUSES, BLOCKERS, summarizePlan, rowSyncable, blockerLabel } from '../../src/lib/sheinListings.js';
+import { rejectedList } from '../../src/lib/sheinRejected.js';
 
 const isAdminRole = (u) => u?.role === 'admin' || u?.role === 'superadmin';
 const PRIV_ACTIONS = new Set(['probe', 'webhooks', 'run', 'retry', 'auto_price', 'publish_again', 'send_again']);
 const PREVIEW_MAX = 300;
 const BULK_MAX = 100;   // bulk edit before publishing: products per read / save
 const SHOP_FILTERS = ['active', 'inactive'];
+const SORTS = ['worst', 'title', 'updated', 'coverage'];   // worst = the default (worst status first, then title)
 const blockingLines = (list) => (list || []).filter((l) => l.ok === false).map((l) => l.key);
 // The size groups the drawer maps a category by (its Shopify sizes not left off) — productGroups() on the page.
 const groupsOf = (variants) => [...new Set(variants.filter((v) => v.shopify_variant_id && !v.excluded).map((v) => sizeGroupOf(v.shopify_size)).filter(Boolean))];
@@ -105,31 +111,41 @@ const adminUrl = (gid) => {
   return /^\d+$/.test(id) && shopifyAdminStore() ? `https://admin.shopify.com/store/${shopifyAdminStore()}/products/${id}` : null;
 };
 const render = (list) => (Array.isArray(list) ? list : []).map((b) => ({ ...renderBlocker(b), sizes: b.sizes ?? undefined }));
+// A product row for the page. blockers / worst = what the shoe is judged on (its counted sizes — in stock or
+// SHEIN-only — when it has any); idleBlockers = reasons that sit ONLY on sizes with 0 pairs (shown greyed
+// "(out of stock)"; 2026-11-17). idle_blockers is the stored column, idleBlockers its rendered form.
 function productOut(p) {
   const blockers = render(p.blockers);
   const worst = blockers.find((b) => !['note', 'review'].includes(b.level)) || blockers[0] || null;
-  const { shopify_json, search_text, computed_hash, ...rest } = p;
-  return { ...rest, blockers, worst, shopifyUrl: adminUrl(p.shopify_product_id) };
+  const { shopify_json, search_text, search_norm, search_compact, computed_hash, ...rest } = p;
+  return { ...rest, blockers, idleBlockers: render(p.idle_blockers), worst, shopifyUrl: adminUrl(p.shopify_product_id) };
 }
 const variantOut = (v) => ({ ...v, blockers: render(v.blockers), notes: render(v.notes) });
 const jobOut = (j) => (j ? { ...j, lease_owner: undefined } : null);
 
-async function summaryOut() {
-  const s = await listingSummary();
-  const byStatus = Object.fromEntries(STATUS_CODES.map((c) => [c, { products: 0, sizes: 0, inStock: 0 }]));
-  for (const r of s.products) if (byStatus[r.status]) byStatus[r.status].products = r.n;
-  for (const r of s.sizes) if (byStatus[r.status]) { byStatus[r.status].sizes = r.n; byStatus[r.status].inStock = r.in_stock; }
-  // A product counts under EVERY status one of its in-stock sizes has, so the tiles can add up to more
-  // than All; each tile's count is the length of its filtered list (2026-10-27 decision).
+// The summary beside the list (2026-11-17): every count follows the list's filters except its own (see
+// listingSummaryCounts in db.js), so a tile / brand / reason number IS the total of the list it opens.
+//   byStatus[code] = { products (OVERALL status = code: the tile), anySize (at least one counted size in it:
+//   status=code&any=1), sizes (counted sizes — in stock or SHEIN-only — in that status), allSizes (every
+//   size, 0 stock too), inStock (Shopify qty > 0) }.
+async function summaryOut(f = {}) {
+  const [s, rej] = await Promise.all([listingSummaryCounts(f), rejectedListingData({ q: f.q, brand: f.brand }).catch(() => null)]);
+  const byStatus = Object.fromEntries(STATUS_CODES.map((c) => [c, { products: 0, anySize: 0, sizes: 0, allSizes: 0, inStock: 0 }]));
+  for (const r of s.tiles) if (byStatus[r.status]) { byStatus[r.status].products = r.products; byStatus[r.status].anySize = r.any_size; }
+  for (const r of s.sizes) if (byStatus[r.status]) Object.assign(byStatus[r.status], { sizes: r.counted, allSizes: r.every, inStock: r.in_stock });
   const all = s.all;
   const [lastSnapshot, active, probe, hooks, autoPrice] = await Promise.all([
     latestListingJob('snapshot', 'done'), activeListingJob(), getListingCache('probe', 'last'), getSetting(HOOKS_KEY).catch(() => null), readAutoPrice(),
   ]);
   const latestSnap = await latestListingJob('snapshot');
   return {
-    all, off: s.off, byStatus, tiles: TILE_STATUSES, order: STATUS_ORDER,
-    topBlockers: s.blockers.map((b) => ({ code: b.code, sizes: b.sizes, products: b.products, level: BLOCKERS[b.code]?.level || 'error', title: renderBlocker({ code: b.code, params: {} }).title })),
+    all, off: s.off, store: s.store, byStatus, tiles: TILE_STATUSES, order: STATUS_ORDER,
+    // label = a short plain name (the reason dropdown); title kept for older readers — the same plain words now
+    topBlockers: s.reasons.map((b) => ({ code: b.code, label: blockerLabel(b.code), title: blockerLabel(b.code), sizes: b.sizes, products: b.products, level: BLOCKERS[b.code]?.level || 'error' })),
     brands: s.brands.map((b) => ({ brand: b.vendor, products: b.n })),
+    shopify: s.shopify,
+    rejected: rej ? rejectedList(rej).length : null,
+    filters: { status: f.status || '', any: !!f.any, q: f.q || null, brand: f.brand || null, blocker: f.blocker || null, shopify: f.shopify || null },
     lastSnapshot: jobOut(lastSnapshot), latestSnapshot: jobOut(latestSnap), activeJob: jobOut(active),
     probe: probe ? { askedAt: probe.payload?.askedAt || probe.fetched_at, jobId: probe.payload?.jobId || null, categories: probe.payload?.categories?.length || 0 } : null,
     hooks: hooks ? JSON.parse(hooks) : null, autoPrice,
@@ -172,7 +188,8 @@ export default async function handler(req, res) {
       for (const r of rows) {
         const p = r.product;
         if (String(p.shopify_product_id).startsWith('shein:')) skipped.push({ productId: p.shopify_product_id, title: p.title, why: 'only on SHEIN — not a Shopify product' });
-        else if (p.spu) skipped.push({ productId: p.shopify_product_id, title: p.title, why: 'already on SHEIN — use Add missing sizes / Update' });
+        // a shoe whose publish SHEIN rejected keeps the SPU it was sent as, but was never live: it is offered (2026-11-17)
+        else if (p.spu && !neverLive(r)) skipped.push({ productId: p.shopify_product_id, title: p.title, why: 'already on SHEIN — use Add missing sizes / Update' });
         else if (p.excluded) skipped.push({ productId: p.shopify_product_id, title: p.title, why: 'marked “Don’t list on SHEIN”' });
         else todo.push(r);
       }
@@ -272,22 +289,31 @@ export default async function handler(req, res) {
         jobItems: items.map((i) => ({ ...(isAdmin ? i : { ...i, body: undefined, response: undefined }), summary: summarizePlan(i.plan) || i.error || null })),
         log: log.map((l) => (isAdmin ? l : { ...l, request: undefined, response: undefined })) });
     }
+    if (qs.get('rejected') === '1') {
+      // "Rejected by SHEIN" (2026-11-17): what SHEIN rejected / refused of OUR sends, one row per shoe, with what
+      // resubmits it (src/lib/sheinRejected.js). DB only. &q= &brand= as the list; &off=1 = shoes that are off too.
+      const data = await rejectedListingData({ q: t(qs.get('q'), 120), brand: t(qs.get('brand'), 120) });
+      const rows = rejectedList({ ...data, canWrite, includeOff: qs.get('off') === '1', shopifyUrl: adminUrl });
+      return send(res, 200, { ok: true, rows, total: rows.length, canWrite, isAdmin });
+    }
     const status = t(qs.get('status'), 20) || '';
     if (status && status !== 'all' && !STATUS_CODES.includes(status)) return send(res, 400, { ok: false, error: 'Unknown status.' });
     const blocker = t(qs.get('blocker'), 40);
     if (blocker && !/^[a-z_]+$/.test(blocker)) return send(res, 400, { ok: false, error: 'Unknown blocker.' });
-    const sort = ['worst', 'title', 'updated', 'coverage'].includes(qs.get('sort')) ? qs.get('sort') : 'worst';
+    const sort = SORTS.includes(qs.get('sort')) ? qs.get('sort') : 'worst';   // unknown → the default (the answer says which)
     const shopify = t(qs.get('shopify'), 20) || '';
     if (shopify && !SHOP_FILTERS.includes(shopify)) return send(res, 400, { ok: false, error: 'shopify: active or inactive.' });
-    const f = { status, blocker, q: t(qs.get('q'), 120), brand: t(qs.get('brand'), 120) };
-    const [st, list, summary, shopifyCounts] = await Promise.all([
+    // any=1: a tile's OLD meaning — shoes with at least one counted size in that status (their own status may be worse)
+    const any = ['1', 'true'].includes(String(qs.get('any') || ''));
+    const f = { status, any, blocker, q: t(qs.get('q'), 120), brand: t(qs.get('brand'), 120), shopify: shopify || null };
+    const [st, list, summary] = await Promise.all([
       sheinStatus().catch(() => null),
-      listListingProducts({ ...f, shopify: shopify || null, page: Number(qs.get('page')) || 1, pageSize: Number(qs.get('pageSize')) || 50, sort }),
-      summaryOut(),
-      listingShopifyCounts(f),
+      listListingProducts({ ...f, page: Number(qs.get('page')) || 1, pageSize: Number(qs.get('pageSize')) || 50, sort }),
+      summaryOut(f),
     ]);
-    return send(res, 200, { ok: true, connected: !!st?.connected, configured: !!st?.configured, canWrite, isAdmin, summary, shopifyCounts,
-      products: list.rows.map(productOut), total: list.total, page: list.page, pageSize: list.pageSize });
+    // page = the page actually returned: a page past the end reads the LAST page (never "26–25 of 25")
+    return send(res, 200, { ok: true, connected: !!st?.connected, configured: !!st?.configured, canWrite, isAdmin, summary, shopifyCounts: summary.shopify,
+      products: list.rows.map(productOut), total: list.total, page: list.page, pages: list.pages, pageSize: list.pageSize, sort, any });
   }
 
   if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
@@ -335,9 +361,9 @@ export default async function handler(req, res) {
           if (blocker && !/^[a-z_]+$/.test(blocker)) return send(res, 400, { ok: false, error: 'Unknown blocker.' });
           const forPublish = Array.isArray(b.ops) && b.ops.includes('publish');
           for (let page = 1; productIds.length < PREVIEW_MAX && page <= 10; page++) {
-            const r = await listListingProducts({ status, blocker, q: t(f.q, 120), brand: t(f.brand, 120), page, pageSize: 200, sort: 'title' });
+            const r = await listListingProducts({ status, any: f.any === true, blocker, q: t(f.q, 120), brand: t(f.brand, 120), page, pageSize: 200, sort: 'title' });
             productIds.push(...r.rows.filter((p) => (forPublish ? !p.spu : !!p.spu) && !String(p.shopify_product_id).startsWith('shein:')).map((p) => p.shopify_product_id));
-            if (r.rows.length < 200) break;
+            if (page >= r.pages) break;   // a page past the end reads the last page again — stop at the real end
           }
           productIds = [...new Set(productIds)].slice(0, PREVIEW_MAX);
         }

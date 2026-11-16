@@ -2062,6 +2062,9 @@ function FulfillTab({ onSignOut }) {
   const [view, setView] = useQueryParam('ship', 'to_ship');
   const [q, setQ] = useQueryParam('fq', '');
   const [only, setOnly] = useQueryParam('where', '');
+  // Alias and StockX parcels are packed and handed over apart, so the list splits by platform.
+  const [platRaw, setPlat] = useQueryParam('plat', '');
+  const plat = UPLAT[platRaw] ? platRaw : '';
   const [d, setD] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
@@ -2075,10 +2078,44 @@ function FulfillTab({ onSignOut }) {
   useLive(['presell_sales', 'presell_stock'], load, { mount: false });
   // The "time left" words move on by themselves.
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(t); }, []);
-  const rows = useMemo(() => (d ? (view === 'to_ship' ? assignWhere(d.rows) : d.rows) : null), [d, view]);
+  // "Where" is worked out over BOTH platforms (they share the set-aside pairs), then narrowed.
+  const allRows = useMemo(() => (d ? (view === 'to_ship' ? assignWhere(d.rows) : d.rows) : null), [d, view]);
+  const rows = useMemo(() => (allRows && plat ? allRows.filter((x) => x.platform === plat) : allRows), [allRows, plat]);
   const shown = useMemo(() => (rows && only && view === 'to_ship' ? rows.filter((x) => x.where === only) : rows), [rows, only, view]);
   const groups = useMemo(() => (shown ? pickGroups(shown) : []), [shown]);
   const tot = useMemo(() => fulfillTotals(rows || [], now), [rows, now]);
+  const platN = useMemo(() => ({ alias: (allRows || []).filter((x) => x.platform === 'alias').length, stockx: (allRows || []).filter((x) => x.platform === 'stockx').length }), [allRows]);
+  // The orders on screen that have a label, per platform, in the pick list's order.
+  // Ticked orders (by sale id). Nothing ticked = every order on screen goes in the PDF.
+  const [picked, setPicked] = useState(() => new Set());
+  const togglePick = (id) => setPicked((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const withLabel = useMemo(() => groups.flatMap((g) => g.orders).filter((x) => UPLAT[x.platform] && labelLink(x)), [groups]);
+  const pickedN = useMemo(() => withLabel.filter((x) => picked.has(Number(x.id))).length, [withLabel, picked]);
+  const labelIds = useMemo(() => {
+    const out = { alias: [], stockx: [] };
+    for (const x of withLabel) if (!pickedN || picked.has(Number(x.id))) out[x.platform].push(Number(x.id));
+    return out;
+  }, [withLabel, picked, pickedN]);
+  const extraDocs = useMemo(() => (shown || []).filter((x) => x.platform === 'stockx' && x.ship_docs?.additionalRequired).length, [shown]);
+
+  async function labels(p) {
+    const ids = labelIds[p];
+    if (!ids.length) return;
+    if (ids.length > 300) { setError(`${ids.length} ${UPLAT[p]} labels is too many for one file — search or filter first (300 at most).`); return; }
+    setBusy(`labels-${p}`); setError(''); setNote('');
+    try {
+      const r = await api.presellLabelsPdf(p, ids);
+      const url = URL.createObjectURL(r.blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = r.filename; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      const miss = r.missing || [];
+      setNote(`${UPLAT[p]}: ${r.included} ${pickedN ? 'ticked ' : ''}label${r.included === 1 ? '' : 's'} in the PDF, in pick-list order.`
+        + (miss.length ? ` ${miss.length} NOT included — open ${miss.length === 1 ? 'its' : 'their'} own 🏷 Label: ${miss.slice(0, 12).map((m) => m.order_id).join(', ')}${miss.length > 12 ? '…' : ''}.` : '')
+        + (p === 'stockx' && extraDocs ? ` ${extraDocs} StockX order${extraDocs === 1 ? ' needs' : 's need'} extra documents — print ${extraDocs === 1 ? 'its' : 'their'} full instructions too.` : ''));
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message || 'Could not build the labels PDF.'); }
+    finally { setBusy(''); }
+  }
 
   async function check() {
     setBusy('sync'); setNote('');
@@ -2096,13 +2133,13 @@ function FulfillTab({ onSignOut }) {
     try {
       const rep = await import('../lib/presellReport.js');
       const at = new Date();
-      const scope = [only && `Only: ${WHERE[only].word}`, q.trim() && `Search: ${q.trim()}`].filter(Boolean).join('  |  ');
+      const scope = [plat && `Platform: ${UPLAT[plat]}`, only && `Only: ${WHERE[only].word}`, q.trim() && `Search: ${q.trim()}`].filter(Boolean).join('  |  ');
       const blob = fmt === 'csv'
         ? new Blob([rep.pickListCsv(shown, at.getTime())], { type: 'text/csv;charset=utf-8' })
         : (await rep.pickListPdf(shown, { generatedAt: `Generated ${estDate(at)} ${estTime(at)} EST`, scope, now: at.getTime() })).output('blob');
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = `presell-pick-list_${estToday()}.${fmt}`; a.click();
+      a.href = url; a.download = `presell-pick-list${plat ? `-${plat}` : ''}_${estToday()}.${fmt}`; a.click();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     } catch (err) { setError(err.message || 'Could not build the pick list.'); }
     finally { setBusy(''); }
@@ -2122,6 +2159,20 @@ function FulfillTab({ onSignOut }) {
           {view === 'to_ship' && <>
             <button type="button" className="btn sm" disabled={!!busy || !shown?.length} onClick={() => download('pdf')}>{busy === 'pdf' ? 'Building…' : '🖨 Pick list PDF'}</button>
             <button type="button" className="btn sm ghost" disabled={!!busy || !shown?.length} onClick={() => download('csv')}>{busy === 'csv' ? 'Building…' : '⬇ CSV'}</button>
+          </>}
+        </div>
+        <div className="ff-bar ff-platbar">
+          <Seg label="Platform" value={plat} onChange={setPlat} options={[['', 'Both', (allRows || []).length], ['alias', 'Alias', platN.alias], ['stockx', 'StockX', platN.stockx]]} />
+          {view === 'to_ship' && ['alias', 'stockx'].filter((p) => !plat || plat === p).map((p) => (
+            <button key={p} type="button" className="btn sm" disabled={!!busy || !labelIds[p].length} onClick={() => labels(p)}
+              title={labelIds[p].length ? `One PDF with the ${labelIds[p].length} ${UPLAT[p]} label${labelIds[p].length === 1 ? '' : 's'} ${pickedN ? 'you ticked' : 'on screen'}, in pick-list order` : pickedN ? `No ${UPLAT[p]} order is ticked` : `No ${UPLAT[p]} order on screen has a label yet`}>
+              {busy === `labels-${p}` ? 'Building…' : `🏷 ${UPLAT[p]} labels PDF (${labelIds[p].length}${pickedN ? ' ticked' : ''})`}
+            </button>
+          ))}
+          {view === 'to_ship' && withLabel.length > 0 && <>
+            <button type="button" className="btn sm ghost" disabled={!!busy || pickedN === withLabel.length} onClick={() => setPicked(new Set(withLabel.map((x) => Number(x.id))))}>Tick all</button>
+            {pickedN > 0 && <button type="button" className="btn sm ghost" disabled={!!busy} onClick={() => setPicked(new Set())}>Clear ({pickedN})</button>}
+            <span className="muted xs">{pickedN ? `${pickedN} ticked — the PDFs hold only these.` : 'Tick orders to put only those in the PDF; none ticked = all on screen.'}</span>
           </>}
         </div>
         <p className="muted xs ff-pass">
@@ -2148,7 +2199,7 @@ function FulfillTab({ onSignOut }) {
       </div>
       {error && <div className="error mt">{error}</div>}
       {shown == null ? <div className="card"><p className="muted">Loading…</p></div>
-        : !shown.length ? <div className="card"><p className="muted">{view === 'to_ship' ? (only || q ? 'Nothing matches.' : 'Nothing to ship — every pre-sell order has gone. 🎉') : 'None.'}</p></div>
+        : !shown.length ? <div className="card"><p className="muted">{view === 'to_ship' ? (only || q || plat ? 'Nothing matches.' : 'Nothing to ship — every pre-sell order has gone. 🎉') : 'None.'}</p></div>
           : groups.map((g) => (
             <div className="card ff-group" key={g.key}>
               <div className="ff-ghead">
@@ -2159,20 +2210,21 @@ function FulfillTab({ onSignOut }) {
                 </div>
                 <div className="ff-gcount"><b>{g.orders.length}</b> <span className="muted xs">{view === 'to_ship' ? 'to ship' : 'order'}{g.orders.length === 1 || view === 'to_ship' ? '' : 's'}</span></div>
               </div>
-              {g.orders.map((x) => <FulfillOrder key={x.id} x={x} now={now} toShip={view === 'to_ship'} />)}
+              {g.orders.map((x) => <FulfillOrder key={x.id} x={x} now={now} toShip={view === 'to_ship'} picked={picked.has(Number(x.id))} onPick={() => togglePick(Number(x.id))} />)}
             </div>
           ))}
     </>
   );
 }
 
-function FulfillOrder({ x, now, toShip }) {
+function FulfillOrder({ x, now, toShip, picked, onPick }) {
   const u = urgency(x.ship_by, now);
   const label = labelLink(x);
   const docs = x.ship_docs || {};
   return (
     <div className="ff-order">
       <div className="ff-o-main">
+        {toShip && label && <input type="checkbox" checked={!!picked} onChange={onPick} aria-label={`Put order ${x.order_id}'s label in the PDF`} />}
         <span className="ff-plat">{UPLAT[x.platform] || x.platform}</span>
         <CopyText text={x.order_id} className="ap-mono">{x.order_id}</CopyText>
         {toShip && x.where && <span className={`ff-where ${x.where}`}>{WHERE[x.where].word}</span>}

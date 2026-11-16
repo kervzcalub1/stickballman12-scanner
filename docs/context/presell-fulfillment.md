@@ -55,6 +55,29 @@ time left (red late, amber < 24 h), where, UPS tracking link, **🏷 Label** (St
 PDF, else PNG; Alias PDF), StockX **Instructions 4×6 / Letter**; a warning when StockX needs
 extra documents or the platform status is unusual.
 
+## Labels by platform — one PDF, all on screen or only the ticked orders (2026-11-16)
+Owner's ask: download the shipping labels from this tab as a PDF, **Alias and StockX apart**, and
+choose which orders go in.
+- **Platform** switch under the bar: **Both / Alias / StockX** with counts (`?plat=`). It narrows the
+  list, the totals and the pick list (file name gets `-alias` / `-stockx`). "Where is the pair" is
+  still worked out over both platforms first — they share the set-aside pairs.
+- **🏷 Alias labels PDF (n)** and **🏷 StockX labels PDF (n)** (To ship view): ONE PDF per platform,
+  one label after the other, in the pick list's order. On Both, both buttons show.
+- **Tick boxes** on every order that has a label, plus **Tick all** / **Clear (n)**. Something
+  ticked → the PDFs hold only the ticked orders (`(n ticked)`); nothing ticked → every order on
+  screen. Ticks are page state, not in the URL.
+- `POST /api/presell-listings/labels { platform, ids }` (warehouse, PH, admin; 12 a minute; 300
+  orders a call) → `mergeLabels` (`api/_lib/presell-labels.js`): the files are fetched **on our
+  server** (other origins the browser can't read), 6 at a time. A PDF's pages are copied as they
+  are (the barcode stays UPS's own); a PNG/JPG label gets its own 4 x 6 in page. The links are read
+  from OUR rows by sale id, never taken from the request; https only, no IP / localhost.
+- **Never an empty or silently short file:** no label fetched → 502 with the reason; some missing →
+  the PDF plus `X-Labels-Missing`, and the tab names those order numbers to open one by one.
+  StockX orders needing extra documents are counted in the message (print their full instructions).
+- No schema change. Checked 2026-11-16 on real links from a prod copy: 4 Alias (288 x 450 pt pages)
+  and 4 StockX (label-only PDFs, 812 x 1218 pt = 4 x 6 ratio) merged in 2–3 s. **Not checked: a real
+  print on the thermal printer** (StockX pages are large; print "fit to page").
+
 ## Pick list (`pickListPdf` / `pickListCsv` in `src/lib/presellReport.js`)
 Letter **portrait**, ASCII only: totals box, then a bar per SKU + size ("3 to ship: 2 set aside,
 1 in transit") and a row per order with a **tick box**, ship by (EST), time left, platform,

@@ -1,4 +1,5 @@
-// POST /api/presell-listings/labels { platform: 'alias' | 'stockx', ids: [presell_sales.id …] }
+// POST /api/presell-listings/labels { platform: 'alias' | 'stockx', ids: [presell_sales.id …], with?: 'instructions' }
+//      with: 'instructions' (StockX only) = StockX's shipping-instructions sheet + the label, per order.
 //      -> ONE PDF: those orders' shipping labels, in the order given (the pick list's order).
 //         Headers: X-Labels-Included (count), X-Labels-Missing (URI-encoded JSON
 //         [{ order_id, reason }] — the ones that could not go in).
@@ -22,6 +23,8 @@ export default async function handler(req, res) {
     const b = await getJsonBody(req);
     const platform = String(b.platform || '').toLowerCase();
     if (!PLATFORMS.has(platform)) return send(res, 400, { ok: false, error: 'Pick a platform: Alias or StockX.' });
+    const withDoc = b.with === 'instructions' ? 'instructions' : 'label';
+    if (withDoc === 'instructions' && platform !== 'stockx') return send(res, 400, { ok: false, error: 'Only StockX has shipping instructions.' });
     const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
     if (!ids.length) return send(res, 400, { ok: false, error: 'No orders were sent.' });
     if (ids.length > LABELS_MAX) return send(res, 400, { ok: false, error: `Too many orders at once (${ids.length}). Download at most ${LABELS_MAX} labels at a time — search or filter first.` });
@@ -32,11 +35,11 @@ export default async function handler(req, res) {
     const sales = ids.map((id) => byId.get(id)).filter(Boolean);
     if (!sales.length) return send(res, 404, { ok: false, error: 'None of those orders were found on that platform.' });
 
-    const { bytes, included, missing } = await mergeLabels(sales);
+    const { bytes, included, missing } = await mergeLabels(sales, { with: withDoc });
     if (!bytes) {
       return send(res, 502, { ok: false, error: `No label could be downloaded${missing[0] ? ` (${missing[0].reason})` : ''}. Press “Check status now”, then try again.`, missing });
     }
-    const name = `presell-labels-${platform}_${estYmd()}.pdf`;
+    const name = `presell-${withDoc === 'instructions' ? 'instructions-labels' : 'labels'}-${platform}_${estYmd()}.pdf`;
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Length', String(bytes.length));

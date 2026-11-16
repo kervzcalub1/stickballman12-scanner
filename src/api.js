@@ -517,11 +517,11 @@ export const api = {
   presellFulfill: (params = {}) => get(`/api/presell-listings/fulfill?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString()}`),
   presellFulfillSync: () => post('/api/presell-listings/fulfill', { action: 'sync' }),
   // Every shipping label of ONE platform in one PDF → { blob, filename, included, missing }.
-  presellLabelsPdf: async (platform, ids) => {
+  presellLabelsPdf: async (platform, ids, withDoc = null) => {
     const t = getToken();
     const res = await fetch('/api/presell-listings/labels', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) },
-      body: JSON.stringify({ platform, ids }),
+      body: JSON.stringify({ platform, ids, ...(withDoc ? { with: withDoc } : {}) }),
     });
     if (res.status === 401) { clearAuth(); const err = new Error('Session expired. Please sign in again.'); err.unauthorized = true; throw err; }
     if (!res.ok) {

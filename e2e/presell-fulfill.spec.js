@@ -184,6 +184,15 @@ test('labels: PDFs and pictures merge in the order given; what could not go in i
   expect(out.getPageCount()).toBe(3);   // 2 pages of A1 + the picture of A2 on its own 4x6 page
   // Nothing usable → no file at all.
   expect((await mergeLabels([{ id: 4, order_id: 'A4', label_url: null }], { fetcher })).bytes).toBeNull();
+  // StockX instructions: the thermal sheet, else the letter sheet, else the bare label.
+  const { docLink } = await import('../api/_lib/presell-labels.js');
+  const sxRow = { label_url: 'https://l.example/l.png', ship_docs: { thermal: 'https://l.example/t.pdf', letter: 'https://l.example/n.pdf', labelOnly: 'https://l.example/a.pdf' } };
+  expect(docLink(sxRow, 'instructions')).toBe('https://l.example/t.pdf');
+  expect(docLink({ ...sxRow, ship_docs: { letter: 'https://l.example/n.pdf' } }, 'instructions')).toBe('https://l.example/n.pdf');
+  expect(docLink({ label_url: 'https://l.example/l.png', ship_docs: null }, 'instructions')).toBe('https://l.example/l.png');
+  expect(docLink(sxRow)).toBe('https://l.example/a.pdf');
+  const ins = await mergeLabels([{ id: 1, order_id: 'S1', label_url: null, ship_docs: { thermal: 'https://l.example/a.pdf' } }], { fetcher, with: 'instructions' });
+  expect(ins.included).toEqual(['S1']);
   for (const bad of ['http://x.com/a.pdf', 'https://localhost/a', 'https://10.0.0.1/a', 'https://[::1]/a', 'file:///etc/passwd', 'nope'])
     expect(labelUrlAllowed(bad)).toBe(false);
 });
@@ -195,6 +204,8 @@ test('labels endpoint: roles, platform, ids; a label that cannot be fetched is a
   expect((await post('warehouse', { platform: 'ebay', ids: [sx.id] })).status()).toBe(400);
   expect((await post('warehouse', { platform: 'stockx', ids: [] })).status()).toBe(400);
   expect((await post('warehouse', { platform: 'stockx', ids: Array.from({ length: 301 }, (_, i) => i + 1) })).status()).toBe(400);
+  // Instructions exist on StockX only.
+  expect((await post('warehouse', { platform: 'alias', ids: [sx.id], with: 'instructions' })).status()).toBe(400);
   // The StockX order asked for as Alias: not found on that platform.
   expect((await post('ph_team', { platform: 'alias', ids: [sx.id] })).status()).toBe(404);
   // Its label lives on l.example, which does not exist → nothing downloaded → 502 with the order named.
@@ -235,6 +246,10 @@ test('📦 Fulfill tab: Alias / StockX split, tick orders, one labels PDF per pl
   const { rows: [sx] } = await db.query(`SELECT id FROM presell_sales WHERE order_id = $1`, [`QAF${stamp}S`]);
   expect(sent).toEqual({ platform: 'stockx', ids: [Number(sx.id)] });
   await expect(page.getByText('StockX: 1 ticked label in the PDF')).toBeVisible();
+  // StockX's instructions sheet + label, for the same ticked order.
+  const [dl2] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '📄 StockX instructions + labels PDF (1 ticked)' }).click()]);
+  expect(dl2).toBeTruthy();
+  expect(sent).toEqual({ platform: 'stockx', ids: [Number(sx.id)], with: 'instructions' });
   await page.getByRole('button', { name: 'Clear (1)' }).click();
   await expect(page.getByRole('button', { name: '🏷 StockX labels PDF (1)' })).toBeEnabled();
 });

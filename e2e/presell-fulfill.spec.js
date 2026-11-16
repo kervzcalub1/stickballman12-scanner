@@ -159,3 +159,82 @@ test('📦 Fulfill tab on a phone: card per SKU + size, label, pick list PDF', a
   expect(text).toContain(`QAF${stamp}S`);
   expect(text).toContain('1ZR1H014YW30521120');
 });
+
+// ---- Labels by platform: one PDF per platform, all on screen or only the ticked orders ----
+const PNG_1PX = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+
+test('labels: PDFs and pictures merge in the order given; what could not go in is named', async () => {
+  const { PDFDocument } = await import('pdf-lib');
+  const { mergeLabels, labelUrlAllowed } = await import('../api/_lib/presell-labels.js');
+  const two = await PDFDocument.create(); two.addPage([288, 432]); two.addPage([288, 432]);
+  const twoPages = Buffer.from(await two.save());
+  const files = { 'https://l.example/a.pdf': twoPages, 'https://l.example/b.png': PNG_1PX, 'https://l.example/junk.pdf': Buffer.from('<html>expired</html>') };
+  const fetcher = async (url) => { if (!files[url]) throw new Error('HTTP 403'); return files[url]; };
+  const r = await mergeLabels([
+    { id: 1, order_id: 'A1', label_url: 'https://l.example/old.png', ship_docs: { labelOnly: 'https://l.example/a.pdf' } },   // label-only PDF beats the PNG
+    { id: 2, order_id: 'A2', label_url: 'https://l.example/b.png' },
+    { id: 3, order_id: 'A3', label_url: 'https://l.example/gone.pdf' },
+    { id: 4, order_id: 'A4', label_url: null },
+    { id: 5, order_id: 'A5', label_url: 'https://l.example/junk.pdf' },
+    { id: 6, order_id: 'A6', label_url: 'http://169.254.169.254/latest' },
+  ], { fetcher });
+  expect(r.included).toEqual(['A1', 'A2']);
+  expect(r.missing.map((m) => [m.order_id, m.reason])).toEqual([['A3', 'HTTP 403'], ['A4', 'no label yet'], ['A5', 'not a PDF or a picture'], ['A6', 'label link not usable']]);
+  const out = await PDFDocument.load(r.bytes);
+  expect(out.getPageCount()).toBe(3);   // 2 pages of A1 + the picture of A2 on its own 4x6 page
+  // Nothing usable → no file at all.
+  expect((await mergeLabels([{ id: 4, order_id: 'A4', label_url: null }], { fetcher })).bytes).toBeNull();
+  for (const bad of ['http://x.com/a.pdf', 'https://localhost/a', 'https://10.0.0.1/a', 'https://[::1]/a', 'file:///etc/passwd', 'nope'])
+    expect(labelUrlAllowed(bad)).toBe(false);
+});
+
+test('labels endpoint: roles, platform, ids; a label that cannot be fetched is an error, not an empty file', async ({ request }) => {
+  const { rows: [sx] } = await db.query(`SELECT id FROM presell_sales WHERE order_id = $1`, [`QAF${stamp}S`]);
+  const post = (role, data) => request.post('/api/presell-listings/labels', { headers: as(role), data });
+  expect((await post('supplier', { platform: 'stockx', ids: [sx.id] })).status()).toBe(403);
+  expect((await post('warehouse', { platform: 'ebay', ids: [sx.id] })).status()).toBe(400);
+  expect((await post('warehouse', { platform: 'stockx', ids: [] })).status()).toBe(400);
+  expect((await post('warehouse', { platform: 'stockx', ids: Array.from({ length: 301 }, (_, i) => i + 1) })).status()).toBe(400);
+  // The StockX order asked for as Alias: not found on that platform.
+  expect((await post('ph_team', { platform: 'alias', ids: [sx.id] })).status()).toBe(404);
+  // Its label lives on l.example, which does not exist → nothing downloaded → 502 with the order named.
+  const r = await post('warehouse', { platform: 'stockx', ids: [sx.id] });
+  expect(r.status()).toBe(502);
+  expect((await r.json()).missing[0].order_id).toBe(`QAF${stamp}S`);
+});
+
+test('📦 Fulfill tab: Alias / StockX split, tick orders, one labels PDF per platform', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  const { PDFDocument } = await import('pdf-lib');
+  const pdf = await PDFDocument.create(); pdf.addPage([288, 432]);
+  const bytes = Buffer.from(await pdf.save());
+  let sent = null;
+  await page.route('**/api/presell-listings/labels', async (route) => {
+    sent = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: 'application/pdf', body: bytes,
+      headers: { 'Content-Disposition': 'attachment; filename="presell-labels-stockx_2026-11-16.pdf"', 'X-Labels-Included': '1', 'X-Labels-Missing': encodeURIComponent('[]') } });
+  });
+  await page.goto(`/presell-listings?tab=fulfill&fq=${SKU}`);
+  const card = page.locator('.ff-group').filter({ hasText: SKU });
+  await expect(card).toBeVisible();
+  const plat = page.getByRole('group', { name: 'Platform' });
+  // Only the StockX order is still to ship (the Alias one shipped).
+  await expect(page.getByRole('button', { name: '🏷 StockX labels PDF (1)' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '🏷 Alias labels PDF (0)' })).toBeDisabled();
+  await plat.getByRole('button', { name: /^Alias/ }).click();
+  await expect(page).toHaveURL(/plat=alias/);
+  await expect(page.getByText('Nothing matches.')).toBeVisible();
+  await expect(page.getByRole('button', { name: /StockX labels PDF/ })).toHaveCount(0);
+  await plat.getByRole('button', { name: /^StockX/ }).click();
+  await expect(card).toBeVisible();
+  // Tick the order → the button counts ticked orders, and only those are sent.
+  await card.getByRole('checkbox', { name: new RegExp(`QAF${stamp}S`) }).check();
+  const btn = page.getByRole('button', { name: '🏷 StockX labels PDF (1 ticked)' });
+  const [dl] = await Promise.all([page.waitForEvent('download'), btn.click()]);
+  expect(dl.suggestedFilename()).toBe('presell-labels-stockx_2026-11-16.pdf');
+  const { rows: [sx] } = await db.query(`SELECT id FROM presell_sales WHERE order_id = $1`, [`QAF${stamp}S`]);
+  expect(sent).toEqual({ platform: 'stockx', ids: [Number(sx.id)] });
+  await expect(page.getByText('StockX: 1 ticked label in the PDF')).toBeVisible();
+  await page.getByRole('button', { name: 'Clear (1)' }).click();
+  await expect(page.getByRole('button', { name: '🏷 StockX labels PDF (1)' })).toBeEnabled();
+});

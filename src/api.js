@@ -516,6 +516,24 @@ export const api = {
   presellCompete: () => get('/api/presell-listings/compete'),
   presellFulfill: (params = {}) => get(`/api/presell-listings/fulfill?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString()}`),
   presellFulfillSync: () => post('/api/presell-listings/fulfill', { action: 'sync' }),
+  // Every shipping label of ONE platform in one PDF → { blob, filename, included, missing }.
+  presellLabelsPdf: async (platform, ids) => {
+    const t = getToken();
+    const res = await fetch('/api/presell-listings/labels', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+      body: JSON.stringify({ platform, ids }),
+    });
+    if (res.status === 401) { clearAuth(); const err = new Error('Session expired. Please sign in again.'); err.unauthorized = true; throw err; }
+    if (!res.ok) {
+      let msg = `Download failed (${res.status})`;
+      try { const d = await res.json(); if (d.error) msg = d.error; } catch { /* not json */ }
+      throw new Error(msg);
+    }
+    let missing = [];
+    try { missing = JSON.parse(decodeURIComponent(res.headers.get('X-Labels-Missing') || '[]')); } catch { /* no list */ }
+    const m = /filename="?([^"]+)"?/.exec(res.headers.get('Content-Disposition') || '');
+    return { blob: await res.blob(), filename: m ? m[1] : `presell-labels-${platform}.pdf`, included: Number(res.headers.get('X-Labels-Included')) || 0, missing };
+  },
   presellCompeteSet: (body) => post('/api/presell-listings/compete', body),
   setPresellListingsSettings: (body) => post('/api/presell-listings/settings', body),
   onlineOrderByTracking: (t) => get(`/api/online-orders/by-tracking?t=${encodeURIComponent(t)}`),

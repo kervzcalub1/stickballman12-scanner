@@ -11265,6 +11265,11 @@ export async function updatePresellSaleShip(id, f) {
     RETURNING id`;
   return r.length > 0;
 }
+// The label links of the named orders of ONE platform (labels PDF, presell-labels.js).
+export async function presellSalesForLabels(ids, platform) {
+  return await db()`SELECT id, platform, order_id, label_url, ship_docs
+                      FROM presell_sales WHERE id = ANY(${ids}::bigint[]) AND platform = ${platform}`;
+}
 // The 📦 Fulfill tab. view: to_ship (incl. not read yet) | shipped | cancelled.
 // shipped_n = this stock row's orders already gone — they used up set-aside pairs.
 export async function listPresellFulfill({ view = 'to_ship', q = null, limit = 2000 } = {}) {

@@ -89,6 +89,7 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
 | `src/components/SheinBulkPublish.jsx` | Bulk edit before publishing (2026-10-28): the ticked new shoes, what blocks each, fixes grouped by key, "Dry run publish (n ready)" |
 | `src/screens/SheinListingsSetup.jsx` | Phase 4: the Setup tab (`?tab=setup`, `?pt=`) — store gates, D6 box, category map, brand map, SHEIN details per product type |
 | `src/lib/sheinCutover.js`, `api/shein/listing-cutover.js`, `src/components/SheinCutover.jsx` | Phase 5: the cut-over / go-live checks (pure), the endpoint, the two Setup cards + the strip line |
+| `src/lib/sheinRejected.js` | 2026-11-17: "Rejected by SHEIN" rows + the action that resubmits each (`rejectedList`, `nextFor`; pure) — data from `rejectedListingData` (db.js) |
 
 ## Tables (`scripts/db-setup.mjs`; live = in `LIVE_TABLES`)
 - `shein_listing_cache` (kind, key, payload, fetched_at) — kinds: `probe`/`last` (the Ask-SHEIN answer),
@@ -99,8 +100,10 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
   days (once per EST day, from the tick).
 - `shein_listing_products` (live) — one row per Shopify product (`shopify_product_id` = gid) or per
   SHEIN product none of whose sizes Shopify has (`shein:<spu>`). Roll-up `status`, `counts`
-  `{ all, sizes (in stock), on_shein, shein_only, by }`, `blockers`, `spu`, `category_id`, `excluded`,
-  `shopify_hash` (listing fields, no stock), `shopify_json` (what the recompute reads), `search_text`.
+  `{ all, sizes (in stock), on_shein, shein_only, by }`, `blockers` (from the COUNTED sizes — see "The list API"),
+  `idle_blockers` (2026-11-17: reasons only zero-stock sizes carry), `spu`, `category_id`, `excluded`,
+  `shopify_hash` (listing fields, no stock), `shopify_json` (what the recompute reads), `search_text`, and the
+  GENERATED `search_norm` / `search_compact` (2026-11-17, the search; never written by code).
 - `shein_listing_variants` (live) — one row per Shopify variant (`row_key` = variant gid) or SHEIN-only
   size (`shein:<skuCode>`): Shopify side, SHEIN side, `match` (sku|link|published|none), `status`,
   `blockers`/`notes`/`diffs` (`{code, field, params}` only — text comes from `BLOCKERS`), `size_plan`
@@ -117,6 +120,7 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
 ## Statuses, matching, sizes (the rules)
 - 8 statuses + internal `unknown`; roll-up = worst of the IN-STOCK sizes: blocked > error > out_of_date >
   not_on_shein > shein_only > in_review > synced > excluded. Zero-stock sizes don't count (D10).
+  The shoe's `blockers` come from the same counted sizes (2026-11-17); a zero-stock size's reason is an `idle_blockers` entry.
 - Match: SHEIN `supplierSku` == Shopify `variant.sku`; else a pending `shein_links` relink
   (`link_sku` ≠ what SHEIN shows) → **Needs update** (`out_of_date`, diff `seller_sku`: "SHEIN has the wrong SKU"). Never the SPU/SKC
   `supplierCode` (4seller's borrowed parent SKU), never the title. A SHEIN size no variant has →
@@ -156,16 +160,11 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
   next re-read catches it). Registered by the admin action `webhooks` (same URL + HMAC as the stock webhook).
 
 ## Endpoints (gates: applySecurity → requireRole(['ph_team']) (admin auto) → privilege read fresh → rateLimit → getJsonBody)
-- `GET /api/shein/listings?status=&blocker=&q=&brand=&page=&pageSize=50&sort=worst|title|updated|coverage`
-  → `{ ok, connected, configured, canWrite, isAdmin, summary, products, total, page, pageSize }`.
-  `status` '' = all but Off; `excluded` = Off; `all`. `summary` = `{ all, off, byStatus: {code: {products,
-  sizes, inStock}}, tiles, order, topBlockers: [{code, sizes, products, level, title}], brands: [{brand,
-  products}], lastSnapshot, latestSnapshot, activeJob, probe: {askedAt, jobId, categories} | null, hooks }`.
-  Product rows: the table's columns (no `shopify_json`/`search_text`/`computed_hash`) + rendered
-  `blockers`, `worst`, `shopifyUrl`. `&shopify=active|inactive` (2026-10-28, 400 otherwise): active = ACTIVE on
-  Shopify with stock > 0 on a size not left off (`EXISTS` on `shein_listing_variants.shopify_qty`, no new column);
-  inactive = the rest (draft / archived / 0 pairs / SHEIN-only rows). Every list answer carries
-  `shopifyCounts: { active, inactive }` for the same status / blocker / q / brand.
+- `GET /api/shein/listings?status=&any=&blocker=&q=&brand=&shopify=&page=&pageSize=50&sort=worst|title|updated|coverage`
+  — the list + its summary. **Full contract (2026-11-17): "The list API" below.** `&shopify=active|inactive`
+  (2026-10-28, 400 otherwise): active = ACTIVE on Shopify with stock > 0 on a size not left off (`EXISTS` on
+  `shein_listing_variants.shopify_qty`, no new column); inactive = the rest (draft / archived / 0 pairs / SHEIN-only rows).
+- `GET ?rejected=1[&q=&brand=&off=1]` (PH ok, DB only) — "Rejected by SHEIN", below.
 - `GET ?publishSetup=<gid,gid,…>` (≤ 100 → else 400; PH ok; DB only) — bulk edit before publishing, below.
 - `GET ?product=<gid>` → `{ ok, product, variants (rendered blockers + notes), jobItems (last 5),
   log (last 20 for its SPU; bodies admin-only), canWrite, isAdmin }`; 404 unknown.
@@ -475,9 +474,9 @@ idempotency and look-before-resend as Phase 2.
   wrong SKU: A → will change to B"; a Shopify-side change → "Shopify price changed: … → …". Button
   **Dry run the update** (that product, ops price + edit). SHEIN stock · price column shows "off" and
   was → new. Amber = what SHEIN has now (`.shl-was`).
-- **Tiles / `?status=` (decision 2026-10-27):** a product is listed under EVERY status one of its counted
-  sizes has (in-stock + SHEIN-only; else all) — `shein_listing_products.size_statuses`; a tile's count is
-  its list's length (tiles may add up to more than All). The roll-up chip still shows the WORST status,
+- **Tiles / `?status=` (decision 2026-10-27, SUPERSEDED 2026-11-17):** a product was listed under EVERY status one of its
+  counted sizes has — `shein_listing_products.size_statuses`. Now a tile = the WHOLE shoe (its roll-up status); the
+  old list is `?status=<s>&any=1` (see "The list API"). The roll-up chip still shows the WORST status,
   with the blue side chip **"n need an update"**.
 - **Two dry runs, named apart** (selection bar and drawer footer, after "Dry run first — nothing is
   sent:"): **Add missing sizes** (`preview {productIds}`, Phase 2) and **Update prices & sizes**
@@ -1060,7 +1059,9 @@ the planner" + the piece test.
 - **Cut-over lines** (each ✓ / ✕ / … counting, with "How it's checked"): (a) paused + last action ≥ 14 days ago;
   (b) every ACTIVE Shopify shoe with `first_seen_at` ≥ the start reached an answer within 2 days (`settled_at −
   first_seen_at`; answer = Synced / In review / Blocked-Error with a non-note blocker / a person's Don't list) — late
-  or missed shoes listed, each opens the drawer; (c) a finished nightly snapshot on every EST night after the start
+  or missed shoes listed, each opens the drawer; (c) a finished AUTOMATIC snapshot on every EST night after the start
+  (2026-11-17: the nightly OR the every-30-min read, `started_by LIKE 'auto (%'`, `isAutoSnapshot`; it counted only
+  `auto (nightly%` and could never pass after the switch to every 30 min on 2026-11-10)
   day (tonight counts after 04:00 EST); (d) no `interrupted` job (each → Jobs `?job=`); (e) in-stock sizes of ACTIVE
   shoes on SHEIN without a SHEIN SKU ≤ those blocked for a SHEIN-controlled reason (`SHEIN_CONTROLLED`); a person's
   Don't-list sizes shown, not counted. Window start = the paused tick's time; "Ready to cancel 4seller" only when all
@@ -1073,6 +1074,104 @@ the planner" + the piece test.
   (`shein_box_defaults.confirmed`), the three pilots (ticks).
 - **SOP:** `ph-shein-listings` in `src/lib/sop/articles.ph.js` (PH + admin + superadmin).
 - e2e (`shein-listings.spec.js` → "Phase 5", +10).
+
+## The list API — tiles, counts, search, "Rejected by SHEIN" (built 2026-11-17, stage 1 of the page fixes)
+**Why (owner: "the filters are buggy"; audit on the local copy of prod):** "Synced" said 515 while 384 shoes were synced
+(a tile matched a shoe with ANY counted size in that status) and its page 1 was red Blocked rows; the counts ignored the
+search / brand / Shopify filter, reasons stopped at 12 and brands at 60; a Synced shoe showed (and was filtered by) a red
+reason from a size with 0 pairs; "DQ7659101", "bold gazelle", "air force 1 07" and curly quotes found nothing; the reason
+dropdown printed blanks ("Only 0 photos…"); cut-over line (c) could never pass; Setup saves left `brand_unset` /
+`no_category` until the next re-read; a rejected never-live shoe was refused by the bulk editor as "already on SHEIN".
+The page itself is unchanged (stage 3 builds on this); the old query keys keep their names.
+
+**`GET /api/shein/listings`** (PH + admin; DB only except the connection check)
+| Param | Values | Meaning |
+|---|---|---|
+| `status` | '' (default) · `all` · a tile code · `excluded` · `unknown` | '' = every shoe not off; a tile code = shoes whose OVERALL (roll-up) status is it; `excluded` = off; 400 for anything else |
+| `any` | `1` / `true` | with a tile code: shoes with at least one COUNTED size in that status (the 2026-10-27 meaning); the ones whose overall status is it come first |
+| `q` | text ≤ 120 | every word must match, any order, case-insensitive; quotes (straight, curly, prime) and commas dropped; a word with a digit / dash / underscore also matches with spaces, dashes, underscores removed on both sides; LIKE-safe. Searches title, style, handle, vendor, product gid, SPU, every seller SKU, SHEIN SKU, SKC |
+| `brand` | vendor | any case |
+| `blocker` | a code `[a-z_]+` | the code is in the shoe's `blockers` (its counted sizes) |
+| `shopify` | `active` · `inactive` | as before |
+| `sort` | `worst` (default) · `title` · `updated` · `coverage` | worst = status order (blocked → … → synced) then title; title = A→Z; updated = Shopify's updated time, newest first; coverage = share of in-stock sizes on SHEIN, lowest first (a shoe with nothing in stock counts as 100 %); ties → title. Unknown → `worst` (the answer's `sort` says which) |
+| `page`, `pageSize` | ≥ 1; 1–200 (default 50) | a page past the end returns the LAST page |
+
+Answer: `{ ok, connected, configured, canWrite, isAdmin, products, total, page (the page actually returned), pages,
+pageSize, sort, any, shopifyCounts {active, inactive} (= summary.shopify), summary }`.
+- **Product row**: the table's columns (never `shopify_json`, `search_text`, `search_norm`, `search_compact`,
+  `computed_hash`) + rendered `blockers` (each `{ code, label, title, fix, level, action, sheinSaid, sizes }` — what the shoe
+  is judged on), `idleBlockers` (same shape: reasons that sit ONLY on 0-stock sizes — show greyed "(out of stock)"),
+  `worst` (first non-note of `blockers`, or null), `shopifyUrl`, raw `idle_blockers`.
+- **`summary`** — every count follows the list's filters EXCEPT its own, so a number is the `total` of the list it opens:
+  - `byStatus[code] = { products, anySize, sizes, allSizes, inStock }` — `products` = shoes whose overall status is code
+    (the tile; `?status=code`), `anySize` = shoes with a counted size in it (`?status=code&any=1`; "384 synced · 131 more
+    have a synced size" = products · anySize − products), `sizes` = counted sizes (in stock or SHEIN-only) in that status,
+    `allSizes` = every size, `inStock` = Shopify qty > 0. Follows q + brand + blocker + shopify (not status).
+  - `all` / `off` (the "All" tile, "Not listing") — same filters as the tiles; `store: { all, off }` = no filter at all.
+  - `brands: [{ brand, products }]` (every vendor, one row per vendor any case, its most used spelling; most first) —
+    follows q + status/any + blocker + shopify.
+  - `topBlockers: [{ code, label, title (= label), products, sizes, level }]` (every code, most products first) — from the
+    shoes' `blockers` (counted sizes), follows q + status/any + brand + shopify. `label` is plain ("Not enough photos").
+  - `shopify: { active, inactive }` — follows q + status/any + brand + blocker.
+  - `rejected` — how many rows `?rejected=1` has for the same q + brand.
+  - `filters` (echo), `tiles`, `order`, `lastSnapshot`, `latestSnapshot`, `activeJob`, `probe`, `hooks`, `autoPrice` as before.
+- **Blockers a shoe is judged on** (`productReadiness`, `src/lib/sheinListings.js`): from its counted sizes (in stock +
+  SHEIN-only — the roll-up's pool) when it has any; the rest go to `idle_blockers`. No counted size → every size (as before).
+  Each blocker's `sizes` = sizes of ITS pool carrying it. Stored rows change on the next recompute: on prod the next
+  automatic Refresh (every 30 min) rewrites every product once (the computed hash changes) — nothing to run by hand.
+- **Search columns** `search_norm` / `search_compact` are GENERATED from `search_text` (`scripts/db-setup.mjs`; the JS twin
+  is `normSearchText` / `compactSearch` / `searchTerms` / `searchMatches` — keep the character sets the same). Filled by
+  `db:setup` itself. Measured on the local copy (1,204 shoes): list ≈ 15–25 ms, the summary (one statement) ≈ 20–30 ms warm.
+- **Labels**: every `BLOCKERS` entry has `label`; `blockerLabel(code)` (unknown code → "Some new code"); `renderBlocker` adds it.
+- `preview {filter}` uses the same list (whole-shoe `status`, `filter.any` honoured) and stops at the real last page.
+- `listing-maps` saves (category set / clear, SHEIN details default set / clear, brand set / clear / no brand) now recount at
+  once like the box and size maps (`recomputed: true|false` in the answer); `recomputeStored` runs one at a time per process
+  (calls meanwhile share ONE follow-up run that starts after the current one; `recomputeBusy()`).
+- `?publishSetup=` offers a shoe whose publish SHEIN rejected (it keeps the SPU it was sent as, but `neverLive`); a shoe live
+  on SHEIN is still skipped "already on SHEIN". (The preview by `filter` with `ops:['publish']` still picks shoes without
+  an SPU only — a rejected never-live shoe goes by `productIds`.)
+
+**"Rejected by SHEIN" — `GET /api/shein/listings?rejected=1[&q=&brand=&off=1]`** (PH + admin, DB only;
+`rejectedListingData` in db.js → `rejectedList` in `src/lib/sheinRejected.js`, pure) → `{ ok, rows, total, canWrite, isAdmin }`.
+From OUR send records only: the latest RUN item per (shoe, op) that is `failed` with `review_rejected` (SHEIN's review) or
+`shein_prevalid` (SHEIN's pre-check refused it) — a later send of the same op supersedes it; a rejected PUBLISH counts only
+while the shoe is never live; plus sizes whose `last_error` is one of those and still shown (unchanged since, not left off).
+Off shoes (not active on Shopify / "Don't list") only with `off=1`. Newest first. A row:
+`{ productId, title, style, vendor, imageUrl, shopifyStatus, shopifyUrl, status, spu, neverLive, live, stock: { pairs,
+sizesInStock, sizes }, what ('publish'|'add_sizes'|'photos'|'edit'|'price'|'model'|'sizes'), whatLabel, code, reason (SHEIN's
+words), module, isPhoto, at, jobId, itemId, sizes (affected), sizeNames, publishAgain: {by, at} | null (pressed since),
+rejections: [{ op, what, whatLabel, code, reason, module, traceId, at, sentAt, jobId, itemId, source 'send'|'size_error',
+sizes, next }], next }`. `next = { action, label, who ('ph_team' | 'admin_or_connect_integrations'), confirmNeeds, canPress
+(for THIS user), ops, fixFirst ('photos' | null), say }`:
+| `next.action` | When | What the button does |
+|---|---|---|
+| `publish_again` | a never-live shoe's publish rejected, Publish again not pressed since | `POST {action:'publish_again', productIds}` (admin / Connect integrations; 403 else) then `preview {productIds, ops:['publish']}`; photo rejection → fix photos first |
+| `preview_publish` | the same, Publish again already pressed | `preview {productIds, ops:['publish']}` (PH ok) → Confirm on the sheet (admin / priv) |
+| `preview_photos` | photos op rejected, or add-sizes rejected for its photos with no photo replacement done since | fix photos (Choose photos) → `preview {ops:['photos']}` → Confirm |
+| `preview_add_sizes` | add-sizes rejected (not photos, or photos already replaced) | `preview {productIds}` — `planAddSizes` re-tries sizes in Error with review_rejected / shein_prevalid / api_error |
+| `preview_update` / `preview_model` | edit / price, model rejected | `preview {ops:['price','edit']}` / `{ops:['model']}` |
+| null | the shoe is off | `say` explains (list it again / activate on Shopify) |
+What the existing actions do (read, not changed): **`publish_again`** — sets `publish_again_by/at` on the shoes and releases
+the idempotency key of their failed publish items; writes nothing to SHEIN, starts no preview, doesn't check the shoe was
+rejected; the next publish preview no longer adds `publish_rejected`. **`send_again`** — ONLY a publish item `failed` with
+`publish_unconfirmed` whose two looks (≥ 30 min after the send) found nothing (`response.send_again_ok`); refuses everything
+else ("Look again first…") — so it never resubmits a rejection. **`retry`** — only run items `deferred`, or `failed` with
+`api_error` (not publish); a SHEIN refusal is refused "SHEIN refused it — fix it, then dry run again", `changed` → "dry run
+again". The `review_rejected` blocker's own button (`send_again` kind) is drawn disabled ("Coming in a later phase").
+**SHEIN's own list of rejected products (not ours, e.g. 4seller's): there is none in the API we have documented.**
+`product/query` (doc 3001239) lists only products that PASSED review ("已发布成功"; its insert time = first approval);
+`spu-info` answers only approved SPUs; `searchProduct` (doc 3001938) filters by codes, shelf status, category and publish /
+update time (publish time = first approval) — no review-state filter or field; `query-document-state` (doc 3001368) gives
+`documentState` (-1 not received · 1 pending · 2 approved · 3 rejected · 4 withdrawn · 5 appeal) + `failedReason` per SKC,
+but only for SPU names we pass (≤ 10 a call). So: a product SHEIN rejected WITHOUT ever approving is invisible to us unless
+we sent it; an APPROVED product whose later edit (by anyone, 4seller included) SHEIN rejected shows up through
+`query-document-state`, which the snapshot already calls for every SPU it reads — stored as `review_state` 3 + `review_reason`
+on the shoe (0 such shoes on the local copy, 2026-11-17; not yet part of `?rejected=1`). The `…_all_channels` audit
+webhook (doc 3001449) fires for Seller Center publishes too but carries no reason.
+**Prod after deploy:** `db:setup` (3 columns: `idle_blockers`, generated `search_norm`, `search_compact` — the ALTER rewrites
+the 1.2k-row table once); the next automatic Refresh (or any recompute) re-saves every product with counted-size blockers.
+e2e (`shein-listings.spec.js` → "the list API fixes (pure)" + "(endpoints)", which run on ANY database: their shoes carry
+the word "zqxshl" and the store-wide checks only compare a count with its own list; + two recount tests in "Phase 4 — publish").
 
 ## Security gates (security review + Phase 4 re-review, 2026-10-27)
 - **Writes:** every SHEIN write (run, retry, probe, webhooks, auto_price, publish_again, send_again, box sizes,

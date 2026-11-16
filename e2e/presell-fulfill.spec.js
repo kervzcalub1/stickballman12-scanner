@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { signToken } from '../api/_lib/util.js';
 import { loadEnv, loginAs } from './helpers/auth.js';
-import { shipStateOf, orderShipInfo, stockxDocs, assignWhere, pickGroups, fulfillTotals, urgency, timeLeft, labelLink } from '../src/lib/presellFulfill.js';
+import { shipStateOf, orderShipInfo, stockxDocs, assignWhere, pickGroups, fulfillTotals, urgency, timeLeft, labelLink, progressOf, unreadable } from '../src/lib/presellFulfill.js';
 
 loadEnv();
 test.describe.configure({ mode: 'serial' });
@@ -252,4 +252,78 @@ test('📦 Fulfill tab: Alias / StockX split, tick orders, one labels PDF per pl
   expect(sent).toEqual({ platform: 'stockx', ids: [Number(sx.id)], with: 'instructions' });
   await page.getByRole('button', { name: 'Clear (1)' }).click();
   await expect(page.getByRole('button', { name: '🏷 StockX labels PDF (1)' })).toBeEnabled();
+});
+
+// ---- Monitoring only (owner, 2026-11-17) ------------------------------------------------------
+// The tab watches the orders; it handles nothing. Three gaps closed: StockX DONOTSHIP read as
+// Shipped, month-old sales the platform no longer returns sitting in To ship, and no way to
+// see whether the warehouse had printed the label or packed the pair.
+test('DONOTSHIP is a cancelled order; an old sale the platform no longer returns is not "to ship" (pure)', () => {
+  expect(shipStateOf('stockx', 'DONOTSHIP')).toBe('cancelled');
+  expect(shipStateOf('stockx', 'DO_NOT_SHIP')).toBe('cancelled');
+  const now = Date.parse('2026-11-17T12:00:00Z');
+  const old = { ship_state: null, sold_at: '2026-10-12T00:00:00Z' };
+  expect(unreadable(old, 404, now)).toBe(true);
+  expect(unreadable(old, 500, now)).toBe(false);                                        // an outage is not "gone"
+  expect(unreadable({ ...old, sold_at: '2026-11-15T00:00:00Z' }, 404, now)).toBe(false);   // too fresh to give up on
+  expect(unreadable({ ...old, ship_state: 'to_ship' }, 404, now)).toBe(false);            // it WAS read: keep asking
+  expect(progressOf({})).toBe('new');
+  expect(progressOf({ label_printed_at: 'x' })).toBe('printed');
+  expect(progressOf({ label_printed_at: 'x', packed_at: 'y' })).toBe('packed');
+  expect(fulfillTotals([{}, { label_printed_at: 'x' }, { packed_at: 'y' }], now)).toMatchObject({ notPrinted: 1, printed: 1, packed: 1 });
+});
+
+test('the sync settles an old never-read sale the platform 404s; printed / packed are our own notes', async ({ request }) => {
+  const { rows: [st] } = await db.query(`SELECT id FROM presell_stock WHERE sku = $1`, [SKU]);
+  await db.query(`INSERT INTO presell_sales (stock_id, platform, order_id, price_cents, sold_at, raw) VALUES
+    ($1, 'alias', $2, 14900, now() - interval '30 days', '{"status":"ORDER_STATUS_UNDER_REVIEW"}'),
+    ($1, 'alias', $3, 14900, now() - interval '1 day', '{}')`, [st.id, `QAF${stamp}OLD`, `QAF${stamp}NEW`]);
+  const F = await import('../api/_lib/presell-fulfill.js');
+  // Only OUR rows answer 404; everyone else's read "fails" another way and is left alone.
+  const gone = async (s) => (s.order_id.startsWith(`QAF${stamp}`) ? { ok: false, status: 404, error: 'Alias answered HTTP 404' } : { ok: false, error: 'not ours' });
+  const pass = await F.syncFulfillment({ force: true, fetchers: { alias: gone, stockx: async () => ({ ok: false, error: 'not ours' }) } });
+  expect(pass.settled).toBe(1);
+  const state = async (o) => (await db.query(`SELECT ship_state, order_status, label_printed_by, packed_by, label_printed_at IS NOT NULL AS printed, packed_at IS NOT NULL AS packed FROM presell_sales WHERE order_id = $1`, [o])).rows[0];
+  expect(await state(`QAF${stamp}OLD`)).toMatchObject({ ship_state: 'unknown', order_status: 'ORDER_STATUS_UNDER_REVIEW' });
+  expect((await state(`QAF${stamp}NEW`)).ship_state).toBeNull();                         // a day old: still asked for
+  const h = { headers: as('warehouse') };
+  const view = async (v) => (await (await request.get(`/api/presell-listings/fulfill?view=${v}&q=QAF${stamp}`, h)).json());
+  expect((await view('unknown')).rows.map((r) => r.order_id)).toEqual([`QAF${stamp}OLD`]);
+  expect((await view('to_ship')).rows.map((r) => r.order_id)).not.toContain(`QAF${stamp}OLD`);
+  expect((await view('to_ship')).counts.unknown).toBeGreaterThanOrEqual(1);
+
+  // Printed / packed: who and when, on our rows only.
+  const { rows: [sx] } = await db.query(`SELECT id FROM presell_sales WHERE order_id = $1`, [`QAF${stamp}S`]);
+  const mark = (data, role = 'warehouse') => request.post('/api/presell-listings/fulfill', { headers: as(role), data: { action: 'mark', ...data } });
+  expect((await mark({ ids: [Number(sx.id)], step: 'printed' }, 'supplier')).status()).toBe(403);
+  expect((await mark({ ids: [Number(sx.id)], step: 'shipped' })).status()).toBe(400);
+  expect((await (await mark({ ids: [Number(sx.id)], step: 'packed' })).json()).changed).toBe(1);
+  expect(await state(`QAF${stamp}S`)).toMatchObject({ printed: true, packed: true, label_printed_by: 'E2E warehouse', packed_by: 'E2E warehouse' });   // packed implies printed
+  expect((await (await mark({ ids: [Number(sx.id)], step: 'packed' })).json()).changed).toBe(0);                 // already packed
+  await mark({ ids: [Number(sx.id)], step: 'printed', on: false });                                              // "not printed after all" clears both
+  expect(await state(`QAF${stamp}S`)).toMatchObject({ printed: false, packed: false });
+  // An order that has left "to ship" can't be marked.
+  const { rows: [al] } = await db.query(`SELECT id FROM presell_sales WHERE order_id = $1`, [`QAF${stamp}A`]);
+  expect((await (await mark({ ids: [Number(al.id)], step: 'printed' })).json()).changed).toBe(0);
+});
+
+test('📦 Fulfill tab: mark an order printed then packed, and filter by what the warehouse has done', async ({ page }) => {
+  await loginAs(page, 'warehouse');
+  await page.goto(`/presell-listings?tab=fulfill&fq=QAF${stamp}`);
+  const order = page.locator('.ff-order', { hasText: `QAF${stamp}S` });
+  await expect(order).toBeVisible();
+  const steps = page.locator('.ff-steps');
+  await expect(steps.getByRole('button', { name: /Label not printed/ })).toContainText('2');     // S and NEW
+  await order.getByRole('button', { name: `Mark order QAF${stamp}S printed` }).click();
+  await expect(order.locator('.ff-step.printed')).toContainText('Printed · E2E Warehouse');
+  await expect(steps.getByRole('button', { name: /Printed, not packed/ })).toContainText('1');
+  await order.getByRole('button', { name: `Mark order QAF${stamp}S packed` }).click();
+  await expect(order.locator('.ff-step.packed')).toContainText('Packed · E2E Warehouse');
+  await steps.getByRole('button', { name: /Label not printed/ }).click();
+  await expect(page.locator('.ff-order', { hasText: `QAF${stamp}S` })).toHaveCount(0);            // packed: not in "not printed"
+  await expect(page).toHaveURL(/step=new/);
+  await steps.getByRole('button', { name: /Packed — waiting for UPS/ }).click();
+  await expect(page.locator('.ff-order', { hasText: `QAF${stamp}S` })).toBeVisible();
+  await page.locator('.ff-order', { hasText: `QAF${stamp}S` }).getByRole('button', { name: `Order QAF${stamp}S: not packed after all` }).click();
+  await expect(page.locator('.ff-order', { hasText: `QAF${stamp}S` })).toHaveCount(0);            // back to "printed"
 });

@@ -8,10 +8,10 @@
 //   · StockX: GET /selling/orders/{orderNumber}             → shipment (label, tracking, ship by)
 //             GET /selling/orders/{orderNumber}/shipping-document (once) → instruction PDFs
 // StockX calls go through the shared rate-limited queue (sxFetch); a 429 ends the pass.
-import { presellSalesToTrack, updatePresellSaleShip } from './db.js';
+import { presellSalesToTrack, updatePresellSaleShip, settlePresellSaleUnreadable } from './db.js';
 import { aliasGetOrder } from './alias.js';
 import { stockxGetOrder, stockxShippingDocument, stockxConfigured } from './stockx.js';
-import { orderShipInfo, stockxDocs } from '../../src/lib/presellFulfill.js';
+import { orderShipInfo, stockxDocs, unreadable } from '../../src/lib/presellFulfill.js';
 
 // Each order at most once per this, unless never read (a fresh sale is read on the next pass).
 const RECHECK_MS = 10 * 60_000;
@@ -46,7 +46,7 @@ const live = {
 export async function syncFulfillment({ force = false, fetchers = live, now = Date.now } = {}) {
   if (running) return running;   // the button and the worker never overlap
   running = (async () => {
-    const out = { at: new Date(now()).toISOString(), read: 0, changed: 0, errors: [], stoppedBy: null };
+    const out = { at: new Date(now()).toISOString(), read: 0, changed: 0, settled: 0, errors: [], stoppedBy: null };
     const sales = await presellSalesToTrack(400);
     for (const s of sales) {
       if (!force && s.ship_state && now() - (lastRead.get(Number(s.id)) || 0) < RECHECK_MS) continue;
@@ -57,6 +57,8 @@ export async function syncFulfillment({ force = false, fetchers = live, now = Da
       lastRead.set(Number(s.id), now());
       if (!r.ok) {
         if (r.status === 429 || /too many|429/i.test(String(r.error || ''))) { out.stoppedBy = `${s.platform} rate limit`; break; }
+        // Never read, a week old and the platform says "no such order": it will not come back.
+        if (unreadable(s, r.status, now())) { if (await settlePresellSaleUnreadable(s.id)) out.settled++; continue; }
         out.errors.push({ id: Number(s.id), platform: s.platform, order: s.order_id, error: r.error || 'read failed' });
         continue;
       }

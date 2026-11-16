@@ -16,7 +16,9 @@ export function shipStateOf(platform, status) {
   const s = String(status || '').toUpperCase();
   if (!s) return null;
   if (/PAYOUT/.test(s)) return 'shipped';   // StockX PAYOUTPENDING / PAYOUTFAILED — long gone
-  if (/CANCEL|DIDNOTSHIP|DID_NOT_SHIP|RETURN|REFUND|VOID/.test(s)) return 'cancelled';
+  // DONOTSHIP (StockX): the order was called off before it left — the parcel must NOT go.
+  // It fell through to "shipped" until 2026-11-17 (29 orders on prod read as Shipped).
+  if (/CANCEL|DIDNOTSHIP|DID_NOT_SHIP|DONOTSHIP|DO_NOT_SHIP|RETURN|REFUND|VOID/.test(s)) return 'cancelled';
   if (platform === 'alias') return /LABEL_GENERATED|_NEW$|CONFIRM|PENDING|SELLER_ACTION/.test(s) ? 'to_ship' : 'shipped';
   // StockX: CREATED = sold, label made, not scanned by UPS yet. CCAUTHORIZATIONFAILED = the
   // buyer's card failed; StockX retries — keep it on the list, its status says to wait.
@@ -154,5 +156,22 @@ export function fulfillTotals(rows, now) {
     transit: r.filter((x) => x.where === 'transit').length,
     source: r.filter((x) => x.where === 'source').length,
     noLabel: r.filter((x) => !labelLink(x)).length,
+    // What the WAREHOUSE has done with it (label_printed_at / packed_at — neither platform
+    // reports these; a labels-PDF download stamps "printed", the rest is ticked on the tab).
+    notPrinted: r.filter((x) => progressOf(x) === 'new').length,
+    printed: r.filter((x) => progressOf(x) === 'printed').length,
+    packed: r.filter((x) => progressOf(x) === 'packed').length,
   };
 }
+
+// Where an order to ship stands on OUR side: new (label not printed) → printed → packed
+// (boxed, waiting for UPS to scan it — the platform moves it to shipped by itself).
+export const PROGRESS = { new: 'Label not printed', printed: 'Printed, not packed', packed: 'Packed — waiting for UPS' };
+export const progressOf = (x) => (x?.packed_at ? 'packed' : x?.label_printed_at ? 'printed' : 'new');
+
+// A sale that has never been read back and is this old will not be: the platform no longer
+// returns the order (Alias answers 404 for sales from before the status sync existed). It is
+// settled as "unknown" instead of sitting in To ship and being asked for every 10 minutes.
+export const UNREADABLE_AFTER_MS = 7 * 24 * 3600_000;
+export const unreadable = (sale, status, now) => status === 404 && !sale.ship_state
+  && now - new Date(sale.sold_at || sale.created_at || now).getTime() > UNREADABLE_AFTER_MS;

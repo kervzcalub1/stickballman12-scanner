@@ -2340,6 +2340,10 @@ await sql(`
 await sql(`CREATE INDEX IF NOT EXISTS online_order_receipt_checks_due_idx ON online_order_receipt_checks (next_at) WHERE state <> 'found'`);
 await sql(`CREATE INDEX IF NOT EXISTS email_receipts_order_key_idx ON email_receipts (upper(btrim(order_number)))`);
 await sql(`CREATE INDEX IF NOT EXISTS online_orders_order_key_idx ON online_orders (upper(btrim(order_number)))`);
+// A parcel received BEFORE its tracking number reached the online order (the number is filled
+// in from the store's emails later) is compared with the order once the two meet
+// (api/_lib/online-order-received.js). NULL = not compared yet; cleared when the number changes.
+await sql(`ALTER TABLE online_orders ADD COLUMN IF NOT EXISTS received_check_at TIMESTAMPTZ`);
 // Tracking numbers fill themselves (2026-11-18): the parcels read from a store's shipping emails,
 // one row per order number + tracking number, and when each number was last asked about.
 await sql(`

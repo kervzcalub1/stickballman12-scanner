@@ -206,6 +206,38 @@ parcels sends one "A shipment from order #… is on the way" email per parcel, w
 - **Only Shopify stores' shipping emails are read** (Shoe Palace). Nike, Foot Locker and Champs ship
   with emails in other shapes; their tracking numbers are still typed.
 
+## Short parcels: found, told, documented (2026-11-18)
+Owner: a parcel that arrives with fewer pairs than its online order has to reach the team and be
+documented well enough to claim from the store (example: tracking 1Z16G27K0320615996, 4 ordered,
+3 in the batch).
+
+- **At the bench** (the order's number is known when the box is received): `onlineOrderCheck`
+  already says "N missing" on Review. Now, when pairs are **missing**, Step 4 shows **Short parcel:
+  photos for the claim (required)** — `CLAIM_PHOTOS` (`src/lib/onlineOrders.js`): the shipping label
+  with the tracking number, every shoe box that arrived in one picture, the packing slip / manifest
+  ("There was no packing slip in the parcel" is the one way past that third photo). The box cannot be
+  saved without them. They ride on the automatic `online_order` shipment issue (`photos`, and the
+  description says how many of each), so they are on the batch and on the PH team's case.
+- **WhatsApp:** the same card, and the "saved" alert, say **Tell the PH team on WhatsApp now** with a
+  ready message (store, order #, OO code, tracking, ordered / received / short by) and **Copy the
+  message**. The app does not send WhatsApp; the person does, with the photos they just took.
+- **Telegram:** the issue opens an inbound-issues case as before (`inbound.issue_reported`); its
+  headline now reads **"Online order parcel SHORT by N (expected 4, got 3)"** (`issueHeadline`).
+- **Found later** (`api/_lib/online-order-received.js`): a parcel is often received BEFORE its number
+  reaches the order (the store's email fills it in afterwards). `compareOrderWithReceived(orderId)`:
+  the delivery with that tracking number (`receivedForTracking`: a received box's own number first,
+  then a committed batch's; supplier deliveries only) → pairs received vs pairs still expected.
+  **Short is by COUNT**, so a SKU typed differently on the order is not a missing pair. Short →
+  one `online_order` shipment issue + case (source `online_order`, "Short by 1: 3 of 4 pairs…"),
+  Telegram to PH, and a **warehouse job on the case** asking for the three claim photos and the
+  WhatsApp message (`PHOTO_TASK`, the Warehouse to-do tab + `inbound.warehouse_task`).
+  - One flag per delivery (`onlineOrderIssueOnBatch`): the bench's own issue, or an earlier compare,
+    stops a twin. Not when the order was already counted in or has nothing still expected.
+  - Runs when a number is placed from an email, when one is typed on an order, and from a worker
+    (production only, `OO_RECEIVED_WATCH=on|off`, every 10 min) over orders never compared whose
+    parcel is in (`online_orders.received_check_at`, **needs db:setup**; cleared when the number changes).
+- E2E: `e2e/receiving-online-order.spec.js`.
+
 ## Not yet
 - No home badge for "Expected" / follow-ups (the page's tab counts only).
 - (Until 2026-11-06) no 17TRACK registration of the tracking numbers. They appeared on **Undelivered Tracking** as "No courier feed" with a link to the courier's site (`docs/context/undelivered.md`).

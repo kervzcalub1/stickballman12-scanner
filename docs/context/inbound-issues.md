@@ -35,6 +35,11 @@ The two places the floor already recorded problems now OPEN CASES:
   `shipment_issues`) and then the case.
 - `openCasesForIntake` never throws: the shipment is saved either way; a failure is logged.
 
+- **Opened by the system (2026-11-18):** a parcel short of its ONLINE ORDER, found after
+  receiving, opens a shipment case by itself with a warehouse job for the claim photos
+  (`source='online_order'`, reporter "System (online order check)") — `online-orders.md` →
+  "Short parcels". At the bench the same shortage now requires three claim photos.
+
 ## The HOLD (a flagged pair is not listable until its case closes)
 A pair case sets **`items.status = 'issue'`** (status_change event, `inboundIssue` id) and
 keeps what it was in `inbound_issues.held_from_status` (`holdPairForIssue`). `issue` was

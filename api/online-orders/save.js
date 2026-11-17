@@ -13,6 +13,7 @@ import { orderCode, orderCosts } from '../../src/lib/onlineOrders.js';
 import { orderNumberSet } from '../_lib/online-order-receipts.js';
 import { orderNumberSetForParcels } from '../_lib/online-order-shipments.js';
 import { orderKey } from '../_lib/db.js';
+import { compareOrdersSoon } from '../_lib/online-order-received.js';
 
 const text = (v, max) => { const t = String(v ?? '').trim().slice(0, max); return t || null; };
 // Money: blank is 0 here — a coupon or shipping nobody typed is genuinely none. Negative
@@ -105,6 +106,7 @@ export default async function handler(req, res) {
     const actor = actorOf(user);
     if (!id) {
       const newId = await createOnlineOrder(o, lines, actor);
+      if (o.tracking_number) compareOrdersSoon([newId]);
       // The store's confirmation email is found by this number and filed as the receipt.
       // In the background: a mailbox search takes seconds and the save must not wait on it.
       if (o.order_number) { orderNumberSet(o.order_number, actor); if (!o.tracking_number) orderNumberSetForParcels(o.order_number); }
@@ -120,6 +122,8 @@ export default async function handler(req, res) {
     const afterUnits = lines.reduce((n, l) => n + l.qty, 0);
     if (beforeUnits !== afterUnits) changes.push(`${beforeUnits} → ${afterUnits} pair(s)`);
     await updateOnlineOrder(id, o, lines, actor, changes.join(' · ') || 'details edited');
+    // A number typed after the parcel already landed: was everything in it?
+    if (o.tracking_number && before.tracking_number !== o.tracking_number) compareOrdersSoon([id]);
     if (o.order_number && orderKey(o.order_number) !== orderKey(before.order_number)) {
       orderNumberSet(o.order_number, actor);
       // Its shipping emails too: the tracking number, and the pairs in each parcel.

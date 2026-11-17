@@ -279,6 +279,11 @@ import('./api/_lib/online-order-receipts.js')
 import('./api/_lib/online-order-shipments.js')
   .then((m) => m.startOnlineOrderShipmentWorker())
   .catch((e) => console.error('[online-order-shipments] failed to start:', e.message));
+// …and a parcel received before its number reached the order is compared with it afterwards:
+// short → a case for PH with the claim photos asked of the warehouse. OO_RECEIVED_WATCH=on|off.
+import('./api/_lib/online-order-received.js')
+  .then((m) => m.startOnlineOrderReceivedWorker())
+  .catch((e) => console.error('[online-order-received] failed to start:', e.message));
 
 // Shopify + eBay Listings kept fresh by the server every 30 min, not only when a page is open
 // (docs/context/shopify-listings.md). Production only by default; LISTINGS_WATCH=on|off overrides.

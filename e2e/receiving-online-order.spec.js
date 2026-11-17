@@ -6,6 +6,11 @@ import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { signToken } from '../api/_lib/util.js';
 import { loginAs } from './helpers/auth.js';
+import { compareOrderWithReceived } from '../api/_lib/online-order-received.js';
+import { issueHeadline } from '../src/lib/inboundIssues.js';
+
+// A 1×1 PNG: the photo the stubs hand around.
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
 const PH = { Authorization: `Bearer ${signToken({ uid: 'oo-ph', username: 'oo_ph', name: 'OO PH', role: 'ph_team' })}` };
 const stamp = `${Date.now()}`.slice(-7);
@@ -32,6 +37,7 @@ test.afterAll(async () => {
   const b = await db.query('SELECT DISTINCT batch_id FROM items WHERE sku LIKE $1', [like]);
   await db.query('DELETE FROM items WHERE sku LIKE $1', [like]);
   for (const { batch_id: id } of b.rows) {
+    await db.query('DELETE FROM inbound_issues WHERE batch_id = $1', [id]).catch(() => {});
     await db.query('DELETE FROM shipment_issues WHERE batch_id = $1', [id]).catch(() => {});
     await db.query('DELETE FROM batches WHERE id = $1', [id]).catch(() => {});
   }
@@ -164,17 +170,108 @@ test('a box that doesn’t match its online order: short / not on order on Revie
   await expect(sum.locator('.po-summary-row.short')).toContainText('size 9');
 
   await page.getByRole('button', { name: 'Next →' }).click();
+
+  // SHORT: the claim photos are required before the box can be saved (owner, 2026-11-18).
+  // The uploads are stubbed: this is about the gate, not the bucket.
+  let n = 0;
+  await page.route('**/api/inbound-issues/photo-sign', (route) => { n += 1; return route.fulfill({ json: { ok: true, uploadUrl: 'https://uploads.e2e.test/put', publicUrl: `https://photos.e2e.test/claim-${n}.jpg` } }); });
+  await page.route('https://uploads.e2e.test/**', (route) => route.fulfill({ status: 200, body: '' }));
+  await page.route('https://photos.e2e.test/**', (route) => route.fulfill({ status: 200, contentType: 'image/png', body: PNG }));
+  const claim = page.locator('.oo-claim');
+  await expect(claim).toContainText('2 pairs missing');
+  await expect(claim).toHaveAttribute('data-claim-left', '3');
+  await expect(claim.locator('.oo-short-msg')).toContainText(`order #P750 (${code}), tracking ${T}. Ordered 4, received 2, short by 2`);
+  await page.getByRole('button', { name: 'Finish batch' }).click();
+  await expect(page.locator('.error')).toContainText('Take the claim photos first');
+  const shoot = async (key) => {
+    await claim.locator(`[data-claim="${key}"] input[type=file]`).last().setInputFiles({ name: `${key}.png`, mimeType: 'image/png', buffer: PNG });
+    await expect(claim.locator(`[data-claim="${key}"] .dp-thumb`)).toHaveCount(1);
+  };
+  await shoot('label');
+  await shoot('pairs');
+  if (process.env.SHOT) { await page.setViewportSize({ width: 430, height: 1500 }); await page.locator('.oo-claim').screenshot({ path: '/private/tmp/claude-501/-Users-kervz-Stickballman12/9a97eea1-0ed1-4509-b269-b446f0ebfe4d/scratchpad/claim.png' }); }
+  await page.getByRole('button', { name: 'Finish batch' }).click();
+  await expect(page.locator('.error')).toContainText('the packing slip / manifest that came inside');
+  // No paper in the parcel is an answer, said out loud.
+  await claim.getByLabel('There was no packing slip in the parcel').check();
+  await expect(claim).toHaveAttribute('data-claim-left', '0');
+
   await page.getByRole('button', { name: 'Finish batch' }).click();
   await page.getByRole('button', { name: 'Yes, commit' }).click();
   await expect(page.getByText(/^Batch .* saved$/)).toBeVisible({ timeout: 15_000 });
   const alert = page.locator('.po-mismatch');
+  await expect(alert).toContainText('Tell the PH team on WhatsApp now');
   await expect(alert).toContainText(`${code} doesn’t match the online order`);
   await expect(alert).toContainText('2 short');
   await expect(alert.getByRole('link', { name: 'Open the order on Online Orders' })).toBeVisible();
 
-  const issue = (await db.query(`SELECT si.type, si.description, si.expected_count, si.received_count FROM shipment_issues si
+  const issue = (await db.query(`SELECT si.type, si.description, si.expected_count, si.received_count, si.photos FROM shipment_issues si
     JOIN items i ON i.batch_id = si.batch_id WHERE i.sku = $1 AND si.type = 'online_order' LIMIT 1`, [S])).rows[0];
   expect(issue).toMatchObject({ type: 'online_order', expected_count: 4, received_count: 2 });
   expect(issue.description).toContain(`${S} US 8 missing (0/1)`);
   expect(issue.description).toContain(`${S} US 9 short (2/3)`);
+  expect(issue.description).toContain('Claim photos: label ×1, pairs ×1, slip ×0 (no packing slip in the parcel)');
+  expect(issue.photos).toEqual(['https://photos.e2e.test/claim-1.jpg', 'https://photos.e2e.test/claim-2.jpg']);
+  // …and it is a case for the PH team, said in words.
+  const c = (await db.query(`SELECT ii.id, ii.type, ii.expected_count, ii.received_count, ii.photos FROM inbound_issues ii
+    JOIN items i ON i.batch_id = ii.batch_id WHERE i.sku = $1 LIMIT 1`, [S])).rows[0];
+  expect(c).toMatchObject({ type: 'online_order', expected_count: 4, received_count: 2 });
+  expect(issueHeadline({ scope: 'shipment', ...c })).toContain('Online order parcel SHORT by 2');
+});
+
+test('received first, tracking number later: the short parcel is found, a case opened, the photos asked of the warehouse', async ({ page, request }) => {
+  const S = `${SKU}-L`; const T = `1ZOOL${stamp}`;
+  // The parcel lands with no online order on its number yet: 3 pairs, nothing to compare with.
+  await loginAs(page, 'warehouse');
+  await page.route('**/api/sku-search', (route) => route.fulfill({
+    json: { ok: true, product: { name: 'E2E OO Late Shoe', sku: S, image: '', source: 'manual', scannedSize: '7.5', sizes: ['7.5'] } },
+  }));
+  await page.goto('/receiving');
+  await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
+  await page.locator('.track-field input').first().fill(T);
+  await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click();
+  await page.getByRole('button', { name: 'Next →' }).click();
+  for (let i = 0; i < 3; i += 1) {
+    await page.locator('.scanbar input').first().fill(S);
+    await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+  }
+  await page.getByRole('button', { name: 'Review →' }).click();
+  await page.getByRole('button', { name: 'Next →' }).click();
+  await expect(page.locator('.oo-claim')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Finish batch' }).click();
+  await page.getByRole('button', { name: 'Yes, commit' }).click();
+  await expect(page.getByText(/^Batch .* saved$/)).toBeVisible({ timeout: 15_000 });
+
+  // An order with no tracking number is nothing to compare; nor is one whose parcel isn't in.
+  const mk = async (data) => (await (await request.post('/api/online-orders/save', { headers: PH, data: { store: 'E2E-OO Shoe Palace', order_number: `SPL${stamp}`, ...data } })).json()).id;
+  const none = await mk({ lines: [{ sku: S, size: '7.5', qty: 4, unit_price: 100 }] });
+  expect((await compareOrderWithReceived(none)).state).toBe('no_tracking');
+  const far = await mk({ tracking_number: `1ZNOTIN${stamp}`, lines: [{ sku: S, size: '7.5', qty: 4, unit_price: 100 }] });
+  expect((await compareOrderWithReceived(far)).state).toBe('not_received');
+
+  // The number reaches the order (typed here; the store's email does the same): 4 ordered, 3 in.
+  // The SKU on the order is typed differently from the box's: short is by COUNT, so it still reads 1.
+  const id = await mk({ tracking_number: T, lines: [{ sku: 'TYPED-OTHERWISE', size: '7.5', qty: 4, unit_price: 100 }] });
+  await expect.poll(async () => (await db.query('SELECT received_check_at FROM online_orders WHERE id = $1', [id])).rows[0].received_check_at, { timeout: 10_000 }).not.toBeNull();
+  const cases = (await db.query(`SELECT ii.* FROM inbound_issues ii JOIN items i ON i.batch_id = ii.batch_id WHERE i.sku = $1 GROUP BY ii.id`, [S])).rows;
+  expect(cases).toHaveLength(1);
+  expect(cases[0]).toMatchObject({ type: 'online_order', expected_count: 4, received_count: 3, status: 'open', source: 'online_order' });
+  expect(cases[0].description).toContain(`Short by 1: 3 of 4 pairs came out of the parcel with tracking ${T}`);
+  expect(cases[0].warehouse_task).toContain('photos needed for the claim');
+  expect(cases[0].warehouse_task).toContain('WhatsApp');
+  // Asked again (the worker, another save): one case, not two.
+  expect((await compareOrderWithReceived(id)).state).toBe('already');
+  expect((await db.query(`SELECT count(*)::int n FROM inbound_issues WHERE batch_id = $1`, [cases[0].batch_id])).rows[0].n).toBe(1);
+  // A parcel with every pair in it opens nothing.
+  await db.query(`DELETE FROM inbound_issue_events WHERE issue_id = $1`, [cases[0].id]).catch(() => {});
+  await db.query(`DELETE FROM inbound_issues WHERE id = $1`, [cases[0].id]);
+  await db.query(`DELETE FROM shipment_issues WHERE batch_id = $1`, [cases[0].batch_id]);
+  const full = await mk({ tracking_number: T, allowDuplicateTracking: true, lines: [{ sku: S, size: '7.5', qty: 3, unit_price: 100 }] });
+  expect(await compareOrderWithReceived(full)).toMatchObject({ state: 'ok', expected: 3, received: 3 });
+
+  // The warehouse sees the job on the case.
+  const again = await compareOrderWithReceived(id);
+  expect(again.state).toBe('short');
+  await page.goto(`/inbound-issues?id=${again.caseId}`);
+  await expect(page.locator('body')).toContainText('photos needed for the claim');
 });

@@ -114,7 +114,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     if (page === 'poizon') return <PoizonOrders onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'stockxlistings') return <StockxListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'presellListings') return <PresellListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
-    if (page === 'receipts') return <Receipts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} cartHref={(id) => `/ph/gift-card-buying?request=${id}`} />;
+    if (page === 'receipts') return <Receipts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} cartHref={(id) => `/ph/gift-card-buying?request=${id}`} orderHref={(id) => `/ph/online-orders?o=${id}`} />;
     // A PH account reaches this ONLY by holding a buying privilege. PH has its own app and
     // never touches the staff router, so without a route here a PH team member who was
     // ticked for gift cards had nowhere to go — which is the exact case the privilege model

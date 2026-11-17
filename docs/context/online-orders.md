@@ -133,6 +133,41 @@ a short count becomes a refund to chase). E2E: `e2e/receiving-online-order.spec.
     turns a missing pair into a refund to chase.
   - Not once the order is already counted in, never on a PO receive / rescale.
 
+## The receipt links itself (2026-11-18)
+Owner: *"automatically grab the receipts based on the order id that was set by the user"*, with
+**SP2515272** as the example: a Shoe Palace order of 10 pairs that shipped in 4 parcels, entered as
+four online orders with the same order number.
+
+- **When the order # is saved** (new order, or the number changed), the ordering mailbox is asked for
+  that number in the background and the store's confirmation email is filed as a receipt
+  (`email_receipts`, so it is on the Receipts page too). Code: `api/_lib/online-order-receipts.js`.
+- **Nothing is stored on the order.** An order and a receipt with the same number (`upper(btrim())`)
+  belong together, joined at read time (`receipt`, `receipt_check`, `same_order` on `listOnlineOrders` /
+  `getOnlineOrder`; `receiptLink` in `src/lib/onlineOrders.js` → `receipt_link`). A receipt filed any
+  other way (a mailbox check) links the same.
+- **One number on several online orders = one receipt, shown on all of them.** The receipt's pairs are
+  compared with every parcel of that number together: "entered as 4 parcels: OO-0204 (3) + … = 10 pairs,
+  matches the receipt", or "the receipt says 10". Cancelled pairs count: the receipt is what was ordered.
+  The list row carries **Receipt linked** / **Receipt differs**.
+- **How the mailbox is asked:** the same Make scenario the buying requests use (6282792,
+  `MAKE_RECEIPT_PARSER_URL`, POST `{ transaction_id }`). It returns the OLDEST email with that text, which
+  for an order number is the confirmation. The email must carry the number as a whole word
+  (`mentionsOrder`), or it is not this order's.
+- **Shopify stores** (Shoe Palace): the Make parser knows the in-store receipts and returns no items for
+  these, so `parseShopifyOrderEmail` reads them here ("Name × qty", the variant line = size, the last
+  `$` line = the line total, then Subtotal / Shipping / Taxes / Total). No style code is in that email,
+  only the shoe's name.
+- **`online_order_receipt_checks`** (one row per order number; **needs db:setup**; in `LIVE_TABLES`):
+  `pending` → `found` | `not_found` | `error` | `unconfigured`. Not found is asked again after 15 min,
+  2 h and 1 day (`RETRY_MIN`), then it stops until someone presses **Check again**
+  (`POST /api/online-orders/receipt`, PH + admin). Re-saving an order never asks twice.
+- **Worker** (production only; `OO_RECEIPT_WATCH=on|off`, `OO_RECEIPT_MIN` default 5): each tick queues
+  3 orders from the last 60 days that were never asked about, and runs what is due. So the orders
+  recorded before this shipped catch up over a few hours rather than in one burst of Make runs.
+- **Not done:** the store's *shipping* emails (one per parcel, each with a tracking number and its pairs)
+  are not read. The lookup returns one email, and an online order still holds one tracking number.
+- E2E: `e2e/online-order-receipts.spec.js`.
+
 ## Not yet
 - No home badge for "Expected" / follow-ups (the page's tab counts only).
 - (Until 2026-11-06) no 17TRACK registration of the tracking numbers. They appeared on **Undelivered Tracking** as "No courier feed" with a link to the courier's site (`docs/context/undelivered.md`).

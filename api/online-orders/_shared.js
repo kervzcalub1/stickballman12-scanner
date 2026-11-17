@@ -1,6 +1,6 @@
 // Shared by the api/online-orders/* handlers (docs/context/online-orders.md). A file
 // starting with "_" is not mounted as a route.
-import { orderCosts, orderStage } from '../../src/lib/onlineOrders.js';
+import { orderCosts, orderStage, receiptLink } from '../../src/lib/onlineOrders.js';
 
 export const actorOf = (user) => user?.name || user?.username || null;
 
@@ -32,5 +32,6 @@ export function shapeOrder(o) {
     lines: costs.lines,
     totals: { units: costs.units, subtotal: costs.subtotal, paid: costs.paid, cashback: costs.cashback, total: costs.total },
     stage: orderStage({ ...o, lines }),
+    receipt_link: receiptLink(o),
   };
 }

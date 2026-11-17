@@ -5,7 +5,8 @@
 // receipt) and who bought it (the address it was sent to, matched against the emails
 // buyers registered). So nobody has to wait for Joey to send his receipts in, and
 // Council's buys can be told from Joey's by store and state.
-// A receipt whose order number is on a buying request links to it.
+// A receipt whose order number is on a buying request links to it; so does one whose number
+// is on an online order (found by itself when the number is typed there).
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar } from '../components/common.jsx';
@@ -13,13 +14,14 @@ import { PurchaseEmails } from '../components/PurchaseEmails.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { PH_DATE, PH_DATETIME, estToday } from '../lib/format.js';
+import { orderCode } from '../lib/onlineOrders.js';
 
 const money = (v) => (v == null ? '—' : `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const when = (ts) => (ts ? `${PH_DATETIME.format(new Date(ts))} EST` : '—');
 // cardcenter / cardcash are GIFT-CARD purchases (a total, no pairs) — said in the name so the row
 // doesn't read as a broken receipt (parser 2026-10-10).
 const STORE_LABEL = { footlocker: 'Foot Locker', kidsfootlocker: 'Kids Foot Locker', champs: 'Champs Sports', nike: 'Nike', adidas: 'adidas',
-  snipes: 'SNIPES', cardcenter: 'CardCenter (gift cards)', cardcash: 'CardCash (gift cards)' };
+  snipes: 'SNIPES', shoepalace: 'Shoe Palace', cardcenter: 'CardCenter (gift cards)', cardcash: 'CardCash (gift cards)' };
 const storeLabel = (s) => STORE_LABEL[s] || s || 'Unknown store';
 const inSpam = (folder) => /spam|bulk|junk/i.test(String(folder || ''));
 // "Check mailboxes" — the sweep runs only when someone asks (api/receipts/sweep.js). It
@@ -102,7 +104,7 @@ function MailboxCheck({ onSignOut }) {
 
 const place = (r) => [r.city, [r.state, r.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
 
-export function Receipts({ user, onHome, onSignOut, cartHref = (id) => `/buy-carts?request=${id}` }) {
+export function Receipts({ user, onHome, onSignOut, cartHref = (id) => `/buy-carts?request=${id}`, orderHref = (id) => `/online-orders?o=${id}` }) {
   const isAdmin = user?.role === 'admin' || user?.role === 'superadmin';
   const [buyer, setBuyer] = useQueryParam('buyer', '');
   const [store, setStore] = useQueryParam('store', '');
@@ -181,7 +183,14 @@ export function Receipts({ user, onHome, onSignOut, cartHref = (id) => `/buy-car
                     <td data-label="Buyer">{r.buyer_name || <span className="rc-unassigned">Unassigned</span>}</td>
                     <td data-label="Pairs">{r.pairs || '—'}</td>
                     <td data-label="Total">{money(r.total)}</td>
-                    <td data-label="Request">{r.cart_id ? <a href={cartHref(r.cart_id)} onClick={(e) => e.stopPropagation()}>{r.cart_code}</a> : '—'}</td>
+                    <td data-label="Request">
+                      {r.cart_id ? <a href={cartHref(r.cart_id)} onClick={(e) => e.stopPropagation()}>{r.cart_code}</a> : null}
+                      {/* An online order with this number (one per parcel, so there can be several). */}
+                      {(r.online_order_ids || []).map((oid) => (
+                        <a key={oid} className="rc-oo" href={orderHref(oid)} onClick={(e) => e.stopPropagation()}>{orderCode(oid)}</a>
+                      ))}
+                      {!r.cart_id && !(r.online_order_ids || []).length ? '—' : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -195,7 +204,7 @@ export function Receipts({ user, onHome, onSignOut, cartHref = (id) => `/buy-car
   );
 }
 
-function ReceiptDetail({ id, isAdmin, onClose, onSignOut, onChanged }) {
+export function ReceiptDetail({ id, isAdmin, onClose, onSignOut, onChanged = () => {} }) {
   const [r, setR] = useState(null);
   const [people, setPeople] = useState([]);
   const [error, setError] = useState('');

@@ -419,6 +419,7 @@ export const api = {
   removePurchaseEmail: (id) => post('/api/purchase-emails', { action: 'remove', id }),
   onlineOrders: ({ q = '', view = 'all' } = {}) => get(`/api/online-orders/list?view=${encodeURIComponent(view)}${q ? `&q=${encodeURIComponent(q)}` : ''}`),
   onlineOrder: (id) => get(`/api/online-orders/get?id=${encodeURIComponent(id)}`),
+  onlineOrderFindReceipt: (id) => post('/api/online-orders/receipt', { id }),
   saveOnlineOrder: (order) => post('/api/online-orders/save', order),
   onlineOrderLine: (body) => post('/api/online-orders/line', body),
   receiveOnlineOrder: (id, counts) => post('/api/online-orders/receive', { id, counts }),

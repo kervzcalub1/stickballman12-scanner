@@ -268,6 +268,13 @@ import('./api/_lib/poizon-orders-worker.js')
   .then((m) => m.startPoizonOrdersWorker())
   .catch((e) => console.error('[poizon-orders-worker] failed to start:', e.message));
 
+// Online orders find their own receipt: the orders recorded before this existed catch up a few
+// at a time, and a number whose email wasn't in the mailbox yet is asked for again
+// (docs/context/online-orders.md). Production only by default; OO_RECEIPT_WATCH=on|off overrides.
+import('./api/_lib/online-order-receipts.js')
+  .then((m) => m.startOnlineOrderReceiptWorker())
+  .catch((e) => console.error('[online-order-receipts] failed to start:', e.message));
+
 // Shopify + eBay Listings kept fresh by the server every 30 min, not only when a page is open
 // (docs/context/shopify-listings.md). Production only by default; LISTINGS_WATCH=on|off overrides.
 import('./api/_lib/listings-watch-worker.js')

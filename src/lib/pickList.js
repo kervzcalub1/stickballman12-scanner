@@ -1,5 +1,6 @@
-// Pick lists for marketplace orders — eBay (eBay page → Orders) and SHEIN (SHEIN page → Orders).
-// docs/context/ebay-orders.md → "Pick list", docs/context/shein-live-fix.md → "Orders + pick list".
+// Pick lists for marketplace orders — eBay (eBay page → Orders), SHEIN (SHEIN page → Orders) and
+// POIZON (the POIZON page). docs/context/ebay-orders.md → "Pick list",
+// docs/context/shein-live-fix.md → "Orders + pick list", docs/context/poizon-orders.md.
 //
 // A person ticks the orders to pick and downloads ONE PDF sized for a 4 x 6 in thermal label
 // printer. One entry per PAIR (an order with two shoes = two entries, each with the order #):
@@ -66,7 +67,7 @@ export const ascii = (v) => String(v ?? '')
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 // 'YYYY-MM-DD' (an EST day) → '12 Nov 2026'. Pure string math: no clock, no timezone.
 export const dayWords = (ymdStr) => { const [y, m, d] = String(ymdStr).split('-').map(Number); return `${d} ${MONTHS[m - 1]} ${y}`; };
-export const PLATFORM_WORDS = { ebay: 'eBay', shein: 'SHEIN' };
+export const PLATFORM_WORDS = { ebay: 'eBay', shein: 'SHEIN', poizon: 'POIZON' };
 // pick-list-ebay-2026-11-12.pdf — the EST day of `now`, never the viewer's own date.
 export const pickListFileName = (platform, now = new Date()) => `pick-list-${platform}-${estDate(now)}.pdf`;
 
@@ -156,6 +157,43 @@ export function sheinPickEntries(orders) {
   return numberPairs(out);
 }
 
+/* -------------------------------- POIZON orders -------------------------------- */
+// poizon_orders has one row per ORDER (Shopify's copy of a POIZON sale, docs/context/poizon-orders.md);
+// each line = { title, size, sku, qty, current (after refunds), unfulfilled (still to ship) }.
+export const POIZON_ORDER_STATES = {
+  to_ship: ['To ship', 'warn'], shipped: ['Shipped', 'ok'], cancelled: ['Cancelled / refunded', 'muted'],
+};
+export const POIZON_ORDER_RANK = ['to_ship', 'shipped', 'cancelled'];
+export const POIZON_AWAITING = new Set(['to_ship']);
+// Pairs of a line still ours to ship: not shipped yet and not refunded.
+export const poizonToShip = (l) => Math.max(0, Math.min(Number(l.unfulfilled ?? l.current ?? l.qty) || 0, Number(l.current ?? l.qty) || 0));
+export function poizonOrderState(o) {
+  const lines = o.lines || [];
+  if (o.cancelled_at) return 'cancelled';
+  if (lines.length && lines.every((l) => (Number(l.current ?? l.qty) || 0) === 0)) return 'cancelled';
+  if (o.fulfillment_status === 'FULFILLED') return 'shipped';
+  if (lines.length && lines.every((l) => poizonToShip(l) === 0)) return 'shipped';
+  return 'to_ship';
+}
+// Rows from /api/poizon/orders → each with its state, still-to-ship first, then the newest.
+export function poizonOrdersSorted(rows) {
+  return (rows || []).map((o) => ({ ...o, state: poizonOrderState(o) }))
+    .sort((a, b) => (POIZON_ORDER_RANK.indexOf(a.state) - POIZON_ORDER_RANK.indexOf(b.state)) || String(b.ordered_at || '').localeCompare(String(a.ordered_at || '')));
+}
+// The shoe on a POIZON line: Shopify's title, the style code out of it, the variant as the size.
+export const poizonLineShoe = (l) => ({ name: l.title || '', sku: pickSku(null, l.title, l.sku), size: l.size || '' });
+// POIZON orders → one entry per pair still to ship (qty 2 = 2 entries; a shipped or refunded pair isn't picked).
+export function poizonPickEntries(orders) {
+  const out = [];
+  for (const o of orders || []) {
+    if (poizonOrderState(o) !== 'to_ship') continue;   // a cancelled order is never picked, whatever its lines say
+    for (const l of o.lines || []) {
+      for (let i = 0; i < poizonToShip(l); i++) out.push({ orderNo: String(o.order_no), ...poizonLineShoe(l) });
+    }
+  }
+  return numberPairs(out);
+}
+
 /* ---------------------------------- layout ---------------------------------- */
 
 // Words into lines no wider than `w`; a word wider than a line is broken by character.
@@ -206,7 +244,7 @@ export function entryLines(e, widthOf) {
   if (widthOf(orderText, size) > W) orderText = no;                     // drop the "#" before anything else
   const pairNote = e.pairs > 1 ? `${e.pair} of ${e.pairs}` : '';
   if (widthOf(orderText, size) > W) {
-    // No real eBay / SHEIN number gets here (≤ 20 characters; 12 pt holds ~28). Should one ever come, it
+    // No real eBay / SHEIN / POIZON number gets here (≤ 20 characters; 12 pt holds ~28). Should one ever come, it
     // runs onto a second line, every character kept, rather than off the edge of the label.
     for (const t of wrap(orderText, W, widthOf, size)) lines.push({ text: t, size, kind: 'order' });
   } else {

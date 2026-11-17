@@ -261,6 +261,13 @@ import('./api/_lib/ebay-orders-worker.js')
   .then((m) => m.startEbayOrdersWorker())
   .catch((e) => console.error('[ebay-orders-worker] failed to start:', e.message));
 
+// POIZON orders — read from Shopify (the orders made by the POIZON app) every 10 min, for the
+// POIZON page and its pick list (docs/context/poizon-orders.md). Read-only. Production only by
+// default; POIZON_ORDERS_WATCH=on|off overrides.
+import('./api/_lib/poizon-orders-worker.js')
+  .then((m) => m.startPoizonOrdersWorker())
+  .catch((e) => console.error('[poizon-orders-worker] failed to start:', e.message));
+
 // Shopify + eBay Listings kept fresh by the server every 30 min, not only when a page is open
 // (docs/context/shopify-listings.md). Production only by default; LISTINGS_WATCH=on|off overrides.
 import('./api/_lib/listings-watch-worker.js')

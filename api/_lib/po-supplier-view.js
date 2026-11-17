@@ -41,6 +41,7 @@ export function supplierPoView(data) {
   if (out.dropoffReceipts) {
     out.dropoffReceipts = out.dropoffReceipts.map((r) => ({
       ...r, uploaded_by: r.uploaded_role === 'supplier' ? r.uploaded_by : 'Our team',
+      moved_by: r.moved_at ? (r.moved_role === 'supplier' ? r.moved_by : 'Our team') : null,
     }));
   }
   // Labels PDFs are bought and uploaded by our team; the file list carries no storage key.

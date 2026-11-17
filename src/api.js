@@ -765,6 +765,7 @@ export const api = {
   poShip: (poBoxId) => post('/api/po/ship', { poBoxId }),
   poDropoffSign: (poId, contentType) => post('/api/po/dropoff', { poId, action: 'sign', contentType }),
   poDropoffAttach: (payload) => post('/api/po/dropoff', { ...payload, action: 'attach' }),
+  poDropoffMove: (poId, id, kind) => post('/api/po/dropoff', { poId, action: 'move', id, kind }),
   poDropoffDelete: (poId, id) => post('/api/po/dropoff', { poId, action: 'delete', id }),
   poDropoffFile: (id, download = false) => downloadBlob(`/api/po/dropoff?id=${encodeURIComponent(id)}${download ? '&download=1' : ''}`),
   // Phase 2 — receive a shipment against a PO (warehouse side).

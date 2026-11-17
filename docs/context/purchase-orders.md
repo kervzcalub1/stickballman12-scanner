@@ -2029,6 +2029,28 @@ Supplier deletes from the portal land there too.
   right after. Shown as **Recovered**; no Restore (there are no rows to put back).
 - ⚠ `deleted_pos` is new: **`db:setup` before this deploys**, or every PO delete fails.
 
+## Two receipts: purchase + drop-off (2026-11-17)
+Suppliers were uploading their **purchase** receipts into the drop-off receipt box. An order now holds two
+kinds, in two lanes of one panel (`PoDropoffReceipts`, still one table: `po_dropoff_receipts.kind` =
+`'dropoff'` (default, everything older) | `'purchase'`; **needs db:setup**):
+- **Purchase receipt** = from the store: what was bought and the price paid. Optional; nothing chases it.
+- **Drop-off receipt** = from the courier: proof the boxes were handed over. Everything below still applies to it.
+- **Told apart four ways at once**: name, a small picture (receipt with $ / truck with ✓), colour (green / blue), and a
+  line saying who the paper is from + what it proves + how to recognise one. Each lane has its own upload button and
+  its own drop area; side by side on a desk, stacked on a phone (purchase first: it happens first).
+- **Move** (`action:'move'`, `{ id, kind }`): every receipt has "⇄ Move to …". Open to **everyone who can reach the
+  order**, including a supplier moving a receipt our team uploaded (they still can't *remove* ours): a move loses
+  nothing. `moved_by / moved_role / moved_at` are kept and shown ("moved here by …"; a supplier sees "Our team").
+  No confirm dialog: the lane says what happened with an **Undo**.
+- **Only a drop-off receipt counts as one**: `dropoff_receipt_count`, the "No drop-off receipt" chip, the
+  `po.dropped_off` message and the buying-request PO picker all count `kind = 'dropoff'`. Moving a misfiled store
+  receipt out brings "Not in yet" + Ask supplier back.
+- A supplier upload of either kind alerts PH + admins (`po.dropoff_receipt`, now titled "Receipt uploaded on an order").
+- Store orders keep their per-store receipts for the audit (`po_store_receipts`); this lane is the order-level one.
+- Why this shape (research): a slot per document type with per-slot status; state the difference outright and repeat it
+  with icon + colour (NN/g "explicit differences"); tolerate a swap instead of rejecting it (ID front/back uploads);
+  a named move button, never drag-only or "left/right"; Undo over a confirm dialog for a reversible action.
+
 ## Drop-off receipts (2026-11-06)
 Proof a box was handed to the courier. **The supplier uploads it, or PH does for them** (`api/po/dropoff.js`,
 `PoDropoffReceipts`, table `po_dropoff_receipts`, **needs db:setup**). An order can hold several; a photo or PDF,

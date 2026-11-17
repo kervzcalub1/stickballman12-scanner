@@ -135,6 +135,13 @@ the sweep filed first still links once the buyer attaches it. Detail: location, 
 items, totals, parser notes, the email text. Staff only (`warehouse`, `ph_team`, admin);
 suppliers get 403 — they register addresses, they don't browse the mailbox.
 
+## Online orders file their own (2026-11-18)
+A receipt can also arrive because someone typed an order number on an **online order**: the mailbox
+is asked for that number and the confirmation is filed here (`message_key` `order-lookup|…|<number>`,
+`store_name` "<store> (online)", no recipients, so no buyer is matched). The list's Request column
+links to the online order(s) with that number (`online_order_ids`). Details: `online-orders.md` →
+"The receipt links itself".
+
 ## Env
 `RECEIPT_INGEST_KEY` — any long random string; the same value goes in the Make scenario
 (pasted by a person, never sent through chat). Local `.env` has one for the suite.

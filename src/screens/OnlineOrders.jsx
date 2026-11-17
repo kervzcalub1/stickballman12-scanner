@@ -14,6 +14,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { TrackingLink } from '../components/TrackingLink.jsx';
 import { TopBar, Modal, FormModal, NumField } from '../components/common.jsx';
+import { ReceiptDetail } from './Receipts.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { estToday, estCivilFromYmd, PH_DATE, PH_DATETIME } from '../lib/format.js';
@@ -60,7 +61,7 @@ export function OnlineOrders({ user, onHome, onSignOut }) {
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { const t = setTimeout(load, q ? 300 : 0); return () => clearTimeout(t); }, [q, view]); // eslint-disable-line react-hooks/exhaustive-deps
-  useLive(['online_orders', 'online_order_lines'], async () => {
+  useLive(['online_orders', 'online_order_lines', 'email_receipts', 'online_order_receipt_checks'], async () => {
     const r = await api.onlineOrders({ q: q.trim(), view });
     const next = r.orders || [];
     setOrders((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
@@ -82,6 +83,7 @@ export function OnlineOrders({ user, onHome, onSignOut }) {
       <div className="app">
         <TopBar title="Online Orders" onHome={onHome} onSignOut={onSignOut} />
         <OrderDetail id={openId} canEdit={canEdit} canReceive={canReceive} onSignOut={onSignOut}
+          isAdmin={user?.role === 'admin' || user?.role === 'superadmin'} onOpenOrder={(oid) => setOpenId(String(oid), { replace: false })}
           onBack={() => setOpenId('')} onEdit={(o) => openEditor(o.id)} onDeleted={() => { setOpenId(''); load(); }} />
       </div>
     );
@@ -157,6 +159,11 @@ function OrderRow({ o, onOpen }) {
       </span>
       <span className="oo-row-side">
         <span><b>{o.totals.units}</b> pair{o.totals.units === 1 ? '' : 's'} · <b>{money(o.totals.total)}</b></span>
+        {o.receipt_link?.state === 'linked' && (
+          <span className={`oo-chip ${o.receipt_link.agrees === false ? 'warn' : 'ok'}`} title={o.receipt_link.agrees === false ? `The receipt has ${o.receipt_link.receiptPairs} pairs, ${o.receipt_link.entered} are entered under this order #` : 'The emailed receipt is linked'}>
+            {o.receipt_link.agrees === false ? 'Receipt differs' : 'Receipt linked'}
+          </span>
+        )}
         {cancelledPairs > 0 && <span className="oo-chip muted">{cancelledPairs} of {orderedPairs} cancelled</span>}
         {missingPairs > 0 && <span className="oo-chip muted">{missingPairs} missing</span>}
         {chase.length > 0 && <span className="oo-chip warn">{chase.length} refund{chase.length === 1 ? '' : 's'} to chase</span>}
@@ -166,7 +173,7 @@ function OrderRow({ o, onOpen }) {
 }
 
 // ---- One order ---------------------------------------------------------------------
-function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDeleted }) {
+function OrderDetail({ id, canEdit, canReceive, isAdmin, onSignOut, onBack, onEdit, onDeleted, onOpenOrder }) {
   const [data, setData] = useState(null);   // { order, events }
   const [error, setError] = useState('');
   const [dialog, setDialog] = useState(null); // { kind, line? }
@@ -176,7 +183,7 @@ function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDel
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { load(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
-  useLive(['online_orders', 'online_order_lines', 'online_order_events'], async () => {
+  useLive(['online_orders', 'online_order_lines', 'online_order_events', 'email_receipts', 'online_order_receipt_checks', 'online_order_shipments'], async () => {
     const d = await api.onlineOrder(id);
     setData((cur) => (JSON.stringify(cur) === JSON.stringify(d) ? cur : d));
   }, { mount: false, paused: !!dialog });
@@ -207,6 +214,8 @@ function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDel
           <span><span className="muted xs">Recorded by</span> {o.created_by || '—'}</span>
         </div>
         {o.note && <p className="oo-note">{o.note}</p>}
+        <ReceiptLink o={o} canEdit={canEdit} onOpen={() => setDialog({ kind: 'receipt' })} onOpenOrder={onOpenOrder} onSignOut={onSignOut} onChanged={load} />
+        <Parcels o={o} parcels={data.parcels || []} canEdit={canEdit} onOpenOrder={onOpenOrder} onSignOut={onSignOut} onChanged={load} />
         <div className="oo-actions">
           {canEdit && <button type="button" className="btn sm" onClick={() => onEdit(o)}>{o.tracking_number ? 'Edit order' : 'Edit · add tracking #'}</button>}
           {/* Ordered too: a parcel that turns up before anyone typed its tracking number
@@ -305,6 +314,9 @@ function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDel
             setDialog(null); load();
           }} />
       )}
+      {dialog?.kind === 'receipt' && o.receipt && (
+        <ReceiptDetail id={o.receipt.id} isAdmin={isAdmin} onClose={() => setDialog(null)} onSignOut={onSignOut} />
+      )}
       {dialog?.kind === 'delete' && (
         <Modal type="warn" title={`Delete ${orderCode(o.id)}?`}
           message="Only for an order recorded by mistake. A real order that fell through is cancelled line by line instead, so its refund stays traceable."
@@ -316,6 +328,118 @@ function OrderDetail({ id, canEdit, canReceive, onSignOut, onBack, onEdit, onDel
         </Modal>
       )}
     </>
+  );
+}
+
+// The emailed receipt for this order number: found by itself when the number is saved
+// (api/_lib/online-order-receipts.js), linked by the number, never stored on the order. A store
+// that ships one order in four parcels is entered as four online orders with the same number,
+// so the receipt's pairs are checked against all of them together.
+function ReceiptLink({ o, canEdit, onOpen, onOpenOrder, onSignOut, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const k = o.receipt_link || { state: 'none' };
+  const same = o.same_order || [];
+  async function find() {
+    setBusy(true); setMsg('');
+    try {
+      const r = await api.onlineOrderFindReceipt(o.id);
+      if (r.state !== 'found') setMsg('No email with this order number in the mailbox.');
+      onChanged();
+    } catch (err) { if (err.unauthorized) return onSignOut(); setMsg(err.message); }
+    setBusy(false);
+  }
+  const findBtn = (label) => canEdit && <button type="button" className="btn sm" onClick={find} disabled={busy}>{busy ? 'Searching the mailbox…' : label}</button>;
+  return (
+    <div className={`oo-receipt ${k.state}${k.agrees === false ? ' differs' : ''}`} data-receipt-state={k.state}>
+      <span className="oo-receipt-label">Receipt</span>
+      {k.state === 'linked' ? (
+        <div className="oo-receipt-body">
+          <button type="button" className="oo-receipt-open" onClick={onOpen}>
+            <b>{o.receipt.subject || `Order #${o.order_number}`}</b>
+            <span className="muted sm"> · {k.receiptPairs ? `${k.receiptPairs} pair${k.receiptPairs === 1 ? '' : 's'}` : 'no item lines read'}{o.receipt.total != null ? ` · ${money(o.receipt.total)}` : ''}{o.receipt.received_at ? ` · emailed ${when(o.receipt.received_at)}` : ''}</span>
+          </button>
+          {(same.length > 1 || k.agrees === false) && (
+            <p className="oo-receipt-sum">
+              {same.length > 1 ? <>Order #{o.order_number} is entered as <b>{same.length} parcels</b>: </> : <>Entered here: </>}
+              {same.map((s, i) => (
+                <React.Fragment key={s.id}>
+                  {i > 0 ? ' + ' : ''}
+                  {Number(s.id) === Number(o.id)
+                    ? <b>{orderCode(s.id)} ({s.pairs})</b>
+                    : <button type="button" className="oo-receipt-sib" onClick={() => onOpenOrder(s.id)}>{orderCode(s.id)} ({s.pairs})</button>}
+                </React.Fragment>
+              ))}
+              {' '}= <b>{k.entered} pair{k.entered === 1 ? '' : 's'}</b>
+              {k.agrees === true && <span className="oo-receipt-ok"> — matches the receipt</span>}
+              {k.agrees === false && <span className="oo-receipt-bad"> — the receipt says {k.receiptPairs}</span>}
+            </p>
+          )}
+        </div>
+      ) : k.state === 'no_number' ? (
+        <span className="muted sm">Add the order # and the emailed receipt is found and linked by itself.</span>
+      ) : k.state === 'looking' ? (
+        <span className="muted sm">Looking in the mailbox for #{o.order_number}…</span>
+      ) : (
+        <div className="oo-receipt-body">
+          <span className="muted sm">
+            {k.state === 'none' ? `Not looked for yet.`
+              : k.state === 'error' ? `The mailbox search failed${k.checkedAt ? ` (${when(k.checkedAt)})` : ''}.`
+                : `No email with #${o.order_number} in the mailbox${k.checkedAt ? ` (checked ${when(k.checkedAt)})` : ''}.`}
+            {k.retrying ? ' It is looked for again by itself.' : ''}
+          </span>
+          {findBtn(k.state === 'none' ? 'Find the receipt' : 'Check again')}
+        </div>
+      )}
+      {msg && <span className="error sm">{msg}</span>}
+    </div>
+  );
+}
+
+// The parcels the store's shipping emails describe for this order number (one email per
+// parcel: its tracking number and the pairs inside). Each is put on its online order by itself
+// (api/_lib/online-order-shipments.js): the number filled in, or the pairs split into their
+// own entry. One that could not be placed for sure is listed as such, for a person.
+const PARCEL_STATUS = { on_the_way: 'On the way', out_for_delivery: 'Out for delivery', delivered: 'Delivered' };
+function Parcels({ o, parcels, canEdit, onOpenOrder, onSignOut, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const waiting = !!String(o.order_number || '').trim() && !o.tracking_number && !o.received_at;
+  if (!parcels.length && !(canEdit && waiting)) return null;
+  async function check() {
+    setBusy(true); setMsg('');
+    try {
+      const r = await api.onlineOrderFindReceipt(o.id);
+      const n = (r.placed || []).length;
+      setMsg(r.shipping !== 'ok' ? 'The shipping emails could not be read on this server.'
+        : n ? `${n} parcel${n === 1 ? '' : 's'} put on ${n === 1 ? 'its' : 'their'} order.`
+          : r.parcels ? 'Nothing new: every parcel in the emails was already looked at.' : 'No shipping email for this order number yet.');
+      onChanged();
+    } catch (err) { if (err.unauthorized) return onSignOut(); setMsg(err.message); }
+    setBusy(false);
+  }
+  return (
+    <div className="oo-receipt oo-parcels" data-parcels={parcels.length}>
+      <span className="oo-receipt-label">Parcels</span>
+      <div className="oo-receipt-body">
+        {parcels.length ? (
+          <ul className="oo-parcel-list">
+            {parcels.map((p) => (
+              <li key={p.tracking_number}>
+                <TrackingLink number={p.tracking_number} carrier={p.carrier || undefined}>{p.tracking_number}</TrackingLink>
+                <span className="muted sm"> · {p.pairs ? `${p.pairs} pair${p.pairs === 1 ? '' : 's'}` : 'pairs not listed'} · {PARCEL_STATUS[p.status] || p.status}</span>
+                {p.order_id == null ? <span className="oo-receipt-bad"> · not on an order yet</span>
+                  : Number(p.order_id) === Number(o.id) ? <b> · this entry</b>
+                    : <> · <button type="button" className="oo-receipt-sib" onClick={() => onOpenOrder(p.order_id)}>{orderCode(p.order_id)}</button></>}
+              </li>
+            ))}
+          </ul>
+        ) : <span className="muted sm">No shipping email for #{o.order_number} yet. When the store ships, the tracking number is filled in by itself.</span>}
+        <span className="muted xs">From the store’s shipping emails.{parcels.some((p) => p.order_id == null) ? ' A parcel that is not on an order could not be matched for sure: add its number by hand.' : ''}</span>
+        {canEdit && <button type="button" className="btn sm ghost" onClick={check} disabled={busy}>{busy ? 'Reading the emails…' : 'Check the emails now'}</button>}
+        {msg && <span className="muted sm" role="status">{msg}</span>}
+      </div>
+    </div>
   );
 }
 
@@ -419,6 +543,7 @@ function OrderForm({ initial, onCancel, onSaved, onSignOut }) {
         <label><span className="muted xs">Tracking #</span><input value={f.tracking_number} onChange={(e) => set('tracking_number')(e.target.value)} placeholder="Add it once the order ships" maxLength={60} /></label>
         <label><span className="muted xs">Ordered on</span><input type="date" value={f.ordered_on} onChange={(e) => set('ordered_on')(e.target.value)} /></label>
       </div>
+      <p className="muted sm">The store’s emailed receipt is found by the <b>order #</b> and linked by itself. So is the <b>tracking #</b>, when the store emails it: an order shipped in several parcels is split into one entry per parcel, each with its own tracking # and pairs.</p>
       {!f.tracking_number.trim() && <p className="muted sm">No tracking number yet — the order is saved as <b>Ordered</b> and reaches the warehouse’s “Expected” list once one is added.</p>}
 
       <h3 className="rows-title">Shoes</h3>

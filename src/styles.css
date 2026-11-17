@@ -5592,6 +5592,23 @@ details.bc-check-group:not([open]) { padding-bottom: 4px; }
 .oo-chip { font-size: 11px; padding: 1px 7px; border-radius: 5px; border: 1px solid var(--border); background: var(--panel); }
 .oo-chip.muted { color: var(--muted); }
 .oo-chip.warn { color: #e0a878; border-color: rgba(224,168,120,0.5); background: rgba(224,168,120,0.10); }
+.oo-chip.ok { color: #7fcf9a; border-color: rgba(127,207,154,0.45); background: rgba(127,207,154,0.10); }
+/* The emailed receipt on an online order (found by the order number). */
+.oo-receipt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: 8px; background: var(--panel); }
+.oo-receipt.linked { border-left-color: #7fcf9a; }
+.oo-receipt.linked.differs, .oo-receipt.error { border-left-color: #e0a878; }
+.oo-receipt-label { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.oo-receipt-body { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; flex: 1 1 260px; min-width: 0; }
+.oo-receipt-open { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.oo-receipt-open b { text-decoration: underline; text-underline-offset: 3px; }
+.oo-receipt-sum { margin: 0; font-size: 13px; line-height: 1.6; }
+.oo-receipt-sib { background: none; border: 0; padding: 0; font: inherit; color: var(--accent, #6aa9ff); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.oo-receipt-ok { color: #7fcf9a; }
+.oo-receipt-bad { color: #e0a878; font-weight: 600; }
+.rc-oo { display: inline-block; margin-right: 6px; }
+.oo-parcels { margin-top: 8px; }
+.oo-parcel-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.oo-parcel-list li { overflow-wrap: anywhere; }
 .oo-stage { font-size: 10.5px; font-weight: 700; letter-spacing: 0.3px; padding: 1px 7px; border-radius: 5px; border: 1px solid var(--border); color: var(--muted); }
 .oo-stage.shipped { color: #8fb0ff; border-color: var(--accent-edge); background: var(--accent-tint); }
 .oo-stage.delivered { color: #7bc99a; border-color: rgba(123,201,154,0.5); background: rgba(123,201,154,0.12); }

@@ -10062,7 +10062,18 @@ export async function listOnlineOrders({ q = '', view = 'all', limit = 200 } = {
   return await db()`
     SELECT o.*,
            coalesce((SELECT json_agg(l ORDER BY l.cancelled_at NULLS FIRST, l.id)
-                       FROM online_order_lines l WHERE l.order_id = o.id), '[]'::json) AS lines
+                       FROM online_order_lines l WHERE l.order_id = o.id), '[]'::json) AS lines,
+           (SELECT json_build_object('id', r.id, 'subject', r.subject, 'received_at', r.received_at, 'total', r.total,
+                     'pairs', (SELECT coalesce(sum(coalesce((x->>'qty')::numeric, 1)), 0)::int FROM jsonb_array_elements(r.items) x))
+              FROM email_receipts r
+             WHERE btrim(coalesce(o.order_number, '')) <> '' AND upper(btrim(r.order_number)) = upper(btrim(o.order_number))
+             ORDER BY r.received_at NULLS LAST, r.id LIMIT 1) AS receipt,
+           (SELECT json_build_object('state', c.state, 'tries', c.tries, 'checked_at', c.checked_at, 'next_at', c.next_at, 'note', c.note)
+              FROM online_order_receipt_checks c WHERE c.order_key = upper(btrim(o.order_number))) AS receipt_check,
+           (SELECT json_agg(json_build_object('id', s.id, 'tracking_number', s.tracking_number,
+                     'pairs', (SELECT coalesce(sum(l.qty), 0)::int FROM online_order_lines l WHERE l.order_id = s.id)) ORDER BY s.id)
+              FROM online_orders s
+             WHERE btrim(coalesce(o.order_number, '')) <> '' AND upper(btrim(s.order_number)) = upper(btrim(o.order_number))) AS same_order
       FROM online_orders o
      WHERE (${like}::text IS NULL
             OR upper(o.store) LIKE ${like} OR upper(coalesce(o.order_number, '')) LIKE ${like}
@@ -10098,7 +10109,18 @@ export async function getOnlineOrder(id) {
   const r = await db()`
     SELECT o.*,
            coalesce((SELECT json_agg(l ORDER BY l.cancelled_at NULLS FIRST, l.id)
-                       FROM online_order_lines l WHERE l.order_id = o.id), '[]'::json) AS lines
+                       FROM online_order_lines l WHERE l.order_id = o.id), '[]'::json) AS lines,
+           (SELECT json_build_object('id', r.id, 'subject', r.subject, 'received_at', r.received_at, 'total', r.total,
+                     'pairs', (SELECT coalesce(sum(coalesce((x->>'qty')::numeric, 1)), 0)::int FROM jsonb_array_elements(r.items) x))
+              FROM email_receipts r
+             WHERE btrim(coalesce(o.order_number, '')) <> '' AND upper(btrim(r.order_number)) = upper(btrim(o.order_number))
+             ORDER BY r.received_at NULLS LAST, r.id LIMIT 1) AS receipt,
+           (SELECT json_build_object('state', c.state, 'tries', c.tries, 'checked_at', c.checked_at, 'next_at', c.next_at, 'note', c.note)
+              FROM online_order_receipt_checks c WHERE c.order_key = upper(btrim(o.order_number))) AS receipt_check,
+           (SELECT json_agg(json_build_object('id', s.id, 'tracking_number', s.tracking_number,
+                     'pairs', (SELECT coalesce(sum(l.qty), 0)::int FROM online_order_lines l WHERE l.order_id = s.id)) ORDER BY s.id)
+              FROM online_orders s
+             WHERE btrim(coalesce(o.order_number, '')) <> '' AND upper(btrim(s.order_number)) = upper(btrim(o.order_number))) AS same_order
       FROM online_orders o WHERE o.id = ${id}`;
   return r[0] || null;
 }
@@ -10418,7 +10440,9 @@ export async function listEmailReceipts({ buyer = null, store = null, state = nu
            jsonb_array_length(r.items) AS item_lines,
            (SELECT coalesce(sum(coalesce((x->>'qty')::numeric, 1)), 0)::int FROM jsonb_array_elements(r.items) x) AS pairs,
            r.recipient_addrs, r.buyer_user_id, r.buyer_source, u.name AS buyer_name, u.role AS buyer_role,
-           c.cart_id, c.cart_code
+           c.cart_id, c.cart_code,
+           (SELECT array_agg(o.id ORDER BY o.id) FROM online_orders o
+             WHERE btrim(coalesce(r.order_number, '')) <> '' AND upper(btrim(o.order_number)) = upper(btrim(r.order_number))) AS online_order_ids
       FROM email_receipts r
       LEFT JOIN users u ON u.id = r.buyer_user_id
       LEFT JOIN LATERAL (
@@ -15277,4 +15301,187 @@ export async function listPoizonOrders(fromIso, toIso, limit = 3000) {
         OR (cancelled_at IS NULL AND COALESCE(fulfillment_status, '') <> 'FULFILLED' AND ordered_at >= now() - interval '60 days')
      ORDER BY ordered_at DESC NULLS LAST, shopify_order_id
      LIMIT ${limit}`;
+}
+
+// ---- Online orders find their own receipt (docs/context/online-orders.md) -----------------
+// The key an order and its receipt share: the order number as typed, without the "#" some
+// people paste with it, spaces or case.
+export const orderKey = (n) => String(n ?? '').trim().replace(/^#\s*/, '').trim().toUpperCase();
+
+export async function emailReceiptByOrderKey(key) {
+  if (!key) return null;
+  const r = await db()`SELECT id, subject, received_at, total FROM email_receipts
+                        WHERE upper(btrim(order_number)) = ${key} ORDER BY received_at NULLS LAST, id LIMIT 1`;
+  return r[0] || null;
+}
+
+// The store as the order was typed ("Shoe Palace"), for a receipt whose email doesn't name one.
+export async function onlineOrderStoreByKey(key) {
+  const r = await db()`SELECT store FROM online_orders WHERE upper(btrim(order_number)) = ${key} ORDER BY id LIMIT 1`;
+  return r[0]?.store || null;
+}
+
+// Ask for this number's receipt. `force` asks again whatever was answered before (the button);
+// without it a number already queued, found or given up on is left alone, so re-saving an
+// order never costs a second mailbox search.
+export async function queueReceiptCheck(key, by = null, force = false) {
+  if (!key) return;
+  if (force) {
+    await db()`INSERT INTO online_order_receipt_checks (order_key, asked_by) VALUES (${key}, ${by})
+               ON CONFLICT (order_key) DO UPDATE SET state = 'pending', tries = 0, note = NULL, next_at = now(), asked_by = ${by}`;
+  } else {
+    await db()`INSERT INTO online_order_receipt_checks (order_key, asked_by) VALUES (${key}, ${by})
+               ON CONFLICT (order_key) DO NOTHING`;
+  }
+}
+
+// Orders from the last 60 days that nobody has asked about yet and that have no receipt: a few
+// at a time, so the orders recorded before this existed catch up without a burst of searches.
+export async function seedReceiptChecks(limit = 3) {
+  const r = await db()`
+    INSERT INTO online_order_receipt_checks (order_key, asked_by)
+    SELECT k.order_key, 'auto' FROM (
+      SELECT DISTINCT upper(btrim(o.order_number)) AS order_key, max(o.created_at) AS newest
+        FROM online_orders o
+       WHERE length(btrim(coalesce(o.order_number, ''))) >= 4 AND o.created_at > now() - interval '60 days'
+         AND NOT EXISTS (SELECT 1 FROM online_order_receipt_checks c WHERE c.order_key = upper(btrim(o.order_number)))
+         AND NOT EXISTS (SELECT 1 FROM email_receipts r WHERE upper(btrim(r.order_number)) = upper(btrim(o.order_number)))
+       GROUP BY 1 ORDER BY 2 DESC LIMIT ${limit}) k
+    ON CONFLICT (order_key) DO NOTHING
+    RETURNING order_key`;
+  return r.length;
+}
+
+export async function dueReceiptChecks(limit = 3) {
+  const r = await db()`SELECT order_key, tries FROM online_order_receipt_checks
+                        WHERE state <> 'found' AND next_at IS NOT NULL AND next_at <= now()
+                        ORDER BY next_at LIMIT ${limit}`;
+  return r;
+}
+
+// `nextInMin` null = stop asking by itself (found, or tried enough); the button still can.
+export async function setReceiptCheck(key, { state, note = null, nextInMin = null, tried = true }) {
+  await db()`
+    UPDATE online_order_receipt_checks
+       SET state = ${state}, note = ${note}, checked_at = now(),
+           tries = tries + ${tried ? 1 : 0},
+           next_at = CASE WHEN ${nextInMin}::int IS NULL THEN NULL ELSE now() + make_interval(mins => ${nextInMin ?? 0}::int) END
+     WHERE order_key = ${key}`;
+}
+
+// ---- Tracking numbers fill themselves (docs/context/online-orders.md) ----------------------
+// Every online order with this order number, with its lines: what planParcels reads.
+export async function onlineOrdersByKey(key) {
+  if (!key) return [];
+  return await db()`
+    SELECT o.id, o.store, o.order_number, o.tracking_number, o.received_at, o.coupon, o.tax, o.shipping,
+           coalesce((SELECT json_agg(l ORDER BY l.id) FROM online_order_lines l WHERE l.order_id = o.id), '[]'::json) AS lines
+      FROM online_orders o WHERE upper(btrim(o.order_number)) = ${key} ORDER BY o.id`;
+}
+
+// The parcels read from the shipping emails. A later email only ever moves a parcel forward
+// (on the way -> out for delivery -> delivered) and never empties its items.
+export async function upsertOrderShipments(key, parcels) {
+  const sql = db();
+  for (const p of parcels) {
+    const tk = String(p.tracking || '').replace(/\s+/g, '').toUpperCase();
+    if (!tk) continue;
+    await sql`
+      INSERT INTO online_order_shipments (order_key, tracking_key, tracking_number, carrier, status, items, emailed_at)
+      VALUES (${key}, ${tk}, ${p.tracking}, ${p.carrier || null}, ${p.status || 'on_the_way'}, ${JSON.stringify(p.items || [])}::jsonb, ${p.emailed_at || null}::timestamptz)
+      ON CONFLICT (order_key, tracking_key) DO UPDATE
+         SET status = EXCLUDED.status,
+             items = CASE WHEN jsonb_array_length(EXCLUDED.items) > 0 THEN EXCLUDED.items ELSE online_order_shipments.items END,
+             carrier = coalesce(EXCLUDED.carrier, online_order_shipments.carrier), updated_at = now()
+       WHERE online_order_shipments.status IS DISTINCT FROM EXCLUDED.status
+          OR (jsonb_array_length(online_order_shipments.items) = 0 AND jsonb_array_length(EXCLUDED.items) > 0)`;
+  }
+}
+
+export async function listOrderShipments(key) {
+  if (!key) return [];
+  return await db()`
+    SELECT tracking_key, tracking_number, carrier, status, items, emailed_at FROM online_order_shipments
+     WHERE order_key = ${key} ORDER BY emailed_at NULLS LAST, tracking_key`;
+}
+
+export async function markShipCheck(key, { emails = null, parcels = null, skip = false, note = null }) {
+  await db()`
+    INSERT INTO online_order_ship_checks (order_key, emails, parcels, skip, note) VALUES (${key}, ${emails}, ${parcels}, ${skip}, ${note})
+    ON CONFLICT (order_key) DO UPDATE SET checked_at = now(), emails = ${emails}, parcels = ${parcels}, skip = ${skip}, note = ${note}`;
+}
+
+// Order numbers that still have an entry waiting for a tracking number, not asked about in
+// the last `hours`. Newest orders first.
+export async function shipChecksDue(limit = 4, hours = 4) {
+  return await db()`
+    SELECT k.order_key FROM (
+      SELECT upper(btrim(o.order_number)) AS order_key, max(o.created_at) AS newest
+        FROM online_orders o
+       WHERE length(btrim(coalesce(o.order_number, ''))) >= 4 AND coalesce(btrim(o.tracking_number), '') = ''
+         AND o.received_at IS NULL AND o.created_at > now() - interval '30 days'
+         AND EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL)
+       GROUP BY 1) k
+      LEFT JOIN online_order_ship_checks c ON c.order_key = k.order_key
+     WHERE c.order_key IS NULL OR (c.skip = false AND c.checked_at < now() - make_interval(hours => ${hours}::int))
+     ORDER BY c.checked_at NULLS FIRST, k.newest DESC
+     LIMIT ${limit}`;
+}
+
+// The parcel IS this order: put its number on. Refused (false) once the order has a number
+// or was counted in — whoever got there first wins.
+export async function fillOnlineOrderTracking(id, tracking, actor, detail) {
+  const r = await db()`
+    WITH u AS (
+      UPDATE online_orders SET tracking_number = ${tracking}, updated_by = ${actor}, updated_at = now()
+       WHERE id = ${id} AND coalesce(btrim(tracking_number), '') = '' AND received_at IS NULL
+       RETURNING id),
+    e AS (INSERT INTO online_order_events (order_id, action, detail, actor) SELECT u.id, 'edited', ${detail}, ${actor} FROM u)
+    SELECT id FROM u`;
+  return !!r[0];
+}
+
+// The parcel is PART of this order: its pairs become their own order with the number, and the
+// order keeps the rest. One statement, guarded on the active lines the plan was made from, so
+// an order someone edited (or cancelled a pair on) in between is left alone. -> the new id.
+export async function carveOnlineOrder(a, actor) {
+  const col = (ls, k) => ls.map((x) => x[k]);
+  const r = await db()`
+    WITH src AS (
+      SELECT * FROM online_orders o
+       WHERE o.id = ${a.orderId} AND o.received_at IS NULL AND coalesce(btrim(o.tracking_number), '') = ''
+         AND (SELECT coalesce(array_agg(l.id ORDER BY l.id), '{}'::bigint[]) FROM online_order_lines l
+               WHERE l.order_id = o.id AND l.cancelled_at IS NULL) = ${a.lineIds}::bigint[]
+         -- a partial cancel keeps the line's id and lowers its qty: the pairs have to match too
+         AND (SELECT coalesce(array_agg(l.qty ORDER BY l.id), '{}'::int[]) FROM online_order_lines l
+               WHERE l.order_id = o.id AND l.cancelled_at IS NULL) = ${a.lineQtys}::int[]),
+    n AS (
+      INSERT INTO online_orders (store, order_number, tracking_number, ordered_on, coupon, tax, shipping, gc_pct, cashback_pct, note, created_by, updated_by)
+      SELECT store, order_number, ${a.tracking}, ordered_on, ${a.money.parcel.coupon}, ${a.money.parcel.tax}, ${a.money.parcel.shipping},
+             gc_pct, cashback_pct, note, created_by, ${actor} FROM src
+      RETURNING id),
+    nl AS (
+      INSERT INTO online_order_lines (order_id, sku, name, size, qty, unit_price)
+      SELECT n.id, u.sku, u.name, u.size, u.qty, u.unit_price
+        FROM n, unnest(${col(a.lines, 'sku')}::text[], ${col(a.lines, 'name')}::text[], ${col(a.lines, 'size')}::text[],
+                       ${col(a.lines, 'qty')}::int[], ${col(a.lines, 'unit_price')}::numeric[]) AS u(sku, name, size, qty, unit_price)),
+    ne AS (
+      INSERT INTO online_order_events (order_id, action, detail, actor)
+      SELECT n.id, 'created', ${`${a.pairs} pair(s) split from OO-${String(a.orderId).padStart(4, '0')}: the store shipped them in their own parcel, tracking ${a.tracking}`}, ${actor} FROM n),
+    up AS (
+      UPDATE online_orders SET coupon = ${a.money.rest.coupon}, tax = ${a.money.rest.tax}, shipping = ${a.money.rest.shipping},
+             updated_by = ${actor}, updated_at = now()
+       WHERE id = ${a.orderId} AND EXISTS (SELECT 1 FROM n)),
+    del AS (
+      DELETE FROM online_order_lines WHERE order_id = ${a.orderId} AND cancelled_at IS NULL AND EXISTS (SELECT 1 FROM n)),
+    rl AS (
+      INSERT INTO online_order_lines (order_id, sku, name, size, qty, unit_price)
+      SELECT ${a.orderId}, u.sku, u.name, u.size, u.qty, u.unit_price
+        FROM n, unnest(${col(a.rest, 'sku')}::text[], ${col(a.rest, 'name')}::text[], ${col(a.rest, 'size')}::text[],
+                       ${col(a.rest, 'qty')}::int[], ${col(a.rest, 'unit_price')}::numeric[]) AS u(sku, name, size, qty, unit_price)),
+    oe AS (
+      INSERT INTO online_order_events (order_id, action, detail, actor)
+      SELECT ${a.orderId}, 'edited', ${`${a.pairs} pair(s) moved to their own entry: the store shipped them separately, tracking ${a.tracking}`}, ${actor} FROM n)
+    SELECT id FROM n`;
+  return r[0] ? Number(r[0].id) : null;
 }

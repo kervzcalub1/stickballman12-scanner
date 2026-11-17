@@ -2322,6 +2322,48 @@ await sql(`CREATE INDEX IF NOT EXISTS email_receipts_received_idx ON email_recei
 await sql(`CREATE INDEX IF NOT EXISTS email_receipts_buyer_idx ON email_receipts (buyer_user_id)`);
 await sql(`CREATE INDEX IF NOT EXISTS email_receipts_order_idx ON email_receipts (order_number)`);
 await sql(`CREATE INDEX IF NOT EXISTS email_receipts_recipients_idx ON email_receipts USING gin (recipient_addrs)`);
+// Online orders find their own receipt (2026-11-18, docs/context/online-orders.md): one row per
+// ORDER NUMBER (several online orders can share one, a parcel each), saying whether the mailbox
+// has been asked for it yet. The link itself is never stored: an order and a receipt with the
+// same number belong together, read at read time.
+await sql(`
+  CREATE TABLE IF NOT EXISTS online_order_receipt_checks (
+    order_key  TEXT PRIMARY KEY,
+    state      TEXT NOT NULL DEFAULT 'pending',
+    tries      INT NOT NULL DEFAULT 0,
+    note       TEXT,
+    asked_by   TEXT,
+    checked_at TIMESTAMPTZ,
+    next_at    TIMESTAMPTZ DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS online_order_receipt_checks_due_idx ON online_order_receipt_checks (next_at) WHERE state <> 'found'`);
+await sql(`CREATE INDEX IF NOT EXISTS email_receipts_order_key_idx ON email_receipts (upper(btrim(order_number)))`);
+await sql(`CREATE INDEX IF NOT EXISTS online_orders_order_key_idx ON online_orders (upper(btrim(order_number)))`);
+// Tracking numbers fill themselves (2026-11-18): the parcels read from a store's shipping emails,
+// one row per order number + tracking number, and when each number was last asked about.
+await sql(`
+  CREATE TABLE IF NOT EXISTS online_order_shipments (
+    order_key       TEXT NOT NULL,
+    tracking_key    TEXT NOT NULL,
+    tracking_number TEXT NOT NULL,
+    carrier         TEXT,
+    status          TEXT NOT NULL DEFAULT 'on_the_way',
+    items           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    emailed_at      TIMESTAMPTZ,
+    first_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (order_key, tracking_key)
+  )`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS online_order_ship_checks (
+    order_key  TEXT PRIMARY KEY,
+    checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    emails     INT,
+    parcels    INT,
+    skip       BOOLEAN NOT NULL DEFAULT false,
+    note       TEXT
+  )`);
 
 // A store's receipt on a store order, WHEN it gave one (paper photo, PDF/screenshot, or an
 // email we already ingested). Optional evidence for the audit — plenty of stores give none.
@@ -3928,6 +3970,7 @@ const LIVE_TABLES = [
   'stock_counts', 'stock_check_scans',
   'ebay_sync_products', 'ebay_sync_links', 'ebay_sync_log', 'ebay_sync_profiles', 'ebay_sync_overrides',
   'poizon_orders',
+  'online_order_receipt_checks', 'online_order_shipments',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

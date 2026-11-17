@@ -103,6 +103,28 @@ export const REFUND_STATES = { refunded: 'Refunded', needs_request: 'Needs follo
 export const needsFollowUp = (l) => isCancelled(l) && (l.refund === 'needs_request' || l.refund === 'requested');
 export const orderCode = (id) => `OO-${String(id).padStart(4, '0')}`;
 
+// The order against its emailed receipt (found by the order number, api/_lib/online-order-receipts.js).
+// One order number can be on several online orders, one per parcel the store shipped: the
+// receipt is for ALL of them, so the pairs compared are everyone's together. Cancelled pairs
+// count too: the receipt is what was ordered.
+//   state: 'linked' | 'no_number' | 'looking' | 'not_found' | 'error' | 'none'
+//   agrees: true / false, or null when the receipt has no item lines to count.
+export function receiptLink(o) {
+  const same = Array.isArray(o?.same_order) ? o.same_order : [];
+  const entered = same.reduce((n, s) => n + (Number(s.pairs) || 0), 0);
+  const base = { parcels: same.length, entered };
+  if (!String(o?.order_number || '').trim()) return { ...base, state: 'no_number' };
+  if (o.receipt) {
+    const pairs = Number(o.receipt.pairs) || 0;
+    return { ...base, state: 'linked', receiptPairs: pairs, agrees: pairs > 0 ? pairs === entered : null };
+  }
+  const c = o.receipt_check;
+  if (!c || c.state === 'unconfigured') return { ...base, state: 'none' };
+  if (c.state === 'pending') return { ...base, state: 'looking' };
+  // Still on its own retries, or given up until someone presses the button.
+  return { ...base, state: c.state === 'error' ? 'error' : 'not_found', retrying: !!c.next_at, checkedAt: c.checked_at || null, note: c.note || null };
+}
+
 // Receive New: the online-order line for this pair, across the orders its parcel(s) match.
 // Same matching as a PO line (poLineMoney: code with dashes/spaces stripped, NUMERIC
 // size), so an online order and a PO can't disagree about which line a pair is.

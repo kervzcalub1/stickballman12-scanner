@@ -133,6 +133,79 @@ a short count becomes a refund to chase). E2E: `e2e/receiving-online-order.spec.
     turns a missing pair into a refund to chase.
   - Not once the order is already counted in, never on a PO receive / rescale.
 
+## The receipt links itself (2026-11-18)
+Owner: *"automatically grab the receipts based on the order id that was set by the user"*, with
+**SP2515272** as the example: a Shoe Palace order of 10 pairs that shipped in 4 parcels, entered as
+four online orders with the same order number.
+
+- **When the order # is saved** (new order, or the number changed), the ordering mailbox is asked for
+  that number in the background and the store's confirmation email is filed as a receipt
+  (`email_receipts`, so it is on the Receipts page too). Code: `api/_lib/online-order-receipts.js`.
+- **Nothing is stored on the order.** An order and a receipt with the same number (`upper(btrim())`)
+  belong together, joined at read time (`receipt`, `receipt_check`, `same_order` on `listOnlineOrders` /
+  `getOnlineOrder`; `receiptLink` in `src/lib/onlineOrders.js` → `receipt_link`). A receipt filed any
+  other way (a mailbox check) links the same.
+- **One number on several online orders = one receipt, shown on all of them.** The receipt's pairs are
+  compared with every parcel of that number together: "entered as 4 parcels: OO-0204 (3) + … = 10 pairs,
+  matches the receipt", or "the receipt says 10". Cancelled pairs count: the receipt is what was ordered.
+  The list row carries **Receipt linked** / **Receipt differs**.
+- **How the mailbox is asked:** the same Make scenario the buying requests use (6282792,
+  `MAKE_RECEIPT_PARSER_URL`, POST `{ transaction_id }`). It returns the OLDEST email with that text, which
+  for an order number is the confirmation. The email must carry the number as a whole word
+  (`mentionsOrder`), or it is not this order's.
+- **Shopify stores** (Shoe Palace): the Make parser knows the in-store receipts and returns no items for
+  these, so `parseShopifyOrderEmail` reads them here ("Name × qty", the variant line = size, the last
+  `$` line = the line total, then Subtotal / Shipping / Taxes / Total). No style code is in that email,
+  only the shoe's name.
+- **`online_order_receipt_checks`** (one row per order number; **needs db:setup**; in `LIVE_TABLES`):
+  `pending` → `found` | `not_found` | `error` | `unconfigured`. Not found is asked again after 15 min,
+  2 h and 1 day (`RETRY_MIN`), then it stops until someone presses **Check again**
+  (`POST /api/online-orders/receipt`, PH + admin). Re-saving an order never asks twice.
+- **Worker** (production only; `OO_RECEIPT_WATCH=on|off`, `OO_RECEIPT_MIN` default 5): each tick queues
+  3 orders from the last 60 days that were never asked about, and runs what is due. So the orders
+  recorded before this shipped catch up over a few hours rather than in one burst of Make runs.
+- E2E: `e2e/online-order-receipts.spec.js`.
+
+## Tracking numbers fill themselves (2026-11-18)
+Owner: fill the tracking number on online orders automatically. A store that ships one order in several
+parcels sends one "A shipment from order #… is on the way" email per parcel, with its tracking number and
+"Items in this shipment" (name, `4 of 10`, size). SP2515272: three parcels, 4 + 2 + 4 pairs.
+
+- **The mailbox:** a second Make scenario, **7082222 "Order emails"** (webhook 3078668, Cherry's team):
+  POST `{ order }` → Gmail All Mail search for `"<order>"` (≤ 60, oldest first) → a text aggregator →
+  the plain text of every email, `@@SUBJECT@@ / @@FROM@@ / @@DATE@@ / @@TEXT@@` blocks split by
+  `@@SBM-EMAIL-END@@`. No code module, no stored secret. Env **`MAKE_ORDER_EMAILS_URL`** (the URL is the
+  secret; unset = this part is off). Gmail only: Yahoo and the Spam folder are not searched.
+- **Reading** (`api/_lib/online-order-shipments.js`): `parseShopifyShipmentEmail` → `{ tracking, carrier,
+  status, items }`. On the way / out for delivery / delivered are three emails for ONE parcel
+  (`parcelsFromEmails`, keyed by tracking number, furthest status kept). Kept in
+  **`online_order_shipments`** (order number + tracking number; **needs db:setup**; in `LIVE_TABLES`).
+- **Placing** (`planParcels`, pure, `src/lib/onlineOrderParcels.js`), one step at a time, re-planned from
+  the database after each:
+  - the number is already on an entry of that order number → nothing;
+  - an entry with **no tracking number** holds exactly the parcel's pairs (by size) → **fill** the number in;
+  - exactly one entry has no tracking number and the parcel is part of it → **carve**: those pairs become
+    their own online order with the number, and coupon (per pair), tax and shipping (by price) move with
+    them, so no pair's actual cost changes. When what is left IS the last parcel, it is a fill.
+  - anything else is **not placed** and shown as "not on an order yet": two open entries and a parcel
+    that is neither, more pairs than the entry has, two shoes in one size and a name that picks neither.
+  - Never touched: an entry counted in, one that already has a tracking number, cancelled pairs, a
+    number that is on another order number's entry.
+- **Guarded on what the plan read** (`carveOnlineOrder`, one statement): the active line ids AND their
+  quantities must still be the same (a partial cancel keeps the id and lowers the qty), or nothing is
+  written. History says it on both entries; the actor is "Store email". Placed numbers go to 17TRACK
+  like a typed one.
+- **When:** on saving an order number with no tracking number; the **Check the emails now** button
+  (`POST /api/online-orders/receipt`, which also looks for the receipt); and a worker (production only,
+  `OO_SHIP_WATCH=on|off`): every order number with an entry still waiting for a tracking number (not
+  counted in, ≤ 30 days old) is asked about again every `OO_SHIP_HOURS` (4), 4 numbers per 5-minute tick
+  (`online_order_ship_checks`). A number whose emails are not a Shopify store's is marked `skip` on the
+  first answer and not asked about again. `OO_SHIP_APPLY=off` reads and shows parcels, changes nothing.
+- **The page:** a **Parcels** box on the order: each tracking number (courier link), pairs, status, and
+  the entry it is on.
+- **Only Shopify stores' shipping emails are read** (Shoe Palace). Nike, Foot Locker and Champs ship
+  with emails in other shapes; their tracking numbers are still typed.
+
 ## Not yet
 - No home badge for "Expected" / follow-ups (the page's tab counts only).
 - (Until 2026-11-06) no 17TRACK registration of the tracking numbers. They appeared on **Undelivered Tracking** as "No courier feed" with a link to the courier's site (`docs/context/undelivered.md`).

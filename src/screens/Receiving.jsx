@@ -23,7 +23,7 @@ import { matchManifestRow, manifestSummary } from '../lib/manifestScan.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES, issueTypeLabel } from '../lib/constants.js';
 import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
 import { costOrNull, poLineMoney, landedFromShelf, unitCost } from '../lib/costs.js';
-import { onlineLineFor, orderCode as onlineOrderCode, onlineOrderCheck, onlineCheckText } from '../lib/onlineOrders.js';
+import { onlineLineFor, orderCode as onlineOrderCode, onlineOrderCheck, onlineCheckText, CLAIM_PHOTOS } from '../lib/onlineOrders.js';
 import { estToday } from '../lib/format.js';
 import { declaresPerBox, trackKey } from '../lib/postatus.js';
 
@@ -100,7 +100,36 @@ function OnlineMismatchAlert({ check }) {
         from {order.store}{order.order_number ? ` #${order.order_number}` : ''}. It’s recorded on the batch as an issue —
         count the order in so a missing pair becomes a refund to chase.
       </p>
+      <ShortParcelTell order={order} summary={check.summary} />
       <a className="btn sm" href={`/online-orders?o=${order.id}`}>Open the order on Online Orders</a>
+    </div>
+  );
+}
+
+// A parcel that came short of its online order: the PH team got it on Telegram as a case, and
+// the floor still has to say it to them directly — WhatsApp, with the same photos — because
+// the claim against the store starts with that message (owner, 2026-11-18).
+function shortParcelMessage(order, summary) {
+  const t = summary.totals;
+  // Pairs that came but are not what was ordered: another shoe, another size, or one too many.
+  const wrong = summary.rows.filter((r) => r.state === 'unexpected' || r.state === 'over')
+    .map((r) => `${r.state === 'over' ? r.delta : r.received} × ${r.sku || '?'} US ${r.size}`);
+  const head = t.missing && wrong.length ? 'SHORT + WRONG PAIRS' : wrong.length ? 'WRONG PAIRS' : 'SHORT PARCEL';
+  return `${head}: ${order.store}${order.order_number ? ` order #${order.order_number}` : ''} (${onlineOrderCode(order.id)}), tracking ${order.tracking_number || '—'}. `
+    + `Ordered ${t.expected}, received ${t.received}${t.missing ? `, short by ${t.missing}` : ''}.`
+    + `${wrong.length ? ` Not on the order: ${wrong.join(', ')}.` : ''} Photos of the label, the boxes and the packing slip are attached.`;
+}
+function ShortParcelTell({ order, summary }) {
+  const [copied, setCopied] = useState(false);
+  const msg = shortParcelMessage(order, summary);
+  return (
+    <div className="oo-short-tell" role="note">
+      <b>Tell the PH team on WhatsApp now.</b>
+      <span className="sm"> Send this message and the same photos you took (label, boxes, packing slip). They use them to claim it from the store.</span>
+      <p className="oo-short-msg">{msg}</p>
+      <button type="button" className="btn sm" onClick={async () => { try { await navigator.clipboard.writeText(msg); setCopied(true); } catch { setCopied(false); } }}>
+        {copied ? 'Copied ✓' : 'Copy the message'}
+      </button>
     </div>
   );
 }
@@ -1908,6 +1937,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const addIssue = () => setIssues((is) => [...is, { key: cartKey++, type: ISSUE_TYPES[0][0], description: '', expectedCount: '', receivedCount: '', photos: [] }]);
   // A shipment's photos (the parcel, the label, the inside) have no VIN to file under.
   const signShipmentPhoto = (type) => api.inboundIssuePhotoSign(type);
+  // SHORT against the online order: the three photos a claim needs, taken before the box can
+  // be saved (label, every box that arrived, the packing slip). `noSlip` = the parcel had no
+  // paper in it, said out loud rather than skipped.
+  const [claimPhotos, setClaimPhotos] = useState({});
+  const [noSlip, setNoSlip] = useState(false);
   // Free text for anything unusual that isn't one of the named problems. Committed as
   // one `note` issue row, so it lands beside the issues on the batch and in reports.
   const [keyNotes, setKeyNotes] = useState('');
@@ -1927,7 +1961,9 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // The box didn't match its online order: on the batch, so Recent shows ⚠ and the
     // record says what was off long after the screen is gone.
     ...(onlineOff ? [{
-      type: 'online_order', description: onlineCheckText(onlineOff.order, onlineOff.summary),
+      type: 'online_order',
+      description: `${onlineCheckText(onlineOff.order, onlineOff.summary)}${claimNeeded ? ` · Claim photos: ${CLAIM_PHOTOS.map((c) => `${c.key} ×${(claimPhotos[c.key] || []).length}`).join(', ')}${noSlip ? ' (no packing slip in the parcel)' : ''}` : ''}`.slice(0, 1000),
+      photos: claimNeeded ? CLAIM_PHOTOS.flatMap((c) => claimPhotos[c.key] || []) : [],
       expectedCount: onlineOff.summary.totals.expected,
       receivedCount: onlineOff.summary.rows.reduce((n, r) => n + r.received, 0),
     }] : []),
@@ -2118,6 +2154,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const onlineCheck = activeOnlineOrder && !activeOnlineOrder.received_at && !isRescale && !isPoReceive
     ? onlineOrderCheck(activeOnlineOrder, items) : null;
   const onlineOff = onlineCheck && !onlineCheck.totals.clean ? { order: activeOnlineOrder, summary: onlineCheck } : null;
+  // Pairs missing against the order, or pairs in the parcel that are not on it (wrong shoe,
+  // wrong size, one too many) → the claim photos are required before this box is saved.
+  const claimNeeded = !!onlineOff;
+  const claimLeft = claimNeeded ? CLAIM_PHOTOS.filter((c) => !(claimPhotos[c.key] || []).length && !(c.key === 'slip' && noSlip)) : [];
+  const claimMissing = claimLeft.length ? `This parcel doesn’t match its online order. Take the claim photo${claimLeft.length === 1 ? '' : 's'} first: ${claimLeft.map((c) => c.label.toLowerCase()).join('; ')}.` : '';
   // A box swap is deliberate (set aside for its box), not a shipment problem to record.
   const autoIssues = items.filter((i) => !i.withBox && !i.boxSwap)
     .flatMap((i) => i.sizes.map((s) => ({ key: `auto-${i.key}-${s.key}`, description: `${i.sku || '?'} ${s.size} — No box` })));
@@ -3245,6 +3286,34 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
 
           {step === 4 && !isRescale && (
             <>
+              {claimNeeded && (
+                <div className="card oo-claim" data-claim-left={claimLeft.length}>
+                  <h3 className="rows-title">Parcel doesn’t match its order: photos for the claim <span className="muted">(required)</span></h3>
+                  <p className="sm">
+                    <b>{[onlineOff.summary.totals.missing ? `${onlineOff.summary.totals.missing} pair${onlineOff.summary.totals.missing === 1 ? '' : 's'} missing` : null,
+                      onlineOff.summary.totals.extra ? `${onlineOff.summary.totals.extra} pair${onlineOff.summary.totals.extra === 1 ? '' : 's'} not on the order` : null].filter(Boolean).join(' · ')}</b> against {onlineOrderCode(onlineOff.order.id)} · {onlineOff.order.store}
+                    {onlineOff.order.order_number ? ` #${onlineOff.order.order_number}` : ''}: {onlineOff.summary.totals.received} of {onlineOff.summary.totals.expected} came out of the parcel.
+                    The PH team is told on Telegram when you submit. Take these now, while the parcel is still in front of you.
+                  </p>
+                  {CLAIM_PHOTOS.map((c, i) => {
+                    const have = (claimPhotos[c.key] || []).length;
+                    const skipped = c.key === 'slip' && noSlip;
+                    return (
+                      <div key={c.key} className={`oo-claim-row ${have || skipped ? 'done' : ''}`} data-claim={c.key}>
+                        <div className="oo-claim-head"><span className="oo-claim-n">{have || skipped ? '✓' : i + 1}</span><b>{c.label}</b><span className="muted sm"> · {c.hint}</span></div>
+                        {!skipped && (
+                          <DefectPhotos photos={claimPhotos[c.key] || []} max={4} sign={signShipmentPhoto}
+                            onChange={(photos) => setClaimPhotos((p) => ({ ...p, [c.key]: photos }))} onSignOut={onSignOut} />
+                        )}
+                        {c.key === 'slip' && !have && (
+                          <label className="oo-claim-none sm"><input type="checkbox" checked={noSlip} onChange={(e) => setNoSlip(e.target.checked)} /> There was no packing slip in the parcel</label>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <ShortParcelTell order={onlineOff.order} summary={onlineOff.summary} />
+                </div>
+              )}
               {swapLines.length > 0 && (
                 <div className={`card box-issue${boxIssueMissing && error ? ' needs' : ''}`} id="box-issue">
                   <div className="box-issue-head"><b>Box swap — what's wrong with the box?</b> <span className="muted sm">Required</span></div>
@@ -3301,7 +3370,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               <div className="batch-bar">
                 <button className="btn ghost" onClick={() => setStep(3)}>← Back</button>
                 <div className="batch-totals"><b>{totalItems}</b> units · <b>${totalCost.toFixed(2)}</b></div>
-                <button className="btn primary" onClick={() => { setError(''); if (!items.length) { setError('Add at least one item.'); return; } if (backToStickers()) return; if (unresolvedCount) { setError(unresolvedMsg); focusFirstUnresolved(); return; } if (boxIssueMissing) { setError(`Box swap pairs: ${boxIssueMissing} first.`); document.getElementById('box-issue')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); return; } setShowConfirm(true); }} disabled={committing}>
+                <button className="btn primary" onClick={() => { setError(''); if (claimMissing) { setError(claimMissing); return; } if (!items.length) { setError('Add at least one item.'); return; } if (backToStickers()) return; if (unresolvedCount) { setError(unresolvedMsg); focusFirstUnresolved(); return; } if (boxIssueMissing) { setError(`Box swap pairs: ${boxIssueMissing} first.`); document.getElementById('box-issue')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); return; } setShowConfirm(true); }} disabled={committing}>
                   {isBoxMode || isMultiBoxNew ? 'Submit box' : isInstore ? 'Save trip' : 'Finish batch'}
                 </button>
               </div>

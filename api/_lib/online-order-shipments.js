@@ -16,6 +16,7 @@ import {
 import { registerWarehouseTracking, normalizeTrackingNumber } from './tracking.js';
 import { mentionsOrder } from './online-order-receipts.js';
 import { planParcels } from '../../src/lib/onlineOrderParcels.js';
+import { compareOrdersSoon } from './online-order-received.js';
 import { trackKey } from '../../src/lib/onlineOrders.js';
 
 const TIMEOUT_MS = 45_000;
@@ -159,6 +160,8 @@ export async function syncOrderParcels(orderNumber, { io = {} } = {}) {
     // Emails, but none in a shape we read: the worker stops asking about this number.
     await x.mark(key, { emails: emails.length, parcels: parcels.length, skip: emails.length > 0 && !shopify, note: null });
     const fresh = placed.map((p) => normalizeTrackingNumber(p.tracking)).filter(Boolean);
+    // A parcel that was received before its number got here: is it short?
+    compareOrdersSoon(placed.flatMap((p) => [p.orderId, p.newId]));
     if (fresh.length) registerWarehouseTracking(fresh, { claim: claimForTracking, label: 'online-order-shipments' }).catch((e) => console.warn('[online-order-shipments] register:', e.message));
     return { state: 'ok', parcels: parcels.length, placed };
   } catch (e) {

@@ -10173,7 +10173,8 @@ export async function updateOnlineOrder(id, o, lines, actor, detail) {
   const sql = db();
   await sql.transaction([
     sql`UPDATE online_orders
-           SET store = ${o.store}, order_number = ${o.order_number}, tracking_number = ${o.tracking_number},
+           SET received_check_at = CASE WHEN tracking_number IS DISTINCT FROM ${o.tracking_number} THEN NULL ELSE received_check_at END,
+               store = ${o.store}, order_number = ${o.order_number}, tracking_number = ${o.tracking_number},
                ordered_on = ${o.ordered_on}::date, coupon = ${o.coupon}, tax = ${o.tax}, shipping = ${o.shipping},
                gc_pct = ${o.gc_pct}, cashback_pct = ${o.cashback_pct}, note = ${o.note}, updated_by = ${actor}, updated_at = now()
          WHERE id = ${id}`,
@@ -15483,5 +15484,62 @@ export async function carveOnlineOrder(a, actor) {
       INSERT INTO online_order_events (order_id, action, detail, actor)
       SELECT ${a.orderId}, 'edited', ${`${a.pairs} pair(s) moved to their own entry: the store shipped them separately, tracking ${a.tracking}`}, ${actor} FROM n)
     SELECT id FROM n`;
+  return r[0] ? Number(r[0].id) : null;
+}
+
+// ---- A received parcel against its online order (docs/context/online-orders.md) ------------
+// What the warehouse scanned out of the delivery with this tracking number: a box's own number
+// first (multi-box), then the batch's. Only a finished supplier delivery counts — a box still
+// being scanned is not short yet. The box's own code/size (GS received as men's keeps what the
+// box said in original_*). -> { batch_id, box_id, batch_code, items:[{ sku, size, qty }] } | null
+export async function receivedForTracking(tracking) {
+  const t = (normalizeTrackingNumber(String(tracking || '')) || String(tracking || '')).replace(/\s+/g, '').toUpperCase();
+  if (t.length < 8) return null;
+  const sql = db();
+  const box = await sql`
+    SELECT bx.id AS box_id, bx.batch_id, b.batch_code FROM batch_boxes bx JOIN batches b ON b.id = bx.batch_id
+     WHERE upper(regexp_replace(bx.tracking_number, '[[:space:]]', '', 'g')) = ${t} AND bx.status = 'received'
+       AND (b.kind IS NULL OR b.kind = 'receiving')
+     ORDER BY bx.id DESC LIMIT 1`;
+  let found = box[0] ? { batch_id: Number(box[0].batch_id), box_id: Number(box[0].box_id), batch_code: box[0].batch_code } : null;
+  if (!found) {
+    const b = await sql`
+      SELECT id, batch_code FROM batches
+       WHERE upper(regexp_replace(tracking_number, '[[:space:]]', '', 'g')) = ${t} AND status = 'committed'
+         AND (kind IS NULL OR kind = 'receiving')
+       ORDER BY id DESC LIMIT 1`;
+    if (b[0]) found = { batch_id: Number(b[0].id), box_id: null, batch_code: b[0].batch_code };
+  }
+  if (!found) return null;
+  const items = found.box_id
+    ? await sql`SELECT coalesce(original_sku, sku) AS sku, coalesce(original_size, size) AS size, count(*)::int AS qty
+                  FROM items WHERE box_id = ${found.box_id} GROUP BY 1, 2`
+    : await sql`SELECT coalesce(original_sku, sku) AS sku, coalesce(original_size, size) AS size, count(*)::int AS qty
+                  FROM items WHERE batch_id = ${found.batch_id} GROUP BY 1, 2`;
+  return { ...found, items };
+}
+
+// Online orders with a tracking number that were never compared with what was received,
+// where a delivery with that number HAS been received. Newest first.
+export async function onlineOrdersToCompare(limit = 20) {
+  return await db()`
+    SELECT o.id FROM online_orders o
+     WHERE o.received_check_at IS NULL AND coalesce(btrim(o.tracking_number), '') <> ''
+       AND o.created_at > now() - interval '90 days'
+       AND (EXISTS (SELECT 1 FROM batch_boxes bx WHERE bx.status = 'received'
+                     AND upper(regexp_replace(bx.tracking_number, '[[:space:]]', '', 'g')) = upper(regexp_replace(o.tracking_number, '[[:space:]]', '', 'g')))
+         OR EXISTS (SELECT 1 FROM batches b WHERE b.status = 'committed'
+                     AND upper(regexp_replace(b.tracking_number, '[[:space:]]', '', 'g')) = upper(regexp_replace(o.tracking_number, '[[:space:]]', '', 'g'))))
+     ORDER BY o.id DESC LIMIT ${limit}`;
+}
+
+export async function markOnlineOrderCompared(id) {
+  await db()`UPDATE online_orders SET received_check_at = now() WHERE id = ${id}`;
+}
+
+// Was this delivery already flagged against its online order (at the bench, or by an earlier
+// compare)? One flag per delivery: a second would be a twin case for the same missing pair.
+export async function onlineOrderIssueOnBatch(batchId) {
+  const r = await db()`SELECT id FROM shipment_issues WHERE batch_id = ${batchId} AND type = 'online_order' ORDER BY id LIMIT 1`;
   return r[0] ? Number(r[0].id) : null;
 }

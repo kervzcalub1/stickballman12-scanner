@@ -164,9 +164,47 @@ four online orders with the same order number.
 - **Worker** (production only; `OO_RECEIPT_WATCH=on|off`, `OO_RECEIPT_MIN` default 5): each tick queues
   3 orders from the last 60 days that were never asked about, and runs what is due. So the orders
   recorded before this shipped catch up over a few hours rather than in one burst of Make runs.
-- **Not done:** the store's *shipping* emails (one per parcel, each with a tracking number and its pairs)
-  are not read. The lookup returns one email, and an online order still holds one tracking number.
 - E2E: `e2e/online-order-receipts.spec.js`.
+
+## Tracking numbers fill themselves (2026-11-18)
+Owner: fill the tracking number on online orders automatically. A store that ships one order in several
+parcels sends one "A shipment from order #… is on the way" email per parcel, with its tracking number and
+"Items in this shipment" (name, `4 of 10`, size). SP2515272: three parcels, 4 + 2 + 4 pairs.
+
+- **The mailbox:** a second Make scenario, **7082222 "Order emails"** (webhook 3078668, Cherry's team):
+  POST `{ order }` → Gmail All Mail search for `"<order>"` (≤ 60, oldest first) → a text aggregator →
+  the plain text of every email, `@@SUBJECT@@ / @@FROM@@ / @@DATE@@ / @@TEXT@@` blocks split by
+  `@@SBM-EMAIL-END@@`. No code module, no stored secret. Env **`MAKE_ORDER_EMAILS_URL`** (the URL is the
+  secret; unset = this part is off). Gmail only: Yahoo and the Spam folder are not searched.
+- **Reading** (`api/_lib/online-order-shipments.js`): `parseShopifyShipmentEmail` → `{ tracking, carrier,
+  status, items }`. On the way / out for delivery / delivered are three emails for ONE parcel
+  (`parcelsFromEmails`, keyed by tracking number, furthest status kept). Kept in
+  **`online_order_shipments`** (order number + tracking number; **needs db:setup**; in `LIVE_TABLES`).
+- **Placing** (`planParcels`, pure, `src/lib/onlineOrderParcels.js`), one step at a time, re-planned from
+  the database after each:
+  - the number is already on an entry of that order number → nothing;
+  - an entry with **no tracking number** holds exactly the parcel's pairs (by size) → **fill** the number in;
+  - exactly one entry has no tracking number and the parcel is part of it → **carve**: those pairs become
+    their own online order with the number, and coupon (per pair), tax and shipping (by price) move with
+    them, so no pair's actual cost changes. When what is left IS the last parcel, it is a fill.
+  - anything else is **not placed** and shown as "not on an order yet": two open entries and a parcel
+    that is neither, more pairs than the entry has, two shoes in one size and a name that picks neither.
+  - Never touched: an entry counted in, one that already has a tracking number, cancelled pairs, a
+    number that is on another order number's entry.
+- **Guarded on what the plan read** (`carveOnlineOrder`, one statement): the active line ids AND their
+  quantities must still be the same (a partial cancel keeps the id and lowers the qty), or nothing is
+  written. History says it on both entries; the actor is "Store email". Placed numbers go to 17TRACK
+  like a typed one.
+- **When:** on saving an order number with no tracking number; the **Check the emails now** button
+  (`POST /api/online-orders/receipt`, which also looks for the receipt); and a worker (production only,
+  `OO_SHIP_WATCH=on|off`): every order number with an entry still waiting for a tracking number (not
+  counted in, ≤ 30 days old) is asked about again every `OO_SHIP_HOURS` (4), 4 numbers per 5-minute tick
+  (`online_order_ship_checks`). A number whose emails are not a Shopify store's is marked `skip` on the
+  first answer and not asked about again. `OO_SHIP_APPLY=off` reads and shows parcels, changes nothing.
+- **The page:** a **Parcels** box on the order: each tracking number (courier link), pairs, status, and
+  the entry it is on.
+- **Only Shopify stores' shipping emails are read** (Shoe Palace). Nike, Foot Locker and Champs ship
+  with emails in other shapes; their tracking numbers are still typed.
 
 ## Not yet
 - No home badge for "Expected" / follow-ups (the page's tab counts only).

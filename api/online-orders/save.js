@@ -11,6 +11,7 @@ import { claimForTracking } from '../_lib/db.js';
 import { registerWarehouseTracking, normalizeTrackingNumber } from '../_lib/tracking.js';
 import { orderCode, orderCosts } from '../../src/lib/onlineOrders.js';
 import { orderNumberSet } from '../_lib/online-order-receipts.js';
+import { orderNumberSetForParcels } from '../_lib/online-order-shipments.js';
 import { orderKey } from '../_lib/db.js';
 
 const text = (v, max) => { const t = String(v ?? '').trim().slice(0, max); return t || null; };
@@ -106,7 +107,7 @@ export default async function handler(req, res) {
       const newId = await createOnlineOrder(o, lines, actor);
       // The store's confirmation email is found by this number and filed as the receipt.
       // In the background: a mailbox search takes seconds and the save must not wait on it.
-      if (o.order_number) orderNumberSet(o.order_number, actor);
+      if (o.order_number) { orderNumberSet(o.order_number, actor); if (!o.tracking_number) orderNumberSetForParcels(o.order_number); }
       return send(res, 200, { ok: true, id: Number(newId) });
     }
     const changes = [];
@@ -119,7 +120,11 @@ export default async function handler(req, res) {
     const afterUnits = lines.reduce((n, l) => n + l.qty, 0);
     if (beforeUnits !== afterUnits) changes.push(`${beforeUnits} → ${afterUnits} pair(s)`);
     await updateOnlineOrder(id, o, lines, actor, changes.join(' · ') || 'details edited');
-    if (o.order_number && orderKey(o.order_number) !== orderKey(before.order_number)) orderNumberSet(o.order_number, actor);
+    if (o.order_number && orderKey(o.order_number) !== orderKey(before.order_number)) {
+      orderNumberSet(o.order_number, actor);
+      // Its shipping emails too: the tracking number, and the pairs in each parcel.
+      if (!o.tracking_number) orderNumberSetForParcels(o.order_number);
+    }
     return send(res, 200, { ok: true, id });
   } catch (e) {
     console.error('[online-orders/save]', e.message);

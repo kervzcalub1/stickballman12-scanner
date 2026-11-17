@@ -15368,3 +15368,120 @@ export async function setReceiptCheck(key, { state, note = null, nextInMin = nul
            next_at = CASE WHEN ${nextInMin}::int IS NULL THEN NULL ELSE now() + make_interval(mins => ${nextInMin ?? 0}::int) END
      WHERE order_key = ${key}`;
 }
+
+// ---- Tracking numbers fill themselves (docs/context/online-orders.md) ----------------------
+// Every online order with this order number, with its lines: what planParcels reads.
+export async function onlineOrdersByKey(key) {
+  if (!key) return [];
+  return await db()`
+    SELECT o.id, o.store, o.order_number, o.tracking_number, o.received_at, o.coupon, o.tax, o.shipping,
+           coalesce((SELECT json_agg(l ORDER BY l.id) FROM online_order_lines l WHERE l.order_id = o.id), '[]'::json) AS lines
+      FROM online_orders o WHERE upper(btrim(o.order_number)) = ${key} ORDER BY o.id`;
+}
+
+// The parcels read from the shipping emails. A later email only ever moves a parcel forward
+// (on the way -> out for delivery -> delivered) and never empties its items.
+export async function upsertOrderShipments(key, parcels) {
+  const sql = db();
+  for (const p of parcels) {
+    const tk = String(p.tracking || '').replace(/\s+/g, '').toUpperCase();
+    if (!tk) continue;
+    await sql`
+      INSERT INTO online_order_shipments (order_key, tracking_key, tracking_number, carrier, status, items, emailed_at)
+      VALUES (${key}, ${tk}, ${p.tracking}, ${p.carrier || null}, ${p.status || 'on_the_way'}, ${JSON.stringify(p.items || [])}::jsonb, ${p.emailed_at || null}::timestamptz)
+      ON CONFLICT (order_key, tracking_key) DO UPDATE
+         SET status = EXCLUDED.status,
+             items = CASE WHEN jsonb_array_length(EXCLUDED.items) > 0 THEN EXCLUDED.items ELSE online_order_shipments.items END,
+             carrier = coalesce(EXCLUDED.carrier, online_order_shipments.carrier), updated_at = now()
+       WHERE online_order_shipments.status IS DISTINCT FROM EXCLUDED.status
+          OR (jsonb_array_length(online_order_shipments.items) = 0 AND jsonb_array_length(EXCLUDED.items) > 0)`;
+  }
+}
+
+export async function listOrderShipments(key) {
+  if (!key) return [];
+  return await db()`
+    SELECT tracking_key, tracking_number, carrier, status, items, emailed_at FROM online_order_shipments
+     WHERE order_key = ${key} ORDER BY emailed_at NULLS LAST, tracking_key`;
+}
+
+export async function markShipCheck(key, { emails = null, parcels = null, skip = false, note = null }) {
+  await db()`
+    INSERT INTO online_order_ship_checks (order_key, emails, parcels, skip, note) VALUES (${key}, ${emails}, ${parcels}, ${skip}, ${note})
+    ON CONFLICT (order_key) DO UPDATE SET checked_at = now(), emails = ${emails}, parcels = ${parcels}, skip = ${skip}, note = ${note}`;
+}
+
+// Order numbers that still have an entry waiting for a tracking number, not asked about in
+// the last `hours`. Newest orders first.
+export async function shipChecksDue(limit = 4, hours = 4) {
+  return await db()`
+    SELECT k.order_key FROM (
+      SELECT upper(btrim(o.order_number)) AS order_key, max(o.created_at) AS newest
+        FROM online_orders o
+       WHERE length(btrim(coalesce(o.order_number, ''))) >= 4 AND coalesce(btrim(o.tracking_number), '') = ''
+         AND o.received_at IS NULL AND o.created_at > now() - interval '30 days'
+         AND EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL)
+       GROUP BY 1) k
+      LEFT JOIN online_order_ship_checks c ON c.order_key = k.order_key
+     WHERE c.order_key IS NULL OR (c.skip = false AND c.checked_at < now() - make_interval(hours => ${hours}::int))
+     ORDER BY c.checked_at NULLS FIRST, k.newest DESC
+     LIMIT ${limit}`;
+}
+
+// The parcel IS this order: put its number on. Refused (false) once the order has a number
+// or was counted in — whoever got there first wins.
+export async function fillOnlineOrderTracking(id, tracking, actor, detail) {
+  const r = await db()`
+    WITH u AS (
+      UPDATE online_orders SET tracking_number = ${tracking}, updated_by = ${actor}, updated_at = now()
+       WHERE id = ${id} AND coalesce(btrim(tracking_number), '') = '' AND received_at IS NULL
+       RETURNING id),
+    e AS (INSERT INTO online_order_events (order_id, action, detail, actor) SELECT u.id, 'edited', ${detail}, ${actor} FROM u)
+    SELECT id FROM u`;
+  return !!r[0];
+}
+
+// The parcel is PART of this order: its pairs become their own order with the number, and the
+// order keeps the rest. One statement, guarded on the active lines the plan was made from, so
+// an order someone edited (or cancelled a pair on) in between is left alone. -> the new id.
+export async function carveOnlineOrder(a, actor) {
+  const col = (ls, k) => ls.map((x) => x[k]);
+  const r = await db()`
+    WITH src AS (
+      SELECT * FROM online_orders o
+       WHERE o.id = ${a.orderId} AND o.received_at IS NULL AND coalesce(btrim(o.tracking_number), '') = ''
+         AND (SELECT coalesce(array_agg(l.id ORDER BY l.id), '{}'::bigint[]) FROM online_order_lines l
+               WHERE l.order_id = o.id AND l.cancelled_at IS NULL) = ${a.lineIds}::bigint[]
+         -- a partial cancel keeps the line's id and lowers its qty: the pairs have to match too
+         AND (SELECT coalesce(array_agg(l.qty ORDER BY l.id), '{}'::int[]) FROM online_order_lines l
+               WHERE l.order_id = o.id AND l.cancelled_at IS NULL) = ${a.lineQtys}::int[]),
+    n AS (
+      INSERT INTO online_orders (store, order_number, tracking_number, ordered_on, coupon, tax, shipping, gc_pct, cashback_pct, note, created_by, updated_by)
+      SELECT store, order_number, ${a.tracking}, ordered_on, ${a.money.parcel.coupon}, ${a.money.parcel.tax}, ${a.money.parcel.shipping},
+             gc_pct, cashback_pct, note, created_by, ${actor} FROM src
+      RETURNING id),
+    nl AS (
+      INSERT INTO online_order_lines (order_id, sku, name, size, qty, unit_price)
+      SELECT n.id, u.sku, u.name, u.size, u.qty, u.unit_price
+        FROM n, unnest(${col(a.lines, 'sku')}::text[], ${col(a.lines, 'name')}::text[], ${col(a.lines, 'size')}::text[],
+                       ${col(a.lines, 'qty')}::int[], ${col(a.lines, 'unit_price')}::numeric[]) AS u(sku, name, size, qty, unit_price)),
+    ne AS (
+      INSERT INTO online_order_events (order_id, action, detail, actor)
+      SELECT n.id, 'created', ${`${a.pairs} pair(s) split from OO-${String(a.orderId).padStart(4, '0')}: the store shipped them in their own parcel, tracking ${a.tracking}`}, ${actor} FROM n),
+    up AS (
+      UPDATE online_orders SET coupon = ${a.money.rest.coupon}, tax = ${a.money.rest.tax}, shipping = ${a.money.rest.shipping},
+             updated_by = ${actor}, updated_at = now()
+       WHERE id = ${a.orderId} AND EXISTS (SELECT 1 FROM n)),
+    del AS (
+      DELETE FROM online_order_lines WHERE order_id = ${a.orderId} AND cancelled_at IS NULL AND EXISTS (SELECT 1 FROM n)),
+    rl AS (
+      INSERT INTO online_order_lines (order_id, sku, name, size, qty, unit_price)
+      SELECT ${a.orderId}, u.sku, u.name, u.size, u.qty, u.unit_price
+        FROM n, unnest(${col(a.rest, 'sku')}::text[], ${col(a.rest, 'name')}::text[], ${col(a.rest, 'size')}::text[],
+                       ${col(a.rest, 'qty')}::int[], ${col(a.rest, 'unit_price')}::numeric[]) AS u(sku, name, size, qty, unit_price)),
+    oe AS (
+      INSERT INTO online_order_events (order_id, action, detail, actor)
+      SELECT ${a.orderId}, 'edited', ${`${a.pairs} pair(s) moved to their own entry: the store shipped them separately, tracking ${a.tracking}`}, ${actor} FROM n)
+    SELECT id FROM n`;
+  return r[0] ? Number(r[0].id) : null;
+}

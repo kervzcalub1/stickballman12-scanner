@@ -1,4 +1,4 @@
-// POST /api/online-orders/receipt  { id }  -> { ok, state, receiptId? }
+// POST /api/online-orders/receipt  { id }  -> { ok, state, receiptId?, parcels?, placed? }
 // "Find the receipt" / "Check again" on an online order: ask the ordering mailbox for this
 // order's number NOW and file the email as its receipt. The same thing happens by itself when
 // the order number is saved (api/_lib/online-order-receipts.js); this is for the email that
@@ -6,6 +6,8 @@
 import { send, applySecurity, rateLimit, requireRole, getJsonBody } from '../_lib/util.js';
 import { dbConfigured, getOnlineOrder } from '../_lib/db.js';
 import { checkOrderReceiptNow, receiptLookupConfigured } from '../_lib/online-order-receipts.js';
+import { syncOrderParcelsNow, orderEmailsConfigured } from '../_lib/online-order-shipments.js';
+import { emailReceiptByOrderKey, orderKey } from '../_lib/db.js';
 import { actorOf, idOf } from './_shared.js';
 
 export default async function handler(req, res) {
@@ -22,10 +24,13 @@ export default async function handler(req, res) {
     const o = await getOnlineOrder(id);
     if (!o) return send(res, 404, { ok: false, error: 'That order no longer exists.' });
     if (String(o.order_number || '').trim().length < 4) return send(res, 400, { ok: false, error: 'Add the order number first — the receipt is found by it.' });
-    const out = await checkOrderReceiptNow(o.order_number, actorOf(user));
-    if (out.state === 'unconfigured') return send(res, 503, { ok: false, error: 'Searching the mailbox is not set up on this server.', configured: receiptLookupConfigured() });
-    if (out.state === 'error') return send(res, 502, { ok: false, error: 'The mailbox search did not answer. Try again in a minute.' });
-    return send(res, 200, { ok: true, ...out });
+    // The receipt, unless it is already here; then the shipping emails (tracking numbers).
+    const have = await emailReceiptByOrderKey(orderKey(o.order_number));
+    const out = have ? { state: 'found', receiptId: Number(have.id) } : await checkOrderReceiptNow(o.order_number, actorOf(user));
+    const ship = orderEmailsConfigured() ? await syncOrderParcelsNow(o.order_number) : { state: 'unconfigured' };
+    if (out.state === 'unconfigured' && ship.state === 'unconfigured') return send(res, 503, { ok: false, error: 'Searching the mailbox is not set up on this server.', configured: receiptLookupConfigured() });
+    if (out.state === 'error' && ship.state !== 'ok') return send(res, 502, { ok: false, error: 'The mailbox search did not answer. Try again in a minute.' });
+    return send(res, 200, { ok: true, ...out, shipping: ship.state, parcels: ship.parcels ?? 0, placed: ship.placed || [] });
   } catch (e) {
     console.error('[online-orders/receipt]', e.message);
     return send(res, 500, { ok: false, error: 'Could not search for the receipt.' });

@@ -274,6 +274,11 @@ import('./api/_lib/poizon-orders-worker.js')
 import('./api/_lib/online-order-receipts.js')
   .then((m) => m.startOnlineOrderReceiptWorker())
   .catch((e) => console.error('[online-order-receipts] failed to start:', e.message));
+// …and their tracking numbers, from the store's shipping emails (one parcel per email).
+// Production only by default; OO_SHIP_WATCH=on|off overrides.
+import('./api/_lib/online-order-shipments.js')
+  .then((m) => m.startOnlineOrderShipmentWorker())
+  .catch((e) => console.error('[online-order-shipments] failed to start:', e.message));
 
 // Shopify + eBay Listings kept fresh by the server every 30 min, not only when a page is open
 // (docs/context/shopify-listings.md). Production only by default; LISTINGS_WATCH=on|off overrides.

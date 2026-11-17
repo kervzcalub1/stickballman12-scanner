@@ -2,7 +2,7 @@
 // One order with its lines, each pair's actual cost, and the history (created, edited,
 // a line cancelled, a refund requested / received, counted in by the warehouse).
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, getOnlineOrder, onlineOrderEvents } from '../_lib/db.js';
+import { dbConfigured, getOnlineOrder, onlineOrderEvents, listOrderShipments, orderKey } from '../_lib/db.js';
 import { shapeOrder, idOf } from './_shared.js';
 
 export default async function handler(req, res) {
@@ -18,7 +18,16 @@ export default async function handler(req, res) {
     const o = await getOnlineOrder(id);
     if (!o) return send(res, 404, { ok: false, error: 'That order no longer exists.' });
     const events = await onlineOrderEvents(id);
-    return send(res, 200, { ok: true, order: shapeOrder(o), events });
+    // The parcels the store's shipping emails describe for this order number, and which
+    // entry each one is on (by its tracking number).
+    const ships = o.order_number ? await listOrderShipments(orderKey(o.order_number)) : [];
+    const key = (t) => String(t || '').replace(/\s+/g, '').toUpperCase();
+    const parcels = ships.map((s) => ({
+      tracking_number: s.tracking_number, carrier: s.carrier, status: s.status, emailed_at: s.emailed_at,
+      pairs: (s.items || []).reduce((n, it) => n + (Number(it.qty) || 0), 0), items: s.items || [],
+      order_id: (o.same_order || []).find((x) => key(x.tracking_number) === s.tracking_key)?.id ?? null,
+    }));
+    return send(res, 200, { ok: true, order: shapeOrder(o), events, parcels });
   } catch (e) {
     console.error('[online-orders/get]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load that order.' });

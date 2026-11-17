@@ -183,7 +183,7 @@ function OrderDetail({ id, canEdit, canReceive, isAdmin, onSignOut, onBack, onEd
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { load(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
-  useLive(['online_orders', 'online_order_lines', 'online_order_events', 'email_receipts', 'online_order_receipt_checks'], async () => {
+  useLive(['online_orders', 'online_order_lines', 'online_order_events', 'email_receipts', 'online_order_receipt_checks', 'online_order_shipments'], async () => {
     const d = await api.onlineOrder(id);
     setData((cur) => (JSON.stringify(cur) === JSON.stringify(d) ? cur : d));
   }, { mount: false, paused: !!dialog });
@@ -215,6 +215,7 @@ function OrderDetail({ id, canEdit, canReceive, isAdmin, onSignOut, onBack, onEd
         </div>
         {o.note && <p className="oo-note">{o.note}</p>}
         <ReceiptLink o={o} canEdit={canEdit} onOpen={() => setDialog({ kind: 'receipt' })} onOpenOrder={onOpenOrder} onSignOut={onSignOut} onChanged={load} />
+        <Parcels o={o} parcels={data.parcels || []} canEdit={canEdit} onOpenOrder={onOpenOrder} onSignOut={onSignOut} onChanged={load} />
         <div className="oo-actions">
           {canEdit && <button type="button" className="btn sm" onClick={() => onEdit(o)}>{o.tracking_number ? 'Edit order' : 'Edit · add tracking #'}</button>}
           {/* Ordered too: a parcel that turns up before anyone typed its tracking number
@@ -395,6 +396,53 @@ function ReceiptLink({ o, canEdit, onOpen, onOpenOrder, onSignOut, onChanged }) 
   );
 }
 
+// The parcels the store's shipping emails describe for this order number (one email per
+// parcel: its tracking number and the pairs inside). Each is put on its online order by itself
+// (api/_lib/online-order-shipments.js): the number filled in, or the pairs split into their
+// own entry. One that could not be placed for sure is listed as such, for a person.
+const PARCEL_STATUS = { on_the_way: 'On the way', out_for_delivery: 'Out for delivery', delivered: 'Delivered' };
+function Parcels({ o, parcels, canEdit, onOpenOrder, onSignOut, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const waiting = !!String(o.order_number || '').trim() && !o.tracking_number && !o.received_at;
+  if (!parcels.length && !(canEdit && waiting)) return null;
+  async function check() {
+    setBusy(true); setMsg('');
+    try {
+      const r = await api.onlineOrderFindReceipt(o.id);
+      const n = (r.placed || []).length;
+      setMsg(r.shipping !== 'ok' ? 'The shipping emails could not be read on this server.'
+        : n ? `${n} parcel${n === 1 ? '' : 's'} put on ${n === 1 ? 'its' : 'their'} order.`
+          : r.parcels ? 'Nothing new: every parcel in the emails was already looked at.' : 'No shipping email for this order number yet.');
+      onChanged();
+    } catch (err) { if (err.unauthorized) return onSignOut(); setMsg(err.message); }
+    setBusy(false);
+  }
+  return (
+    <div className="oo-receipt oo-parcels" data-parcels={parcels.length}>
+      <span className="oo-receipt-label">Parcels</span>
+      <div className="oo-receipt-body">
+        {parcels.length ? (
+          <ul className="oo-parcel-list">
+            {parcels.map((p) => (
+              <li key={p.tracking_number}>
+                <TrackingLink number={p.tracking_number} carrier={p.carrier || undefined}>{p.tracking_number}</TrackingLink>
+                <span className="muted sm"> · {p.pairs ? `${p.pairs} pair${p.pairs === 1 ? '' : 's'}` : 'pairs not listed'} · {PARCEL_STATUS[p.status] || p.status}</span>
+                {p.order_id == null ? <span className="oo-receipt-bad"> · not on an order yet</span>
+                  : Number(p.order_id) === Number(o.id) ? <b> · this entry</b>
+                    : <> · <button type="button" className="oo-receipt-sib" onClick={() => onOpenOrder(p.order_id)}>{orderCode(p.order_id)}</button></>}
+              </li>
+            ))}
+          </ul>
+        ) : <span className="muted sm">No shipping email for #{o.order_number} yet. When the store ships, the tracking number is filled in by itself.</span>}
+        <span className="muted xs">From the store’s shipping emails.{parcels.some((p) => p.order_id == null) ? ' A parcel that is not on an order could not be matched for sure: add its number by hand.' : ''}</span>
+        {canEdit && <button type="button" className="btn sm ghost" onClick={check} disabled={busy}>{busy ? 'Reading the emails…' : 'Check the emails now'}</button>}
+        {msg && <span className="muted sm" role="status">{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
 const EVENT_LABEL = {
   created: 'Recorded', edited: 'Edited', cancelled: 'Cancelled', restored: 'Cancellation undone', received: 'Counted in',
   refund_requested: 'Refund requested', refund_refunded: 'Refund received', refund_needs_request: 'Refund back to follow-up',
@@ -495,7 +543,7 @@ function OrderForm({ initial, onCancel, onSaved, onSignOut }) {
         <label><span className="muted xs">Tracking #</span><input value={f.tracking_number} onChange={(e) => set('tracking_number')(e.target.value)} placeholder="Add it once the order ships" maxLength={60} /></label>
         <label><span className="muted xs">Ordered on</span><input type="date" value={f.ordered_on} onChange={(e) => set('ordered_on')(e.target.value)} /></label>
       </div>
-      <p className="muted sm">The store’s emailed receipt is found by the <b>order #</b> and linked by itself. An order shipped in several parcels is one online order per parcel, each with the same order #.</p>
+      <p className="muted sm">The store’s emailed receipt is found by the <b>order #</b> and linked by itself. So is the <b>tracking #</b>, when the store emails it: an order shipped in several parcels is split into one entry per parcel, each with its own tracking # and pairs.</p>
       {!f.tracking_number.trim() && <p className="muted sm">No tracking number yet — the order is saved as <b>Ordered</b> and reaches the warehouse’s “Expected” list once one is added.</p>}
 
       <h3 className="rows-title">Shoes</h3>

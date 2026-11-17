@@ -86,7 +86,7 @@ export default defineConfig({
     // unrelated PR could go red just for adding a test file. It is refused under
     // NODE_ENV=production (api/_lib/util.js), and the server logs a line when it is off.
     env: {
-      TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '', MAKE_RECEIPT_PARSER_URL: '', E2E_NO_RATE_LIMIT: '1',
+      TRACKING_API_KEY: '', MAKE_WEBHOOK_URL: '', MAKE_RECEIPT_PARSER_URL: '', MAKE_ORDER_EMAILS_URL: '', E2E_NO_RATE_LIMIT: '1',
       // Dev and prod share ONE StockX account: the suite must never send a price change.
       STOCKX_REPRICE_WORKER: 'off',
       // eBay Sync writes to the real eBay + Shopify when its switches are live.

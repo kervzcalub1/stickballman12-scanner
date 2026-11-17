@@ -11,6 +11,9 @@ import { signToken } from '../api/_lib/util.js';
 import { loginAs } from './helpers/auth.js';
 import { parseShopifyOrderEmail, mentionsOrder, receiptBodyFromLookup, checkOrderReceipt, RETRY_MIN } from '../api/_lib/online-order-receipts.js';
 import { receiptLink } from '../src/lib/onlineOrders.js';
+import { parseShopifyShipmentEmail, splitOrderEmails, parcelsFromEmails, syncOrderParcels } from '../api/_lib/online-order-shipments.js';
+import { planParcels } from '../src/lib/onlineOrderParcels.js';
+import { onlineOrdersByKey, carveOnlineOrder } from '../api/_lib/db.js';
 
 const PH = { Authorization: `Bearer ${signToken({ uid: 'oor-ph', username: 'oor_ph', name: 'OOR PH', role: 'ph_team' })}` };
 const WH = { Authorization: `Bearer ${signToken({ uid: 'oor-wh', username: 'oor_wh', name: 'OOR Warehouse', role: 'warehouse' })}` };
@@ -74,6 +77,8 @@ const clean = async () => {
   await db.query(`DELETE FROM online_orders WHERE store LIKE 'E2E-OOR%'`);
   await db.query(`DELETE FROM email_receipts WHERE order_number LIKE 'E2EOOR%'`);
   await db.query(`DELETE FROM online_order_receipt_checks WHERE order_key LIKE 'E2EOOR%'`);
+  await db.query(`DELETE FROM online_order_shipments WHERE order_key LIKE 'E2EOOR%'`);
+  await db.query(`DELETE FROM online_order_ship_checks WHERE order_key LIKE 'E2EOOR%'`);
 };
 test.beforeAll(async () => { db = new pg.Client({ connectionString: process.env.DATABASE_URL }); await db.connect(); await clean(); });
 test.afterAll(async () => { await clean(); await db.end(); });
@@ -237,4 +242,150 @@ test('no number, no search: who may ask, and what an unconfigured server answers
   const id2 = (await (await save(request, { store: STORE, order_number: n, lines: [{ sku: 'OOR-NUM', size: '9', qty: 1, unit_price: 50 }] })).json()).id;
   expect((await request.post('/api/online-orders/receipt', { headers: PH, data: { id: id2 } })).status()).toBe(503);
   expect((await get(request, id2)).receipt_link.state).toBe('none');
+});
+
+// ---- Tracking numbers fill themselves: the store's shipping emails ---------------------------
+const shipEmail = (track, qty, of, subject = `A shipment from order #${NO} is on the way`, over = '') => ({
+  subject, from: 'store+1@t.shopifyemail.com', date: '2026-10-24T05:02:19.000Z',
+  text: `Some items in your order are on the way
+Shoe Shop
+Order #${NO}
+---------------------------------------
+Some items in your order are on the way. Track your
+shipment to see the delivery status.
+View your order
+( https://www.shoeshop.com/1/orders/abc/authenticate?key=xyz )
+UPS tracking number: ${track}
+( https://www.ups.com/WebTracking?loc=en_US&requester=ST&trackNums=${track} )
+Items in this shipment
+----------------------
+Speedcat Ballet Lace Womens Lifestyle Shoes (Ruby
+Shimmer/Frosted Ivory) ×
+${qty} of ${of}
+7.5
+${over}If you have any questions, reply to this email or
+contact us at CustomerService@ShoeShop.com.`,
+});
+
+test('a Shopify shipping email reads into a parcel: tracking number, carrier, pairs', () => {
+  const p = parseShopifyShipmentEmail(shipEmail('1Z16G2050307953950', 4, 10, undefined, 'Court Runner Mens ×\n1\nBlack / 10\n'));
+  expect(p).toEqual({ tracking: '1Z16G2050307953950', carrier: 'UPS', status: 'on_the_way', items: [
+    { name: 'Speedcat Ballet Lace Womens Lifestyle Shoes (Ruby Shimmer/Frosted Ivory)', size: '7.5', qty: 4 },
+    { name: 'Court Runner Mens', size: '10', qty: 1 },
+  ] });
+  // The confirmation has no tracking number: not a parcel.
+  expect(parseShopifyShipmentEmail({ subject: `Order #${NO} confirmed`, text: EMAIL })).toBe(null);
+
+  // On the way, out for delivery, delivered: three emails, ONE parcel, the furthest status.
+  const raw = [
+    { subject: `Order #${NO} confirmed`, from: 'store+1@t.shopifyemail.com', date: '2026-10-24T04:00:00Z', text: EMAIL },
+    shipEmail('1ZAAA0000000000001', 4, 10), shipEmail('1ZAAA0000000000002', 6, 10),
+    shipEmail('1ZAAA0000000000001', 4, 10, `A shipment from order #${NO} has been delivered`),
+    { ...shipEmail('1ZBBB0000000000009', 1, 1), subject: 'A shipment from order #OTHER is on the way', text: shipEmail('1ZBBB0000000000009', 1, 1).text.replace(NO, 'OTHER77') },
+  ].map((e) => `@@SUBJECT@@ ${e.subject}\n@@FROM@@ ${e.from}\n@@DATE@@ ${e.date}\n@@TEXT@@\n${e.text}`).join('\n@@SBM-EMAIL-END@@\n');
+  const emails = splitOrderEmails(raw);
+  expect(emails).toHaveLength(5);
+  const { parcels, shopify } = parcelsFromEmails(NO, emails);
+  expect(shopify).toBe(true);
+  expect(parcels.map((x) => [x.tracking, x.status, x.items[0].qty])).toEqual([['1ZAAA0000000000001', 'delivered', 4], ['1ZAAA0000000000002', 'on_the_way', 6]]);
+  expect(splitOrderEmails('@@SUBJECT@@ \n@@FROM@@ \n@@DATE@@ \n@@TEXT@@\n')).toEqual([]);   // nothing found
+});
+
+test('planParcels: fill the entry that IS the parcel, carve the one that holds it, leave the rest to a person', () => {
+  const line = (id, qty, over = {}) => ({ id, sku: 'AAA-1', name: 'Speedcat Ballet', size: '7.5', qty, unit_price: 100, ...over });
+  const ship = (tracking, qty, size = '7.5', name = 'Speedcat Ballet Lace') => ({ tracking, items: [{ name, size, qty }] });
+  const one = { id: 1, tracking_number: null, received_at: null, coupon: 30, tax: 20, shipping: 10, lines: [line(11, 10)] };
+
+  // One entry of 10, parcels of 4 + 2 + 4: carve 4 (the money goes with the pairs), …
+  let p = planParcels([one], [ship('T1', 4), ship('T2', 2), ship('T3', 4)]).action;
+  expect(p).toMatchObject({ kind: 'carve', orderId: 1, lineIds: [11], tracking: 'T1', pairs: 4,
+    lines: [{ sku: 'AAA-1', size: '7.5', qty: 4, unit_price: 100 }], rest: [{ sku: 'AAA-1', qty: 6 }],
+    money: { parcel: { coupon: 12, tax: 8, shipping: 4 }, rest: { coupon: 18, tax: 12, shipping: 6 } } });
+  // …and when what is left IS the last parcel, its number is simply filled in.
+  const after = [{ ...one, lines: [line(12, 4)] }, { id: 2, tracking_number: 'T1', lines: [line(13, 4)] }, { id: 3, tracking_number: 't 2', lines: [line(14, 2)] }];
+  expect(planParcels(after, [ship('T1', 4), ship('T2', 2), ship('T3', 4)]).action).toEqual({ kind: 'fill', orderId: 1, tracking: 'T3', pairs: 4 });
+  // Everything placed: nothing to do.
+  expect(planParcels([{ ...after[0], tracking_number: 'T3' }, after[1], after[2]], [ship('T1', 4), ship('T2', 2), ship('T3', 4)])).toEqual({ action: null, unplaced: [] });
+
+  // Entries typed per parcel by hand: each parcel fills the entry with the same pairs.
+  const typed = [{ id: 5, lines: [line(1, 4)] }, { id: 6, lines: [line(2, 2)] }];
+  expect(planParcels(typed, [ship('T2', 2)]).action).toMatchObject({ kind: 'fill', orderId: 6 });
+  // Two open entries and a parcel that is neither: not guessed.
+  expect(planParcels(typed, [ship('T9', 3)])).toEqual({ action: null, unplaced: ['T9'] });
+  // More pairs than the entry has, a size it doesn't have, an entry already counted in, a parcel with no items.
+  expect(planParcels([one], [ship('T1', 11)]).action).toBe(null);
+  expect(planParcels([one], [ship('T1', 2, '9')]).action).toBe(null);
+  expect(planParcels([{ ...one, received_at: '2026-11-01' }], [ship('T1', 4)]).action).toBe(null);
+  expect(planParcels([one], [{ tracking: 'T1', items: [] }])).toEqual({ action: null, unplaced: ['T1'] });
+  // A cancelled pair is never moved; only the active ones are counted.
+  expect(planParcels([{ ...one, lines: [line(11, 4), line(12, 6, { cancelled_at: '2026-11-01' })] }], [ship('T1', 4)]).action).toMatchObject({ kind: 'fill' });
+
+  // Two shoes in the same size: the email's name picks the line, or nothing is done.
+  const two = { ...one, lines: [line(21, 3, { sku: 'AAA-1', name: 'Speedcat Ballet' }), line(22, 3, { sku: 'BBB-2', name: 'Court Runner' })] };
+  expect(planParcels([two], [ship('T1', 2, '7.5', 'Court Runner Mens (Black)')]).action).toMatchObject({ kind: 'carve', lines: [{ sku: 'BBB-2', qty: 2 }], rest: [{ sku: 'AAA-1', qty: 3 }, { sku: 'BBB-2', qty: 1 }] });
+  expect(planParcels([two], [ship('T1', 2, '7.5', 'Some Other Shoe')]).action).toBe(null);
+  // A number told to skip (it is on another order number's entry) is left alone.
+  expect(planParcels([one], [ship('T1', 4)], new Set(['T1'])).action).toBe(null);
+});
+
+test('one entry of 10, three parcels in the emails: it becomes three entries with their tracking numbers', async ({ request, page }) => {
+  const n = `${NO}S`;
+  const r = await save(request, { store: STORE, order_number: n, ordered_on: '2026-10-24', coupon: 30, tax: 20, shipping: 10, gc_pct: 5,
+    lines: [{ sku: 'OOR-SPEEDCAT', name: 'Speedcat Ballet', size: '7.5', qty: 10, unit_price: 100 }] });
+  const { id } = await r.json();
+  const before = await get(request, id);
+  const T = [`1ZE2E${stamp}A1`, `1ZE2E${stamp}B2`, `1ZE2E${stamp}C3`];
+  const fake = [[T[0], 4], [T[1], 2], [T[2], 4]].map(([t, q]) => shipEmail(t, q, 10)).map((e) => ({ ...e, text: e.text.replaceAll(NO, n) }));
+  const raw = fake.map((e) => `@@SUBJECT@@ ${e.subject.replace(NO, n)}\n@@FROM@@ ${e.from}\n@@DATE@@ ${e.date}\n@@TEXT@@\n${e.text}`).join('\n@@SBM-EMAIL-END@@\n');
+
+  const out = await syncOrderParcels(n, { io: { configured: () => true, ask: async () => raw } });
+  expect(out.state).toBe('ok');
+  expect(out.placed.map((p) => [p.kind, p.pairs])).toEqual([['carve', 4], ['carve', 2], ['fill', 4]]);
+
+  const list = (await (await request.get(`/api/online-orders/list?q=${n}`, { headers: PH })).json()).orders.sort((a, b) => a.id - b.id);
+  expect(list.map((o) => [o.tracking_number, o.totals.units, o.coupon, o.tax, o.shipping, o.stage])).toEqual([
+    [T[2], 4, 12, 8, 4, 'shipped'], [T[0], 4, 12, 8, 4, 'shipped'], [T[1], 2, 6, 4, 2, 'shipped'],
+  ]);
+  // No pair's actual cost moved, and the order's money still adds up to what was typed.
+  expect(new Set(list.flatMap((o) => o.lines.map((l) => l.each)))).toEqual(new Set(before.lines.map((l) => l.each)));
+  expect(list.reduce((s, o) => s + o.totals.total, 0)).toBeCloseTo(before.totals.total, 2);
+  // Each new entry says where it came from, and the original says what left.
+  const hist = await (await request.get(`/api/online-orders/get?id=${list[1].id}`, { headers: PH })).json();
+  expect(hist.events[0]).toMatchObject({ action: 'created', actor: 'Store email' });
+  expect(hist.events[0].detail).toContain(`split from OO-${String(id).padStart(4, '0')}`);
+  expect(hist.parcels.map((p) => [p.tracking_number, p.pairs, p.order_id])).toEqual([[T[0], 4, list[1].id], [T[1], 2, list[2].id], [T[2], 4, id]]);
+  // Asked again: nothing more to do.
+  expect((await syncOrderParcels(n, { io: { configured: () => true, ask: async () => raw } })).placed).toEqual([]);
+  expect((await (await request.get(`/api/online-orders/list?q=${n}`, { headers: PH })).json()).orders).toHaveLength(3);
+
+  // On the page: the three parcels, each pointing at its entry.
+  await loginAs(page, 'ph_team');
+  await page.goto(`/ph/online-orders?o=${id}`);
+  const box = page.locator('.oo-parcels');
+  await expect(box).toHaveAttribute('data-parcels', '3');
+  await expect(box.locator('li')).toHaveCount(3);
+  await expect(box.locator('li').nth(2)).toContainText('this entry');
+  await expect(box.locator('li').first()).toContainText('4 pairs');
+  await box.getByRole('button', { name: `OO-${String(list[1].id).padStart(4, '0')}` }).click();
+  await expect(page).toHaveURL(new RegExp(`o=${list[1].id}`));
+});
+
+test('an entry someone changed in between is left alone, and a store in another shape is not asked again', async ({ request }) => {
+  const n = `${NO}G`;
+  const { id } = await (await save(request, { store: STORE, order_number: n, lines: [{ sku: 'OOR-G', size: '9', qty: 5, unit_price: 80 }] })).json();
+  const o = (await onlineOrdersByKey(n))[0];
+  const plan = planParcels([o], [{ tracking: `1ZE2E${stamp}G1`, items: [{ name: 'x', size: '9', qty: 2 }] }]).action;
+  // The plan was made from these line ids; a cancel in between changes them.
+  const line = (await get(request, id)).lines[0];
+  await request.post('/api/online-orders/line', { headers: PH, data: { lineId: line.id, action: 'cancel', qty: 1, reason: 'oot', refund: 'needs_request' } });
+  expect(await carveOnlineOrder(plan, 'Store email')).toBe(null);
+  expect((await onlineOrdersByKey(n))).toHaveLength(1);
+
+  // Emails came back, none of them a Shopify store's: marked so the worker skips the number.
+  const marks = [];
+  const nike = '@@SUBJECT@@ Your Nike order\n@@FROM@@ nike@official.nike.com\n@@DATE@@ 2026-11-01T00:00:00Z\n@@TEXT@@\nOrder ' + n + ' has shipped. Tracking 1Z999';
+  await syncOrderParcels(n, { io: { configured: () => true, ask: async () => nike, place: async () => [], mark: async (k, m) => marks.push(m) } });
+  expect(marks[0]).toMatchObject({ emails: 1, parcels: 0, skip: true });
+  // Not configured: nothing is asked.
+  expect((await syncOrderParcels(n, { io: { configured: () => false } })).state).toBe('unconfigured');
 });

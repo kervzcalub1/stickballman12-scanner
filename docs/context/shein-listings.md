@@ -1069,7 +1069,7 @@ photo was never the cause (five shoes with a PIECE photo passed #380 without it)
 carry a SKU-level piece count (`quantity_info` 1 / 1 / 1, set when its sizes were added 10-29) and `planPhotoEdit`
 named every SKU in `sku_list` with only its photo; a field left out of an edited SKU is cleared. `skuKept(sku)`
 (`sheinPublish.js`) now returns `quantity_info` + `package_type` exactly as spu-info has them and the swap sends them
-with each SKU; `plan.skuPiecesKept`. Shoes with no SKU piece count get nothing extra. NOT changed (same latent risk,
+with each SKU; `plan.skuPiecesKept`. **All or none (#445):** #713 was refused again with 2 of 6 sent — spu-info returns the count only on HQ8717's 2 original sizes, not the 4 we added 10-29 — so a size without one takes its sibling's (`plan.skuPiecesFilled`). Shoes with no SKU piece count get nothing extra. NOT changed (same latent risk,
 never seen refused): the relink entries `{ sku_code, supplier_sku }` in add sizes, the two-step swap and `api/_lib/shein.js`.
 
 ## Photo swap keeps SHEIN's colour-block ("piece") photo (fixed 2026-11-11)

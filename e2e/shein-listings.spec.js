@@ -2544,6 +2544,12 @@ test.describe('SHEIN Listings — replace live photos: the planner (pure)', () =
     expect(b.quantity_info).toEqual({ quantity: 1, quantity_type: 1, quantity_unit: 1 });
     expect(b).not.toHaveProperty('package_type');
     expect(plan.skuPiecesKept).toBe(2);
+    expect(plan.skuPiecesFilled).toBe(0);
+    // only SOME sizes read back with a count (HQ8717: 2 of 6, send #713 refused): the others take their sibling's
+    const some = spu(); Object.assign(some.skcInfoList[0].skuInfoList[1], { quantity: 1, quantityType: 1, quantityUnit: 2 });
+    const h = planPhotoEdit({ spu: some, fill: {}, ip: imagePlan({}), images: conv });
+    expect(h.body.skc_list[0].sku_list.map((k) => k.quantity_info)).toEqual([{ quantity: 1, quantity_type: 1, quantity_unit: 2 }, { quantity: 1, quantity_type: 1, quantity_unit: 2 }]);
+    expect(h.plan).toMatchObject({ skuPiecesKept: 1, skuPiecesFilled: 1 });
     // a shoe whose sizes carry no piece count (spu-info nulls): nothing is added
     const plain = spu(); Object.assign(plain.skcInfoList[0].skuInfoList[0], { quantity: null, quantityType: null, quantityUnit: null });
     const r = planPhotoEdit({ spu: plain, fill: {}, ip: imagePlan({}), images: conv });

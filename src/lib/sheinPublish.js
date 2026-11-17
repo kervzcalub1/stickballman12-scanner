@@ -314,6 +314,13 @@ export function planPhotoEdit({ spu, fill = null, fillUnread = false, ip, images
     out.sku_list = skus.map((k, i) => ({ sku_code: String(k.skuCode), image_info: { image_group_code: skuImgs[i].groupCode, image_info_list: [{ image_sort: 1, image_type: 1, image_url: mainUrl }] }, ...skuKept(k) }));
     plan.skuImages = skus.length;
     plan.skuPiecesKept = out.sku_list.filter((k) => k.quantity_info).length;
+    // ALL or none: on HQ8717 spu-info returns the count on only its 2 original sizes — the 4 we added
+    // 10-29 read back without one — and SHEIN refused the swap again with 2 of 6 sent (#713). A size
+    // without a count takes the one its siblings have (within a colour the unit must be the same, and
+    // every shoe SKU is 1 piece).
+    const piece = out.sku_list.find((k) => k.quantity_info)?.quantity_info || null;
+    plan.skuPiecesFilled = 0;
+    if (piece) for (const k of out.sku_list) if (!k.quantity_info) { k.quantity_info = { ...piece }; plan.skuPiecesFilled += 1; }
   }
   const body = { spu_name: spu.spuName, skc_list: [out] };
   if (spuPhotos.length) {

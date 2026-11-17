@@ -206,6 +206,12 @@ export const ALERT_EVENTS = [
     defaultFor: (u) => isAdminRole(u.role),
   },
   {
+    key: 'online.order_arrived', group: 'Shipments', emoji: '📦', required: false,
+    title: 'Online order arrived',
+    when: 'A parcel of an online order was received: the merchant, order and tracking number, what came out of it, and whether it matches the order',
+    who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
+  },
+  {
     key: 'tracking.delayed', group: 'Shipments', emoji: '🚨', required: false,
     title: 'Shipments delayed',
     when: 'A tracking number has not moved in 7 days: who to follow up with, once a day at most',
@@ -894,6 +900,29 @@ export function trackingDelayBody({ fresh = [], reminders = [] }) {
   take(fresh, line, 'New:');
   take(reminders, short, 'Still not moving:');
   return parts.join('\n');
+}
+
+// An online order's parcel landed (owner, 2026-11-18): the courier feed can lag days behind,
+// the warehouse's scan does not. One message per order, ever: who it is from, its numbers,
+// what came out of the parcel, and the finding — all there, short, or wrong pairs.
+export function onlineOrderArrivedBody({ order, batchCode, items = [], expected, received, short = 0, wrong = 0, counted = false, caseId = null, text = '' }) {
+  const came = items.map((it) => `${it.sku} US ${it.size} ×${it.qty}`).join(', ') || 'nothing scanned';
+  const finding = !short && !wrong
+    ? `✅ All ${expected} ordered pair${expected === 1 ? '' : 's'} arrived.${counted ? ' Counted in.' : ''}`
+    : `⚠️ ${[short ? `SHORT by ${short} (${received} of ${expected})` : null, wrong ? `${wrong} WRONG pair${wrong === 1 ? '' : 's'}` : null].filter(Boolean).join(' + ')}.`
+      + `${text ? `\n${text}` : ''}`
+      + `\n${counted ? 'Counted in with what arrived; the missing pairs are on Refund follow-up.' : 'Not counted in — it needs a person to look.'}`
+      + `${caseId ? ` Case #${caseId} is open for the claim.` : ''}`;
+  return `${order.store}${order.order_number ? ` · order #${order.order_number}` : ''}\nTracking ${order.tracking_number} · batch ${batchCode}\nArrived: ${received} pair${received === 1 ? '' : 's'} — ${came}\n${finding}`;
+}
+export function alertOnlineOrderArrived(info) {
+  fireAlert(() => alertUsers('online.order_arrived', {
+    once: true,
+    ref: `oo-arrived:${info.order.id}`,
+    code: `OO-${String(info.order.id).padStart(4, '0')}`,
+    body: onlineOrderArrivedBody(info),
+    path: at('online', `o=${info.order.id}`),
+  }));
 }
 
 export async function alertTrackingDelayed({ day, fresh, reminders }) {

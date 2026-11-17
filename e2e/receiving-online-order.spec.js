@@ -6,8 +6,10 @@ import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { signToken } from '../api/_lib/util.js';
 import { loginAs } from './helpers/auth.js';
-import { compareOrderWithReceived } from '../api/_lib/online-order-received.js';
+import { compareOrderWithReceived, countsFromReceived, underOrderCodes } from '../api/_lib/online-order-received.js';
+import { lineKey, nearCode } from '../src/lib/onlineOrders.js';
 import { issueHeadline } from '../src/lib/inboundIssues.js';
+import { onlineOrderArrivedBody } from '../api/_lib/alerts.js';
 
 // A 1×1 PNG: the photo the stubs hand around.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
@@ -259,6 +261,8 @@ test('received first, tracking number later: the short parcel is found, a case o
   expect(cases[0].description).toContain(`Short by 1: 3 of 4 pairs came out of the parcel with tracking ${T}`);
   expect(cases[0].warehouse_task).toContain('photos needed for the claim');
   expect(cases[0].warehouse_task).toContain('WhatsApp');
+  // The SKU doesn't match the box's, so which pair is missing is a judgement: NOT counted in.
+  expect((await db.query('SELECT received_at FROM online_orders WHERE id = $1', [id])).rows[0].received_at).toBeNull();
   // Asked again (the worker, another save): one case, not two.
   expect((await compareOrderWithReceived(id)).state).toBe('already');
   expect((await db.query(`SELECT count(*)::int n FROM inbound_issues WHERE batch_id = $1`, [cases[0].batch_id])).rows[0].n).toBe(1);
@@ -267,7 +271,26 @@ test('received first, tracking number later: the short parcel is found, a case o
   await db.query(`DELETE FROM inbound_issues WHERE id = $1`, [cases[0].id]);
   await db.query(`DELETE FROM shipment_issues WHERE batch_id = $1`, [cases[0].batch_id]);
   const full = await mk({ tracking_number: T, allowDuplicateTracking: true, lines: [{ sku: S, size: '7.5', qty: 3, unit_price: 100 }] });
-  expect(await compareOrderWithReceived(full)).toMatchObject({ state: 'ok', expected: 3, received: 3 });
+  // …and is COUNTED IN by itself: the warehouse scanning the parcel was the count.
+  // (Saving the number already started the compare on the server; whichever ran, it is counted.)
+  await compareOrderWithReceived(full);
+  const got = await (await request.get(`/api/online-orders/get?id=${full}`, { headers: PH })).json();
+  expect(got.order.stage).toBe('delivered');
+  expect(got.order.received_by).toMatch(/^Auto · batch B-/);
+  expect(got.events.at(-1)).toMatchObject({ action: 'received' });
+  expect(got.events.at(-1).detail).toContain('all 3 pair(s) arrived — matched to batch');
+  expect(await compareOrderWithReceived(full)).toMatchObject({ state: 'ok' });   // again: nothing more
+
+  // Short, and the pairs that came ARE the ones ordered: counted in with what arrived, the
+  // missing pair split off as not delivered with its refund to chase, and a case for PH.
+  const shortId = await mk({ tracking_number: T, allowDuplicateTracking: true, lines: [{ sku: S, size: '7.5', qty: 5, unit_price: 100 }] });
+  await compareOrderWithReceived(shortId);
+  const sh = { caseId: (await db.query(`SELECT id FROM inbound_issues WHERE batch_id = $1 AND description LIKE 'Short by 2:%'`, [cases[0].batch_id])).rows[0].id };
+  const so = (await (await request.get(`/api/online-orders/get?id=${shortId}`, { headers: PH })).json()).order;
+  expect(so.stage).toBe('delivered');
+  expect(so.lines.map((l) => [l.qty, l.cancel_reason || null, l.refund || null])).toEqual([[3, null, null], [2, 'not_delivered', 'needs_request']]);
+  await db.query(`DELETE FROM inbound_issues WHERE id = $1`, [sh.caseId]);
+  await db.query(`DELETE FROM shipment_issues WHERE batch_id = $1`, [cases[0].batch_id]);
 
   // The right COUNT but not the shoe that was ordered: wrong pairs, a case as well.
   const cleanUp = async (batchId) => {
@@ -276,8 +299,10 @@ test('received first, tracking number later: the short parcel is found, a case o
   };
   const other = await mk({ tracking_number: T, allowDuplicateTracking: true, lines: [{ sku: S, size: '7.5', qty: 2, unit_price: 100 }, { sku: S, size: '9', qty: 1, unit_price: 100 }] });
   const w = await compareOrderWithReceived(other);
-  expect(w).toMatchObject({ state: 'wrong', short: 0, wrong: 1, expected: 3, received: 3 });
-  const wc = (await db.query('SELECT * FROM inbound_issues WHERE id = $1', [w.caseId])).rows[0];
+  expect(['wrong', 'already']).toContain(w.state);
+  expect(w.counted).toBe(false);
+  const wc = (await db.query(`SELECT * FROM inbound_issues WHERE batch_id = $1 AND description LIKE 'Wrong pairs:%'`, [cases[0].batch_id])).rows[0];
+  expect((await db.query('SELECT received_at FROM online_orders WHERE id = $1', [other])).rows[0].received_at).toBeNull();
   expect(wc.description).toContain('Wrong pairs: 1 of the 3 in the parcel');
   expect(wc.description).toContain(`${S} US 7.5 extra (+1)`);
   expect(issueHeadline({ scope: 'shipment', ...wc })).toContain('Online order parcel has WRONG pairs');
@@ -288,4 +313,47 @@ test('received first, tracking number later: the short parcel is found, a case o
   expect(again.state).toBe('short');
   await page.goto(`/inbound-issues?id=${again.caseId}`);
   await expect(page.locator('body')).toContainText('photos needed for the claim');
+});
+
+test('countsFromReceived: the delivery’s pairs are handed to the order’s lines by code and size', () => {
+  const lines = [{ id: 1, sku: 'DD1391-100', size: '9', qty: 2 }, { id: 2, sku: 'dd1391 100', size: '9.0', qty: 2 }, { id: 3, sku: 'DD1391-100', size: '10', qty: 1 }, { id: 4, sku: 'X', size: '9', qty: 1, cancelled_at: '2026-11-01' }];
+  const c = countsFromReceived(lines, [{ sku: 'DD1391100', size: '9', qty: 3 }, { sku: 'ZZ', size: '10', qty: 5 }]);
+  expect([...c]).toEqual([[1, 2], [2, 1], [3, 0]]);
+  // The slash JD Sports prints and the dash on the box are one code; a code one character off
+  // with the same size is the same shoe mistyped; anything further is a different shoe.
+  expect(lineKey('IV2867/100', '9')).toBe(lineKey('iv2867-100', '9.0'));
+  expect(nearCode('Q0400-100', 'IQ0400-100')).toBe(true);
+  expect(nearCode('DD1391-100', 'DD1391-103')).toBe(true);
+  expect(nearCode('DD1391-100', 'DD1391-001')).toBe(false);
+  expect(nearCode('AB1', 'AB12')).toBe(false);
+  const typed = [{ id: 1, sku: 'Q0400-100', size: '10.5', qty: 5 }];
+  expect(underOrderCodes(typed, [{ sku: 'IQ0400-100', size: '10.5', qty: 5 }])).toEqual([{ sku: 'Q0400-100', size: '10.5', qty: 5 }]);
+  expect(underOrderCodes(typed, [{ sku: 'IQ0400-100', size: '11', qty: 5 }])[0].sku).toBe('IQ0400-100');   // another size: not assumed
+  // The box in women's sizing for the men's size ordered (11.5W = men's 10): the same pairs.
+  expect(underOrderCodes([{ id: 1, sku: 'HF2881-302', size: '10', qty: 4 }], [{ sku: 'HF2881-302-', size: '11.5W', qty: 4 }])).toEqual([{ sku: 'HF2881-302', size: '10', qty: 4 }]);
+  expect(underOrderCodes([{ id: 1, sku: 'HF2881-302', size: '10', qty: 4 }], [{ sku: 'HF2881-302', size: '11.5', qty: 4 }])[0].size).toBe('11.5');   // not marked W: a different size
+  // Two order lines it could be: not assumed either.
+  expect(underOrderCodes([{ id: 1, sku: 'DD1391-100', size: '9', qty: 1 }, { id: 2, sku: 'DD1391-102', size: '9', qty: 1 }], [{ sku: 'DD1391-101', size: '9', qty: 1 }])[0].sku).toBe('DD1391-101');
+});
+
+test('the Telegram message for a parcel: who, which numbers, what came, and the finding', async () => {
+  const order = { id: 85, store: 'Foot Locker', order_number: 'P7509922306077007872', tracking_number: '384212231759' };
+  const ok = onlineOrderArrivedBody({ order, batchCode: 'B-101889', items: [{ sku: 'IM4260-001', size: '13', qty: 1 }], expected: 1, received: 1, counted: true });
+  expect(ok).toBe('Foot Locker · order #P7509922306077007872\nTracking 384212231759 · batch B-101889\nArrived: 1 pair — IM4260-001 US 13 ×1\n✅ All 1 ordered pair arrived. Counted in.');
+  const bad = onlineOrderArrivedBody({ order, batchCode: 'B-1', items: [{ sku: 'A', size: '9', qty: 3 }], expected: 4, received: 3, short: 1, counted: true, caseId: 12, text: 'A US 9 short (3/4)' });
+  expect(bad).toContain('⚠️ SHORT by 1 (3 of 4).');
+  expect(bad).toContain('A US 9 short (3/4)');
+  expect(bad).toContain('Case #12 is open for the claim.');
+  // What the compare hands the alert: every parcel is told once, an old clean one is not.
+  const told = [];
+  const io = (received_at, items) => ({ arrived: (i) => told.push(i), order: async () => ({ ...order, lines: [{ id: 1, sku: 'IM4260-001', size: '13', qty: 1 }] }),
+    received: async () => ({ batch_id: 1, box_id: null, batch_code: 'B-101889', received_at, items }), mark: async () => {}, flagged: async () => null, count: async () => true,
+    issue: async () => [{ id: 1, description: 'd' }], open: async () => [{ id: 9 }], task: async () => null, alert: () => {}, alertTask: () => {} });
+  await compareOrderWithReceived(85, { io: io(new Date().toISOString(), [{ sku: 'IM4260-001', size: '13', qty: 1 }]) });
+  expect(told).toHaveLength(1);
+  expect(told[0]).toMatchObject({ batchCode: 'B-101889', expected: 1, received: 1, short: 0, wrong: 0, counted: true });
+  await compareOrderWithReceived(85, { io: io('2026-10-31T17:55:00Z', [{ sku: 'IM4260-001', size: '13', qty: 1 }]) });
+  expect(told).toHaveLength(1);                       // matched, landed weeks ago: counted in quietly
+  await compareOrderWithReceived(85, { io: io('2026-10-31T17:55:00Z', []) });
+  expect(told[1]).toMatchObject({ short: 1, caseId: 9 });   // short is always told, however old
 });

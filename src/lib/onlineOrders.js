@@ -156,8 +156,21 @@ export function onlineLineFor(orders, sku, size) {
 // Expected = the order's lines still coming (cancelled ones are already settled); matched
 // to the cart on the code with dashes/spaces stripped and the NUMERIC size, the rule
 // onlineLineFor and poLineMoney use. Returns manifestSummary's { rows, totals } shape.
-const bareCode = (s) => String(s || '').toUpperCase().replace(/[\s-]/g, '');
-const lineKey = (sku, size) => {
+// Letters and digits only: "IV2867/100", "IV2867-100" and "IV2867 100" are one code (JD Sports
+// prints the slash, the box prints the dash).
+export const bareCode = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+// A code typed on the order one character off the box's ("Q0400-100" for "IQ0400-100"): the
+// same shoe, mistyped. Only ever used with the SAME size and when it picks exactly one line.
+export function nearCode(a, b) {
+  const x = bareCode(a); const y = bareCode(b);
+  if (!x || !y || x === y) return x === y && !!x;
+  if (Math.abs(x.length - y.length) > 1 || Math.min(x.length, y.length) < 6) return false;
+  if (x.length === y.length) { let d = 0; for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) d += 1; return d === 1; }
+  const [long, short] = x.length > y.length ? [x, y] : [y, x];
+  for (let i = 0; i < long.length; i += 1) if (long.slice(0, i) + long.slice(i + 1) === short) return true;
+  return false;
+}
+export const lineKey = (sku, size) => {
   const n = sizeNum(size);
   return `${bareCode(sku)}|${Number.isNaN(n) ? String(size || '').trim().toUpperCase() : n}`;
 };

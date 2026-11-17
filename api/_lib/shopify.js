@@ -1013,3 +1013,41 @@ export async function shopifyLiveForStyle(code) {
   }
   return { variants };
 }
+
+/* ------------------------------------------------------------------ */
+/* POIZON orders (docs/context/poizon-orders.md)                       */
+/* ------------------------------------------------------------------ */
+// Shopify's order search has NO working filter for the app that made an order (measured 2026-11-17:
+// `app_id:` is ignored and returns every channel; `source_name:` / `channel:` return nothing), and
+// POIZON orders carry no channelInformation. So the sync reads a LIGHT page of every order changed
+// since its cursor (250 a page, oldest change first), keeps the ids whose app is POIZON, and reads
+// only those in full.
+const ORDERS_LIGHT = `query OrdersLight($q: String!, $after: String) {
+  orders(first: 250, query: $q, sortKey: UPDATED_AT, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    edges { node { id updatedAt app { name } channelInformation { channelDefinition { channelName } } } }
+  }
+}`;
+const ORDERS_FULL = `query OrdersFull($ids: [ID!]!) {
+  nodes(ids: $ids) { ... on Order {
+    id name createdAt updatedAt cancelledAt closedAt displayFulfillmentStatus displayFinancialStatus
+    app { name }
+    lineItems(first: 50) { edges { node { title quantity currentQuantity unfulfilledQuantity variantTitle sku } } }
+    fulfillments(first: 10) { status createdAt trackingInfo { number company url } }
+  } }
+}`;
+export async function shopifyOrdersChangedPage(sinceIso, after = null) {
+  const r = await gqlPaced(ORDERS_LIGHT, { q: `updated_at:>='${sinceIso}'`, after });
+  if (!r.ok) return failure(r, 'orders');
+  const conn = r.data?.orders;
+  return { ok: true, orders: (conn?.edges || []).map((e) => e.node), next: conn?.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null };
+}
+export async function shopifyOrdersByIds(ids) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const r = await gqlPaced(ORDERS_FULL, { ids: ids.slice(i, i + 50) });
+    if (!r.ok) return failure(r, 'orders');
+    out.push(...(r.data?.nodes || []).filter(Boolean));
+  }
+  return { ok: true, orders: out };
+}

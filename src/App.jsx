@@ -24,6 +24,7 @@ import { Inventory } from './screens/Inventory.jsx';
 import { PHTeamApp, PHGrid } from './screens/PHTeam.jsx';
 import { EbayListings } from './screens/EbayListings.jsx';
 import { StockxListings } from './screens/StockxListings.jsx';
+import { PoizonOrders } from './screens/PoizonOrders.jsx';
 import { Shein } from './screens/Shein.jsx';
 import { NoBoxHub } from './screens/NoBoxHub.jsx';
 import { ItemCosts } from './screens/ItemCosts.jsx';
@@ -253,6 +254,7 @@ export default function App() {
   // SHEIN: one page; which sections show depends on who it is (sheinPage.js). The endpoints refuse anyone else.
   if (view === 'shein' && sheinSectionsFor(user).length) return withAdvisor(<Shein user={user} base="/shein" onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'ebay' && (isPrivilegedRole(user.role) || hasPriv(user, 'connect_integrations'))) return withAdvisor(<EbayListings user={user} onHome={() => go('home')} onSignOut={signOut} />);
+  if (view === 'poizon' && isPrivilegedRole(user.role)) return withAdvisor(<PoizonOrders onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'stockx-listings' && isPrivilegedRole(user.role)) return withAdvisor(<StockxListings onHome={() => go('home')} onSignOut={signOut} isAdmin />);
   if (view === 'presell-listings') return withAdvisor(<PresellListings onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'vin-stock') return withAdvisor(<VinStock onHome={() => go('home')} onSignOut={signOut} />);

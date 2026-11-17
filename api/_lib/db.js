@@ -15241,3 +15241,40 @@ export async function finishIdleLostRuns() {
      WHERE r.p2_status = 'running'
        AND NOT EXISTS (SELECT 1 FROM lost_pkg_orders WHERE run_id = r.id AND p2_state IN ('queued', 'checking'))`;
 }
+
+/* ---------------------------- POIZON orders ---------------------------- */
+// docs/context/poizon-orders.md. Rows come from api/_lib/poizon-orders.js (Shopify's orders made by
+// the POIZON app). A row is rewritten only when Shopify's own updatedAt moved, so a re-read of the
+// same orders wakes no screen.
+export async function upsertPoizonOrders(rows) {
+  let changed = 0;
+  for (const r of rows || []) {
+    const out = await db()`
+      INSERT INTO poizon_orders (shopify_order_id, order_no, ordered_at, cancelled_at, closed_at, fulfillment_status,
+                                 financial_status, lines, tracking, shopify_updated_at)
+      VALUES (${r.shopify_order_id}, ${r.order_no}, ${r.ordered_at}, ${r.cancelled_at}, ${r.closed_at}, ${r.fulfillment_status},
+              ${r.financial_status}, ${JSON.stringify(r.lines || [])}::jsonb, ${JSON.stringify(r.tracking || [])}::jsonb, ${r.shopify_updated_at})
+      ON CONFLICT (shopify_order_id) DO UPDATE SET
+        order_no = EXCLUDED.order_no, ordered_at = EXCLUDED.ordered_at, cancelled_at = EXCLUDED.cancelled_at,
+        closed_at = EXCLUDED.closed_at, fulfillment_status = EXCLUDED.fulfillment_status,
+        financial_status = EXCLUDED.financial_status, lines = EXCLUDED.lines, tracking = EXCLUDED.tracking,
+        shopify_updated_at = EXCLUDED.shopify_updated_at, updated_at = now()
+      WHERE poizon_orders.shopify_updated_at IS DISTINCT FROM EXCLUDED.shopify_updated_at
+         OR poizon_orders.lines IS DISTINCT FROM EXCLUDED.lines
+         OR poizon_orders.tracking IS DISTINCT FROM EXCLUDED.tracking
+      RETURNING shopify_order_id`;
+    changed += out.length;
+  }
+  return changed;
+}
+// Orders sold in the range, plus every one still to ship (not cancelled, not fulfilled) from the last 60 days.
+export async function listPoizonOrders(fromIso, toIso, limit = 3000) {
+  return await db()`
+    SELECT shopify_order_id, order_no, ordered_at, cancelled_at, closed_at, fulfillment_status, financial_status,
+           lines, tracking, shopify_updated_at, first_seen
+      FROM poizon_orders
+     WHERE (ordered_at >= ${fromIso}::timestamptz AND ordered_at < ${toIso}::timestamptz)
+        OR (cancelled_at IS NULL AND COALESCE(fulfillment_status, '') <> 'FULFILLED' AND ordered_at >= now() - interval '60 days')
+     ORDER BY ordered_at DESC NULLS LAST, shopify_order_id
+     LIMIT ${limit}`;
+}

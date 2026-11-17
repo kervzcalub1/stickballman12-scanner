@@ -484,6 +484,8 @@ export const api = {
   sheinLinksClear: (ids) => post('/api/shein/links', { clear: ids }),
   sheinFixAi: (products) => post('/api/shein-fix/ai', { products }),
   sheinLive: () => get('/api/shein/live'),
+  poizonOrders: (from, to) => get(`/api/poizon/orders?from=${encodeURIComponent(from || '')}&to=${encodeURIComponent(to || '')}`),
+  poizonOrdersSync: () => post('/api/poizon/orders', {}),
   sheinOrders: (from, to) => get(`/api/shein/orders?from=${encodeURIComponent(from || '')}&to=${encodeURIComponent(to || '')}`),
   sheinLiveAllItems: (runId) => get(`/api/shein/live?run=${encodeURIComponent(runId)}&all=1`),
   sheinLiveAction: (body) => post('/api/shein/live', body),

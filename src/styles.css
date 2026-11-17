@@ -6400,6 +6400,10 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
   .sho-table td.pk-cell { top: 8px; left: 4px; width: 52px !important; }
 }
 .sho-line { grid-template-columns: minmax(0, 1fr); }
+/* POIZON Orders (/ph/poizon): the check-now strip and a tracking number under the status chip. */
+.pzo-sync { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; margin: 4px 0 10px; }
+.pzo-track { margin-top: 4px; overflow-wrap: anywhere; }
+@media (max-width: 768px) { .pzo-sync > .btn { min-height: 44px; } }
 .sho-off { opacity: 0.55; text-decoration: line-through; }
 .ebs-period { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .ebs-period .input { width: auto; flex: 0 1 auto; }

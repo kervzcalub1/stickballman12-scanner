@@ -3883,6 +3883,26 @@ await sql(`CREATE INDEX IF NOT EXISTS lost_pkg_orders_queue_idx ON lost_pkg_orde
 await sql(`ALTER TABLE lost_pkg_orders ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ`);
 await sql(`ALTER TABLE lost_pkg_orders ADD COLUMN IF NOT EXISTS removed_by TEXT`);
 
+// POIZON orders (docs/context/poizon-orders.md): POIZON sales land in Shopify as orders made by the
+// "POIZON" app. Shopify has no search filter for the app, so a sync reads Shopify's orders and keeps
+// only POIZON's here: one row per order, its lines (pairs) and tracking as JSON. Read-only copy.
+await sql(`
+  CREATE TABLE IF NOT EXISTS poizon_orders (
+    shopify_order_id   TEXT PRIMARY KEY,
+    order_no           TEXT NOT NULL,
+    ordered_at         TIMESTAMPTZ,
+    cancelled_at       TIMESTAMPTZ,
+    closed_at          TIMESTAMPTZ,
+    fulfillment_status TEXT,
+    financial_status   TEXT,
+    lines              JSONB NOT NULL DEFAULT '[]'::jsonb,
+    tracking           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    shopify_updated_at TIMESTAMPTZ,
+    first_seen         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS poizon_orders_ordered ON poizon_orders (ordered_at DESC)`);
+
 const LIVE_TABLES = [
   'shopify_listing_variants', 'listing_market_prices',
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
@@ -3907,6 +3927,7 @@ const LIVE_TABLES = [
   'inbound_issues', 'inbound_issue_events',
   'stock_counts', 'stock_check_scans',
   'ebay_sync_products', 'ebay_sync_links', 'ebay_sync_log', 'ebay_sync_profiles', 'ebay_sync_overrides',
+  'poizon_orders',
 ];
 for (const t of LIVE_TABLES) {
   await sql(`DROP TRIGGER IF EXISTS sb_live ON ${t}`);   // the first, one-trigger version

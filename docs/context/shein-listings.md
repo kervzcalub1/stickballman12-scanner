@@ -1063,6 +1063,15 @@ it for "Add missing sizes (1)" / "Replace SHEIN photos (1)"; the photo preview t
 - e2e: 5 previews after the rejected send → `lastPublishRun` + `neverLive` + the 18-line checklist; add / photos
   previews → `never_approved`, 0 spu-info calls.
 
+## Photo swap sends each size's piece count back (fixed 2026-11-16)
+HQ8717 was refused a third time (#711) "The number of pieces with sku is incomplete" with the piece PHOTO kept, so the
+photo was never the cause (five shoes with a PIECE photo passed #380 without it). The real difference: HQ8717's SKUs
+carry a SKU-level piece count (`quantity_info` 1 / 1 / 1, set when its sizes were added 10-29) and `planPhotoEdit`
+named every SKU in `sku_list` with only its photo; a field left out of an edited SKU is cleared. `skuKept(sku)`
+(`sheinPublish.js`) now returns `quantity_info` + `package_type` exactly as spu-info has them and the swap sends them
+with each SKU; `plan.skuPiecesKept`. Shoes with no SKU piece count get nothing extra. NOT changed (same latent risk,
+never seen refused): the relink entries `{ sku_code, supplier_sku }` in add sizes, the two-step swap and `api/_lib/shein.js`.
+
 ## Photo swap keeps SHEIN's colour-block ("piece") photo (fixed 2026-11-11)
 First live run (#380): 5 of 6 swaps went to review; HQ8717 was refused "The number of pieces with sku is incomplete" —
 its SKC carried a type-6 colour-block (PIECE) photo and the new list dropped it. `planPhotoEdit` now appends every

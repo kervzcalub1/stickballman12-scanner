@@ -111,3 +111,7 @@ defaultFor?`) + one `alertUsers(key, {…})` call after the write. No migration.
 
 ## Not built yet (plan Phase 3)
 Announcements, quiet hours for the PH night shift, web push.
+
+- **`online.order_arrived`** (2026-11-18, group Shipments, PH + admins): one message per online
+  order when its parcel is received and compared — what came, and whether it matches
+  (`alertOnlineOrderArrived`, `online-orders.md` → "Counted in by itself").

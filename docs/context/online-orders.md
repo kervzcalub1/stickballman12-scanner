@@ -243,6 +243,35 @@ documented well enough to claim from the store (example: tracking 1Z16G27K032061
     parcel is in (`online_orders.received_check_at`, **needs db:setup**; cleared when the number changes).
 - E2E: `e2e/receiving-online-order.spec.js`.
 
+## Counted in by itself, and told on Telegram (2026-11-18)
+Owner, looking at three Foot Locker orders (OO-0083/84/85) still "Shipped" and on the delayed list
+17 days after the warehouse received them: the order only became Delivered when someone pressed
+**Count it in…**, and nobody had. Now the warehouse's scan IS the count.
+
+- `compareOrderWithReceived` (above) also **counts the order in** (`receiveOnlineOrder`, the button's
+  own write; `received_by` = `Auto · batch B-…`, the history says which batch):
+  - every pair there → **Delivered**;
+  - pairs missing, nothing wrong in the parcel → counted in with what arrived, the missing pairs
+    split off as `not_delivered` + `needs_request` (the **Refund follow-up** tab), and the case;
+  - wrong pairs → **not** counted in: which ordered pair a wrong one stands for is a judgement.
+  Counting in is what takes an order off Expected and off the "Shipments delayed" message, so a
+  courier feed that never updates no longer keeps a received parcel on the chase list.
+- **The same shoe said two ways is not a wrong pair** (`underOrderCodes`, found on the real data:
+  10 of 69 orders read as wrong before this): codes compare on letters and digits only (`bareCode`:
+  `IV2867/100` = `IV2867-100`); a code ONE character off at the same size is the order's typing slip
+  (`nearCode`: `Q0400-100` for `IQ0400-100`); a box in women's sizing (`11.5W`) is the men's size
+  ordered (10). Each only when exactly one order line fits.
+- **Telegram, once per order** (`online.order_arrived`, "Online order arrived", PH + admins, in the
+  bell panel under Shipments): merchant · order # · tracking · batch · what came out · the finding
+  (✅ all arrived / ⚠️ SHORT by N / WRONG pairs, whether it was counted in, the case #). A parcel
+  that matched and landed more than 3 days ago is counted in **quietly**, so the catch-up over old
+  orders is not a hundred "all arrived" messages; a discrepancy is always told.
+- **Catch-up:** the worker clears `received_check_at` once (`app_settings.oo_autocount_reset`) for
+  orders it compared before it could count, then works through them 20 per 10 min.
+- A batch-level tracking number no longer counts pairs from a box that came under another number.
+- **"Did it land at all?"** is the pages that already exist, now without the received ones in them:
+  Online Orders → **Expected**, **Undelivered Tracking**, and the daily "Shipments delayed" message.
+
 ## Not yet
 - No home badge for "Expected" / follow-ups (the page's tab counts only).
 - (Until 2026-11-06) no 17TRACK registration of the tracking numbers. They appeared on **Undelivered Tracking** as "No courier feed" with a link to the courier's site (`docs/context/undelivered.md`).

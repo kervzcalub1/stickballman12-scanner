@@ -9,29 +9,73 @@
 // claim needs, uploaded on the case and sent to the team on WhatsApp.
 import {
   getOnlineOrder, receivedForTracking, onlineOrdersToCompare, markOnlineOrderCompared, onlineOrderIssueOnBatch,
-  insertIssues, openInboundIssues, setInboundWarehouseTask, dbConfigured,
+  insertIssues, openInboundIssues, setInboundWarehouseTask, dbConfigured, receiveOnlineOrder, resetOnlineOrderCompareOnce,
 } from './db.js';
-import { alertInboundIssuesReported, alertInboundWarehouseTask } from './alerts.js';
-import { onlineOrderCheck, onlineCheckText, isCancelled, orderCode, CLAIM_PHOTOS } from '../../src/lib/onlineOrders.js';
+import { alertInboundIssuesReported, alertInboundWarehouseTask, alertOnlineOrderArrived } from './alerts.js';
+import { onlineOrderCheck, onlineCheckText, isCancelled, orderCode, CLAIM_PHOTOS, lineKey, nearCode } from '../../src/lib/onlineOrders.js';
 
 export const SYSTEM = 'System (online order check)';
+// Who counted an order in when nobody pressed "Count it in": the delivery itself.
+export const autoBy = (batchCode) => `Auto · batch ${batchCode}`;
+
+// The delivery's pairs under the ORDER's spelling, where the two say the same shoe differently:
+// a code one character off at the same size ("Q0400-100" typed for "IQ0400-100"), or the box in
+// women's sizing ("11.5W") for the men's size ordered (10). A typing slip or a size chart must
+// not read as five wrong pairs. Only when exactly one order line fits.
+export function underOrderCodes(lines, items) {
+  const active = (lines || []).filter((x) => !isCancelled(x));
+  const keys = new Set(active.map((l) => lineKey(l.sku, l.size)));
+  const num = (z) => { const m = String(z ?? '').match(/[\d.]+/); return m ? parseFloat(m[0]) : NaN; };
+  // The same size said two ways: equal, or the box in WOMEN's ("11.5W") for a men's 10 on the
+  // order — the same shoe, a size and a half apart.
+  const sameSize = (ordered, box) => lineKey('X', ordered) === lineKey('X', box)
+    || (/\d\s*W$/i.test(String(box || '').trim()) && !/W$/i.test(String(ordered || '').trim()) && num(box) - 1.5 === num(ordered));
+  return (items || []).map((it) => {
+    if (keys.has(lineKey(it.sku, it.size))) return it;
+    const fits = active.filter((l) => sameSize(l.size, it.size) && nearCode(l.sku, it.sku));
+    const one = [...new Set(fits.map((l) => lineKey(l.sku, l.size)))];
+    return one.length === 1 ? { ...it, sku: fits[0].sku, size: fits[0].size } : it;
+  });
+}
+
+// How many pairs of each ACTIVE order line came out of the delivery: Map(lineId → got). The
+// delivery's pairs are handed to the lines by code + size (the bench's rule), first line first.
+export function countsFromReceived(lines, items) {
+  const left = new Map();
+  for (const it of items || []) left.set(lineKey(it.sku, it.size), (left.get(lineKey(it.sku, it.size)) || 0) + Number(it.qty));
+  const counts = new Map();
+  for (const l of (lines || []).filter((x) => !isCancelled(x))) {
+    const k = lineKey(l.sku, l.size);
+    const got = Math.min(Number(l.qty), left.get(k) || 0);
+    left.set(k, (left.get(k) || 0) - got);
+    counts.set(Number(l.id), got);
+  }
+  return counts;
+}
 export const PHOTO_TASK = `This parcel doesn’t match its online order, photos needed for the claim: ${CLAIM_PHOTOS.map((p) => p.label.toLowerCase()).join('; ')}. Add them to this case, send the same photos to the team on WhatsApp, then tap Done.`;
 
 /**
  * One online order: has its parcel been received, and with every pair?
- * -> { state: 'no_tracking' | 'not_received' | 'ok' | 'already' | 'short' | 'wrong', short?, wrong?, caseId? } `io` swaps the outside world for the tests.
+ * -> { state: 'no_tracking' | 'not_received' | 'ok' | 'already' | 'short' | 'wrong', counted?, short?, wrong?, caseId? }
+ *
+ * It also COUNTS THE ORDER IN (2026-11-18): the warehouse scanning the parcel is the count.
+ * Every pair there → Delivered, by itself. Pairs missing, and nothing wrong in the parcel →
+ * counted in with what arrived, the missing pairs split off as not delivered with their refund
+ * to chase (what the "Count it in…" button does). Wrong pairs in the parcel → left for a person:
+ * which ordered pair a wrong one stands for is a judgement. `io` swaps the outside world for the tests.
  */
 export async function compareOrderWithReceived(orderId, { io = {} } = {}) {
   const x = {
     order: getOnlineOrder, received: receivedForTracking, mark: markOnlineOrderCompared, flagged: onlineOrderIssueOnBatch,
-    issue: insertIssues, open: openInboundIssues, task: setInboundWarehouseTask,
-    alert: alertInboundIssuesReported, alertTask: alertInboundWarehouseTask, ...io,
+    issue: insertIssues, open: openInboundIssues, task: setInboundWarehouseTask, count: receiveOnlineOrder,
+    alert: alertInboundIssuesReported, alertTask: alertInboundWarehouseTask, arrived: alertOnlineOrderArrived, ...io,
   };
   const o = await x.order(orderId);
   if (!o || !String(o.tracking_number || '').trim()) return { state: 'no_tracking' };
-  const got = await x.received(o.tracking_number);
-  if (!got) return { state: 'not_received' };
+  const raw = await x.received(o.tracking_number);
+  if (!raw) return { state: 'not_received' };
   const lines = (o.lines || []).map((l) => ({ ...l, qty: Number(l.qty) }));
+  const got = { ...raw, items: underOrderCodes(lines, raw.items) };
   const expected = lines.filter((l) => !isCancelled(l)).reduce((n, l) => n + l.qty, 0);
   const received = got.items.reduce((n, it) => n + Number(it.qty), 0);
   await x.mark(o.id);
@@ -44,8 +88,34 @@ export async function compareOrderWithReceived(orderId, { io = {} } = {}) {
   // bench uses (code with dashes and spaces dropped, numeric size).
   const short = Math.max(0, expected - received);
   const wrong = summary.totals.extra;
-  if (!short && !wrong) return { state: 'ok', expected, received };
-  if (await x.flagged(got.batch_id)) return { state: 'already', expected, received };
+  // Count it in, unless a wrong pair makes that a judgement. Refused (already counted by a
+  // person in the same minute) is fine: theirs stands.
+  const countIn = async () => {
+    if (wrong) return false;
+    const counts = countsFromReceived(lines, got.items);
+    const arrived = [...counts.values()].reduce((n, v) => n + v, 0);
+    const detail = arrived === expected
+      ? `all ${expected} pair(s) arrived — matched to batch ${got.batch_code} by its tracking number, counted in automatically`
+      : `${arrived} of ${expected} pair(s) arrived in batch ${got.batch_code} — ${expected - arrived} not delivered, refund to follow up (counted in automatically)`;
+    try { await x.count({ ...o, lines }, counts, autoBy(got.batch_code), detail); return true; } catch (e) {
+      if (e.status === 409) return false;
+      throw e;
+    }
+  };
+  // The team hears about every parcel on Telegram (once per order): what came, and the finding.
+  // A parcel that matched and landed more than 3 days ago is counted in quietly — the catch-up
+  // over old orders must not be a hundred "all arrived" messages.
+  const tell = (extra) => {
+    const old = got.received_at && Date.now() - new Date(got.received_at).getTime() > 3 * 86_400_000;
+    if (!short && !wrong && old) return;
+    x.arrived({ order: o, batchCode: got.batch_code, items: got.items, expected, received, short, wrong, text: short || wrong ? onlineCheckText(o, summary).split(': ').slice(1).join(': ') : '', ...extra });
+  };
+  if (!short && !wrong) { const counted = await countIn(); tell({ counted }); return { state: 'ok', expected, received, counted }; }
+  if (await x.flagged(got.batch_id)) {
+    // Flagged at the bench: the case exists; still count it in and say what was found.
+    const counted = await countIn(); tell({ counted });
+    return { state: 'already', expected, received, counted };
+  }
 
   const lead = short
     ? `Short by ${short}: ${received} of ${expected} pair${expected === 1 ? '' : 's'} came out of the parcel with tracking ${o.tracking_number}.`
@@ -62,7 +132,9 @@ export async function compareOrderWithReceived(orderId, { io = {} } = {}) {
     const withTask = await x.task(row.id, { actor: SYSTEM, task: PHOTO_TASK });
     if (withTask) x.alertTask(withTask, { id: null, name: 'The online order check' });
   }
-  return { state: short ? 'short' : 'wrong', short, wrong, expected, received, caseId: row ? Number(row.id) : null };
+  const counted = await countIn();
+  tell({ counted, caseId: row ? Number(row.id) : null });
+  return { state: short ? 'short' : 'wrong', short, wrong, expected, received, caseId: row ? Number(row.id) : null, counted };
 }
 
 // One at a time: a save, the email reader and the worker can all point at the same order.
@@ -92,6 +164,12 @@ export function startOnlineOrderReceivedWorker() {
   const on = flag === 'on' || (flag !== 'off' && String(process.env.RAILWAY_ENVIRONMENT_NAME || '').trim().toLowerCase() === 'production');
   if (!on) return;
   console.log('[online-order-received] worker on: received parcels compared with their online orders every 10 min');
-  const run = () => compareWaitingOrders().catch((e) => console.error('[online-order-received] tick', e.message));
+  let reset = false;
+  const run = async () => {
+    try {
+      if (!reset && dbConfigured()) { reset = true; const n = await resetOnlineOrderCompareOnce(); if (n) console.log(`[online-order-received] ${n} orders to look at again (counting in)`); }
+      await compareWaitingOrders();
+    } catch (e) { console.error('[online-order-received] tick', e.message); }
+  };
   setTimeout(() => { run(); setInterval(run, 10 * 60_000); }, 6 * 60_000);
 }

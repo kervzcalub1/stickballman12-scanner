@@ -15497,25 +15497,30 @@ export async function receivedForTracking(tracking) {
   if (t.length < 8) return null;
   const sql = db();
   const box = await sql`
-    SELECT bx.id AS box_id, bx.batch_id, b.batch_code FROM batch_boxes bx JOIN batches b ON b.id = bx.batch_id
+    SELECT bx.id AS box_id, bx.batch_id, b.batch_code, coalesce(bx.received_at, b.created_at) AS at FROM batch_boxes bx JOIN batches b ON b.id = bx.batch_id
      WHERE upper(regexp_replace(bx.tracking_number, '[[:space:]]', '', 'g')) = ${t} AND bx.status = 'received'
        AND (b.kind IS NULL OR b.kind = 'receiving')
      ORDER BY bx.id DESC LIMIT 1`;
-  let found = box[0] ? { batch_id: Number(box[0].batch_id), box_id: Number(box[0].box_id), batch_code: box[0].batch_code } : null;
+  let found = box[0] ? { batch_id: Number(box[0].batch_id), box_id: Number(box[0].box_id), batch_code: box[0].batch_code, received_at: box[0].at } : null;
   if (!found) {
     const b = await sql`
-      SELECT id, batch_code FROM batches
+      SELECT id, batch_code, created_at AS at FROM batches
        WHERE upper(regexp_replace(tracking_number, '[[:space:]]', '', 'g')) = ${t} AND status = 'committed'
          AND (kind IS NULL OR kind = 'receiving')
        ORDER BY id DESC LIMIT 1`;
-    if (b[0]) found = { batch_id: Number(b[0].id), box_id: null, batch_code: b[0].batch_code };
+    if (b[0]) found = { batch_id: Number(b[0].id), box_id: null, batch_code: b[0].batch_code, received_at: b[0].at };
   }
   if (!found) return null;
   const items = found.box_id
     ? await sql`SELECT coalesce(original_sku, sku) AS sku, coalesce(original_size, size) AS size, count(*)::int AS qty
                   FROM items WHERE box_id = ${found.box_id} GROUP BY 1, 2`
-    : await sql`SELECT coalesce(original_sku, sku) AS sku, coalesce(original_size, size) AS size, count(*)::int AS qty
-                  FROM items WHERE batch_id = ${found.batch_id} GROUP BY 1, 2`;
+    // The batch's own number: its pairs, but not those of a box that came under another number.
+    : await sql`SELECT coalesce(i.original_sku, i.sku) AS sku, coalesce(i.original_size, i.size) AS size, count(*)::int AS qty
+                  FROM items i LEFT JOIN batch_boxes bx ON bx.id = i.box_id
+                 WHERE i.batch_id = ${found.batch_id}
+                   AND (bx.id IS NULL OR coalesce(btrim(bx.tracking_number), '') = ''
+                        OR upper(regexp_replace(bx.tracking_number, '[[:space:]]', '', 'g')) = ${t})
+                 GROUP BY 1, 2`;
   return { ...found, items };
 }
 
@@ -15524,7 +15529,7 @@ export async function receivedForTracking(tracking) {
 export async function onlineOrdersToCompare(limit = 20) {
   return await db()`
     SELECT o.id FROM online_orders o
-     WHERE o.received_check_at IS NULL AND coalesce(btrim(o.tracking_number), '') <> ''
+     WHERE o.received_check_at IS NULL AND o.received_at IS NULL AND coalesce(btrim(o.tracking_number), '') <> ''
        AND o.created_at > now() - interval '90 days'
        AND (EXISTS (SELECT 1 FROM batch_boxes bx WHERE bx.status = 'received'
                      AND upper(regexp_replace(bx.tracking_number, '[[:space:]]', '', 'g')) = upper(regexp_replace(o.tracking_number, '[[:space:]]', '', 'g')))
@@ -15542,4 +15547,15 @@ export async function markOnlineOrderCompared(id) {
 export async function onlineOrderIssueOnBatch(batchId) {
   const r = await db()`SELECT id FROM shipment_issues WHERE batch_id = ${batchId} AND type = 'online_order' ORDER BY id LIMIT 1`;
   return r[0] ? Number(r[0].id) : null;
+}
+
+// Once: the compare now also COUNTS the order in (2026-11-18). Orders it looked at before that
+// and left as "Shipped" are looked at again, so parcels received weeks ago get counted in.
+// Done by the worker as it starts, not by db:setup: it has to happen AFTER the new code is up.
+export async function resetOnlineOrderCompareOnce() {
+  const first = await db()`INSERT INTO app_settings (key, value, updated_by) VALUES ('oo_autocount_reset', '1', 'online-order-received')
+                           ON CONFLICT (key) DO NOTHING RETURNING key`;
+  if (!first.length) return 0;
+  const r = await db()`UPDATE online_orders SET received_check_at = NULL WHERE received_at IS NULL AND received_check_at IS NOT NULL RETURNING id`;
+  return r.length;
 }

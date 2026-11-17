@@ -1501,6 +1501,14 @@ await sql(`
   )
 `);
 await sql(`CREATE INDEX IF NOT EXISTS po_dropoff_receipts_po_idx ON po_dropoff_receipts (po_id, id)`);
+// Two kinds of receipt on one order (2026-11-17): 'dropoff' = the courier's proof the boxes were handed
+// over; 'purchase' = the store's proof of what was bought and paid. Suppliers were putting purchase
+// receipts in the drop-off box, so each has its own lane and a receipt can be MOVED between them
+// (who and when is kept). Everything already here is a drop-off receipt.
+await sql(`ALTER TABLE po_dropoff_receipts ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'dropoff'`);
+await sql(`ALTER TABLE po_dropoff_receipts ADD COLUMN IF NOT EXISTS moved_by TEXT`);
+await sql(`ALTER TABLE po_dropoff_receipts ADD COLUMN IF NOT EXISTS moved_role TEXT`);
+await sql(`ALTER TABLE po_dropoff_receipts ADD COLUMN IF NOT EXISTS moved_at TIMESTAMPTZ`);
 // When the team was told this box left the supplier: set once, so the supplier's tap and the
 // carrier's first scan can't both announce it. Boxes that already left aren't news.
 await sql(`ALTER TABLE po_boxes ADD COLUMN IF NOT EXISTS dropoff_alerted_at TIMESTAMPTZ`);

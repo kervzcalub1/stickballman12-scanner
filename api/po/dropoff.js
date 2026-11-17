@@ -1,16 +1,22 @@
-// The supplier's drop-off receipt: proof a box was handed to the courier.
+// Receipts on a purchase order, two kinds on one table (docs/context/purchase-orders.md → "Two receipts"):
+//   dropoff  = the courier's receipt: proof a box was handed over
+//   purchase = the store's receipt: proof of what was bought and paid
 //
 // POST /api/po/dropoff  { poId, action:'sign', contentType }                     -> { uploadUrl, key }
-//                       { poId, action:'attach', key, name, contentType, sizeBytes } -> { receipt, dropoffReceipts }
+//                       { poId, action:'attach', key, name, contentType, sizeBytes, kind? } -> { receipt, dropoffReceipts }
+//                       { poId, action:'move', id, kind }                         -> { dropoffReceipts }   filed under the wrong kind
 //                       { poId, action:'delete', id }                             -> { dropoffReceipts }
 // GET  /api/po/dropoff?id=…[&download=1]                                          -> the bytes
 //
 // The supplier uploads it, or our team does for them. Same presigned shape as a buying request's
 // files, and the bytes are checked on attach. Files are proxied, never a bucket URL. A supplier
-// reaches only their own orders, and can remove only what they uploaded themselves.
+// reaches only their own orders, and can remove only what they uploaded themselves. MOVING a
+// receipt to the other kind is open to everyone who can reach the order: nothing is lost, and who
+// moved it is kept.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole, isPrivileged } from '../_lib/util.js';
 import {
-  getPo, listPoDropoffReceipts, getPoDropoffReceipt, addPoDropoffReceipt, removePoDropoffReceipt, dbConfigured,
+  getPo, listPoDropoffReceipts, getPoDropoffReceipt, addPoDropoffReceipt, removePoDropoffReceipt, movePoDropoffReceipt,
+  PO_RECEIPT_KINDS, dbConfigured,
 } from '../_lib/db.js';
 import { presignPutUrl, getObject, deleteObject, r2Configured } from '../_lib/r2.js';
 import { sniffImageFormat } from '../_lib/imgformat.js';
@@ -76,6 +82,15 @@ export default async function handler(req, res) {
       return send(res, 200, { ok: true, dropoffReceipts: await listPoDropoffReceipts(poId) });
     }
 
+    if (body.action === 'move') {
+      const kind = String(body.kind || '');
+      if (!PO_RECEIPT_KINDS.includes(kind)) return send(res, 400, { ok: false, error: 'Move it to drop-off or purchase receipts.' });
+      const r = await getPoDropoffReceipt(Number(body.id));
+      if (!r || Number(r.po_id) !== poId) return send(res, 404, { ok: false, error: 'That receipt is not on this order.' });
+      await movePoDropoffReceipt(r.id, kind, user);   // already there = nothing to do, still ok
+      return send(res, 200, { ok: true, dropoffReceipts: await listPoDropoffReceipts(poId) });
+    }
+
     if (!r2Configured()) return send(res, 503, { ok: false, error: 'File storage is not configured.' });
 
     if (body.action === 'sign') {
@@ -104,9 +119,10 @@ export default async function handler(req, res) {
         contentType: EXT[body.contentType] ? body.contentType : null,
         sizeBytes: Number.isInteger(Number(body.sizeBytes)) ? Number(body.sizeBytes) : null,
         actor: user,
+        kind: body.kind === 'purchase' ? 'purchase' : 'dropoff',
       });
       // The team asked for it, so tell them it came. Our own upload needs no announcing.
-      if (isSupplier(user)) alertDropoffReceiptUploaded(po, user);
+      if (isSupplier(user)) alertDropoffReceiptUploaded(po, user, receipt.kind);
       return send(res, 200, { ok: true, receipt, dropoffReceipts: await listPoDropoffReceipts(poId) });
     }
 

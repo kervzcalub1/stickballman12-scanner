@@ -108,8 +108,8 @@ export const ALERT_EVENTS = [
   },
   {
     key: 'po.dropoff_receipt', group: 'Purchase orders', emoji: '🧾', required: false,
-    title: 'Drop-off receipt uploaded',
-    when: 'A supplier uploads a drop-off receipt',
+    title: 'Receipt uploaded on an order',
+    when: 'A supplier uploads a drop-off receipt or a purchase receipt',
     who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
   },
   {
@@ -528,7 +528,7 @@ export function alertPoDroppedOff(rows) {
       return data;
     }, async (data) => {
       const list = [...data.boxes.values()];
-      const receipts = (await listPoDropoffReceipts(data.poId)).length;
+      const receipts = (await listPoDropoffReceipts(data.poId)).filter((r) => r.kind !== 'purchase').length;
       return alertUsers('po.dropped_off', {
         ref: `po:${data.poId}:dropoff:${list.map((b) => b.id).sort().join(',')}`,
         code: data.code,
@@ -539,10 +539,10 @@ export function alertPoDroppedOff(rows) {
   }
 }
 
-export function alertDropoffReceiptUploaded(po, actor) {
+export function alertDropoffReceiptUploaded(po, actor, kind = 'dropoff') {
   fireAlert(() => alertUsers('po.dropoff_receipt', {
-    actorUid: actor?.uid, ref: `po:${po.id}:dropoff-receipt`, code: po.po_code,
-    body: `${po.supplier_name || 'The supplier'} uploaded a drop-off receipt.`,
+    actorUid: actor?.uid, ref: `po:${po.id}:${kind === 'purchase' ? 'purchase' : 'dropoff'}-receipt`, code: po.po_code,
+    body: `${po.supplier_name || 'The supplier'} uploaded a ${kind === 'purchase' ? 'purchase' : 'drop-off'} receipt.`,
     path: at('postatus', `po=${po.id}`),
   }));
 }

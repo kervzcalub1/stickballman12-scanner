@@ -5321,22 +5321,36 @@ export async function markTrackingDelayAlerted(rows) {
   }
 }
 
-// ---- Drop-off receipts -----------------------------------------------------
+// ---- Receipts on a purchase order: drop-off + purchase -------------------------
+// One table, two kinds (`kind`): 'dropoff' = the courier's proof a box was handed over,
+// 'purchase' = the store's proof of what was bought. A receipt filed under the wrong one is moved.
+export const PO_RECEIPT_KINDS = ['dropoff', 'purchase'];
 export async function listPoDropoffReceipts(poId) {
-  return db()`SELECT id, po_id, name, content_type, size_bytes, uploaded_by, uploaded_by_id, uploaded_role, uploaded_at
+  return db()`SELECT id, po_id, kind, name, content_type, size_bytes, uploaded_by, uploaded_by_id, uploaded_role, uploaded_at,
+                     moved_by, moved_role, moved_at
                 FROM po_dropoff_receipts WHERE po_id = ${poId} ORDER BY id`;
 }
 export async function getPoDropoffReceipt(id) {
   return (await db()`SELECT * FROM po_dropoff_receipts WHERE id = ${id}`)[0] || null;
 }
-export async function addPoDropoffReceipt({ poId, key, name, contentType, sizeBytes, actor }) {
+export async function addPoDropoffReceipt({ poId, key, name, contentType, sizeBytes, actor, kind = 'dropoff' }) {
   const uid = Number(actor?.uid);
+  const k = PO_RECEIPT_KINDS.includes(kind) ? kind : 'dropoff';
   const rows = await db()`
-    INSERT INTO po_dropoff_receipts (po_id, r2_key, name, content_type, size_bytes, uploaded_by, uploaded_by_id, uploaded_role)
+    INSERT INTO po_dropoff_receipts (po_id, r2_key, name, content_type, size_bytes, uploaded_by, uploaded_by_id, uploaded_role, kind)
     VALUES (${poId}, ${key}, ${name || null}, ${contentType || null}, ${sizeBytes ?? null},
-            ${actor?.name || actor?.username || null}, ${Number.isInteger(uid) ? uid : null}, ${actor?.role || null})
-    RETURNING id, po_id, name, content_type, size_bytes, uploaded_by, uploaded_by_id, uploaded_role, uploaded_at`;
+            ${actor?.name || actor?.username || null}, ${Number.isInteger(uid) ? uid : null}, ${actor?.role || null}, ${k})
+    RETURNING id, po_id, kind, name, content_type, size_bytes, uploaded_by, uploaded_by_id, uploaded_role, uploaded_at`;
   return rows[0];
+}
+// File a receipt under the other kind. Nothing about the file changes; who moved it and when is kept.
+export async function movePoDropoffReceipt(id, kind, actor) {
+  if (!PO_RECEIPT_KINDS.includes(kind)) return null;
+  return (await db()`
+    UPDATE po_dropoff_receipts
+       SET kind = ${kind}, moved_by = ${actor?.name || actor?.username || null}, moved_role = ${actor?.role || null}, moved_at = now()
+     WHERE id = ${id} AND kind <> ${kind}
+    RETURNING id, po_id, kind`)[0] || null;
 }
 export async function removePoDropoffReceipt(id) {
   return (await db()`DELETE FROM po_dropoff_receipts WHERE id = ${id} RETURNING id, r2_key, name, po_id`)[0] || null;
@@ -5371,7 +5385,7 @@ export async function listPos({ uid, supplierScope }) {
         (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement')::int AS box_count,
         (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement'
            AND b.status = ANY(${LEFT_SUPPLIER_STATUSES}))::int AS shipped_count,
-        (SELECT count(*) FROM po_dropoff_receipts d WHERE d.po_id = p.id)::int AS dropoff_receipt_count,
+        (SELECT count(*) FROM po_dropoff_receipts d WHERE d.po_id = p.id AND d.kind = 'dropoff')::int AS dropoff_receipt_count,
         (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind = 'replacement')::int AS replacement_count,
         (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l
            LEFT JOIN po_boxes lb ON lb.id = l.po_box_id
@@ -5403,7 +5417,7 @@ export async function listPos({ uid, supplierScope }) {
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement')::int AS box_count,
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement'
          AND b.status = ANY(${LEFT_SUPPLIER_STATUSES}))::int AS shipped_count,
-      (SELECT count(*) FROM po_dropoff_receipts d WHERE d.po_id = p.id)::int AS dropoff_receipt_count,
+      (SELECT count(*) FROM po_dropoff_receipts d WHERE d.po_id = p.id AND d.kind = 'dropoff')::int AS dropoff_receipt_count,
       -- Replacements excluded here too, or the delivered count could exceed its own
       -- denominator (box_count counts originals) and "all delivered" would fire early.
       (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id AND b.kind <> 'replacement'
@@ -9707,7 +9721,7 @@ export async function listPosForCartLink(buyerUserId, limit = 40) {
            (p.created_at AT TIME ZONE 'America/New_York')::date::text AS created_on,
            (SELECT count(*) FROM po_boxes b WHERE b.po_id = p.id)::int AS boxes,
            (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = p.id)::int AS units,
-           (SELECT count(*) FROM po_dropoff_receipts d WHERE d.po_id = p.id)::int AS dropoffs,
+           (SELECT count(*) FROM po_dropoff_receipts d WHERE d.po_id = p.id AND d.kind = 'dropoff')::int AS dropoffs,
            (SELECT coalesce(array_agg(c.cart_code ORDER BY c.id), '{}') FROM buy_carts c WHERE c.po_id = p.id) AS requests
       FROM purchase_orders p
      WHERE p.supplier_user_id = ${buyerUserId} AND p.created_at > now() - interval '180 days'

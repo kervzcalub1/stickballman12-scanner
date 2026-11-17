@@ -1,4 +1,6 @@
-// Drop-off receipts on a purchase order, and the alert that asks for them.
+// Drop-off receipts on a purchase order, and the alert that asks for them. Since 2026-11-17 an order
+// holds TWO kinds of receipt (purchase + drop-off), each in its own lane, and a receipt filed in the
+// wrong one is moved — by anyone who can open the order.
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { signToken } from '../api/_lib/util.js';
@@ -161,7 +163,7 @@ test('on screen: PH sees it missing and can ask; a receipt clears the chip', asy
   await page.reload();
   await expect(panel).toContainText('dropoff.jpg');
   await expect(panel.getByRole('button', { name: 'Ask supplier' })).toHaveCount(0);
-  await expect(panel.getByRole('button', { name: 'Add another' })).toBeVisible();
+  await expect(panel.getByRole('button', { name: '+ Add drop-off receipt' })).toBeVisible();
   await page.goto(`/ph/po-status?q=${encodeURIComponent(a.code)}`);
   await expect(page.getByText(a.code).first()).toBeVisible();
   await expect(page.locator('.po-chip.dropoff-missing')).toHaveCount(0);
@@ -179,7 +181,7 @@ test('on screen: the supplier is asked to upload it, and can take theirs back bu
   await page.locator('.po-card', { hasText: a.code }).click();
   const panel = page.locator('.po-dropoff');
   await expect(panel).toContainText('Please upload it');
-  await expect(panel.getByRole('button', { name: 'Upload receipt' })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Upload drop-off receipt' })).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Ask supplier' })).toHaveCount(0);
 
   // Appears by itself, with no refresh: the team uploading it for them while they look.
@@ -188,6 +190,101 @@ test('on screen: the supplier is asked to upload it, and can take theirs back bu
   await expect(panel.locator('li', { hasText: 'mine.jpg' }).getByRole('button', { name: 'Remove' })).toBeVisible();
   await expect(panel.locator('li', { hasText: 'ours.jpg' })).toContainText('Our team');
   await expect(panel.locator('li', { hasText: 'ours.jpg' }).getByRole('button', { name: 'Remove' })).toHaveCount(0);
+});
+
+/* ------------------------- two kinds: purchase + drop-off ------------------------- */
+test('two kinds: moving is open to everyone on the order, keeps who moved it, and only a DROP-OFF receipt clears the chip', async ({ request }) => {
+  const { poId } = await order({ status: 'shipped', alerted: true });
+  const ours = Number((await receipt(poId, 'ph_team', null, 'store-receipt.jpg')).rows[0].id);
+  const move = (who, uid, id, kind, p = poId) => request.post('/api/po/dropoff', { headers: auth(who, uid), data: { poId: p, action: 'move', id, kind } });
+  const count = async () => Number((await pool.query(`SELECT count(*) FILTER (WHERE kind = 'dropoff') AS n FROM po_dropoff_receipts WHERE po_id = $1`, [poId])).rows[0].n);
+  // Everything already on file is a drop-off receipt.
+  expect((await pool.query('SELECT kind FROM po_dropoff_receipts WHERE id = $1', [ours])).rows[0].kind).toBe('dropoff');
+  // Not on the order: no. The warehouse: no part in it. A kind that doesn't exist, or another order's receipt: refused.
+  expect((await move('supplier', other, ours, 'purchase')).status()).toBe(403);
+  expect((await move('warehouse', undefined, ours, 'purchase')).status()).toBe(403);
+  expect((await move('ph_team', undefined, ours, 'invoice')).status()).toBe(400);
+  expect((await move('ph_team', undefined, ours, 'purchase', made.pos[0])).status()).toBe(404);
+  expect(await count()).toBe(1);
+  // The supplier may move even what OUR team uploaded (they can't remove it): nothing is lost by a move.
+  const r = await move('supplier', owner, ours, 'purchase');
+  expect(r.status()).toBe(200);
+  expect((await r.json()).dropoffReceipts.map((x) => x.kind)).toEqual(['purchase']);
+  const row = (await pool.query('SELECT kind, moved_by, moved_role, moved_at, r2_key FROM po_dropoff_receipts WHERE id = $1', [ours])).rows[0];
+  expect(row).toMatchObject({ kind: 'purchase', moved_by: 'E2E supplier', moved_role: 'supplier' });
+  expect(row.moved_at).toBeTruthy();
+  // A purchase receipt is not proof of a drop-off: the order still asks for one.
+  const po = (await (await request.get(`/api/po/get?id=${poId}`, { headers: auth('ph_team') })).json());
+  expect(po.dropoffReceipts[0]).toMatchObject({ kind: 'purchase', moved_by: 'E2E supplier' });
+  expect(await count()).toBe(0);
+  // Moving to where it already is changes nothing, and is not an error.
+  expect((await move('ph_team', undefined, ours, 'purchase')).status()).toBe(200);
+  expect((await pool.query('SELECT moved_by FROM po_dropoff_receipts WHERE id = $1', [ours])).rows[0].moved_by).toBe('E2E supplier');
+  // PH moves it back; the supplier is not told which of our staff did.
+  expect((await move('ph_team', undefined, ours, 'dropoff')).status()).toBe(200);
+  const theirs = await (await request.get(`/api/po/get?id=${poId}`, { headers: auth('supplier', owner) })).json();
+  expect(theirs.dropoffReceipts[0]).toMatchObject({ kind: 'dropoff', moved_by: 'Our team', uploaded_by: 'Our team' });
+  expect(await count()).toBe(1);
+});
+
+test('on screen: two lanes told apart; a receipt in the wrong one is moved with one press and put back with Undo', async ({ page }) => {
+  const a = await order({ status: 'shipped', alerted: true });
+  await receipt(a.poId, 'supplier', owner, 'footlocker-receipt.jpg');   // a store receipt, put in the drop-off box
+  await loginAs(page, 'ph_team');
+  await page.goto(`/ph/po-status?po=${a.poId}`);
+  const purchase = page.locator('[data-receipt-lane="purchase"]');
+  const dropoff = page.locator('[data-receipt-lane="dropoff"]');
+  // Each lane says who the paper is from and what it proves, and has its own upload button.
+  await expect(purchase).toContainText('Purchase receipt');
+  await expect(purchase).toContainText('From the store');
+  await expect(purchase).toContainText('What was bought and the price paid.');
+  await expect(dropoff).toContainText('From the courier');
+  await expect(dropoff).toContainText('Proof the boxes were handed over.');
+  await expect(purchase.getByRole('button', { name: 'Upload purchase receipt' })).toBeVisible();
+  await expect(purchase).toContainText('None yet');
+  await expect(purchase.locator('li')).toHaveCount(0);
+  await expect(dropoff.locator('li')).toHaveCount(1);
+  // Move it where it belongs.
+  await dropoff.getByRole('button', { name: 'Move footlocker-receipt.jpg to purchase receipts' }).click();
+  await expect(purchase.locator('li', { hasText: 'footlocker-receipt.jpg' })).toContainText('moved here by');
+  await expect(purchase.getByRole('status')).toContainText('footlocker-receipt.jpg moved here from drop-off receipts.');
+  await expect(dropoff.locator('li')).toHaveCount(0);
+  await expect(dropoff).toContainText('Not in yet');                      // the order still has no drop-off receipt
+  await expect(dropoff.getByRole('button', { name: 'Ask supplier' })).toBeVisible();
+  expect((await pool.query('SELECT kind FROM po_dropoff_receipts WHERE po_id = $1', [a.poId])).rows[0].kind).toBe('purchase');
+  // Undo puts it back.
+  await purchase.getByRole('button', { name: 'Undo' }).click();
+  await expect(dropoff.locator('li', { hasText: 'footlocker-receipt.jpg' })).toBeVisible();
+  await expect(purchase.locator('li')).toHaveCount(0);
+  await expect(dropoff.getByRole('status')).toContainText('is back under drop-off receipts');
+  await expect(dropoff.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+});
+
+test('on screen: the supplier has both lanes, can move any receipt on their order, and a phone fits', async ({ page }) => {
+  const a = await order({ status: 'shipped', alerted: true });
+  await receipt(a.poId, 'ph_team', null, 'ours.jpg');
+  const token = signToken({ uid: owner, username: `e2e_drp_a_${STAMP}`, name: 'E2E Drop', role: 'supplier' });
+  await page.addInitScript(([t, u]) => {
+    sessionStorage.setItem('sb_session_token', t);
+    sessionStorage.setItem('sb_user', u);
+  }, [token, JSON.stringify({ username: `e2e_drp_a_${STAMP}`, name: 'E2E Drop', role: 'supplier' })]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/orders');
+  await page.locator('.po-card', { hasText: a.code }).click();
+  const purchase = page.locator('[data-receipt-lane="purchase"]');
+  const dropoff = page.locator('[data-receipt-lane="dropoff"]');
+  await expect(purchase.getByRole('button', { name: 'Upload purchase receipt' })).toBeVisible();
+  // stacked on a phone: the purchase lane sits above the drop-off lane, and nothing runs off the side
+  const [pb, db] = [await purchase.boundingBox(), await dropoff.boundingBox()];
+  expect(db.y).toBeGreaterThan(pb.y + pb.height - 1);
+  const wide = await page.evaluate(() => [...document.querySelectorAll('.po-rcpts, .po-rcpts *')].filter((el) => el.getBoundingClientRect().right > window.innerWidth + 1).map((el) => el.className));
+  expect(wide).toEqual([]);
+  // ours can't be removed by them, but it can be moved
+  const row = dropoff.locator('li', { hasText: 'ours.jpg' });
+  await expect(row.getByRole('button', { name: 'Remove' })).toHaveCount(0);
+  await row.getByRole('button', { name: /Move ours.jpg to purchase receipts/ }).click();
+  await expect(purchase.locator('li', { hasText: 'ours.jpg' })).toContainText('moved here by E2E Drop');
+  await expect(dropoff).toContainText('Please upload it');
 });
 
 test('the Telegram link lands an admin on the order, with its receipt panel', async ({ page }) => {

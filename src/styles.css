@@ -2829,7 +2829,35 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .po-chip.kind { font-weight: 600; letter-spacing: 0.01em; }
 /* The shoes/boxes choice on the create + edit forms: full width inside its field label,
    above the sentence explaining what the choice changes. */
-.po-dropoff { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+/* Receipts on an order: two lanes that must never read as one (PoDropoffReceipts.jsx). Each differs
+   by name, picture, colour and a line saying who the paper is from; purchase = green (money),
+   drop-off = blue (the courier). Side by side on a desk, stacked on a phone. */
+.po-rcpts { margin: 12px 0; }
+.po-rcpts-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 8px; }
+.po-rcpts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.po-rcpt-lane { --lane: #5fc58a; --lane-bg: rgba(95,197,138,0.07); min-width: 0; padding: 12px; border: 1px solid var(--border); border-top: 3px solid var(--lane); border-radius: 10px; background: var(--lane-bg); }
+.po-rcpt-lane.po-dropoff { --lane: #6f9bff; --lane-bg: rgba(79,124,255,0.07); }
+.po-rcpt-lane.drag { border-color: var(--lane); background: color-mix(in srgb, var(--lane) 16%, transparent); }
+.po-rcpt-head { display: flex; gap: 10px; align-items: center; }
+.po-rcpt-pic { flex: 0 0 auto; width: 40px; height: 40px; padding: 4px; box-sizing: border-box; border-radius: 10px; color: var(--lane); background: color-mix(in srgb, var(--lane) 14%, transparent); }
+.po-rcpt-what { display: flex; flex-direction: column; min-width: 0; }
+.po-rcpt-title { font-size: 15px; }
+.po-rcpt-from { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--lane); }
+.po-rcpt-proves { font-size: 13px; }
+.po-rcpt-looks { margin: 8px 0; }
+.po-rcpt-lane .po-rcpt-upload { border-color: var(--lane); }
+.po-rcpt-lane .po-dropoff-list li { justify-content: space-between; padding: 8px 6px; margin: 0 -6px; border-radius: 6px; border-top: 1px solid var(--border); }
+.po-rcpt-file { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 160px; }
+.po-rcpt-row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.po-rcpt-fresh { animation: po-rcpt-fresh 4s ease-out; }
+@keyframes po-rcpt-fresh { 0%, 40% { background: color-mix(in srgb, var(--lane) 22%, transparent); } 100% { background: transparent; } }
+.po-rcpt-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 0; color: var(--text); overflow-wrap: anywhere; }
+.po-rcpt-undo { border-color: var(--lane); }
+@media (max-width: 768px) {
+  .po-rcpts-grid { grid-template-columns: minmax(0, 1fr); }
+  .po-rcpt-lane .btn { min-height: 40px; }
+  .po-rcpt-row-actions { flex: 1 1 100%; }
+}
 .po-dropoff-h { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .po-dropoff-actions { margin-left: auto; display: flex; gap: 6px; }
 .po-dropoff-list { list-style: none; margin: 8px 0 0; padding: 0; }
@@ -4050,7 +4078,7 @@ button.box-existing-size:hover { border-color: var(--primary); }
 .po-labels-note { color: #e0a878; margin: 8px 0 0; }
 /* Several labels PDFs on one order (labels bought in parts) + drop-off receipts: both take
    several files at once, dropped on the panel itself. */
-.po-labels-file.drag, .po-dropoff.drag { border-color: var(--primary); background: rgba(59,130,246,.10); }
+.po-labels-file.drag { border-color: var(--primary); background: rgba(59,130,246,.10); }
 .po-label-files { list-style: none; margin: 8px 0 0; padding: 0; }
 .po-label-files li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid var(--border); }
 .po-label-files li:first-child { border-top: 0; }

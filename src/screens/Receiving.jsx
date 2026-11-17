@@ -100,7 +100,7 @@ function OnlineMismatchAlert({ check }) {
         from {order.store}{order.order_number ? ` #${order.order_number}` : ''}. It’s recorded on the batch as an issue —
         count the order in so a missing pair becomes a refund to chase.
       </p>
-      {totals.missing > 0 && <ShortParcelTell order={order} totals={totals} />}
+      <ShortParcelTell order={order} summary={check.summary} />
       <a className="btn sm" href={`/online-orders?o=${order.id}`}>Open the order on Online Orders</a>
     </div>
   );
@@ -109,18 +109,23 @@ function OnlineMismatchAlert({ check }) {
 // A parcel that came short of its online order: the PH team got it on Telegram as a case, and
 // the floor still has to say it to them directly — WhatsApp, with the same photos — because
 // the claim against the store starts with that message (owner, 2026-11-18).
-function shortParcelMessage(order, totals) {
-  const short = totals.missing;
-  return `SHORT PARCEL: ${order.store}${order.order_number ? ` order #${order.order_number}` : ''} (${onlineOrderCode(order.id)}), tracking ${order.tracking_number || '—'}. `
-    + `Ordered ${totals.expected}, received ${totals.received}, short by ${short}. Photos of the label, the boxes and the packing slip are attached.`;
+function shortParcelMessage(order, summary) {
+  const t = summary.totals;
+  // Pairs that came but are not what was ordered: another shoe, another size, or one too many.
+  const wrong = summary.rows.filter((r) => r.state === 'unexpected' || r.state === 'over')
+    .map((r) => `${r.state === 'over' ? r.delta : r.received} × ${r.sku || '?'} US ${r.size}`);
+  const head = t.missing && wrong.length ? 'SHORT + WRONG PAIRS' : wrong.length ? 'WRONG PAIRS' : 'SHORT PARCEL';
+  return `${head}: ${order.store}${order.order_number ? ` order #${order.order_number}` : ''} (${onlineOrderCode(order.id)}), tracking ${order.tracking_number || '—'}. `
+    + `Ordered ${t.expected}, received ${t.received}${t.missing ? `, short by ${t.missing}` : ''}.`
+    + `${wrong.length ? ` Not on the order: ${wrong.join(', ')}.` : ''} Photos of the label, the boxes and the packing slip are attached.`;
 }
-function ShortParcelTell({ order, totals }) {
+function ShortParcelTell({ order, summary }) {
   const [copied, setCopied] = useState(false);
-  const msg = shortParcelMessage(order, totals);
+  const msg = shortParcelMessage(order, summary);
   return (
     <div className="oo-short-tell" role="note">
       <b>Tell the PH team on WhatsApp now.</b>
-      <span className="sm"> Send this message and the same photos you took (label, boxes, packing slip). They use them to claim the missing pair{totals.missing === 1 ? '' : 's'} from the store.</span>
+      <span className="sm"> Send this message and the same photos you took (label, boxes, packing slip). They use them to claim it from the store.</span>
       <p className="oo-short-msg">{msg}</p>
       <button type="button" className="btn sm" onClick={async () => { try { await navigator.clipboard.writeText(msg); setCopied(true); } catch { setCopied(false); } }}>
         {copied ? 'Copied ✓' : 'Copy the message'}
@@ -2149,10 +2154,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   const onlineCheck = activeOnlineOrder && !activeOnlineOrder.received_at && !isRescale && !isPoReceive
     ? onlineOrderCheck(activeOnlineOrder, items) : null;
   const onlineOff = onlineCheck && !onlineCheck.totals.clean ? { order: activeOnlineOrder, summary: onlineCheck } : null;
-  // Pairs missing against the order → the claim photos are required before this box is saved.
-  const claimNeeded = !!onlineOff && onlineOff.summary.totals.missing > 0;
+  // Pairs missing against the order, or pairs in the parcel that are not on it (wrong shoe,
+  // wrong size, one too many) → the claim photos are required before this box is saved.
+  const claimNeeded = !!onlineOff;
   const claimLeft = claimNeeded ? CLAIM_PHOTOS.filter((c) => !(claimPhotos[c.key] || []).length && !(c.key === 'slip' && noSlip)) : [];
-  const claimMissing = claimLeft.length ? `This parcel is short of its online order. Take the claim photo${claimLeft.length === 1 ? '' : 's'} first: ${claimLeft.map((c) => c.label.toLowerCase()).join('; ')}.` : '';
+  const claimMissing = claimLeft.length ? `This parcel doesn’t match its online order. Take the claim photo${claimLeft.length === 1 ? '' : 's'} first: ${claimLeft.map((c) => c.label.toLowerCase()).join('; ')}.` : '';
   // A box swap is deliberate (set aside for its box), not a shipment problem to record.
   const autoIssues = items.filter((i) => !i.withBox && !i.boxSwap)
     .flatMap((i) => i.sizes.map((s) => ({ key: `auto-${i.key}-${s.key}`, description: `${i.sku || '?'} ${s.size} — No box` })));
@@ -3282,9 +3288,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             <>
               {claimNeeded && (
                 <div className="card oo-claim" data-claim-left={claimLeft.length}>
-                  <h3 className="rows-title">Short parcel: photos for the claim <span className="muted">(required)</span></h3>
+                  <h3 className="rows-title">Parcel doesn’t match its order: photos for the claim <span className="muted">(required)</span></h3>
                   <p className="sm">
-                    <b>{onlineOff.summary.totals.missing} pair{onlineOff.summary.totals.missing === 1 ? '' : 's'} missing</b> against {onlineOrderCode(onlineOff.order.id)} · {onlineOff.order.store}
+                    <b>{[onlineOff.summary.totals.missing ? `${onlineOff.summary.totals.missing} pair${onlineOff.summary.totals.missing === 1 ? '' : 's'} missing` : null,
+                      onlineOff.summary.totals.extra ? `${onlineOff.summary.totals.extra} pair${onlineOff.summary.totals.extra === 1 ? '' : 's'} not on the order` : null].filter(Boolean).join(' · ')}</b> against {onlineOrderCode(onlineOff.order.id)} · {onlineOff.order.store}
                     {onlineOff.order.order_number ? ` #${onlineOff.order.order_number}` : ''}: {onlineOff.summary.totals.received} of {onlineOff.summary.totals.expected} came out of the parcel.
                     The PH team is told on Telegram when you submit. Take these now, while the parcel is still in front of you.
                   </p>
@@ -3304,7 +3311,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                       </div>
                     );
                   })}
-                  <ShortParcelTell order={onlineOff.order} totals={onlineOff.summary.totals} />
+                  <ShortParcelTell order={onlineOff.order} summary={onlineOff.summary} />
                 </div>
               )}
               {swapLines.length > 0 && (

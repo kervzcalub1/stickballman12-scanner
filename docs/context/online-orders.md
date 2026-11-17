@@ -206,14 +206,15 @@ parcels sends one "A shipment from order #… is on the way" email per parcel, w
 - **Only Shopify stores' shipping emails are read** (Shoe Palace). Nike, Foot Locker and Champs ship
   with emails in other shapes; their tracking numbers are still typed.
 
-## Short parcels: found, told, documented (2026-11-18)
+## Short or wrong parcels: found, told, documented (2026-11-18)
 Owner: a parcel that arrives with fewer pairs than its online order has to reach the team and be
 documented well enough to claim from the store (example: tracking 1Z16G27K0320615996, 4 ordered,
 3 in the batch).
 
 - **At the bench** (the order's number is known when the box is received): `onlineOrderCheck`
-  already says "N missing" on Review. Now, when pairs are **missing**, Step 4 shows **Short parcel:
-  photos for the claim (required)** — `CLAIM_PHOTOS` (`src/lib/onlineOrders.js`): the shipping label
+  already says "N missing" / "not on order" on Review. Now, when pairs are **missing OR pairs in
+  the parcel are not on the order** (wrong shoe, wrong size, one too many — owner, same day), Step 4
+  shows **Parcel doesn’t match its order: photos for the claim (required)** — `CLAIM_PHOTOS` (`src/lib/onlineOrders.js`): the shipping label
   with the tracking number, every shoe box that arrived in one picture, the packing slip / manifest
   ("There was no packing slip in the parcel" is the one way past that third photo). The box cannot be
   saved without them. They ride on the automatic `online_order` shipment issue (`photos`, and the
@@ -222,12 +223,16 @@ documented well enough to claim from the store (example: tracking 1Z16G27K032061
   ready message (store, order #, OO code, tracking, ordered / received / short by) and **Copy the
   message**. The app does not send WhatsApp; the person does, with the photos they just took.
 - **Telegram:** the issue opens an inbound-issues case as before (`inbound.issue_reported`); its
-  headline now reads **"Online order parcel SHORT by N (expected 4, got 3)"** (`issueHeadline`).
+  headline now reads **"Online order parcel SHORT by N (expected 4, got 3)"**, **"… has WRONG pairs"**,
+  or both (`issueHeadline`; wrong is read off the description's "not on the order" / "extra (").
 - **Found later** (`api/_lib/online-order-received.js`): a parcel is often received BEFORE its number
   reaches the order (the store's email fills it in afterwards). `compareOrderWithReceived(orderId)`:
   the delivery with that tracking number (`receivedForTracking`: a received box's own number first,
   then a committed batch's; supplier deliveries only) → pairs received vs pairs still expected.
-  **Short is by COUNT**, so a SKU typed differently on the order is not a missing pair. Short →
+  **Short is by COUNT** (fewer pairs out than ordered). **Wrong is by shoe**: the count is there but
+  a pair is not the code + size ordered, the bench's own rule (dashes/spaces dropped, numeric size) —
+  so an order whose SKU was typed differently from the box reads as wrong pairs here, as it does at
+  the bench. Either →
   one `online_order` shipment issue + case (source `online_order`, "Short by 1: 3 of 4 pairs…"),
   Telegram to PH, and a **warehouse job on the case** asking for the three claim photos and the
   WhatsApp message (`PHOTO_TASK`, the Warehouse to-do tab + `inbound.warehouse_task`).

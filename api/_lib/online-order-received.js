@@ -15,13 +15,11 @@ import { alertInboundIssuesReported, alertInboundWarehouseTask } from './alerts.
 import { onlineOrderCheck, onlineCheckText, isCancelled, orderCode, CLAIM_PHOTOS } from '../../src/lib/onlineOrders.js';
 
 export const SYSTEM = 'System (online order check)';
-export const PHOTO_TASK = `Short parcel, photos needed for the claim: ${CLAIM_PHOTOS.map((p) => p.label.toLowerCase()).join('; ')}. Add them to this case, send the same photos to the team on WhatsApp, then tap Done.`;
+export const PHOTO_TASK = `This parcel doesn’t match its online order, photos needed for the claim: ${CLAIM_PHOTOS.map((p) => p.label.toLowerCase()).join('; ')}. Add them to this case, send the same photos to the team on WhatsApp, then tap Done.`;
 
 /**
  * One online order: has its parcel been received, and with every pair?
- * -> { state: 'no_tracking' | 'not_received' | 'ok' | 'already' | 'short', short?, caseId? }
- * Short is by COUNT (fewer pairs out of the box than on the order): a SKU typed differently
- * on the order must not read as a missing pair. `io` swaps the outside world for the tests.
+ * -> { state: 'no_tracking' | 'not_received' | 'ok' | 'already' | 'short' | 'wrong', short?, wrong?, caseId? } `io` swaps the outside world for the tests.
  */
 export async function compareOrderWithReceived(orderId, { io = {} } = {}) {
   const x = {
@@ -39,13 +37,20 @@ export async function compareOrderWithReceived(orderId, { io = {} } = {}) {
   await x.mark(o.id);
   // Nothing still expected (all cancelled, or the warehouse already counted the order in and
   // split the missing pairs off): the refund side has it.
-  if (o.received_at || expected === 0 || received >= expected) return { state: 'ok', expected, received };
+  if (o.received_at || expected === 0) return { state: 'ok', expected, received };
+  const summary = onlineOrderCheck({ ...o, lines }, got.items.map((it) => ({ sku: it.sku, sizes: [{ size: it.size, qty: Number(it.qty) }] })));
+  // SHORT is by count (fewer pairs out of the box than on the order). WRONG is by shoe: the
+  // count is there, but a pair is not the code + size that was ordered — the same rule the
+  // bench uses (code with dashes and spaces dropped, numeric size).
+  const short = Math.max(0, expected - received);
+  const wrong = summary.totals.extra;
+  if (!short && !wrong) return { state: 'ok', expected, received };
   if (await x.flagged(got.batch_id)) return { state: 'already', expected, received };
 
-  const short = expected - received;
-  const summary = onlineOrderCheck({ ...o, lines }, got.items.map((it) => ({ sku: it.sku, sizes: [{ size: it.size, qty: Number(it.qty) }] })));
-  const description = `Short by ${short}: ${received} of ${expected} pair${expected === 1 ? '' : 's'} came out of the parcel with tracking ${o.tracking_number}. `
-    + `${onlineCheckText(o, summary)}. Found after receiving, when the tracking number reached ${orderCode(o.id)}.`;
+  const lead = short
+    ? `Short by ${short}: ${received} of ${expected} pair${expected === 1 ? '' : 's'} came out of the parcel with tracking ${o.tracking_number}.`
+    : `Wrong pairs: ${wrong} of the ${received} in the parcel with tracking ${o.tracking_number} ${wrong === 1 ? 'is' : 'are'} not what was ordered.`;
+  const description = `${lead} ${onlineCheckText(o, summary)}. Found after receiving, when the tracking number reached ${orderCode(o.id)}.`;
   const [rec] = await x.issue(got.batch_id, [{ type: 'online_order', description: description.slice(0, 1000), expectedCount: expected, receivedCount: received, photos: [] }], SYSTEM);
   const rows = await x.open({
     batchId: got.batch_id, boxId: got.box_id, by: SYSTEM, byUid: null, source: 'online_order',
@@ -57,7 +62,7 @@ export async function compareOrderWithReceived(orderId, { io = {} } = {}) {
     const withTask = await x.task(row.id, { actor: SYSTEM, task: PHOTO_TASK });
     if (withTask) x.alertTask(withTask, { id: null, name: 'The online order check' });
   }
-  return { state: 'short', short, expected, received, caseId: row ? Number(row.id) : null };
+  return { state: short ? 'short' : 'wrong', short, wrong, expected, received, caseId: row ? Number(row.id) : null };
 }
 
 // One at a time: a save, the email reader and the worker can all point at the same order.

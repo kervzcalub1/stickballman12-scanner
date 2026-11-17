@@ -269,6 +269,20 @@ test('received first, tracking number later: the short parcel is found, a case o
   const full = await mk({ tracking_number: T, allowDuplicateTracking: true, lines: [{ sku: S, size: '7.5', qty: 3, unit_price: 100 }] });
   expect(await compareOrderWithReceived(full)).toMatchObject({ state: 'ok', expected: 3, received: 3 });
 
+  // The right COUNT but not the shoe that was ordered: wrong pairs, a case as well.
+  const cleanUp = async (batchId) => {
+    await db.query(`DELETE FROM inbound_issues WHERE batch_id = $1`, [batchId]);
+    await db.query(`DELETE FROM shipment_issues WHERE batch_id = $1`, [batchId]);
+  };
+  const other = await mk({ tracking_number: T, allowDuplicateTracking: true, lines: [{ sku: S, size: '7.5', qty: 2, unit_price: 100 }, { sku: S, size: '9', qty: 1, unit_price: 100 }] });
+  const w = await compareOrderWithReceived(other);
+  expect(w).toMatchObject({ state: 'wrong', short: 0, wrong: 1, expected: 3, received: 3 });
+  const wc = (await db.query('SELECT * FROM inbound_issues WHERE id = $1', [w.caseId])).rows[0];
+  expect(wc.description).toContain('Wrong pairs: 1 of the 3 in the parcel');
+  expect(wc.description).toContain(`${S} US 7.5 extra (+1)`);
+  expect(issueHeadline({ scope: 'shipment', ...wc })).toContain('Online order parcel has WRONG pairs');
+  await cleanUp(cases[0].batch_id);
+
   // The warehouse sees the job on the case.
   const again = await compareOrderWithReceived(id);
   expect(again.state).toBe('short');

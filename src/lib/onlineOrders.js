@@ -125,12 +125,13 @@ export function receiptLink(o) {
   return { ...base, state: c.state === 'error' ? 'error' : 'not_found', retrying: !!c.next_at, checkedAt: c.checked_at || null, note: c.note || null };
 }
 
-// The photos a claim against the store needs when a parcel arrives short (owner, 2026-11-18):
+// The photos a claim against the store needs when a parcel arrives short or with the wrong
+// pairs in it (owner, 2026-11-18):
 // required at the bench before the box can be saved, and asked for on the case when the
 // shortage is found later. `key` rides in the photo's file name, so each can be told apart.
 export const CLAIM_PHOTOS = [
   { key: 'label', label: 'The shipping label with the tracking number', hint: 'Still on the parcel, the whole label readable.' },
-  { key: 'pairs', label: 'Every shoe box that arrived, in one picture', hint: 'So the count can be seen: all the boxes side by side.' },
+  { key: 'pairs', label: 'Every shoe box that arrived, in one picture', hint: 'All the boxes side by side, so the count can be seen. A wrong pair: its box label too (style code and size).' },
   { key: 'slip', label: 'The packing slip / manifest that came inside', hint: 'The paper the store packed with it.' },
 ];
 

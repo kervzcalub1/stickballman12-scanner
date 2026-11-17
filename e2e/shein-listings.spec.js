@@ -2533,6 +2533,23 @@ test.describe('SHEIN Listings — replace live photos: the planner (pure)', () =
     expect(plan.piecesKept).toBe(1);
     expect(planPhotoEdit({ spu: spu(), fill: {}, ip: imagePlan({}), images: conv }).plan.piecesKept).toBe(0);
   });
+  test('a size’s piece count and package type go back with its photo (HQ8717: “The number of pieces with sku is incomplete”)', async () => {
+    const { planPhotoEdit, imagePlan } = await import('../src/lib/sheinPublish.js');
+    const s = spu();
+    Object.assign(s.skcInfoList[0].skuInfoList[0], { quantity: 1, quantityType: 1, quantityUnit: 1, packageType: 3 });
+    Object.assign(s.skcInfoList[0].skuInfoList[1], { quantity: 1, quantityType: 1, quantityUnit: 1, packageType: 0 });
+    const { body, plan } = planPhotoEdit({ spu: s, fill: {}, ip: imagePlan({}), images: conv });
+    const [a, b] = body.skc_list[0].sku_list;
+    expect(a).toMatchObject({ sku_code: 'A', quantity_info: { quantity: 1, quantity_type: 1, quantity_unit: 1 }, package_type: 3 });
+    expect(b.quantity_info).toEqual({ quantity: 1, quantity_type: 1, quantity_unit: 1 });
+    expect(b).not.toHaveProperty('package_type');
+    expect(plan.skuPiecesKept).toBe(2);
+    // a shoe whose sizes carry no piece count (spu-info nulls): nothing is added
+    const plain = spu(); Object.assign(plain.skcInfoList[0].skuInfoList[0], { quantity: null, quantityType: null, quantityUnit: null });
+    const r = planPhotoEdit({ spu: plain, fill: {}, ip: imagePlan({}), images: conv });
+    for (const k of r.body.skc_list[0].sku_list) { expect(k).not.toHaveProperty('quantity_info'); expect(k).not.toHaveProperty('package_type'); }
+    expect(r.plan.skuPiecesKept).toBe(0);
+  });
   test('the body: the SKC list replaced whole (its group code, every photo NEW), every size’s photo → the new main, the SKC title kept; blockers when SHEIN’s data doesn’t allow it', async () => {
     const { planPhotoEdit, imagePlan } = await import('../src/lib/sheinPublish.js');
     const fill = { fill_in_standard_list: [{ field_key: 'skc_title', show: true, required: false }] };

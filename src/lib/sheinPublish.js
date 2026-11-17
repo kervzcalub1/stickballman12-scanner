@@ -246,6 +246,14 @@ function imageList(group, converted, photoCount) {
 // Every photo is NEW (no image_item_id). Never sent: is_spu_pic, prices, stock, sale attributes.
 // In: spu (raw spu-info), fill (the category's fill-in-standard), ip (imagePlan for THIS product:
 // imagePlan(fill) when it has SPU photos, else the old plan), images (convertPhotos) | null, attrs.
+// What SHEIN holds on a SKU that an edit naming that SKU must send back (left out = cleared): its piece
+// count and its package type. Only when SHEIN has them — a category without SKU pieces gets nothing.
+export function skuKept(k) {
+  const out = {};
+  if (k?.quantity != null && k.quantityType != null && k.quantityUnit != null) out.quantity_info = { quantity: Number(k.quantity), quantity_type: Number(k.quantityType), quantity_unit: Number(k.quantityUnit) };
+  if (Number(k?.packageType) > 0) out.package_type = Number(k.packageType);
+  return out;
+}
 export const asImageList = (x) => (Array.isArray(x) ? x : x ? [x] : []).filter((i) => i && (i.imageUrl || i.groupCode));
 export const spuHasSpuPhotos = (spu) => asImageList(spu?.spuImageInfoList).length > 0;
 export function planPhotoEdit({ spu, fill = null, fillUnread = false, ip, images = null, attrs = null }) {
@@ -299,8 +307,13 @@ export function planPhotoEdit({ spu, fill = null, fillUnread = false, ip, images
     plan.skcTitleCopied = true;
   }
   if (withImg) {
-    out.sku_list = skus.map((k, i) => ({ sku_code: String(k.skuCode), image_info: { image_group_code: skuImgs[i].groupCode, image_info_list: [{ image_sort: 1, image_type: 1, image_url: mainUrl }] } }));
+    // A SKU named in an edit loses what the edit leaves out. HQ8717's sizes carry a PIECE COUNT (1 piece,
+    // spu-info quantity / quantityType / quantityUnit) and the swap named them with only their photo, so
+    // SHEIN refused it: "The number of pieces with sku is incomplete" (#380, #385, #711 — the piece PHOTO
+    // above was never the cause: five shoes with one passed without it). Sent back exactly as SHEIN has it.
+    out.sku_list = skus.map((k, i) => ({ sku_code: String(k.skuCode), image_info: { image_group_code: skuImgs[i].groupCode, image_info_list: [{ image_sort: 1, image_type: 1, image_url: mainUrl }] }, ...skuKept(k) }));
     plan.skuImages = skus.length;
+    plan.skuPiecesKept = out.sku_list.filter((k) => k.quantity_info).length;
   }
   const body = { spu_name: spu.spuName, skc_list: [out] };
   if (spuPhotos.length) {

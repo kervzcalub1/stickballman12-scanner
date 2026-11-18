@@ -4,6 +4,7 @@
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { dbConfigured, getOnlineOrder, onlineOrderEvents, listOrderShipments, orderKey } from '../_lib/db.js';
 import { shapeOrder, idOf } from './_shared.js';
+import { trackKeys } from '../../src/lib/onlineOrders.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -21,11 +22,10 @@ export default async function handler(req, res) {
     // The parcels the store's shipping emails describe for this order number, and which
     // entry each one is on (by its tracking number).
     const ships = o.order_number ? await listOrderShipments(orderKey(o.order_number)) : [];
-    const key = (t) => String(t || '').replace(/\s+/g, '').toUpperCase();
     const parcels = ships.map((s) => ({
       tracking_number: s.tracking_number, carrier: s.carrier, status: s.status, emailed_at: s.emailed_at,
       pairs: (s.items || []).reduce((n, it) => n + (Number(it.qty) || 0), 0), items: s.items || [],
-      order_id: (o.same_order || []).find((x) => key(x.tracking_number) === s.tracking_key)?.id ?? null,
+      order_id: (o.same_order || []).find((x) => trackKeys(x.tracking_number).includes(s.tracking_key))?.id ?? null,
     }));
     return send(res, 200, { ok: true, order: shapeOrder(o), events, parcels });
   } catch (e) {

@@ -80,6 +80,36 @@ export function orderCosts(order, lines) {
 // "1Z 999 AA1…" pasted from an email and "1Z999AA1…" off a scanner are one parcel.
 export const trackKey = (t) => String(t || '').replace(/\s+/g, '').toUpperCase();
 
+// One order can come in several parcels, and the field is typed by hand: "A B", "A, B",
+// "A & B", "A / B", one per line. Kept as ONE number that way, the courier feed is sent
+// "AB" glued together and can read neither (2026-11-19). So the field is a LIST:
+//   splitTracking  -> each number by itself, upper case, no spaces, no repeats
+//   formatTracking -> how it is stored and shown: "A, B, C" (a comma between numbers)
+// A space is only a separator between two whole numbers (8+ characters each). Short groups
+// are one number read aloud ("1Z 3YY 408 03 2150 4891", "9400 1000 0000 …"), and UPS numbers
+// run together ("1Z…1Z…") are cut back into their 18 characters.
+export function splitTracking(raw) {
+  const out = [];
+  const seen = new Set();
+  const push = (n) => { const k = n.replace(/[^A-Z0-9]/g, ''); if (k && !seen.has(k)) { seen.add(k); out.push(n); } };
+  for (const piece of String(raw || '').toUpperCase().split(/[,;&|/\n\r\t]+|\bAND\b/)) {
+    const toks = piece.trim().split(/\s+/).filter(Boolean);
+    if (!toks.length) continue;
+    const bare = toks.join('');
+    if (/^(?:1Z[A-Z0-9]{16}){2,}$/.test(bare)) bare.match(/.{18}/g).forEach(push);
+    else if (toks.length > 1 && toks.some((t) => t.length >= 8)) {
+      // Whole numbers stand alone; short groups next to each other are one number's pieces.
+      let run = '';
+      for (const t of toks) { if (t.length >= 8) { if (run) push(run); run = ''; push(t); } else run += t; }
+      if (run) push(run);
+    } else push(bare);
+  }
+  return out;
+}
+export const formatTracking = (raw) => splitTracking(raw).join(', ');
+/** The whitespace-free keys of every number in the field. */
+export const trackKeys = (raw) => splitTracking(raw).map(trackKey);
+
 // What PH picks when cancelling. 'not_delivered' is never picked — it is written by the
 // warehouse's count ("ordered 5, delivered 3"), so it is labelled but not offered.
 export const CANCEL_REASONS = [['oot', 'Out of stock (OOT)'], ['other', 'Other']];

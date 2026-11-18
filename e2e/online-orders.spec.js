@@ -8,6 +8,7 @@ import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { signToken } from '../api/_lib/util.js';
 import { loginAs } from './helpers/auth.js';
+import { splitTracking, formatTracking } from '../src/lib/onlineOrders.js';
 
 const PH = { Authorization: `Bearer ${signToken({ uid: 'oo-ph', username: 'oo_ph', name: 'OO PH', role: 'ph_team' })}` };
 const WH = { Authorization: `Bearer ${signToken({ uid: 'oo-wh', username: 'oo_wh', name: 'OO Warehouse', role: 'warehouse' })}` };
@@ -162,6 +163,46 @@ test('who may do what, and one tracking number on two orders is caught', async (
   expect((await save(request, { store: STORE, tracking_number: track, allowDuplicateTracking: true, lines: [{ sku: 'OO-FFF-2', size: '9', qty: 1, unit_price: 50 }] })).ok()).toBeTruthy();
   // A line with no size is refused, not saved half-filled.
   expect((await save(request, { store: STORE, lines: [{ sku: 'OO-GGG-1', qty: 1, unit_price: 50 }] })).status()).toBe(400);
+});
+
+// 2026-11-19: "A B" typed in the tracking field was sent to the courier feed as "AB".
+test('several tracking numbers: split apart, stored with commas, each one finds the order', async ({ request }) => {
+  expect(splitTracking('1ZH93A300309747963 1Z16G26E0327829960')).toEqual(['1ZH93A300309747963', '1Z16G26E0327829960']);
+  expect(splitTracking('878319238130 & 384062743983')).toEqual(['878319238130', '384062743983']);
+  expect(splitTracking('384060828229,D10017766803829')).toEqual(['384060828229', 'D10017766803829']);
+  // Glued together (how they used to reach the feed) comes apart again.
+  expect(splitTracking('1Z16G2D703382123721Z16G18R0329070716')).toEqual(['1Z16G2D70338212372', '1Z16G18R0329070716']);
+  // ONE number read aloud is still one number.
+  expect(splitTracking('1Z 3YY 408 03 2150 4891')).toEqual(['1Z3YY4080321504891']);
+  expect(splitTracking('9400 1000 0000 0000 0000 00')).toEqual(['9400100000000000000000']);
+  expect(formatTracking('a1234567\nb1234567; A1234567')).toBe('A1234567, B1234567');
+
+  const n = String(Date.now()).slice(-9);
+  const [a, b, c] = [`E2EOOA${n}`, `E2EOOB${n}`, `E2EOOC${n}`];
+  const lines = [{ sku: 'OO-MULTI-1', size: '9', qty: 3, unit_price: 100 }];
+  const r = await save(request, { store: STORE, order_number: `M-${n}`, tracking_number: `${a.toLowerCase()} ${b} & ${c}`, lines });
+  expect(r.ok(), await r.text()).toBeTruthy();
+  const { id } = await r.json();
+  expect((await get(request, id)).order.tracking_number).toBe(`${a}, ${b}, ${c}`);
+  // Receiving scans ONE parcel: any of the three is this order.
+  for (const t of [a, b, c]) {
+    const hit = await (await request.get(`/api/online-orders/by-tracking?t=${t}`, { headers: WH })).json();
+    expect(hit.order?.id, t).toBe(id);
+  }
+  expect((await (await request.get(`/api/online-orders/by-tracking?t=${a}${b}`, { headers: WH })).json()).order).toBeNull();
+  // One of them on another order is still the duplicate.
+  const dup = await save(request, { store: STORE, tracking_number: `E2EOOZ${n}, ${b}`, lines });
+  expect(dup.status()).toBe(409);
+  expect((await dup.json()).error).toContain(b);
+  // Expected This Week and Undelivered: a row per parcel, the order's pairs counted once.
+  const exp = (await (await request.get('/api/expected', { headers: WH })).json()).online.filter((o) => Number(o.order_id) === id);
+  expect(exp.map((o) => o.tracking_number)).toEqual([a, b, c]);
+  expect(exp.reduce((s, o) => s + (o.pairs || 0), 0)).toBe(3);
+  const und = (await (await request.get('/api/undelivered', { headers: PH })).json()).rows.filter((x) => x.source === 'online' && Number(x.ref_id) === id);
+  expect(und.map((x) => x.tracking_number).sort()).toEqual([a, b, c]);
+  // Too many to hold is refused, never cut short.
+  const many = Array.from({ length: 30 }, (_, i) => `E2EOOLONG${n}${String(i).padStart(4, '0')}`).join(' ');
+  expect((await save(request, { store: STORE, tracking_number: many, lines })).status()).toBe(400);
 });
 
 test('the page: PH records an order and sees each pair’s actual cost as it types', async ({ page }) => {

@@ -44,7 +44,8 @@ export function feedStatus(row) {
   return { label: sub || 'In transit', tone: tone === 'bad' ? 'bad' : 'info', key: 'transit' };
 }
 
-export const rowKey = (r) => `${r.source}:${r.ref_id}`;
+// An online order with several tracking numbers is one row per parcel.
+export const rowKey = (r) => `${r.source}:${r.ref_id}${Number(r.parcel) > 1 ? `:${r.parcel}` : ''}`;
 export const courierOf = (r) => carrierName(courierKeyFor(r.tracking_number, r.carrier_key || r.carrier)) || '';
 export const codeOf = (r) => (r.source === 'online' ? orderCode(r.order_id) : r.order_code || '');
 

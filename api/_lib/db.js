@@ -5191,21 +5191,26 @@ export async function listInboundBoxes() {
 // least one pair not cancelled. The parcel's row is matched on the whitespace-free number.
 export async function listExpectedOnlineOrders() {
   return db()`
-    SELECT o.id AS order_id, o.store, o.order_number, o.tracking_number,
+    SELECT o.id AS order_id, o.store, o.order_number, btrim(n.raw) AS tracking_number,
+           coalesce(n.ord, 1)::int AS parcel,
            t.carrier, t.tracking_status, t.tracking_sub_status,
            to_char(t.eta_from, 'YYYY-MM-DD') AS eta_from, to_char(t.eta_to, 'YYYY-MM-DD') AS eta_to,
            -- No scan yet counts from when the carrier was told about it, or else the order.
            coalesce((t.tracking_events -> 0 ->> 'time')::timestamptz, t.checked_at, t.registered_at, o.created_at) AS last_move_at,
            (t.tracking_events -> 0 ->> 'location') AS last_location,
-           (SELECT coalesce(sum(l.qty), 0) FROM online_order_lines l
-             WHERE l.order_id = o.id AND l.cancelled_at IS NULL)::int AS pairs
+           -- The order's pairs are counted once, on its first parcel: which pairs ride in
+           -- which parcel is not known for a hand-typed list.
+           CASE WHEN coalesce(n.ord, 1) = 1 THEN (SELECT coalesce(sum(l.qty), 0) FROM online_order_lines l
+             WHERE l.order_id = o.id AND l.cancelled_at IS NULL)::int END AS pairs
       FROM online_orders o
+      -- One row per PARCEL: the field is a comma-separated list (splitTracking).
+      LEFT JOIN LATERAL unnest(string_to_array(nullif(btrim(o.tracking_number), ''), ',')) WITH ORDINALITY AS n(raw, ord) ON true
       LEFT JOIN shipment_tracking t
         ON regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')
-         = regexp_replace(upper(o.tracking_number), '[^A-Z0-9]', '', 'g')
+         = regexp_replace(upper(n.raw), '[^A-Z0-9]', '', 'g')
      WHERE o.received_at IS NULL
        AND EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL)
-     ORDER BY o.created_at DESC`;
+     ORDER BY o.created_at DESC, n.ord`;
 }
 
 // One style's pairs that haven't reached the warehouse, read raw for `src/lib/notHere.js`, which
@@ -5287,12 +5292,14 @@ export async function listExpectedShipments() {
 // months ago costs quota and tells nobody anything now.
 export async function listUnregisteredOnlineTracking(limit = 40) {
   const rows = await db()`
-    SELECT DISTINCT o.tracking_number
+    SELECT DISTINCT btrim(n.raw) AS tracking_number
       FROM online_orders o
+      -- Each number of the list by itself: the feed cannot read two as one.
+      CROSS JOIN LATERAL unnest(string_to_array(o.tracking_number, ',')) AS n(raw)
       LEFT JOIN shipment_tracking t
         ON regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')
-         = regexp_replace(upper(o.tracking_number), '[^A-Z0-9]', '', 'g')
-     WHERE o.received_at IS NULL AND coalesce(btrim(o.tracking_number), '') <> ''
+         = regexp_replace(upper(n.raw), '[^A-Z0-9]', '', 'g')
+     WHERE o.received_at IS NULL AND length(regexp_replace(n.raw, '[^A-Za-z0-9]', '', 'g')) >= 8
        AND o.created_at > now() - interval '60 days'
        AND t.registered_at IS NULL
        AND EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL)
@@ -9019,7 +9026,7 @@ export async function openOnlineOrdersByTracking(numbers) {
     SELECT o.id, o.store, o.order_number, o.tracking_number, o.created_by,
            COALESCE(SUM(l.qty) FILTER (WHERE l.cancelled_at IS NULL), 0)::int AS pairs
       FROM online_orders o LEFT JOIN online_order_lines l ON l.order_id = o.id
-     WHERE regexp_replace(upper(o.tracking_number), '[^A-Z0-9]', '', 'g') = ANY(${nums.map(deliveryKey)})
+     WHERE string_to_array(regexp_replace(upper(coalesce(o.tracking_number, '')), '[^A-Z0-9,]', '', 'g'), ',') && ${nums.map(deliveryKey)}::text[]
        AND o.received_at IS NULL
      GROUP BY o.id`;
 }
@@ -10133,11 +10140,12 @@ export async function onlineOrderEvents(orderId) {
 
 // Another order already under this tracking number (spaces/case ignored), if any.
 export async function onlineOrderByTracking(tracking, exceptId = null) {
-  const key = String(tracking || '').replace(/\s+/g, '').toUpperCase();
+  const key = String(tracking || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!key) return null;
+  // Any ONE of the order's numbers: the field is a comma-separated list.
   const r = await db()`
     SELECT id, store, order_number FROM online_orders
-     WHERE upper(regexp_replace(tracking_number, '[[:space:]]', '', 'g')) = ${key}
+     WHERE ${key} = ANY(string_to_array(regexp_replace(upper(coalesce(tracking_number, '')), '[^A-Z0-9,]', '', 'g'), ','))
        AND (${exceptId}::bigint IS NULL OR id <> ${exceptId})
      ORDER BY created_at DESC
      LIMIT 1`;
@@ -13319,7 +13327,7 @@ export async function listUndeliveredTracking({ days = null } = {}) {
              NULL::text AS order_number,
              to_char(p.created_at AT TIME ZONE 'America/New_York', 'YYYY-MM-DD') AS ordered_on,
              (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_box_id = b.id)::int AS pairs,
-             true AS has_feed
+             true AS has_feed, 1 AS parcel
         FROM po_boxes b
         JOIN purchase_orders p ON p.id = b.po_id
         LEFT JOIN shipment_tracking t
@@ -13329,7 +13337,7 @@ export async function listUndeliveredTracking({ days = null } = {}) {
          AND b.status <> 'delivered'
     ),
     oo AS (
-      SELECT 'online'::text AS source, o.id AS ref_id, o.tracking_number, t.carrier, t.carrier_key,
+      SELECT 'online'::text AS source, o.id AS ref_id, btrim(n.raw) AS tracking_number, t.carrier, t.carrier_key,
              o.created_at AS added_at, NULL::timestamptz AS shipped_at,
              t.tracking_status, t.tracking_sub_status, t.tracking_sub_status_descr AS tracking_detail, t.last_checkpoint,
              coalesce((t.tracking_events -> 0 ->> 'time')::timestamptz, t.checked_at) AS last_move_at,
@@ -13338,14 +13346,16 @@ export async function listUndeliveredTracking({ days = null } = {}) {
              o.id AS order_id, NULL::text AS order_code, o.store AS party,
              NULL::text AS order_status, o.order_number,
              to_char(o.ordered_on, 'YYYY-MM-DD') AS ordered_on,
-             (SELECT coalesce(sum(l.qty), 0) FROM online_order_lines l
-               WHERE l.order_id = o.id AND l.cancelled_at IS NULL)::int AS pairs,
-             (t.tracking_number IS NOT NULL) AS has_feed
+             CASE WHEN n.ord = 1 THEN (SELECT coalesce(sum(l.qty), 0) FROM online_order_lines l
+               WHERE l.order_id = o.id AND l.cancelled_at IS NULL)::int END AS pairs,
+             (t.tracking_number IS NOT NULL) AS has_feed, n.ord::int AS parcel
         FROM online_orders o
+        -- One row per parcel: the order's field is a comma-separated list.
+        CROSS JOIN LATERAL unnest(string_to_array(o.tracking_number, ',')) WITH ORDINALITY AS n(raw, ord)
         LEFT JOIN shipment_tracking t
           ON regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')
-           = regexp_replace(upper(o.tracking_number), '[^A-Z0-9]', '', 'g')
-       WHERE coalesce(btrim(o.tracking_number), '') <> ''
+           = regexp_replace(upper(n.raw), '[^A-Z0-9]', '', 'g')
+       WHERE btrim(n.raw) <> ''
          AND o.received_at IS NULL
          AND EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL)
     )
@@ -13384,7 +13394,7 @@ export async function markTrackingDelivered(trackingNumber, { by, on, note } = {
      WHERE regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g') = ${key}`;
   const online = await sql`
     SELECT id FROM online_orders
-     WHERE regexp_replace(upper(tracking_number), '[^A-Z0-9]', '', 'g') = ${key}`;
+     WHERE ${key} = ANY(string_to_array(regexp_replace(upper(coalesce(tracking_number, '')), '[^A-Z0-9,]', '', 'g'), ','))`;
   if (!t && !boxes.length && !online.length) return { error: 'unknown' };
   const prev = {
     tracking: t ? { status: t.tracking_status, sub: t.tracking_sub_status, descr: t.tracking_sub_status_descr, checkpoint: t.last_checkpoint } : null,
@@ -13460,11 +13470,9 @@ export async function listManualDelivered({ days = null } = {}) {
              WHERE regexp_replace(upper(b.tracking_number), '[^A-Z0-9]', '', 'g')
                  = regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')) AS suppliers,
            (SELECT array_agg(o.id::int ORDER BY o.id) FROM online_orders o
-             WHERE regexp_replace(upper(o.tracking_number), '[^A-Z0-9]', '', 'g')
-                 = regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')) AS online_ids,
+             WHERE regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g') = ANY(string_to_array(regexp_replace(upper(coalesce(o.tracking_number, '')), '[^A-Z0-9,]', '', 'g'), ','))) AS online_ids,
            (SELECT string_agg(DISTINCT o.store, ', ') FROM online_orders o
-             WHERE regexp_replace(upper(o.tracking_number), '[^A-Z0-9]', '', 'g')
-                 = regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g')) AS stores
+             WHERE regexp_replace(upper(t.tracking_number), '[^A-Z0-9]', '', 'g') = ANY(string_to_array(regexp_replace(upper(coalesce(o.tracking_number, '')), '[^A-Z0-9,]', '', 'g'), ','))) AS stores
       FROM shipment_tracking t
      WHERE t.manual_at IS NOT NULL
        AND (${d}::int IS NULL OR t.manual_at >= now() - make_interval(days => ${d}::int))
@@ -13815,7 +13823,7 @@ const INBOUND_ISSUE_FROM = `
   LEFT JOIN LATERAL (
     SELECT o.id, o.store, o.order_number FROM online_orders o
      WHERE o.tracking_number IS NOT NULL
-       AND o.tracking_number = coalesce(bx.tracking_number, b.tracking_number, ii.tracking_number)
+       AND nullif(regexp_replace(upper(coalesce(bx.tracking_number, b.tracking_number, ii.tracking_number)), '[^A-Z0-9]', '', 'g'), '') = ANY(string_to_array(regexp_replace(upper(coalesce(o.tracking_number, '')), '[^A-Z0-9,]', '', 'g'), ','))
      ORDER BY o.id DESC LIMIT 1) oo ON true`;
 const inboundRow = (r) => (r ? {
   ...r,

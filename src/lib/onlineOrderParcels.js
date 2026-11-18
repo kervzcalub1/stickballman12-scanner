@@ -13,7 +13,7 @@
 // and anything else is left for a person, listed as not placed. It never touches an order
 // the warehouse counted in, an order that already has a tracking number, or a cancelled pair.
 import { sizeNum } from './codes.js';
-import { trackKey, isCancelled } from './onlineOrders.js';
+import { trackKey, trackKeys, isCancelled } from './onlineOrders.js';
 
 const r2 = (n) => Math.round(n * 100) / 100;
 const sizeKey = (s) => { const n = sizeNum(s); return Number.isNaN(n) ? String(s ?? '').trim().toUpperCase() : String(n); };
@@ -67,7 +67,8 @@ function take(order, items) {
  *   { kind:'carve', orderId, lineIds, lineQtys, tracking, lines, rest, money:{ parcel, rest } }
  */
 export function planParcels(orders, shipments, skip = new Set()) {
-  const on = new Set(orders.map((o) => trackKey(o.tracking_number)).filter(Boolean));
+  // An order typed with several numbers ("A, B") already has each of them.
+  const on = new Set(orders.flatMap((o) => trackKeys(o.tracking_number)));
   const todo = (shipments || []).filter((s) => trackKey(s.tracking) && !on.has(trackKey(s.tracking)) && !skip.has(trackKey(s.tracking)));
   const open = orders.filter((o) => !trackKey(o.tracking_number) && !o.received_at && pairs(active(o)) > 0)
     .sort((a, b) => Number(a.id) - Number(b.id));

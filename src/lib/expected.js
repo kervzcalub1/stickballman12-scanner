@@ -100,7 +100,7 @@ export function expectedDashboard({ boxes = [], online = [] } = {}, today, now =
     ...b, pairs: b.box_units, code: b.po_code, id: `box-${b.box_id}`,
   }));
   const fromStores = online.map((o) => ({
-    ...o, code: o.order_number || `Order ${o.order_id}`, id: `order-${o.order_id}`,
+    ...o, code: o.order_number || `Order ${o.order_id}`, id: `order-${o.order_id}-${o.parcel || 1}`,
   }));
   return {
     suppliers: group(fromSuppliers, (b) => b.supplier_name, today, now),

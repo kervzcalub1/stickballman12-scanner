@@ -23,7 +23,7 @@ import { matchManifestRow, manifestSummary } from '../lib/manifestScan.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES, issueTypeLabel } from '../lib/constants.js';
 import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
 import { costOrNull, poLineMoney, landedFromShelf, unitCost } from '../lib/costs.js';
-import { onlineLineFor, orderCode as onlineOrderCode, onlineOrderCheck, onlineCheckText, CLAIM_PHOTOS } from '../lib/onlineOrders.js';
+import { onlineLineFor, orderCode as onlineOrderCode, onlineOrderCheck, onlineCheckText, CLAIM_PHOTOS, splitTracking } from '../lib/onlineOrders.js';
 import { estToday } from '../lib/format.js';
 import { declaresPerBox, trackKey } from '../lib/postatus.js';
 
@@ -2153,7 +2153,11 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // "saved" window. Not once the order has been counted in (that box is already settled).
   const onlineCheck = activeOnlineOrder && !activeOnlineOrder.received_at && !isRescale && !isPoReceive
     ? onlineOrderCheck(activeOnlineOrder, items) : null;
-  const onlineOff = onlineCheck && !onlineCheck.totals.clean ? { order: activeOnlineOrder, summary: onlineCheck } : null;
+  // An order with several tracking numbers comes in several parcels: the pairs not in THIS
+  // one are in the others, not missing. Only a pair that is not on the order is off.
+  const onlineParcels = activeOnlineOrder ? splitTracking(activeOnlineOrder.tracking_number).length : 0;
+  const onlineOff = onlineCheck && !onlineCheck.totals.clean && (onlineParcels < 2 || onlineCheck.totals.extra > 0)
+    ? { order: activeOnlineOrder, summary: onlineCheck } : null;
   // Pairs missing against the order, or pairs in the parcel that are not on it (wrong shoe,
   // wrong size, one too many) → the claim photos are required before this box is saved.
   const claimNeeded = !!onlineOff;
@@ -4148,12 +4152,13 @@ function BatchList({ kind, onOpenItem, onSignOut }) {
 function OnlineOrderBanner({ order }) {
   const coming = (order.lines || []).filter((l) => !l.cancelled_at);
   const pairs = coming.reduce((n, l) => n + Number(l.qty || 0), 0);
+  const parcels = splitTracking(order.tracking_number).length;
   return (
     <div className="oo-recv-banner" role="status">
       <b>Online order {onlineOrderCode(order.id)}</b> · {order.store}{order.order_number ? ` #${order.order_number}` : ''}
       {order.received_at ? <span className="oo-recv-done"> · already counted in</span> : null}
       <div className="muted sm">
-        Should hold {pairs} pair{pairs === 1 ? '' : 's'}: {coming.map((l) => `${l.sku} US ${l.size}${l.qty > 1 ? ` ×${l.qty}` : ''}`).join(' · ') || '—'}.
+        {parcels > 1 ? `Comes in ${parcels} parcels. Together they hold` : 'Should hold'} {pairs} pair{pairs === 1 ? '' : 's'}: {coming.map((l) => `${l.sku} US ${l.size}${l.qty > 1 ? ` ×${l.qty}` : ''}`).join(' · ') || '—'}.
         {' '}Each pair’s cost comes from the order (after coupon, tax, shipping, gift card and cashback).
         {!order.received_at && ' Count it in on Online Orders once the box is checked.'}
       </div>

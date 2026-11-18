@@ -12,7 +12,7 @@ import {
   insertIssues, openInboundIssues, setInboundWarehouseTask, dbConfigured, receiveOnlineOrder, resetOnlineOrderCompareOnce,
 } from './db.js';
 import { alertInboundIssuesReported, alertInboundWarehouseTask, alertOnlineOrderArrived } from './alerts.js';
-import { onlineOrderCheck, onlineCheckText, isCancelled, orderCode, CLAIM_PHOTOS, lineKey, nearCode } from '../../src/lib/onlineOrders.js';
+import { onlineOrderCheck, onlineCheckText, isCancelled, orderCode, CLAIM_PHOTOS, lineKey, nearCode, splitTracking } from '../../src/lib/onlineOrders.js';
 
 export const SYSTEM = 'System (online order check)';
 // Who counted an order in when nobody pressed "Count it in": the delivery itself.
@@ -72,6 +72,9 @@ export async function compareOrderWithReceived(orderId, { io = {} } = {}) {
   };
   const o = await x.order(orderId);
   if (!o || !String(o.tracking_number || '').trim()) return { state: 'no_tracking' };
+  // Several numbers = several parcels: one of them landing is not the whole order, and
+  // calling the rest "not delivered" would be wrong. Left for a person to count in.
+  if (splitTracking(o.tracking_number).length > 1) return { state: 'several_parcels' };
   const raw = await x.received(o.tracking_number);
   if (!raw) return { state: 'not_received' };
   const lines = (o.lines || []).map((l) => ({ ...l, qty: Number(l.qty) }));

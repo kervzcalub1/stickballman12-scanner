@@ -9,12 +9,15 @@ import { dbConfigured, createOnlineOrder, updateOnlineOrder, getOnlineOrder, onl
 import { actorOf, MAX_MONEY, realDate } from './_shared.js';
 import { claimForTracking } from '../_lib/db.js';
 import { registerWarehouseTracking, normalizeTrackingNumber } from '../_lib/tracking.js';
-import { orderCode, orderCosts } from '../../src/lib/onlineOrders.js';
+import { orderCode, orderCosts, splitTracking, formatTracking } from '../../src/lib/onlineOrders.js';
 import { orderNumberSet } from '../_lib/online-order-receipts.js';
 import { orderNumberSetForParcels } from '../_lib/online-order-shipments.js';
 import { orderKey } from '../_lib/db.js';
 import { compareOrdersSoon } from '../_lib/online-order-received.js';
 
+// Room for a dozen parcels. Over it the save is REFUSED, never cut: a number cut short is a
+// number nobody can track (the old 60-character cap did exactly that to a 4th parcel).
+const TRACKING_MAX = 400;
 const text = (v, max) => { const t = String(v ?? '').trim().slice(0, max); return t || null; };
 // Money: blank is 0 here — a coupon or shipping nobody typed is genuinely none. Negative
 // or non-numeric is refused rather than quietly zeroed.
@@ -38,13 +41,15 @@ export default async function handler(req, res) {
   const o = {
     store: text(b.store, 120),
     order_number: text(b.order_number, 80),
-    tracking_number: text(b.tracking_number, 60),
+    // A list: one number per parcel, stored with a comma between them (splitTracking).
+    tracking_number: text(formatTracking(String(b.tracking_number ?? '').slice(0, 2000)), 2000),
     ordered_on: realDate(b.ordered_on),
     coupon: money(b.coupon), tax: money(b.tax), shipping: money(b.shipping),
     gc_pct: money(b.gc_pct), cashback_pct: money(b.cashback_pct),
     note: text(b.note, 1000),
   };
   if (!o.store) return send(res, 400, { ok: false, error: 'Which store was it bought from?' });
+  if ((o.tracking_number || '').length > TRACKING_MAX) return send(res, 400, { ok: false, error: 'That is too many tracking numbers for one order. Split the order into one entry per parcel.' });
   if (b.ordered_on && !o.ordered_on) return send(res, 400, { ok: false, error: 'That order date isn’t a real date.' });
   for (const k of ['coupon', 'tax', 'shipping', 'gc_pct', 'cashback_pct']) {
     if (Number.isNaN(o[k])) return send(res, 400, { ok: false, error: `The ${k === 'gc_pct' ? 'gift card discount' : k === 'cashback_pct' ? 'cashback' : k} has to be a number from 0 to ${MAX_MONEY.toLocaleString('en-US')}.` });
@@ -88,19 +93,23 @@ export default async function handler(req, res) {
     if (before?.received_at && lines.reduce((n, l) => n + l.qty, 0) !== (before.lines || []).filter((l) => !l.cancelled_at).reduce((n, l) => n + Number(l.qty), 0)) {
       return send(res, 409, { ok: false, error: 'The warehouse already counted this order in — the number of pairs can’t change now. Cancel a line instead.' });
     }
-    if (o.tracking_number && !b.allowDuplicateTracking) {
-      const dup = await onlineOrderByTracking(o.tracking_number, id);
-      if (dup) {
-        return send(res, 409, {
-          ok: false, duplicate: { id: Number(dup.id), store: dup.store, order_number: dup.order_number },
-          error: `${orderCode(dup.id)} (${dup.store}) already has this tracking number.`,
-        });
+    const numbers = splitTracking(o.tracking_number);
+    if (numbers.length && !b.allowDuplicateTracking) {
+      for (const n of numbers) {
+        const dup = await onlineOrderByTracking(n, id);
+        if (dup) {
+          return send(res, 409, {
+            ok: false, duplicate: { id: Number(dup.id), store: dup.store, order_number: dup.order_number },
+            error: `${orderCode(dup.id)} (${dup.store}) already has ${numbers.length > 1 ? `tracking number ${n}` : 'this tracking number'}.`,
+          });
+        }
       }
     }
-    // Tell the courier feed, so the parcel gets a status and an arrival estimate. After the
-    // response is decided, never in its way; a number already registered costs nothing.
-    if (o.tracking_number) {
-      registerWarehouseTracking([normalizeTrackingNumber(o.tracking_number)], { claim: claimForTracking, label: 'online-orders/save' })
+    // Tell the courier feed, so each parcel gets a status and an arrival estimate: every
+    // number BY ITSELF, never the field as one string. After the response is decided, never
+    // in its way; a number already registered costs nothing.
+    if (numbers.length) {
+      registerWarehouseTracking(numbers.map(normalizeTrackingNumber), { claim: claimForTracking, label: 'online-orders/save' })
         .catch((e) => console.warn('[online-orders/save] register:', e.message));
     }
     const actor = actorOf(user);

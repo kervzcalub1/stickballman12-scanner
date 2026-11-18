@@ -20,6 +20,7 @@ import { useQueryParam } from '../lib/urlstate.js';
 import { estToday, estCivilFromYmd, PH_DATE, PH_DATETIME } from '../lib/format.js';
 import {
   orderCosts, orderCode, orderStage, STAGE_LABEL, CANCEL_REASONS, REASON_LABEL, REFUND_STATES, needsFollowUp, isCancelled,
+  splitTracking, formatTracking,
 } from '../lib/onlineOrders.js';
 
 const money = (v) => (v == null || Number.isNaN(Number(v)) ? '—' : `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
@@ -209,7 +210,7 @@ function OrderDetail({ id, canEdit, canReceive, isAdmin, onSignOut, onBack, onEd
         <div className="oo-facts">
           <span><span className="muted xs">Order #</span> {o.order_number || '—'}</span>
           <span><span className="muted xs">Ordered</span> {dateOf(o.ordered_on)}</span>
-          <span><span className="muted xs">Tracking</span> {o.tracking_number ? <TrackingLink number={o.tracking_number} /> : <i className="muted">none yet</i>}</span>
+          <span><span className="muted xs">Tracking</span> {o.tracking_number ? splitTracking(o.tracking_number).map((n, i) => <React.Fragment key={n}>{i > 0 && ', '}<TrackingLink number={n} /></React.Fragment>) : <i className="muted">none yet</i>}</span>
           {o.received_at && <span><span className="muted xs">Counted in</span> {when(o.received_at)}{o.received_by ? ` · ${o.received_by}` : ''}</span>}
           <span><span className="muted xs">Recorded by</span> {o.created_by || '—'}</span>
         </div>
@@ -540,10 +541,11 @@ function OrderForm({ initial, onCancel, onSaved, onSignOut }) {
       <div className="oo-form-grid">
         <label><span className="muted xs">Store *</span><input value={f.store} onChange={(e) => set('store')(e.target.value)} placeholder="Nike.com, Foot Locker…" maxLength={120} /></label>
         <label><span className="muted xs">Order #</span><input value={f.order_number} onChange={(e) => set('order_number')(e.target.value)} maxLength={80} /></label>
-        <label><span className="muted xs">Tracking #</span><input value={f.tracking_number} onChange={(e) => set('tracking_number')(e.target.value)} placeholder="Add it once the order ships" maxLength={60} /></label>
+        <label><span className="muted xs">Tracking #</span><input value={f.tracking_number} onChange={(e) => set('tracking_number')(e.target.value)} placeholder="Add it once the order ships" maxLength={400} onBlur={(e) => set('tracking_number')(formatTracking(e.target.value))} /></label>
         <label><span className="muted xs">Ordered on</span><input type="date" value={f.ordered_on} onChange={(e) => set('ordered_on')(e.target.value)} /></label>
       </div>
       <p className="muted sm">The store’s emailed receipt is found by the <b>order #</b> and linked by itself. So is the <b>tracking #</b>, when the store emails it: an order shipped in several parcels is split into one entry per parcel, each with its own tracking # and pairs.</p>
+      {splitTracking(f.tracking_number).length > 1 && <p className="muted sm"><b>{splitTracking(f.tracking_number).length} tracking numbers</b>, one per parcel, with a comma between them: {formatTracking(f.tracking_number)}. Each is tracked by itself.</p>}
       {!f.tracking_number.trim() && <p className="muted sm">No tracking number yet — the order is saved as <b>Ordered</b> and reaches the warehouse’s “Expected” list once one is added.</p>}
 
       <h3 className="rows-title">Shoes</h3>

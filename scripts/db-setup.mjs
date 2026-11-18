@@ -2191,6 +2191,24 @@ await sql(`
            GROUP BY l.order_id) b
    WHERE b.order_id = o.id AND o.cashback > 0 AND b.base > 0`);
 await sql(`CREATE INDEX IF NOT EXISTS online_orders_track_idx ON online_orders (upper(regexp_replace(tracking_number, '[[:space:]]', '', 'g')))`);
+// Tracking numbers are a comma-separated LIST (2026-11-19). Orders typed as "A B", "A & B" or
+// "A,B" were sent to the courier feed glued into one unreadable number. Rewrite each as
+// "A, B" (splitTracking, the same rule the save uses). A field that hit the old 60-character
+// cap ends in a piece of a number: that piece is dropped and the order is named in the log,
+// so someone can type the missing number back. Idempotent: a clean field is left alone.
+{
+  const { splitTracking } = await import('../src/lib/onlineOrders.js');
+  const { rows } = await pool.query(`SELECT id, tracking_number FROM online_orders WHERE tracking_number ~ '[^A-Za-z0-9-]'`);
+  for (const r of rows) {
+    let list = splitTracking(r.tracking_number);
+    const cut = r.tracking_number.length >= 60 ? list.filter((n) => n.length < 8) : [];
+    if (cut.length) list = list.filter((n) => !cut.includes(n));
+    const next = list.join(', ');
+    if (!next || next === r.tracking_number) continue;
+    await pool.query(`UPDATE online_orders SET tracking_number = $1 WHERE id = $2 AND tracking_number = $3`, [next, r.id, r.tracking_number]);
+    console.log(`  online order ${r.id}: tracking "${r.tracking_number}" -> "${next}"${cut.length ? `  (cut short at 60 characters, "${cut.join(' ')}" dropped: one number is missing)` : ''}`);
+  }
+}
 
 // GS received as men's (2026-10-06): the warehouse converts a Grade School pair to the
 // men's style code + size at receiving (Alias lists it there). items.sku / size become the

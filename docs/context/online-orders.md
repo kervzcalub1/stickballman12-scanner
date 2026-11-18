@@ -272,6 +272,33 @@ Owner, looking at three Foot Locker orders (OO-0083/84/85) still "Shipped" and o
 - **"Did it land at all?"** is the pages that already exist, now without the received ones in them:
   Online Orders → **Expected**, **Undelivered Tracking**, and the daily "Shipments delayed" message.
 
+## Several tracking numbers on one order (2026-11-19)
+Owner: the numbers must be comma-separated so 17TRACK reads them. PH types every parcel's number into
+the one field ("A B", "A & B", "A,B"). The whole field went to 17TRACK as ONE number, glued
+(`1Z…1Z…1Z…`), so none of those parcels had a status, an estimate or a delay alert, and receiving
+could not find the order from a parcel's number. The field was also cut at 60 characters, which
+chopped the 4th number off.
+- **`online_orders.tracking_number` is a LIST**, stored `"A, B, C"`. `splitTracking` / `formatTracking`
+  / `trackKeys` (`src/lib/onlineOrders.js`) are the only reader and writer: split on `, ; & | /`,
+  new lines and "and"; a space splits only between whole numbers (8+ characters), so
+  `1Z 3YY 408 03 2150 4891` stays one number; UPS numbers run together are cut back into 18s.
+- **Save** (`api/online-orders/save.js`): stores the list, checks EACH number for a duplicate, registers
+  EACH with 17TRACK. Over 400 characters is refused (400), never cut.
+- **SQL**: match one number with `key = ANY(string_to_array(regexp_replace(upper(tracking_number),
+  '[^A-Z0-9,]', '', 'g'), ','))`; explode with `unnest(string_to_array(tracking_number, ','))`. Never
+  compare the whole field to one number. Done in: `onlineOrderByTracking` (receiving + duplicate),
+  `openOnlineOrdersByTracking` (delivered alerts), `listUnregisteredOnlineTracking` (the backlog the
+  delay worker registers), `markTrackingDelivered`, `listManualDelivered`, the Inbound Issues order link.
+- **Expected This Week + Undelivered Tracking**: one row per PARCEL (`parcel` = 1, 2, …). The order's
+  pairs are on parcel 1 only, so totals don't double.
+- **Receiving**: any one of the numbers finds the order (cost per pair flows). With several parcels,
+  pairs not in THIS parcel are not "missing": only a pair that is not on the order asks for claim photos.
+- **Not counted in by itself**: an order with several numbers is left for a person
+  (`compareOrderWithReceived` → `several_parcels`). One parcel landing is not the whole order.
+- **Shipping emails** (`planParcels`): a number already in an order's list is "on" that order.
+- **Old rows**: `db:setup` rewrites them once (logged per order). A field that hit the 60 cap loses its
+  cut-off piece; the log names the order so the missing number can be typed back.
+
 ## Not yet
 - No home badge for "Expected" / follow-ups (the page's tab counts only).
 - (Until 2026-11-06) no 17TRACK registration of the tracking numbers. They appeared on **Undelivered Tracking** as "No courier feed" with a link to the courier's site (`docs/context/undelivered.md`).

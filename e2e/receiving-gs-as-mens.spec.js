@@ -44,7 +44,7 @@ async function startReceive(page) {
   await page.goto('/receiving');
   await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
   await page.locator('.track-field input').first().fill(`1ZGSM${stamp}${Math.floor(Math.random() * 1000)}`);
-  await page.locator('.manifest-q').getByRole('button', { name: 'No' }).click();
+  await page.locator('.manifest-q').getByRole('button', { name: 'Yes' }).click();   // 'No' now asks for claim photos (receiving-evidence.md)
   await page.getByRole('button', { name: 'Next →' }).click();
   for (let i = 0; i < 2; i += 1) {
     await page.locator('.scanbar input').first().fill(GS);

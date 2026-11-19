@@ -1,6 +1,6 @@
 // POST /api/inbound-issues/manifest-report
 //   { origin:'online'|'supplier', tracking?, store?, orderNumber?, listed?, got?,
-//     lines?: [{ shoe, size, listed, got }], boxPhotos: [url], manifestPhotos: [url], note? }
+//     lines?: [{ shoe, size, listed, got }], labelPhotos: [url] | noLabel: true, boxPhotos: [url], manifestPhotos: [url], note? }
 //   -> { ok, row }
 // The warehouse opens a parcel and its own paperwork does not match what is inside: the
 // packing slip of an online order, or a manifest a supplier slipped in the box (they never
@@ -34,6 +34,8 @@ export default async function handler(req, res) {
   const lines = cleanManifestLines(b.lines);
   const boxPhotos = cleanPhotoUrls(b.boxPhotos, 6);
   const manifestPhotos = cleanPhotoUrls(b.manifestPhotos, 6);
+  const labelPhotos = cleanPhotoUrls(b.labelPhotos, 6);
+  const noLabel = b.noLabel === true && !labelPhotos.length;
   try {
     // What we already know about this parcel from its tracking number: the online order
     // (store, order #) and the delivery it was received as, if it has been.
@@ -41,7 +43,7 @@ export default async function handler(req, res) {
     try { order = tracking ? await onlineOrderByTracking(tracking) : null; } catch { order = null; }
     const store = text(b.store, 120) || order?.store || null;
     const orderNumber = text(b.orderNumber, 80) || order?.order_number || null;
-    const form = { origin, store, orderNumber, lines, listed: b.listed, got: b.got, note, boxPhotos, manifestPhotos };
+    const form = { origin, store, orderNumber, lines, listed: b.listed, got: b.got, note, boxPhotos, manifestPhotos, labelPhotos, noLabel };
     const problem = manifestReportProblem(form);
     if (problem) return send(res, 400, { ok: false, error: problem });
 
@@ -61,9 +63,9 @@ export default async function handler(req, res) {
         type: 'manifest',
         description: manifestDescription(form),
         expectedCount: t.listed, receivedCount: t.got,
-        photos: [...boxPhotos, ...manifestPhotos],
+        photos: [...labelPhotos, ...boxPhotos, ...manifestPhotos],
         supplier: store, trackingNumber: tracking,
-        manifest: { origin, store, orderNumber, lines, boxPhotos, manifestPhotos, note },
+        manifest: { origin, store, orderNumber, lines, labelPhotos, noLabel, boxPhotos, manifestPhotos, note },
       }],
     });
     alertManifestDiscrepancy(rows[0], { id: byUid, name: by });

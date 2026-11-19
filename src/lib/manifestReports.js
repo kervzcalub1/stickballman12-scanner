@@ -73,7 +73,7 @@ export function manifestDiffLines(lines) {
  * The case's Details text: everything, in words, so the Inbound Issues page, its CSV and
  * "Copy for supplier" carry the report without knowing about the `manifest` column.
  */
-export function manifestDescription({ origin, store, orderNumber, lines = [], listed, got, note }) {
+export function manifestDescription({ origin, store, orderNumber, lines = [], listed, got, note, noLabel = false }) {
   const t = manifestTotals({ lines, listed, got });
   const rows = cleanManifestLines(lines);
   return [
@@ -81,11 +81,12 @@ export function manifestDescription({ origin, store, orderNumber, lines = [], li
     [originLabel(origin), store, orderNumber && `order #${orderNumber}`].filter(Boolean).join(' · '),
     ...rows.map((l) => `· ${lineWords(l)}`),
     note ? `Note: ${note}` : '',
+    noLabel ? 'Shipping label: no longer available (the carton was already thrown away).' : '',
   ].filter(Boolean).join('\n').slice(0, 1000);
 }
 
 /** What is wrong with the form, or '' when it can be sent. One sentence, the first problem. */
-export function manifestReportProblem({ origin, store, lines = [], listed, got, note, boxPhotos = [], manifestPhotos = [] }, { storeKnown = false } = {}) {
+export function manifestReportProblem({ origin, store, lines = [], listed, got, note, boxPhotos = [], manifestPhotos = [], labelPhotos = [], noLabel = false }, { storeKnown = false } = {}) {
   if (!ORIGINS.some(([k]) => k === origin)) return 'Is it an online order or a supplier delivery?';
   if (!str(store, 120) && !storeKnown) return origin === 'online' ? 'Which store is it from? (It is on the packing slip.)' : 'Which supplier is it from?';
   const t = manifestTotals({ lines, listed, got });
@@ -93,6 +94,9 @@ export function manifestReportProblem({ origin, store, lines = [], listed, got, 
   if (t.got == null) return 'How many pairs are in the box?';
   const differs = t.listed !== t.got || cleanManifestLines(lines).some((l) => l.listed !== l.got);
   if (!differs && !str(note, 1000)) return 'The manifest and the box show the same count. Say what is different in the note (wrong shoe, wrong size).';
+  // The store asks for the label before it looks at a claim (Alex, 2026-11-20). The one way past
+  // it is to SAY the carton is gone, which is then written on the case.
+  if (!labelPhotos.length && !noLabel) return 'Take a photo of the shipping label (the tracking number readable), or tick that the carton is already gone.';
   if (!boxPhotos.length) return 'Take a photo of the boxes that arrived.';
   if (!manifestPhotos.length) return 'Take a photo of the manifest.';
   return '';

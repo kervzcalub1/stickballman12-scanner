@@ -16,6 +16,8 @@ import { estTime } from '../lib/format.js';
 import { issueTypeLabel } from '../lib/constants.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { useLive } from '../hooks.js';
+import { ReceivingEvidence } from '../components/ReceivingEvidence.jsx';
+import { evidenceCount } from '../lib/receivingEvidence.js';
 
 const shortDate = (s) => String(s || '').slice(0, 10);
 
@@ -514,6 +516,16 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
                   {is.type === 'shortfall' && is.expected_count != null ? ` (${is.received_count ?? '?'} of ${is.expected_count})` : ''}
                   {is.created_by ? <span className="muted sm"> — {is.created_by}</span> : null}
                 </div>
+              ))}
+            </div>
+          )}
+          {/* The claim photos taken at the bench (receiving-evidence.md): the batch's own, then
+              each box's — where somebody looks when a store disputes a short count. */}
+          {(evidenceCount(b.evidence) > 0 || (detail.boxes || []).some((bx) => evidenceCount(bx.evidence) > 0)) && (
+            <div className="batch-evidence">
+              <ReceivingEvidence evidence={b.evidence} />
+              {(detail.boxes || []).filter((bx) => evidenceCount(bx.evidence) > 0).map((bx) => (
+                <ReceivingEvidence key={bx.id} evidence={bx.evidence} title={`Photos taken at receiving — box ${bx.box_number}${bx.tracking_number ? ` · ${bx.tracking_number}` : ''}`} />
               ))}
             </div>
           )}

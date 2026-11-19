@@ -1530,7 +1530,7 @@ export async function createOpenBatch(h, createdBy) {
 // quota decision, deliberately not taken here.
 export async function listBatchBoxes(batchId) {
   return await db()`
-    SELECT bx.id, bx.box_number, bx.tracking_number, bx.status, bx.received_by, bx.received_at, bx.created_at,
+    SELECT bx.id, bx.box_number, bx.tracking_number, bx.status, bx.received_by, bx.received_at, bx.created_at, bx.evidence,
            (SELECT count(*)::int FROM items i WHERE i.box_id = bx.id) AS item_count,
            tr.carrier, tr.carrier_key, tr.tracking_status, tr.tracking_sub_status,
            tr.tracking_sub_status_descr, tr.last_checkpoint, tr.checked_at, tr.tracking_events
@@ -13889,6 +13889,7 @@ const INBOUND_ISSUE_COLS = `
   ii.warehouse_task, ii.warehouse_task_by, ii.warehouse_task_at, ii.warehouse_done_by, ii.warehouse_done_at,
   ii.outcome, ii.claim_amount, ii.refund_amount, ii.disposition, ii.resolution_note, ii.resolved_by, ii.resolved_at,
   ii.source, ii.reported_by, ii.reported_by_user_id, ii.created_at, ii.updated_at, ii.last_activity_at, ii.manifest,
+  coalesce(bx.evidence, b.evidence) AS evidence,
   coalesce(b.supplier_name, ii.supplier) AS supplier,
   coalesce(bx.tracking_number, b.tracking_number, ii.tracking_number) AS tracking_number,
   coalesce(b.po_id, ii.po_id) AS po_id,
@@ -15703,4 +15704,31 @@ export async function resetOnlineOrderCompareOnce() {
   if (!first.length) return 0;
   const r = await db()`UPDATE online_orders SET received_check_at = NULL WHERE received_at IS NULL AND received_check_at IS NOT NULL RETURNING id`;
   return r.length;
+}
+
+
+/* -------------------------- Receiving evidence --------------------------- */
+// The claim photos taken at the bench (docs/context/receiving-evidence.md), on the receiving
+// record: the box when the receive was one box of a multi-box batch, else the batch. A later
+// submit for the same record ADDS photos (a re-opened box), it never drops the earlier ones.
+export async function saveReceivingEvidence({ batchId, boxId = null, evidence, by = null }) {
+  if (!evidence) return;
+  const sql = db();
+  const had = boxId
+    ? (await sql`SELECT evidence FROM batch_boxes WHERE id = ${boxId} AND batch_id = ${batchId}`)[0]?.evidence
+    : (await sql`SELECT evidence FROM batches WHERE id = ${batchId}`)[0]?.evidence;
+  const join = (k) => [...new Set([...(had?.[k] || []), ...(evidence[k] || [])])].slice(0, 12);
+  const next = {
+    label: join('label'), pairs: join('pairs'), slip: join('slip'), noSlip: evidence.noSlip === true && !join('slip').length,
+    reasons: [...new Set([...(had?.reasons || []), ...(evidence.reasons || [])])].slice(0, 12), by, at: new Date().toISOString(),
+  };
+  if (boxId) await sql`UPDATE batch_boxes SET evidence = ${JSON.stringify(next)}::jsonb WHERE id = ${boxId} AND batch_id = ${batchId}`;
+  else await sql`UPDATE batches SET evidence = ${JSON.stringify(next)}::jsonb WHERE id = ${batchId}`;
+}
+// The evidence on a received delivery: the box that carries this tracking number, else the batch.
+export async function receivingEvidenceFor(batchId, boxId = null) {
+  const rows = await db()`
+    SELECT coalesce((SELECT bx.evidence FROM batch_boxes bx WHERE bx.id = ${boxId}::bigint AND bx.batch_id = b.id), b.evidence) AS evidence
+      FROM batches b WHERE b.id = ${batchId}`;
+  return rows[0]?.evidence || null;
 }

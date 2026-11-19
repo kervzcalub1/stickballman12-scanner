@@ -7927,3 +7927,13 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
   .mr-line { grid-template-columns: 1fr 1fr 1fr 30px; }
   .mr-line .mr-shoe { grid-column: 1 / -1; }
 }
+
+/* Receiving evidence — the claim photos taken at the bench (src/components/ReceivingEvidence.jsx) */
+.rcv-ev { margin-top: 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(224,168,120,0.45); background: rgba(224,168,120,0.07); }
+.rcv-ev-h { font-size: 13px; }
+.rcv-ev-group { margin-top: 8px; }
+.rcv-ev .ii-photos { margin-top: 4px; }
+.batch-evidence { margin-top: 12px; }
+.batch-evidence .rcv-ev:first-child { margin-top: 0; }
+.oo-claim-why { margin: 4px 0 6px; padding-left: 18px; }
+.mr-nolabel { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); margin-top: 4px; }

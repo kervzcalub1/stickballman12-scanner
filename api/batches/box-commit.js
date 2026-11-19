@@ -9,7 +9,9 @@ import { openCasesForIntake } from '../_lib/inbound-issues.js';
 import {
   getBatchWithBoxes, commitBoxItems, insertIssueEvents, insertIssues,
   reconcileOutcomeForIntake, dbConfigured, SHIPMENT_KINDS, logTrackingDuplicate,
+  saveReceivingEvidence,
 } from '../_lib/db.js';
+import { cleanEvidence } from '../../src/lib/receivingEvidence.js';
 import { normalizeItems, parseUnitIssues, enrichGlobalIndicators, toCost } from '../_lib/intake.js';
 import { duplicateVin } from '../_lib/vins.js';
 
@@ -70,6 +72,9 @@ export default async function handler(req, res) {
     }
     // Batch-level shipment issues (no-box auto-list + manual) — recorded on the batch.
     const issues = Array.isArray(body.issues) ? body.issues : [];
+    // The claim photos taken at the bench ride on THIS box (receiving-evidence.md). Best effort.
+    const evidence = cleanEvidence(body.evidence);
+    if (evidence) await saveReceivingEvidence({ batchId, boxId, evidence, by: createdBy }).catch((e) => console.error('[box-commit] evidence', e.message));
     const recordedIssues = issues.length ? await insertIssues(batchId, issues, createdBy) : [];
     // Each real problem → a case the PH team owns, flagged pairs held (inbound-issues.md).
     const cases = found.batch.kind === 'receiving'

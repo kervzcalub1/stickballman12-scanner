@@ -20,6 +20,7 @@ import { useUnsavedGuard, useLive } from '../hooks.js';
 import { isVinCode, isRollVin, isUpcCode, parseTrackingNumber, usSizeChart, compareSizes, isCameraReread, gsToMensSize } from '../lib/codes.js';
 import { MensConvertModal } from '../components/MensConvert.jsx';
 import { matchManifestRow, manifestSummary } from '../lib/manifestScan.js';
+import { evidenceReasons, evidenceLeft, needsEvidence } from '../lib/receivingEvidence.js';
 import { SUPPLIERS, RESCALE_REASONS, ISSUE_TYPES, DEFECT_TYPES, issueTypeLabel } from '../lib/constants.js';
 import { manifestSource, manifestSourceNote } from '../lib/manifestSource.js';
 import { costOrNull, poLineMoney, landedFromShelf, unitCost } from '../lib/costs.js';
@@ -1962,8 +1963,8 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     // record says what was off long after the screen is gone.
     ...(onlineOff ? [{
       type: 'online_order',
-      description: `${onlineCheckText(onlineOff.order, onlineOff.summary)}${claimNeeded ? ` · Claim photos: ${CLAIM_PHOTOS.map((c) => `${c.key} ×${(claimPhotos[c.key] || []).length}`).join(', ')}${noSlip ? ' (no packing slip in the parcel)' : ''}` : ''}`.slice(0, 1000),
-      photos: claimNeeded ? CLAIM_PHOTOS.flatMap((c) => claimPhotos[c.key] || []) : [],
+      description: `${onlineCheckText(onlineOff.order, onlineOff.summary)}${onlineOff ? ` · Claim photos: ${CLAIM_PHOTOS.map((c) => `${c.key} ×${(claimPhotos[c.key] || []).length}`).join(', ')}${noSlip ? ' (no packing slip in the parcel)' : ''}` : ''}`.slice(0, 1000),
+      photos: CLAIM_PHOTOS.flatMap((c) => claimPhotos[c.key] || []),
       expectedCount: onlineOff.summary.totals.expected,
       receivedCount: onlineOff.summary.rows.reduce((n, r) => n + r.received, 0),
     }] : []),
@@ -2160,9 +2161,23 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     ? { order: activeOnlineOrder, summary: onlineCheck } : null;
   // Pairs missing against the order, or pairs in the parcel that are not on it (wrong shoe,
   // wrong size, one too many) → the claim photos are required before this box is saved.
-  const claimNeeded = !!onlineOff;
-  const claimLeft = claimNeeded ? CLAIM_PHOTOS.filter((c) => !(claimPhotos[c.key] || []).length && !(c.key === 'slip' && noSlip)) : [];
-  const claimMissing = claimLeft.length ? `This parcel doesn’t match its online order. Take the claim photo${claimLeft.length === 1 ? '' : 's'} first: ${claimLeft.map((c) => c.label.toLowerCase()).join('; ')}.` : '';
+  // The same three photos for EVERY discrepancy, not only an online order's (Alex, 2026-11-20 —
+  // receiving-evidence.md): short or wrong against the PO's own list, any problem typed on the
+  // Issues step, or a parcel received without a manifest. By the time a shortage is found
+  // days later the carton and its label are in the bin; they are still on the bench now.
+  const evidenceApplies = !noShipment;
+  const poCheck = isPoReceive && poBoxHasChecklist ? manifestSummary(items) : null;
+  const poOff = poCheck && !poCheck.totals.clean ? poCheck.totals : null;
+  const noManifest = evidenceApplies && !isBoxMode && header.manifestReceived === false;
+  const evidenceWhy = evidenceApplies
+    ? evidenceReasons({ online: onlineOff ? onlineOff.summary.totals : null, po: poOff, issues, noManifest, issueLabel: issueTypeLabel }) : [];
+  const claimNeeded = evidenceWhy.length > 0;
+  // Nothing was sent with it: there may be no paper to photograph, so the slip is not demanded.
+  const claimLeft = claimNeeded ? evidenceLeft(claimPhotos, { noSlip, slipOptional: noManifest }) : [];
+  const claimMissing = claimLeft.length ? `Something is off with this parcel (${evidenceWhy[0]}). Take the photo${claimLeft.length === 1 ? '' : 's'} for the claim first: ${claimLeft.map((c) => c.label.toLowerCase()).join('; ')}.` : '';
+  // What rides with the submit: kept on the batch / box, shown on every case about this delivery.
+  const evidencePayload = () => (evidenceApplies && CLAIM_PHOTOS.some((c) => (claimPhotos[c.key] || []).length)
+    ? { label: claimPhotos.label || [], pairs: claimPhotos.pairs || [], slip: claimPhotos.slip || [], noSlip, reasons: evidenceWhy } : null);
   // A box swap is deliberate (set aside for its box), not a shipment problem to record.
   const autoIssues = items.filter((i) => !i.withBox && !i.boxSwap)
     .flatMap((i) => i.sizes.map((s) => ({ key: `auto-${i.key}-${s.key}`, description: `${i.sku || '?'} ${s.size} — No box` })));
@@ -2211,7 +2226,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
     }
     setActiveSlot(i); setDraft(null); setStickerTyping(false);
     setItems(isPoReceive ? buildManifestItems(boxSlots[i]?.poBoxId) : []);
-    setIssues([]); setKeyNotes(''); setUnitIssues({}); setRescanned([]); setBoxIssue({ type: 'box_no_lid', note: '', photos: [] });
+    setIssues([]); setKeyNotes(''); setUnitIssues({}); setRescanned([]); setBoxIssue({ type: 'box_no_lid', note: '', photos: [] }); setClaimPhotos({}); setNoSlip(false);
     resetScanState();
     emptyBoxAck.current = false;
     setStep(2);
@@ -2220,7 +2235,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // the in-progress, uncommitted draft for that box).
   function backToBoxList() {
     setActiveSlot(null); setStep(1);
-    setItems([]); setIssues([]); setKeyNotes(''); setUnitIssues({}); setDraft(null); setBoxIssue({ type: 'box_no_lid', note: '', photos: [] });
+    setItems([]); setIssues([]); setKeyNotes(''); setUnitIssues({}); setDraft(null); setBoxIssue({ type: 'box_no_lid', note: '', photos: [] }); setClaimPhotos({}); setNoSlip(false);
     resetScanState();
     emptyBoxAck.current = false;
   }
@@ -2358,7 +2373,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         untieOk.current = false; setUntieAsk(null);
         const res = await api.boxCommit({
           batchId, boxId: box.id, items: out, unitIssues: flatUnitIssues,
-          issues: issuePayload(),
+          issues: issuePayload(), evidence: evidencePayload(),
         });
         setShowConfirm(false);
         // Raw 1ID mode: the pair already wears its number, so there is nothing to
@@ -2374,7 +2389,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           vin, name: out[i]?.name, sku: out[i]?.sku, size: out[i]?.size,
           upc: out[i]?.upc, colorway: out[i]?.colorway, gender: out[i]?.gender, withBox: out[i]?.withBox,
         })).filter((_, i) => !out[i]?.boxSwap);
-        setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setBoxIssue({ type: 'box_no_lid', note: '', photos: [] });
+        setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setBoxIssue({ type: 'box_no_lid', note: '', photos: [] }); setClaimPhotos({}); setNoSlip(false);
         if (isMultiBoxNew) {
           // Mark the slot received and drop back to the box list (step 1) to do the next.
           setBoxSlots((slots) => slots.map((s, idx) => (idx === activeSlot
@@ -2397,6 +2412,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
           items: out,
           unitIssues: flatUnitIssues,
           issues: isRescale ? [] : issuePayload(),
+          evidence: evidencePayload(),
         };
         batchRes = await api.batchCommit(payload);
       }
@@ -2430,7 +2446,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
         online: onlineAtCommit,
         inboundIssues: batchRes?.inboundIssues || [],
       });
-      setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1); setBoxIssue({ type: 'box_no_lid', note: '', photos: [] });
+      setItems([]); setIssues([]); setKeyNotes(''); setRescanned([]); setUnitIssues({}); resetScanState(); setStep(1); setBoxIssue({ type: 'box_no_lid', note: '', photos: [] }); setClaimPhotos({}); setNoSlip(false);
       // noTracking and pre-sell reset with the tracking # for the same reason: left
       // sticky, the NEXT shipment would quietly commit untracked, or with every pair in
       // it held back from listing.
@@ -3292,30 +3308,39 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
             <>
               {claimNeeded && (
                 <div className="card oo-claim" data-claim-left={claimLeft.length}>
-                  <h3 className="rows-title">Parcel doesn’t match its order: photos for the claim <span className="muted">(required)</span></h3>
+                  <h3 className="rows-title">Something is off with this parcel: photos for the claim <span className="muted">(required)</span></h3>
+                  <ul className="oo-claim-why sm">{evidenceWhy.map((w) => <li key={w}><b>{w}</b></li>)}</ul>
                   <p className="sm">
-                    <b>{[onlineOff.summary.totals.missing ? `${onlineOff.summary.totals.missing} pair${onlineOff.summary.totals.missing === 1 ? '' : 's'} missing` : null,
-                      onlineOff.summary.totals.extra ? `${onlineOff.summary.totals.extra} pair${onlineOff.summary.totals.extra === 1 ? '' : 's'} not on the order` : null].filter(Boolean).join(' · ')}</b> against {onlineOrderCode(onlineOff.order.id)} · {onlineOff.order.store}
-                    {onlineOff.order.order_number ? ` #${onlineOff.order.order_number}` : ''}: {onlineOff.summary.totals.received} of {onlineOff.summary.totals.expected} came out of the parcel.
-                    The PH team is told on Telegram when you submit. Take these now, while the parcel is still in front of you.
+                    {onlineOff && <>Against {onlineOrderCode(onlineOff.order.id)} · {onlineOff.order.store}{onlineOff.order.order_number ? ` #${onlineOff.order.order_number}` : ''}: {onlineOff.summary.totals.received} of {onlineOff.summary.totals.expected} came out of the parcel. </>}
+                    Take these now, <b>before the carton and its label are thrown away</b>. They are saved with this delivery and the PH team sees them on the case — a store asks for the shipping label before it looks at a claim.
                   </p>
                   {CLAIM_PHOTOS.map((c, i) => {
                     const have = (claimPhotos[c.key] || []).length;
+                    const optional = c.key === 'slip' && noManifest;
                     const skipped = c.key === 'slip' && noSlip;
                     return (
                       <div key={c.key} className={`oo-claim-row ${have || skipped ? 'done' : ''}`} data-claim={c.key}>
-                        <div className="oo-claim-head"><span className="oo-claim-n">{have || skipped ? '✓' : i + 1}</span><b>{c.label}</b><span className="muted sm"> · {c.hint}</span></div>
+                        <div className="oo-claim-head"><span className="oo-claim-n">{have || skipped ? '✓' : i + 1}</span><b>{c.label}</b><span className="muted sm"> · {optional ? 'Only if there is one in the box.' : c.hint}</span></div>
                         {!skipped && (
                           <DefectPhotos photos={claimPhotos[c.key] || []} max={4} sign={signShipmentPhoto}
                             onChange={(photos) => setClaimPhotos((p) => ({ ...p, [c.key]: photos }))} onSignOut={onSignOut} />
                         )}
-                        {c.key === 'slip' && !have && (
+                        {c.key === 'slip' && !have && !optional && (
                           <label className="oo-claim-none sm"><input type="checkbox" checked={noSlip} onChange={(e) => setNoSlip(e.target.checked)} /> There was no packing slip in the parcel</label>
                         )}
                       </div>
                     );
                   })}
-                  <ShortParcelTell order={onlineOff.order} summary={onlineOff.summary} />
+                  {onlineOff && <ShortParcelTell order={onlineOff.order} summary={onlineOff.summary} />}
+                </div>
+              )}
+              {/* Nothing is off — still ask for the label: a shortage found days later has no carton left. */}
+              {!claimNeeded && evidenceApplies && (
+                <div className="card rcv-label" data-claim-optional="label">
+                  <h3 className="rows-title">Photo of the shipping label <span className="muted">(recommended)</span></h3>
+                  <p className="muted sm">One picture of the label on the carton, the tracking number readable, before the carton is thrown away. If this delivery turns out short later, this is the proof the store asks for.</p>
+                  <DefectPhotos photos={claimPhotos.label || []} max={4} sign={signShipmentPhoto}
+                    onChange={(photos) => setClaimPhotos((p) => ({ ...p, label: photos }))} onSignOut={onSignOut} />
                 </div>
               )}
               {swapLines.length > 0 && (
@@ -3337,6 +3362,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
               )}
               <div className="card">
                 <h3 className="rows-title">{isInstore ? 'Issues' : 'Shipment issues'} <span className="muted">(optional)</span></h3>
+                {evidenceApplies && issues.some((i) => needsEvidence(i.type)) && <p className="warn-line sm">A reported problem needs the three claim photos above before this can be saved.</p>}
                 <p className="muted sm">Anything wrong with the package as it arrived — damage, tampering, a short count, bad packing. Pick the closest problem, describe it and <b>take photos: the outside of the parcel, the shipping label (tracking #) and what is inside</b>.{!isInstore && <> Each one is sent to the PH team as a case on <b>Inbound Issues</b> — they take it and sort it out with the supplier. A pair with a problem is flagged on the Review step (＋ Issue on its VIN).</>}</p>
                 {autoIssues.length > 0 && (
                   <div className="auto-issues">

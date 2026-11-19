@@ -9,8 +9,9 @@
 // claim needs, uploaded on the case and sent to the team on WhatsApp.
 import {
   getOnlineOrder, receivedForTracking, onlineOrdersToCompare, markOnlineOrderCompared, onlineOrderIssueOnBatch, findOpenManifestCase,
-  insertIssues, openInboundIssues, setInboundWarehouseTask, dbConfigured, receiveOnlineOrder, resetOnlineOrderCompareOnce,
+  insertIssues, openInboundIssues, setInboundWarehouseTask, dbConfigured, receiveOnlineOrder, resetOnlineOrderCompareOnce, receivingEvidenceFor,
 } from './db.js';
+import { evidenceCoversClaim, evidenceWords } from '../../src/lib/receivingEvidence.js';
 import { alertInboundIssuesReported, alertInboundWarehouseTask, alertOnlineOrderArrived } from './alerts.js';
 import { onlineOrderCheck, onlineCheckText, isCancelled, orderCode, CLAIM_PHOTOS, lineKey, nearCode, splitTracking } from '../../src/lib/onlineOrders.js';
 
@@ -70,6 +71,8 @@ export async function compareOrderWithReceived(orderId, { io = {} } = {}) {
     // A person already reported this parcel's manifest by hand (manifest-reports.md): that case stands.
     reported: (tracking) => findOpenManifestCase(tracking, ['manifest']),
     issue: insertIssues, open: openInboundIssues, task: setInboundWarehouseTask, count: receiveOnlineOrder,
+    // The claim photos already taken at the bench for this delivery (receiving-evidence.md).
+    evidence: receivingEvidenceFor,
     alert: alertInboundIssuesReported, alertTask: alertInboundWarehouseTask, arrived: alertOnlineOrderArrived, ...io,
   };
   const o = await x.order(orderId);
@@ -125,7 +128,12 @@ export async function compareOrderWithReceived(orderId, { io = {} } = {}) {
   const lead = short
     ? `Short by ${short}: ${received} of ${expected} pair${expected === 1 ? '' : 's'} came out of the parcel with tracking ${o.tracking_number}.`
     : `Wrong pairs: ${wrong} of the ${received} in the parcel with tracking ${o.tracking_number} ${wrong === 1 ? 'is' : 'are'} not what was ordered.`;
-  const description = `${lead} ${onlineCheckText(o, summary)}. Found after receiving, when the tracking number reached ${orderCode(o.id)}.`;
+  // The parcel was photographed when it was received (label + boxes): the case shows those
+  // photos by itself, so the floor is not sent to look for a carton that is already gone.
+  let ev = null;
+  try { ev = await x.evidence(got.batch_id, got.box_id); } catch { ev = null; }
+  const covered = evidenceCoversClaim(ev);
+  const description = `${lead} ${onlineCheckText(o, summary)}. Found after receiving, when the tracking number reached ${orderCode(o.id)}.${covered ? ` Photos taken at receiving: ${evidenceWords(ev)}.` : ''}`;
   const [rec] = await x.issue(got.batch_id, [{ type: 'online_order', description: description.slice(0, 1000), expectedCount: expected, receivedCount: received, photos: [] }], SYSTEM);
   const rows = await x.open({
     batchId: got.batch_id, boxId: got.box_id, by: SYSTEM, byUid: null, source: 'online_order',
@@ -134,8 +142,10 @@ export async function compareOrderWithReceived(orderId, { io = {} } = {}) {
   const row = rows[0] || null;
   if (row) {
     x.alert(rows, { id: null, name: 'The online order check' });
-    const withTask = await x.task(row.id, { actor: SYSTEM, task: PHOTO_TASK });
-    if (withTask) x.alertTask(withTask, { id: null, name: 'The online order check' });
+    if (!covered) {
+      const withTask = await x.task(row.id, { actor: SYSTEM, task: PHOTO_TASK });
+      if (withTask) x.alertTask(withTask, { id: null, name: 'The online order check' });
+    }
   }
   const counted = await countIn();
   tell({ counted, caseId: row ? Number(row.id) : null });

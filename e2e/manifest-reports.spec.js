@@ -24,6 +24,7 @@ const auth = (u) => ({ Authorization: `Bearer ${signToken(u)}` });
 const WH = auth(WH_USER); const PH = auth(PH_USER);
 const BOX = 'https://example.com/e2e-mr-boxes.jpg';
 const SLIP = 'https://example.com/e2e-mr-slip.jpg';
+const LABEL = 'https://example.com/e2e-mr-label.jpg';
 const report = (request, data, headers = WH) => request.post('/api/inbound-issues/manifest-report', { headers, data });
 let caseId;
 test.describe.configure({ mode: 'serial' });
@@ -39,38 +40,42 @@ test('a report needs both photos and a real difference, then opens one urgent ca
   const base = { origin: 'online', tracking: TRACK.replace(/(.{4})/g, '$1 ').toLowerCase(), store: STORE, orderNumber: 'W123456',
     lines: [{ shoe: 'Air Max 90 · DH8010-100', size: '9', listed: 2, got: 1 }, { shoe: 'Air Max 90 · DH8010-100', size: '10', listed: 2, got: 1 }] };
 
-  let r = await report(request, { ...base, manifestPhotos: [SLIP] });
+  // The shipping label first: the store asks for it before it looks at a claim (Alex, 2026-11-20).
+  let r = await report(request, { ...base, boxPhotos: [BOX], manifestPhotos: [SLIP] });
+  expect(r.status()).toBe(400);
+  expect((await r.json()).error).toMatch(/photo of the shipping label/i);
+  r = await report(request, { ...base, labelPhotos: [LABEL], manifestPhotos: [SLIP] });
   expect(r.status()).toBe(400);
   expect((await r.json()).error).toMatch(/photo of the boxes/i);
-  r = await report(request, { ...base, boxPhotos: [BOX] });
+  r = await report(request, { ...base, labelPhotos: [LABEL], boxPhotos: [BOX] });
   expect(r.status()).toBe(400);
   expect((await r.json()).error).toMatch(/photo of the manifest/i);
   // Same count on both sides and nothing said about what differs: not a report.
-  r = await report(request, { origin: 'online', store: STORE, listed: 3, got: 3, boxPhotos: [BOX], manifestPhotos: [SLIP] });
+  r = await report(request, { origin: 'online', store: STORE, listed: 3, got: 3, labelPhotos: [LABEL], boxPhotos: [BOX], manifestPhotos: [SLIP] });
   expect(r.status()).toBe(400);
   // A supplier account has no business here.
-  r = await report(request, { ...base, boxPhotos: [BOX], manifestPhotos: [SLIP] }, auth({ uid: 990203, username: 'e2e_mr_sup', name: 'E2E MR Sup', role: 'supplier' }));
+  r = await report(request, { ...base, labelPhotos: [LABEL], boxPhotos: [BOX], manifestPhotos: [SLIP] }, auth({ uid: 990203, username: 'e2e_mr_sup', name: 'E2E MR Sup', role: 'supplier' }));
   expect(r.status()).toBe(403);
 
-  r = await report(request, { ...base, boxPhotos: [BOX], manifestPhotos: [SLIP], note: 'box was re-taped' });
+  r = await report(request, { ...base, labelPhotos: [LABEL], boxPhotos: [BOX], manifestPhotos: [SLIP], note: 'box was re-taped' });
   expect(r.ok(), await r.text()).toBeTruthy();
   const { row } = await r.json();
   caseId = row.id;
   expect(row).toMatchObject({ type: 'manifest', scope: 'shipment', status: 'open', source: 'manifest',
     expected_count: 4, received_count: 2, supplier: STORE, tracking_number: TRACK, batch_id: null, reported_by: WH_USER.name });
-  expect(row.photos).toEqual([BOX, SLIP]);
+  expect(row.photos).toEqual([LABEL, BOX, SLIP]);
   expect(row.manifest).toMatchObject({ origin: 'online', store: STORE, orderNumber: 'W123456', boxPhotos: [BOX], manifestPhotos: [SLIP] });
   expect(row.manifest.lines).toHaveLength(2);
   expect(row.description).toContain('lists 4 pairs; 2 in the box (SHORT by 2)');
   expect(row.description).toContain('size 9: manifest 2, in the box 1');
 
   // The same parcel again (number typed plainly this time) is the same case, not a twin.
-  r = await report(request, { origin: 'online', tracking: TRACK, store: STORE, listed: 4, got: 2, boxPhotos: [BOX], manifestPhotos: [SLIP] });
+  r = await report(request, { origin: 'online', tracking: TRACK, store: STORE, listed: 4, got: 2, labelPhotos: [LABEL], boxPhotos: [BOX], manifestPhotos: [SLIP] });
   expect(r.status()).toBe(409);
   expect((await r.json()).caseId).toBe(caseId);
 
   // No tracking number and only the two totals is still a report.
-  r = await report(request, { origin: 'supplier', store: STORE, listed: 6, got: 5, boxPhotos: [BOX], manifestPhotos: [SLIP] });
+  r = await report(request, { origin: 'supplier', store: STORE, listed: 6, got: 5, noLabel: true, boxPhotos: [BOX], manifestPhotos: [SLIP] });
   expect(r.ok(), await r.text()).toBeTruthy();
   expect((await r.json()).row).toMatchObject({ expected_count: 6, received_count: 5, tracking_number: null });
 });
@@ -117,6 +122,10 @@ test('the page shows the report, and the form says what is missing', async ({ pa
   await form.getByLabel('Pairs the manifest lists').fill('4');
   await form.getByLabel('Pairs in the box').fill('2');
   await expect(form.locator('.mr-gap')).toHaveText('SHORT by 2');
+  await form.getByRole('button', { name: 'Send to the PH team' }).click();
+  await expect(form.locator('.error')).toContainText('photo of the shipping label');
+  // The carton is gone: said out loud, and the next thing asked for is the boxes.
+  await form.getByLabel(/carton is already thrown away/).check();
   await form.getByRole('button', { name: 'Send to the PH team' }).click();
   await expect(form.locator('.error')).toContainText('photo of the boxes');
   // The open form survives a refresh (it is in the URL).

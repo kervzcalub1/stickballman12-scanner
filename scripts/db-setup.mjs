@@ -2480,6 +2480,12 @@ await sql(`
     UNIQUE (platform, external_id)
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS presell_listings_stock_idx ON presell_listings (stock_id)`);
+// Receiving evidence (2026-11-20, docs/context/receiving-evidence.md): the claim photos taken
+// at the bench — { label:[url], pairs:[url], slip:[url], noSlip, reasons:[…], by, at } — kept on
+// the receiving record itself (the batch, or the box of a multi-box batch) so every case about
+// that delivery shows them, including one opened days later.
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS evidence JSONB`);
+await sql(`ALTER TABLE batch_boxes ADD COLUMN IF NOT EXISTS evidence JSONB`);
 // IN TRANSIT (2026-10-10, Alex): pairs listed while still on their way, to catch the hype.
 // When the warehouse RECEIVES that SKU + size, every unsold Alias/StockX listing for it is
 // DELETED and the pre-sell group is told, so PH / Nikki list the real pairs properly.

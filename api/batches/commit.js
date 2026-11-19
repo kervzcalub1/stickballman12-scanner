@@ -16,8 +16,9 @@ import { alertPoDiscrepancy, alertDuplicateTracking } from '../_lib/alerts.js';
 import {
   createBatch, insertItems, insertIntakeEvents, insertIssues, insertIssueEvents,
   addSupplier, getPo, markPoReceiving, reconcileOutcomeForIntake, dbConfigured,
-  getLocationByCode, shelveItems, PH_EXCLUDED_KINDS, claimForTracking, logTrackingDuplicate,
+  getLocationByCode, shelveItems, PH_EXCLUDED_KINDS, claimForTracking, logTrackingDuplicate, saveReceivingEvidence,
 } from '../_lib/db.js';
+import { cleanEvidence } from '../../src/lib/receivingEvidence.js';
 import { openCasesForIntake } from '../_lib/inbound-issues.js';
 import { registerWarehouseTracking } from '../_lib/tracking.js';
 import { enrichGlobalIndicators, normalizeItems, toCost } from '../_lib/intake.js';
@@ -58,6 +59,8 @@ export default async function handler(req, res) {
   // Rescale and existing carry no issues; receiving and in-store both can (in-store
   // reuses the full Review + Issues flow — no-box auto-issues, per-unit defect flags).
   const issues = (kind === 'rescale' || kind === 'existing') ? [] : (Array.isArray(body.issues) ? body.issues : []);
+  // The claim photos taken at the bench (receiving-evidence.md) — supplier deliveries only.
+  const evidence = kind === 'receiving' || !kind ? cleanEvidence(body.evidence) : null;
   // Per-unit defect issues flagged on the Review screen (V6 Feature 4):
   // [{ vin, type, note, photos:[https…] }]. Mapped to item ids after insert.
   const unitIssues = (Array.isArray(body.unitIssues) ? body.unitIssues : [])
@@ -212,6 +215,8 @@ export default async function handler(req, res) {
     const created = await insertItems(batch.id, items, createdBy, bh.dateReceived);
     // First history per item: "Scanned by <user>" then received / rescaled.
     await insertIntakeEvents(created.map((r) => r.id), createdBy, kind);
+    // The claim photos taken at the bench ride on the batch (receiving-evidence.md). Best effort.
+    if (evidence) await saveReceivingEvidence({ batchId: batch.id, evidence, by: createdBy }).catch((e) => console.error('[commit] evidence', e.message));
     const recordedIssues = await insertIssues(batch.id, issues, createdBy);
 
     // Existing stock: place every counted pair on the shelf it was scanned against,

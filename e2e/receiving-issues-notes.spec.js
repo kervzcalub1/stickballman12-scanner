@@ -5,6 +5,7 @@
 // the issues only showed under Receiving → Recent.
 import { test, expect } from '@playwright/test';
 import { loadEnv, loginAs } from './helpers/auth.js';
+import { stubClaimUploads, shootClaim } from './helpers/claimPhotos.js';
 import pg from 'pg';
 
 loadEnv();
@@ -29,6 +30,7 @@ test.afterAll(async () => {
 
 test('a named problem and the key notes land on the batch, and the Batch page shows them', async ({ page }) => {
   await loginAs(page, 'warehouse');
+  await stubClaimUploads(page);
   await page.route('**/api/sku-search', (route) => route.fulfill({ json: { ok: true, product: { name: 'E2E Issue Runner', sku: SKU, image: '', source: 'manual', scannedSize: '9', sizes: ['9'] } } }));
   await page.goto('/receiving');
   await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
@@ -49,6 +51,15 @@ test('a named problem and the key notes land on the batch, and the Batch page sh
   await row.locator('input[placeholder="Description"]').fill('inner seal broken, one box empty');
   await page.locator('.key-notes textarea').fill(NOTE);
 
+  // A reported problem needs the three claim photos before the batch can be saved
+  // (receiving-evidence.md): label, the boxes, the packing slip — or saying there was none.
+  await expect(page.locator('.oo-claim')).toContainText('Reported: Merchandise appears removed / tampered with');
+  await page.getByRole('button', { name: 'Finish batch' }).click();
+  await expect(page.locator('.error')).toContainText('Take the photos for the claim first');
+  await shootClaim(page, ['label', 'pairs']);
+  await page.locator('.oo-claim').getByLabel('There was no packing slip in the parcel').check();
+  await expect(page.locator('.oo-claim')).toHaveAttribute('data-claim-left', '0');
+
   await page.getByRole('button', { name: 'Finish batch' }).click();
   await page.getByRole('button', { name: 'Yes, commit' }).click();
   await expect(page.getByText(/^Batch .* saved$/)).toBeVisible({ timeout: 15_000 });
@@ -59,6 +70,13 @@ test('a named problem and the key notes land on the batch, and the Batch page sh
     { type: 'tampered', description: 'inner seal broken, one box empty' },
     { type: 'note', description: NOTE },
   ]);
+  // The claim photos are on the receiving record, and on the case the PH team opens.
+  const [{ evidence }] = await q('SELECT evidence FROM batches WHERE id = $1', [batch_id]);
+  expect(evidence).toMatchObject({ noSlip: true, slip: [], reasons: ['Reported: Merchandise appears removed / tampered with'] });
+  expect(evidence.label).toHaveLength(1);
+  expect(evidence.pairs).toHaveLength(1);
+  const [kase] = await q(`SELECT id FROM inbound_issues WHERE batch_id = $1 AND type = 'tampered'`, [batch_id]);
+  expect(kase).toBeTruthy();
 
   // …and the Batch page reads them back in words, not type keys.
   await page.goto(`/batches?b=${batch_id}`);

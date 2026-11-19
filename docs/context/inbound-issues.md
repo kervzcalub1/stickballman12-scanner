@@ -40,6 +40,10 @@ The two places the floor already recorded problems now OPEN CASES:
   (`source='online_order'`, reporter "System (online order check)") — `online-orders.md` →
   "Short parcels". At the bench the same shortage now requires three claim photos.
 
+**Claim photos (2026-11-20).** A problem typed on Step 4 now REQUIRES the three claim photos
+(label · boxes · packing slip) before the submit; they are kept on the batch / box and every
+case about that delivery shows them as "Photos taken at receiving" → `receiving-evidence.md`.
+
 ## The HOLD (a flagged pair is not listable until its case closes)
 A pair case sets **`items.status = 'issue'`** (status_change event, `inboundIssue` id) and
 keeps what it was in `inbound_issues.held_from_status` (`holdPairForIssue`). `issue` was

@@ -6,6 +6,7 @@
 // Rescale / in-store are never asked — there is no manifest to have come with.
 import { test, expect } from '@playwright/test';
 import { loadEnv, loginAs } from './helpers/auth.js';
+import { stubClaimUploads, shootClaim } from './helpers/claimPhotos.js';
 import { signToken } from '../api/_lib/util.js';
 import pg from 'pg';
 
@@ -32,6 +33,7 @@ const authHeaders = () => ({ Authorization: `Bearer ${signToken({ uid: 'e2e-wh',
 
 test('the question is required, "No" flags the batch, and the audit is signed off on the Batch page', async ({ page, request }) => {
   await loginAs(page, 'warehouse');
+  await stubClaimUploads(page);
   await page.route('**/api/sku-search', (route) => route.fulfill({ json: { ok: true, product: { name: 'E2E Manifest Runner', sku: SKU, image: '', source: 'manual', scannedSize: '9', sizes: ['9'] } } }));
   await page.goto('/receiving');
   await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
@@ -52,6 +54,12 @@ test('the question is required, "No" flags the batch, and the audit is signed of
   await expect(page.locator(`.recv-item[data-sku="${SKU}"]`)).toBeVisible();
   await page.getByRole('button', { name: 'Review →' }).click();
   await page.getByRole('button', { name: 'Next →' }).click();
+  // Received blind: the label and the boxes are photographed before it can be saved; there is
+  // no paper to ask for (receiving-evidence.md).
+  await expect(page.locator('.oo-claim')).toContainText('Received without a manifest');
+  await page.getByRole('button', { name: 'Finish batch' }).click();
+  await expect(page.locator('.error')).toContainText('the shipping label with the tracking number; every shoe box that arrived, in one picture.');
+  await shootClaim(page, ['label', 'pairs']);
   await page.getByRole('button', { name: 'Finish batch' }).click();
   await expect(page.locator('.confirm-summary .warn-line', { hasText: 'manifest' })).toContainText(`Received without a manifest — flagged for audit against tracking ${TRACK}`);
   await page.getByRole('button', { name: 'Yes, commit' }).click();
@@ -60,6 +68,9 @@ test('the question is required, "No" flags the batch, and the audit is signed of
   const [{ batch_id }] = await q('SELECT batch_id FROM items WHERE sku = $1 LIMIT 1', [SKU]);
   const [row] = await q('SELECT manifest_received, audited_at FROM batches WHERE id = $1', [batch_id]);
   expect(row).toEqual({ manifest_received: false, audited_at: null });
+  const [{ evidence }] = await q('SELECT evidence FROM batches WHERE id = $1', [batch_id]);
+  expect(evidence).toMatchObject({ reasons: ['Received without a manifest'], slip: [] });
+  expect([evidence.label.length, evidence.pairs.length]).toEqual([1, 1]);
 
   // It counts, it filters, and it is marked on the row.
   const counts = await (await request.get('/api/items/pending-counts', { headers: authHeaders() })).json();

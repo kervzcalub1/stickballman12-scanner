@@ -333,6 +333,13 @@ export function sendPresellSale(lines) {
   if (!env('TELEGRAM_BOT_TOKEN') || !presellChatId()) return Promise.reject(new Error('TELEGRAM_PRESELL_CHAT_ID is not set'));
   return enqueue(() => tg('sendMessage', { chat_id: presellChatId(), text: htmlLines(lines), parse_mode: 'HTML', disable_web_page_preview: true }));
 }
+// Any group chat by id — Alias Cross-Listing keeps its chat in app_settings, not the env
+// (docs/context/alias-cross-listing.md). Lines are strings or { b, t }.
+export function sendToChat(chatId, lines) {
+  if (!env('TELEGRAM_BOT_TOKEN')) return Promise.reject(new Error('TELEGRAM_BOT_TOKEN is not set'));
+  if (!chatId) return Promise.reject(new Error('No Telegram chat is set'));
+  return enqueue(() => tg('sendMessage', { chat_id: chatId, text: htmlLines(lines), parse_mode: 'HTML', disable_web_page_preview: true }));
+}
 // Pre-sell price moves (market competition + 🔒 lock) → their own group (owner, 2026-10-11).
 export const priceAlertChatId = () => env('PRICE_ALERT_CHAT_ID');
 export function sendPriceAlert(lines) {

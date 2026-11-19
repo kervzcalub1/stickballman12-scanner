@@ -57,6 +57,7 @@ import { InboundIssues } from './screens/InboundIssues.jsx';
 import { ManifestReports } from './screens/ManifestReports.jsx';
 import { Receipts } from './screens/Receipts.jsx';
 import { PresellListings } from './screens/PresellListings.jsx';
+import { AliasCross } from './screens/AliasCross.jsx';
 import { VinStock } from './screens/VinStock.jsx';
 
 // The supplier scan-out portal is served on the `supplier.` subdomain. This is a
@@ -259,6 +260,7 @@ export default function App() {
   if (view === 'ebay' && (isPrivilegedRole(user.role) || hasPriv(user, 'connect_integrations'))) return withAdvisor(<EbayListings user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'poizon' && isPrivilegedRole(user.role)) return withAdvisor(<PoizonOrders onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'stockx-listings' && isPrivilegedRole(user.role)) return withAdvisor(<StockxListings onHome={() => go('home')} onSignOut={signOut} isAdmin />);
+  if (view === 'alias-cross') return withAdvisor(<AliasCross onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'presell-listings') return withAdvisor(<PresellListings onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'vin-stock') return withAdvisor(<VinStock onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'access') return withAdvisor(<CheckAccess user={user} onHome={() => go('home')} onSignOut={signOut} />);

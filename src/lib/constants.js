@@ -5,7 +5,7 @@ import { CARD_WORDS } from './sheinWords.js';
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'expected', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'poizon', 'shein', 'cancellations', 'inbound-issues', 'stock-check', 'my-scans', 'lost-packages'];
+export const ROUTES = ['receiving', 'inbound', 'expected', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'poizon', 'shein', 'cancellations', 'inbound-issues', 'manifest-reports', 'stock-check', 'my-scans', 'lost-packages'];
 // No Box lives at /no-box (and /no-box/box-swap, /no-box/print-box-labels — no-box.md);
 // the old /nobox still opens it.
 const PATH_ALIAS = { nobox: 'no-box' };
@@ -129,6 +129,8 @@ export function homeCardBadges(key, c) {
   if (key === 'dup-tracking') return [['Open', c.dup_tracking_open]];
   // Inbound issues: amber = nobody has taken it / the floor has a job on it; the rest is
   // PH's work in progress, neutral.
+  // Manifest discrepancies nobody has taken: urgent, so it is the one red-amber number.
+  if (key === 'manifest-reports') return [['Not taken', c.manifest_reports_new]];
   if (key === 'inbound-issues') return [['New', c.inbound_issues_new], ['Warehouse to-do', c.inbound_issues_warehouse], ['Open', c.inbound_issues_open, 'info']];
   // Empty shoe boxes. "On hand" is stock, not a chore, so it reads as neutral info; only
   // the ones still to put away are amber. Both hide at 0, which is most days.
@@ -156,6 +158,8 @@ export const HOME_SECTIONS = [
     { key: 'presell', icon: '🔖', title: 'Pre-sell', sub: 'Shipments sold before they landed — say how many each order covers, then free the rest for listing' },
     // A problem recorded at receiving is a CASE the PH team owns until it's resolved
     // (inbound-issues.md) — here so the floor can report one later and see its jobs.
+    // The parcel's own paper says 4 pairs, the box holds 2: reported with photos, PH told at once.
+    { key: 'manifest-reports', icon: '📋', title: 'Manifest Discrepancies', sub: 'The packing slip or manifest in a parcel doesn’t match the box — report it with photos, the PH team is told at once' },
     { key: 'inbound-issues', icon: '⚠️', title: 'Inbound Issues', sub: 'Damaged, short or wrong deliveries — each one a case PH works with the supplier until it is resolved' },
     { key: 'costs', icon: '💵', title: 'Costs', sub: 'Fill in what a pair cost when the supplier left it off the manifest' },
   ] },
@@ -298,6 +302,8 @@ export const HOME_ATTENTION = [
   // shelve it), and — for the oversight — problems nobody has taken yet.
   { id: 'inbound-task', key: 'inbound-issues', label: 'Inbound issue jobs', count: 'inbound_issues_warehouse', query: { view: 'warehouse' }, tier: 'now' },
   // `adminOnly`: the warehouse can't take a case, so for them it's not a to-do.
+  // Manifest discrepancies are urgent and have their own page; admins see the untaken ones.
+  { id: 'manifest-new', key: 'manifest-reports', label: 'Manifest discrepancies not taken', count: 'manifest_reports_new', query: { view: 'open' }, tier: 'now', adminOnly: true },
   { id: 'inbound-new', key: 'inbound-issues', label: 'Inbound issues not taken', count: 'inbound_issues_new', query: { view: 'open' }, tier: 'now', adminOnly: true },
   // Shipments received without a manifest and not yet signed off. `query` opens the
   // Batches page already filtered to them (Home writes it after go()).

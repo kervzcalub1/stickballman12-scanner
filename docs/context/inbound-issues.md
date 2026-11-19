@@ -131,6 +131,12 @@ open it twice; `claim_amount` added 2026-10-25), `inbound_issue_events` (the tra
 an amount, keep → needs_shelf, returned → removed, trail order, page renders the claim facts;
 report-by-VIN and report-by-tracking after receiving.
 
+## Manifest discrepancy reports (2026-11-20)
+A parcel whose own paper does not match the box is a case of type **`manifest`** (source
+`manifest`), filed from its own page and alerted on its own urgent event. It can have **no
+batch** (reported before receiving): supplier / tracking number are then the report's own.
+Everything else here (take, waiting, resolve, daily summary) applies. `docs/context/manifest-reports.md`.
+
 ## Not yet
 - No backfill: issues recorded before 2026-10-24 stay plain records on their batches.
 - No return-label upload (paste the label link / tracking in the warehouse task or a note).

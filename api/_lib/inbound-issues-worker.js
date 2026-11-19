@@ -11,7 +11,7 @@
 // Production only by default (dev and prod share one Telegram bot); INBOUND_ISSUES_WORKER
 // =on / =off overrides, INBOUND_ISSUES_DIGEST_HOUR_EST moves the hour.
 import { listOpenInboundIssues, countInboundIssuesResolvedOn, listUnclaimedInboundIssues } from './db.js';
-import { alertInboundIssuesDaily, alertInboundIssueUnclaimed } from './alerts.js';
+import { alertInboundIssuesDaily, alertInboundIssueUnclaimed, alertManifestUnclaimed } from './alerts.js';
 import { estToday, estCivil, ymd } from '../../src/lib/format.js';
 
 const TICK_MS = 10 * 60 * 1000;
@@ -19,6 +19,11 @@ const TICK_MS = 10 * 60 * 1000;
 const remindHours = () => {
   const h = Number(process.env.INBOUND_ISSUES_REMIND_HOURS);
   return Number.isInteger(h) && h > 0 && h <= 72 ? h : 4;
+};
+// A manifest discrepancy is urgent: asked about again after 1 h (MANIFEST_REMIND_HOURS).
+const manifestRemindHours = () => {
+  const h = Number(process.env.MANIFEST_REMIND_HOURS);
+  return Number.isInteger(h) && h > 0 && h <= 72 ? h : 1;
 };
 const digestHour = () => {
   const h = Number(process.env.INBOUND_ISSUES_DIGEST_HOUR_EST);
@@ -42,7 +47,9 @@ export function inboundIssuesWorkerEnabled(env = process.env) {
 let lastDay = null;
 export async function inboundIssuesTick(now = new Date()) {
   // The re-ping first: it is per case and `once`, so a tick that repeats it says nothing.
-  for (const r of await listUnclaimedInboundIssues(remindHours())) await alertInboundIssueUnclaimed(r);
+  for (const r of await listUnclaimedInboundIssues(remindHours(), manifestRemindHours())) {
+    await (r.type === 'manifest' ? alertManifestUnclaimed(r) : alertInboundIssueUnclaimed(r));
+  }
   const day = estToday();
   if (lastDay === day || estHour(now) < digestHour()) return { sent: false };
   lastDay = day; // set first: a failed send is not retried every 10 minutes

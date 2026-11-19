@@ -91,6 +91,23 @@ every PURCHASE line for a SKU, from both ways we buy:
 - Not in it (yet): in-store buys (`kind='instore'`) and the cost already on received pairs
   (`items.cost`) — those are on the other two tabs' search. E2E: `e2e/cost-lookup.spec.js`.
 
+## Filters + Export CSV (2026-11-20)
+Owner: export what still needs a cost, by SKU, and filter by supplier and by a date range.
+- **Supplier** (`?sup=`) is filtered **on the server** (`listItemsMissingCost(…, { supplier })`,
+  case and outer spaces ignored, `(none)` = the batch names no supplier). Never in the browser:
+  the list is the newest 5,000 pairs and the real backlog is larger (13,800 on 2026-11-19), so a
+  filter over the loaded rows would silently lose pairs. The dropdown's suppliers and counts come
+  from `listCostBacklogSuppliers` (whole range, no cap); the response carries `suppliers` + `total`.
+- **Date range** (`?cf=` from, `?ct=` to): typed dates replace the Day / Week / Month bar while
+  set. No "To" = until today. EST days, like the bar.
+- **Export CSV**: `costExportCsv` (`src/lib/costs.js`), **one row per SKU whatever the size or
+  shipment**: SKU, name, colorway, pairs, sizes in one cell (`9 ×2 · 10 ×1`), supplier(s),
+  batch(es), first / last received, and an empty "Cost per pair" column to write in. It is what
+  the filters match, not what the page loaded: over the cap, the export asks again with `all=1`
+  (up to 50,000 pairs). Works on the $0 tab too. Not offered on a search.
+- The page says so when the range holds more pairs than it shows.
+- E2E: `e2e/costs-export.spec.js`.
+
 ## Granularity: batch + SKU + size
 `groupCostRows` makes one card per **batch + SKU**, with a row per size. One amount
 covers every pair of that size **in that shipment** — matching `po_lines.unit_cost`

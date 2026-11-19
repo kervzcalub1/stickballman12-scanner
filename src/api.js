@@ -248,6 +248,9 @@ export const api = {
   inboundIssueAction: (id, action, extra = {}) => post('/api/inbound-issues/action', { id, action, ...extra }),
   reportInboundIssue: (body) => post('/api/inbound-issues/report', body),
   inboundIssuePhotoSign: (contentType, id = null) => post('/api/inbound-issues/photo-sign', { contentType, id }),
+  // Manifest discrepancy reports (docs/context/manifest-reports.md)
+  manifestReports: (view = 'open') => get(`/api/inbound-issues/manifests?view=${encodeURIComponent(view)}`),
+  reportManifestDiscrepancy: (body) => post('/api/inbound-issues/manifest-report', body),
   cancellationPhoto: (photoId) => downloadBlob(`/api/cancellations/photo?id=${encodeURIComponent(photoId)}`),
   searchSku: (sku) => post('/api/sku-search', { sku }),
   // GS received as men's: what this GS code was last received as (receiving.md).

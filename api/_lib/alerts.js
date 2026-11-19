@@ -22,6 +22,7 @@ import { fundingTarget } from './buycart.js';
 import { fundingWords } from '../../src/lib/buycartRules.js';
 import { merchantLabel } from '../../src/lib/giftCardMerchants.js';
 import { issueHeadline, outcomeLabel, ageFlags, ago, STALE_DAYS } from '../../src/lib/inboundIssues.js';
+import { manifestDiffLines, originLabel, gapWords } from '../../src/lib/manifestReports.js';
 
 const isAdminRole = (role) => role === 'admin' || role === 'superadmin';
 // Anyone who can raise a buying request: staff, and a supplier switched on for buying.
@@ -178,6 +179,15 @@ export const ALERT_EVENTS = [
     when: 'The warehouse records a problem with a delivery — damaged, short, wrong or defective pair. Take it and work it with the supplier',
     who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
     defaultFor: (u) => u.role === 'ph_team',
+  },
+  // A parcel whose own manifest does not match what is in the box (manifest-reports.md).
+  // Its own switch, on for PH AND admins: the owner asked for these to be urgent, always.
+  {
+    key: 'inbound.manifest_discrepancy', group: 'Inbound issues', emoji: '🚨', required: false,
+    title: 'URGENT: manifest doesn’t match the box',
+    when: 'The warehouse reports a parcel whose packing slip or manifest lists more (or other) pairs than the box holds, with photos of both. Take it and claim from the store or supplier',
+    who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
+    defaultFor: (u) => u.role === 'ph_team' || isAdminRole(u.role),
   },
   {
     key: 'inbound.issue_assigned', group: 'Inbound issues', emoji: '👤', required: false,
@@ -347,6 +357,7 @@ const ROUTES = {
   newinv:    { main: '/report',        ph: '/ph/new-inventory' },
   cancellations: { main: '/cancellations', ph: '/ph/cancellations' },
   inboundissues: { main: '/inbound-issues', ph: '/ph/inbound-issues' },
+  manifestreports: { main: '/manifest-reports', ph: '/ph/manifest-reports' },
   expected:  { main: '/expected',      ph: '/ph/expected' },
   postatus:  { main: '/reconcile',     ph: '/ph/po-status' },
   ebaysync:  { main: '/ebay?tab=sync', ph: '/ph/ebay-listings?tab=sync' },
@@ -809,6 +820,46 @@ export function alertInboundIssuesReported(rows, by) {
     body: `${by?.name || 'The warehouse'} reported ${rows.length === 1 ? 'a problem' : `${rows.length} problems`}${issueWhere(first) ? ` (${issueWhere(first)})` : ''}:\n${lines.join('\n')}${more}\n\nOpen it and tap “Take it” — one person owns each case.`,
     path: at('inboundissues', rows.length === 1 ? `id=${first.id}` : 'view=open'),
   }));
+}
+
+// A manifest discrepancy report: urgent, with everything needed to start the claim from
+// the message itself — the counts, the rows that differ, and the photos as links.
+const manifestBody = (row) => {
+  const m = row.manifest || {};
+  const diffs = manifestDiffLines(m.lines);
+  return [
+    [originLabel(m.origin), m.store || row.supplier, m.orderNumber && `order #${m.orderNumber}`].filter(Boolean).join(' · '),
+    row.tracking_number ? `Tracking # ${row.tracking_number}` : 'No tracking number given',
+    row.batch_code ? `Received as ${row.batch_code}` : '',
+    '',
+    `Manifest lists ${row.expected_count ?? '?'} · in the box ${row.received_count ?? '?'} → ${gapWords(row.expected_count, row.received_count)}`,
+    ...diffs.slice(0, 12).map((l) => `• ${l}`),
+    diffs.length > 12 ? `…and ${diffs.length - 12} more rows.` : '',
+    m.note ? `Note: ${m.note}` : '',
+    '',
+    ...(m.boxPhotos || []).map((u, i) => `📦 Boxes ${i + 1}: ${u}`),
+    ...(m.manifestPhotos || []).map((u, i) => `📄 Manifest ${i + 1}: ${u}`),
+  ].filter((l, i, a) => l !== '' || (i > 0 && a[i - 1] !== '')).join('\n').trim();
+};
+export function alertManifestDiscrepancy(row, by) {
+  if (!row) return;
+  fireAlert(() => alertUsers('inbound.manifest_discrepancy', {
+    actorUid: by?.id ?? null,
+    ref: `manifest:${row.id}`,
+    code: `Case #${row.id} · reported by ${by?.name || row.reported_by || 'the warehouse'}`,
+    body: `${manifestBody(row)}\n\nOpen it and tap “Take it”. One person owns the claim.`,
+    path: at('manifestreports', `id=${row.id}`),
+  }));
+}
+// Still on "Not taken" after the urgent window: asked about once more, on the same switch.
+export async function alertManifestUnclaimed(row) {
+  return alertUsers('inbound.manifest_discrepancy', {
+    once: true,
+    ref: `manifest-remind:${row.id}`,
+    code: `Case #${row.id} · still not taken`,
+    body: `Nobody has taken this yet (reported ${ago(row.created_at)} ago by ${row.reported_by || 'the warehouse'}).\n${manifestBody(row)}\n\nOpen it and tap “Take it”.`,
+    path: at('manifestreports', `id=${row.id}`),
+  });
 }
 
 export function alertInboundIssueAssigned(row, toUid, by) {

@@ -54,6 +54,7 @@ import { Undelivered } from './screens/Undelivered.jsx';
 import { LostPackages } from './screens/LostPackages.jsx';
 import { Cancellations } from './screens/Cancellations.jsx';
 import { InboundIssues } from './screens/InboundIssues.jsx';
+import { ManifestReports } from './screens/ManifestReports.jsx';
 import { Receipts } from './screens/Receipts.jsx';
 import { PresellListings } from './screens/PresellListings.jsx';
 import { VinStock } from './screens/VinStock.jsx';
@@ -246,6 +247,8 @@ export default function App() {
     : <Home user={user} onPick={go} onSignOut={signOut} />;
   if (view === 'cancellations') return withAdvisor(<Cancellations onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'inbound-issues') return withAdvisor(<InboundIssues onHome={() => go('home')} onSignOut={signOut} />);
+  // A parcel whose own manifest does not match the box (manifest-reports.md).
+  if (view === 'manifest-reports') return withAdvisor(<ManifestReports onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'dup-tracking') return withAdvisor(<TrackingDuplicates user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // Store receipts the mailbox sweep filed (receipts.md).
   if (view === 'receipts') return withAdvisor(<Receipts user={user} onHome={() => go('home')} onSignOut={signOut} />);

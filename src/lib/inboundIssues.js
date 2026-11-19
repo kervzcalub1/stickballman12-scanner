@@ -11,6 +11,7 @@
 import { toCsv } from './manifestCsv.js';
 import { estDate, estTime } from './format.js';
 import { ISSUE_TYPES, DEFECT_TYPES } from './constants.js';
+import { gapWords } from './manifestReports.js';
 
 // open        → nobody owns it yet (the alert went out; somebody has to take it)
 // in_progress → an owner is on it (contacting the supplier, starting a return …)
@@ -55,6 +56,7 @@ const SHIPMENT = Object.fromEntries(ISSUE_TYPES);
 const PAIR = Object.fromEntries(DEFECT_TYPES);
 export function typeLabel(scope, type) {
   if (type === 'online_order') return 'Doesn’t match the online order';
+  if (type === 'manifest') return 'Manifest doesn’t match the box';
   return (scope === 'pair' ? PAIR[type] : SHIPMENT[type]) || SHIPMENT[type] || PAIR[type] || String(type || 'Issue');
 }
 /** The types a person can pick when reporting by hand on the page. */
@@ -107,6 +109,10 @@ export function issueHeadline(r) {
   const shortBy = r.type === 'online_order' && r.expected_count != null && r.received_count != null ? Number(r.expected_count) - Number(r.received_count) : 0;
   // …and pairs that are not what was ordered (the description lists them).
   const wrong = r.type === 'online_order' && /not on the order|extra \(/.test(String(r.description || ''));
+  if (r.type === 'manifest') {
+    const from = [r.manifest?.store || r.supplier, r.manifest?.orderNumber && `order #${r.manifest.orderNumber}`].filter(Boolean).join(' ');
+    return `Manifest says ${r.expected_count ?? '?'}, box has ${r.received_count ?? '?'} (${gapWords(r.expected_count, r.received_count)})${from ? ` — ${from}` : ''}`;
+  }
   const what = shortBy > 0 ? `Online order parcel SHORT by ${shortBy}${wrong ? ' + WRONG pairs' : ''}`
     : wrong ? 'Online order parcel has WRONG pairs' : typeLabel(r.scope, r.type);
   const pair = r.scope === 'pair' ? [r.sku, r.size ? `size ${r.size}` : '', r.vin].filter(Boolean).join(' · ') : '';

@@ -199,14 +199,15 @@ export function unitCost(shoeCost, poCost, defaultCost) {
 export const NO_SUPPLIER = '(none)';
 const supKey = (s) => String(s || '').trim().toLowerCase();
 
-// One row per SKU, whatever the size and whatever shipment it came in on: the list
-// someone takes away to find the costs. Sizes ride along as one cell ("8 ×2 · 9.5 ×1").
+// One row per SKU PER SUPPLIER, whatever the size and whatever shipment it came in on: the
+// list someone takes away to find the costs. The supplier is part of the row because the
+// same shoe from two suppliers has two costs, and it is what the upload maps a cost back by. Sizes ride along as one cell ("8 ×2 · 9.5 ×1").
 // SKUs group with case/spaces/dashes ignored, the way the rest of the app matches them.
 export function costExportRows(rows) {
   const bare = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const map = new Map();
   for (const r of rows || []) {
-    const key = bare(r.sku) || `name:${supKey(r.name)}`;
+    const key = `${bare(r.sku) || `name:${supKey(r.name)}`}|#|${supKey(r.supplier_name)}`;
     let g = map.get(key);
     if (!g) {
       g = { sku: r.sku || '', name: r.name || '', colorway: r.colorway || '', pairs: 0,
@@ -237,7 +238,7 @@ export function costExportRows(rows) {
       batches: [...g._batches].sort().join('; '),
       first: g.first || '', last: g.last || '',
     }))
-    .sort((a, b) => a.sku.localeCompare(b.sku) || a.name.localeCompare(b.name));
+    .sort((a, b) => a.sku.localeCompare(b.sku) || a.name.localeCompare(b.name) || a.suppliers.localeCompare(b.suppliers));
 }
 
 // The CSV of exactly the rows on screen. `zero` = the "$0, check these" tab. The last
@@ -249,4 +250,77 @@ export function costExportCsv(rows, { zero = false } = {}) {
   const body = costExportRows(rows).map((r) =>
     [r.sku, r.name, r.colorway, r.pairs, r.sizes, r.suppliers, r.batches, r.first, r.last, '']);
   return '﻿' + [head, ...body].map((r) => r.map(cell).join(',')).join('\r\n') + '\r\n';
+}
+
+// ── Upload the filled CSV back (2026-11-20) ──────────────────────────────────
+// The export leaves "Cost per pair" empty; someone fills it in a spreadsheet and the
+// file comes back. One cost per SKU + supplier (the file's Supplier column), for every size
+// and shipment of it the filters hold. An empty Supplier cell means the pairs that have no
+// supplier. A file with no Supplier column at all fills the SKU whoever it came from.
+// A SKU as a key: letters and digits only, upper case.
+export const skuKey = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+export const COST_IMPORT_MAX = 3000;
+const MAX_IMPORT_COST = 100000;
+
+// RFC 4180: quoted commas, "" escapes, CRLF or LF. Excel also saves with ";" in some
+// regions, so the separator is whichever the header row uses.
+function csvRows(text) {
+  const s = String(text || '').replace(/^﻿/, '');
+  const head = s.slice(0, s.search(/[\r\n]|$/));
+  const sep = (head.match(/;/g) || []).length > (head.match(/,/g) || []).length ? ';' : ',';
+  const rows = []; let row = []; let cur = ''; let inQ = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inQ) {
+      if (c === '"' && s[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') inQ = false; else cur += c;
+    } else if (c === '"') inQ = true;
+    else if (c === sep) { row.push(cur); cur = ''; } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && s[i + 1] === '\n') i++;
+      row.push(cur); rows.push(row); row = []; cur = '';
+    } else cur += c;
+  }
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+
+/**
+ * Read a filled-in export. → { error } or { rows: [{ sku, supplier, cost }], bySupplier, skipped: [{ sku, why }], blank }
+ *   bySupplier — the file has a Supplier column, so each cost goes to that supplier's pairs only;
+ *   rows    — SKUs with a usable cost (what is sent to the server);
+ *   skipped — a row that has something in the cost cell we will not use, and why;
+ *   blank   — rows whose cost cell is still empty (not a problem: not filled in yet).
+ */
+export function readCostImport(text) {
+  const all = csvRows(text).filter((r) => r.some((c) => String(c).trim() !== ''));
+  if (!all.length) return { error: 'That file is empty.' };
+  const head = all[0].map((h) => String(h).trim().toLowerCase());
+  const skuAt = head.indexOf('sku');
+  const costAt = head.findIndex((h) => h === 'cost per pair' || h === 'cost');
+  if (skuAt < 0 || costAt < 0) return { error: 'This isn’t the Costs export: it needs a “SKU” column and a “Cost per pair” column. Use Export CSV, fill in the last column, and upload that file.' };
+  const supAt = head.indexOf('supplier');
+  const bySupplier = supAt >= 0;
+  const seen = new Map(); const skipped = []; let blank = 0;
+  for (const r of all.slice(1)) {
+    const sku = String(r[skuAt] ?? '').trim();
+    const raw = String(r[costAt] ?? '').trim();
+    if (raw === '') { blank += 1; continue; }
+    if (!skuKey(sku)) { skipped.push({ sku: sku || '(no SKU)', why: 'no SKU on this row' }); continue; }
+    const n = Number(raw.replace(/[$,\s]/g, ''));
+    if (!Number.isFinite(n) || n < 0) { skipped.push({ sku, why: `“${raw}” is not an amount` }); continue; }
+    if (n === 0) { skipped.push({ sku, why: '$0 is not filled in bulk. If the pair really was free, type 0 on the page' }); continue; }
+    if (n > MAX_IMPORT_COST) { skipped.push({ sku, why: `$${raw} looks wrong` }); continue; }
+    const cost = Math.round(n * 100) / 100;
+    const supplier = bySupplier ? String(r[supAt] ?? '').trim() : '';
+    const key = `${skuKey(sku)}|${supKey(supplier)}`;
+    const had = seen.get(key);
+    if (had && had.cost !== cost) { had.clash = true; continue; }
+    if (!had) seen.set(key, { sku, supplier, cost, clash: false });
+  }
+  const rows = [];
+  for (const v of seen.values()) {
+    if (v.clash) skipped.push({ sku: v.sku, why: `the file has this SKU${v.supplier ? ` from ${v.supplier}` : ''} twice with two different costs` });
+    else rows.push({ sku: v.sku, supplier: v.supplier, cost: v.cost });
+  }
+  if (rows.length > COST_IMPORT_MAX) return { error: `That file fills ${rows.length} SKUs. Upload at most ${COST_IMPORT_MAX} at a time.` };
+  return { rows, bySupplier, skipped, blank };
 }

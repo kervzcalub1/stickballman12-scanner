@@ -14,6 +14,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar } from '../components/common.jsx';
 import { DefectPhotos } from '../components/DefectPhotos.jsx';
+import { ReceivingEvidence } from '../components/ReceivingEvidence.jsx';
 import { TrackingLink } from '../components/TrackingLink.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -59,7 +60,7 @@ function Report({ row, canWork, focused, onTake, busy, onOpenPhoto }) {
   const store = m?.store || row.online_store || row.supplier;
   const orderNo = m?.orderNumber || row.online_order_number;
   // Photos not filed under "boxes" or "manifest": added to the case later, or an automatic find's.
-  const other = (row.photos || []).filter((u) => !(m?.boxPhotos || []).includes(u) && !(m?.manifestPhotos || []).includes(u));
+  const other = (row.photos || []).filter((u) => !(m?.boxPhotos || []).includes(u) && !(m?.manifestPhotos || []).includes(u) && !(m?.labelPhotos || []).includes(u));
   return (
     <div className={`ii-case ii-${row.status}${focused ? ' focused' : ''}`} id={`report-${row.id}`}>
       <div className="ii-head">
@@ -98,9 +99,12 @@ function Report({ row, canWork, focused, onTake, busy, onOpenPhoto }) {
       {m?.note && <p className="ii-desc"><span className="muted xs">Note</span><br />{m.note}</p>}
       {!m && row.description && <p className="ii-desc">{row.description}</p>}
 
+      <Photos label="The shipping label" urls={m?.labelPhotos} onOpen={onOpenPhoto} />
+      {m?.noLabel && <p className="muted sm">Shipping label: no longer available — the carton was already thrown away.</p>}
       <Photos label="The boxes" urls={m?.boxPhotos} onOpen={onOpenPhoto} />
       <Photos label="The manifest" urls={m?.manifestPhotos} onOpen={onOpenPhoto} />
       <Photos label={m ? 'Added later' : 'Photos'} urls={other} onOpen={onOpenPhoto} />
+      <ReceivingEvidence evidence={row.evidence} onOpen={onOpenPhoto} />
       {!m && !(row.photos || []).length && !resolved && (
         <p className="muted sm mr-nophotos">No photos yet. Open the case and add the boxes and the packing slip.</p>
       )}
@@ -137,6 +141,8 @@ function ReportModal({ onClose, onDone, onSignOut }) {
   const [lines, setLines] = useState([]);
   const [boxPhotos, setBoxPhotos] = useState([]);
   const [manifestPhotos, setManifestPhotos] = useState([]);
+  const [labelPhotos, setLabelPhotos] = useState([]);
+  const [noLabel, setNoLabel] = useState(false);
   const [note, setNote] = useState('');
   const [order, setOrder] = useState(null);     // the online order this tracking number is on, if any
   const [busy, setBusy] = useState(false);
@@ -168,7 +174,7 @@ function ReportModal({ onClose, onDone, onSignOut }) {
   const rows = cleanManifestLines(lines);
   const totals = manifestTotals({ lines, listed, got });
   const setLine = (i, k, v) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, [k]: v } : l)));
-  const form = { origin, store, orderNumber, lines, listed, got, note, boxPhotos, manifestPhotos };
+  const form = { origin, store, orderNumber, lines, listed, got, note, boxPhotos, manifestPhotos, labelPhotos, noLabel: noLabel && !labelPhotos.length };
 
   async function submit(e) {
     e.preventDefault();
@@ -247,6 +253,13 @@ function ReportModal({ onClose, onDone, onSignOut }) {
             {rows.length > 0 && <span className="muted xs">The two totals above now add up from these rows.</span>}
           </div>
 
+          <div className="form-modal-label"><span>Photo of the shipping label<i className="form-modal-req" aria-hidden="true">*</i></span>
+            <span className="muted xs">Still on the carton, the tracking number readable. The store asks for this before it looks at a claim.</span>
+            {!noLabel && <DefectPhotos photos={labelPhotos} max={6} onChange={setLabelPhotos} onSignOut={onSignOut} sign={(t) => api.inboundIssuePhotoSign(t)} />}
+            {!labelPhotos.length && (
+              <label className="mr-nolabel sm"><input type="checkbox" checked={noLabel} onChange={(e) => setNoLabel(e.target.checked)} disabled={busy} /> The carton is already thrown away — there is no label to photograph</label>
+            )}
+          </div>
           <div className="form-modal-label"><span>Photo of the boxes that arrived<i className="form-modal-req" aria-hidden="true">*</i></span>
             <span className="muted xs">Every shoe box from the parcel in one picture, so the count can be seen.</span>
             <DefectPhotos photos={boxPhotos} max={6} onChange={setBoxPhotos} onSignOut={onSignOut} sign={(t) => api.inboundIssuePhotoSign(t)} />

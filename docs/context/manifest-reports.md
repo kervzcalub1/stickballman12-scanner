@@ -22,6 +22,7 @@ received yet, or the paper is a supplier's.
   and offers **Fill in its shoes**), order #.
 - **Manifest lists N pairs / In the box M pairs** (required). Optional shoe rows (shoe or SKU,
   size, manifest, in box); once rows are typed the totals add up from them.
+- **Photo of the shipping label** first (2026-11-20, `receiving-evidence.md`): required, or tick "the carton is already thrown away" (`manifest.noLabel`, `manifest.labelPhotos`).
 - **Photo of the boxes + photo of the manifest: both required**, up to 6 each (R2, the
   inbound-issues `photo-sign`). No escape hatch: without the paper it is not this report.
 - Same count on both sides needs a note saying what differs (wrong shoe / size).

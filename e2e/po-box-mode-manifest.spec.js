@@ -12,6 +12,7 @@
 import { test, expect } from '@playwright/test';
 import { signToken } from '../api/_lib/util.js';
 import { loadEnv, loginAs } from './helpers/auth.js';
+import { stubClaimUploads, shootClaim } from './helpers/claimPhotos.js';
 import pg from 'pg';
 
 loadEnv();
@@ -93,6 +94,13 @@ test('continuing box 2 from the Batch page shows THAT label’s manifest, and sc
   // Committing the box still files the pairs under box 2 of this batch.
   await page.getByRole('button', { name: 'Review →' }).click();
   await page.getByRole('button', { name: 'Next →' }).click();
+  // The box is one pair short of its label (size 11 never came out): the claim photos are
+  // required before it can be saved (receiving-evidence.md).
+  await stubClaimUploads(page);
+  await expect(page.locator('.oo-claim')).toContainText('pairs missing against the purchase order');
+  await page.getByRole('button', { name: /Submit box/i }).click();
+  await expect(page.locator('.error')).toContainText('Take the photos for the claim first');
+  await shootClaim(page, ['label', 'pairs', 'slip']);
   await page.getByRole('button', { name: /Submit box/i }).click();
   await page.getByRole('button', { name: /Yes, (commit|submit)/i }).click();
   await expect(page.locator('.modal')).toContainText(/saved|received/i, { timeout: 15_000 });

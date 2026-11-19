@@ -15,6 +15,7 @@
 //
 // Like notify.js this runs AFTER the response has gone (`fireAlert`), and it swallows
 // everything: an alert that fails costs the person a message, never a request.
+import { evidenceCount, evidenceWords } from '../../src/lib/receivingEvidence.js';
 import { telegramConfigured, sendAlertMessage, sendAlertDocument } from './telegram.js';
 import { listPoDropoffReceipts, alertCandidates, logAlert, setTelegramBroken, alertSentRecently, cartParticipantIds, poParticipantIds,
   getBuyCart, cartListChangesSince } from './db.js';
@@ -813,11 +814,13 @@ export function alertInboundIssuesReported(rows, by) {
   const first = rows[0];
   const lines = rows.slice(0, 10).map((r) => `#${r.id} ${issueHeadline(r)}${(r.photos || []).length ? ` · ${r.photos.length} photo${r.photos.length === 1 ? '' : 's'}` : ''}`);
   const more = rows.length > 10 ? `\n…and ${rows.length - 10} more.` : '';
+  // The claim photos taken at the bench ride on the delivery (receiving-evidence.md).
+  const ev = evidenceCount(first.evidence) ? `\n📷 Taken at receiving: ${evidenceWords(first.evidence)}` : '';
   fireAlert(() => alertUsers('inbound.issue_reported', {
     actorUid: by?.id ?? null,
     ref: `inbound:${first.id}`,
     code: rows.length === 1 ? `#${first.id}` : `#${first.id}–#${rows[rows.length - 1].id}`,
-    body: `${by?.name || 'The warehouse'} reported ${rows.length === 1 ? 'a problem' : `${rows.length} problems`}${issueWhere(first) ? ` (${issueWhere(first)})` : ''}:\n${lines.join('\n')}${more}\n\nOpen it and tap “Take it” — one person owns each case.`,
+    body: `${by?.name || 'The warehouse'} reported ${rows.length === 1 ? 'a problem' : `${rows.length} problems`}${issueWhere(first) ? ` (${issueWhere(first)})` : ''}:\n${lines.join('\n')}${more}${ev}\n\nOpen it and tap “Take it” — one person owns each case.`,
     path: at('inboundissues', rows.length === 1 ? `id=${first.id}` : 'view=open'),
   }));
 }
@@ -837,6 +840,8 @@ const manifestBody = (row) => {
     diffs.length > 12 ? `…and ${diffs.length - 12} more rows.` : '',
     m.note ? `Note: ${m.note}` : '',
     '',
+    ...(m.labelPhotos || []).map((u, i) => `🏷 Shipping label ${i + 1}: ${u}`),
+    m.noLabel ? '🏷 Shipping label: no longer available (carton thrown away)' : '',
     ...(m.boxPhotos || []).map((u, i) => `📦 Boxes ${i + 1}: ${u}`),
     ...(m.manifestPhotos || []).map((u, i) => `📄 Manifest ${i + 1}: ${u}`),
   ].filter((l, i, a) => l !== '' || (i > 0 && a[i - 1] !== '')).join('\n').trim();

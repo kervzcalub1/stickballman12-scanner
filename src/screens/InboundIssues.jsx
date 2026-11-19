@@ -15,6 +15,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, FormModal } from '../components/common.jsx';
 import { DefectPhotos } from '../components/DefectPhotos.jsx';
+import { ReceivingEvidence } from '../components/ReceivingEvidence.jsx';
+import { evidenceCount, EVIDENCE_KEYS, EVIDENCE_LABEL } from '../lib/receivingEvidence.js';
 import { TrackingLink } from '../components/TrackingLink.jsx';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
@@ -57,6 +59,7 @@ function claimText(r) {
     (r.expected_count != null || r.received_count != null) && `Expected ${r.expected_count ?? '?'}, received ${r.received_count ?? '?'}`,
     r.description && `Details: ${r.description}`,
     (r.photos || []).length && `Photos:\n${r.photos.join('\n')}`,
+    evidenceCount(r.evidence) && `Photos taken at receiving:\n${EVIDENCE_KEYS.flatMap((k) => (r.evidence[k] || []).map((u) => `${EVIDENCE_LABEL[k]}: ${u}`)).join('\n')}`,
   ].filter(Boolean).join('\n');
 }
 
@@ -155,6 +158,8 @@ function Case({ row, canWork, me, assignees, onChanged, onOpenPhoto, onError, se
           ))}
         </div>
       )}
+
+      <ReceivingEvidence evidence={row.evidence} onOpen={onOpenPhoto} />
 
       {row.warehouse_task && (
         <div className={`ii-task ${row.warehouse_done_at ? 'done' : ''}`}>

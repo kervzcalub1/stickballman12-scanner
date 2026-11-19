@@ -184,7 +184,7 @@ test('a box that doesn’t match its online order: short / not on order on Revie
   await expect(claim).toHaveAttribute('data-claim-left', '3');
   await expect(claim.locator('.oo-short-msg')).toContainText(`order #P750 (${code}), tracking ${T}. Ordered 4, received 2, short by 2`);
   await page.getByRole('button', { name: 'Finish batch' }).click();
-  await expect(page.locator('.error')).toContainText('Take the claim photos first');
+  await expect(page.locator('.error')).toContainText('Take the photos for the claim first');
   const shoot = async (key) => {
     await claim.locator(`[data-claim="${key}"] input[type=file]`).last().setInputFiles({ name: `${key}.png`, mimeType: 'image/png', buffer: PNG });
     await expect(claim.locator(`[data-claim="${key}"] .dp-thumb`)).toHaveCount(1);

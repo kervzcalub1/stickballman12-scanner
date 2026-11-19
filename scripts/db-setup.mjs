@@ -2486,6 +2486,81 @@ await sql(`CREATE INDEX IF NOT EXISTS presell_listings_stock_idx ON presell_list
 // that delivery shows them, including one opened days later.
 await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS evidence JSONB`);
 await sql(`ALTER TABLE batch_boxes ADD COLUMN IF NOT EXISTS evidence JSONB`);
+// Alias Cross-Listing (2026-11-20, docs/context/alias-cross-listing.md): ONE physical pair
+// listed on Alias under several SKUs that are the same shoe (re-releases), to take whichever
+// SKU's price is better. A sale on any SKU takes one listing down on every other.
+//   cross_groups      one per shoe family the user put together by hand
+//   cross_group_skus  the Alias catalogue entries in it (SKU, catalog_id, name, picture)
+//   cross_pool        one row per group + size: pairs we have (qty), sold, the cost of a pair
+//   cross_listings    one row per Alias listing (external_id = Alias's listing id)
+//   cross_sales       one row per Alias order, unique — the watcher sees an order every poll
+await sql(`
+  CREATE TABLE IF NOT EXISTS cross_groups (
+    id          BIGSERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    created_by  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS cross_group_skus (
+    id          BIGSERIAL PRIMARY KEY,
+    group_id    BIGINT NOT NULL REFERENCES cross_groups(id) ON DELETE CASCADE,
+    sku         TEXT NOT NULL,
+    catalog_id  TEXT NOT NULL,
+    name        TEXT,
+    image       TEXT,
+    sizes       JSONB,            -- { "<size label>": <the number Alias wants on a listing> }
+    UNIQUE (group_id, catalog_id)
+  )`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS cross_pool (
+    id          BIGSERIAL PRIMARY KEY,
+    group_id    BIGINT NOT NULL REFERENCES cross_groups(id) ON DELETE CASCADE,
+    size        TEXT NOT NULL,
+    qty         INTEGER NOT NULL DEFAULT 0 CHECK (qty >= 0),
+    sold        INTEGER NOT NULL DEFAULT 0 CHECK (sold >= 0),
+    unit_cost   NUMERIC(12,2),
+    created_by  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (group_id, size)
+  )`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS cross_listings (
+    id            BIGSERIAL PRIMARY KEY,
+    pool_id       BIGINT NOT NULL REFERENCES cross_pool(id) ON DELETE CASCADE,
+    group_sku_id  BIGINT NOT NULL REFERENCES cross_group_skus(id) ON DELETE CASCADE,
+    external_id   TEXT NOT NULL UNIQUE,
+    size_value    NUMERIC(5,1),
+    price_cents   INTEGER NOT NULL CHECK (price_cents > 0),
+    status        TEXT NOT NULL CHECK (status IN ('live', 'off', 'sold', 'deleted')),
+    delete_reason TEXT,
+    last_error    TEXT,
+    created_by    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by    TEXT,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sold_at       TIMESTAMPTZ,
+    deleted_at    TIMESTAMPTZ
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS cross_listings_pool_idx ON cross_listings (pool_id, status)`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS cross_sales (
+    id            BIGSERIAL PRIMARY KEY,
+    pool_id       BIGINT NOT NULL REFERENCES cross_pool(id) ON DELETE CASCADE,
+    listing_id    BIGINT REFERENCES cross_listings(id) ON DELETE SET NULL,
+    group_sku_id  BIGINT REFERENCES cross_group_skus(id) ON DELETE SET NULL,
+    order_id      TEXT NOT NULL UNIQUE,
+    price_cents   INTEGER,
+    payout_cents  INTEGER,
+    unit_cost     NUMERIC(12,2),
+    sold_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    raw           JSONB,
+    notified_at   TIMESTAMPTZ,
+    notify_error  TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
 // IN TRANSIT (2026-10-10, Alex): pairs listed while still on their way, to catch the hype.
 // When the warehouse RECEIVES that SKU + size, every unsold Alias/StockX listing for it is
 // DELETED and the pre-sell group is told, so PH / Nikki list the real pairs properly.
@@ -3983,6 +4058,7 @@ const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
   'shein_category_map', 'shein_brand_map',
+  'cross_pool', 'cross_listings', 'cross_sales',
   'app_settings', 'payout_presets', 'shipment_issues', 'shipment_tracking',
   'purchase_orders', 'po_boxes', 'po_lines', 'po_comments', 'po_resolutions', 'deleted_pos',
   'po_stores', 'po_store_charges', 'po_store_receipts', 'po_dropoff_receipts', 'po_label_files', 'presell_stock_po', 'presell_box_lines',

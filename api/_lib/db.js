@@ -15732,3 +15732,129 @@ export async function receivingEvidenceFor(batchId, boxId = null) {
       FROM batches b WHERE b.id = ${batchId}`;
   return rows[0]?.evidence || null;
 }
+
+/* ------------------------- Alias Cross-Listing -------------------------- */
+// docs/context/alias-cross-listing.md. One pool of pairs per group + size, listed on Alias
+// under every SKU of the group; a sale on one SKU takes a listing down on the others.
+
+export async function createCrossGroup({ name, skus }, actor) {
+  const sql = db();
+  const g = await sql`INSERT INTO cross_groups (name, created_by) VALUES (${name}, ${actor}) RETURNING id`;
+  const id = Number(g[0].id);
+  for (const k of skus) {
+    await sql`
+      INSERT INTO cross_group_skus (group_id, sku, catalog_id, name, image, sizes)
+      VALUES (${id}, ${k.sku}, ${k.catalogId}, ${k.name || null}, ${k.image || null}, ${JSON.stringify(k.sizes || {})}::jsonb)
+      ON CONFLICT (group_id, catalog_id) DO NOTHING`;
+  }
+  return id;
+}
+export async function getCrossGroupSkus(groupId) {
+  return await db()`SELECT * FROM cross_group_skus WHERE group_id = ${groupId} ORDER BY id`;
+}
+// Removes a group with its sizes, listings and sales rows (the tests' cleanup; nothing on Alias is touched).
+export async function deleteCrossGroup(id) {
+  await db()`DELETE FROM cross_groups WHERE id = ${id}`;
+}
+export async function crossGroupExists(id) {
+  return !!(await db()`SELECT 1 FROM cross_groups WHERE id = ${id}`)[0];
+}
+// Add pairs to a size of a group (creates the row). A cost given replaces the one there.
+export async function upsertCrossPool({ groupId, size, addQty, unitCost = null }, actor) {
+  const rows = await db()`
+    INSERT INTO cross_pool (group_id, size, qty, unit_cost, created_by, updated_by)
+    VALUES (${groupId}, ${size}, ${addQty}, ${unitCost}, ${actor}, ${actor})
+    ON CONFLICT (group_id, size) DO UPDATE SET
+      qty = cross_pool.qty + EXCLUDED.qty,
+      unit_cost = COALESCE(EXCLUDED.unit_cost, cross_pool.unit_cost),
+      updated_by = EXCLUDED.updated_by, updated_at = now()
+    RETURNING *`;
+  return rows[0];
+}
+export async function getCrossPool(id) {
+  const rows = await db()`
+    SELECT p.*, g.name AS group_name FROM cross_pool p JOIN cross_groups g ON g.id = p.group_id WHERE p.id = ${id}`;
+  return rows[0] || null;
+}
+export async function setCrossPool(id, { qty = null, unitCost = undefined }, actor) {
+  const hasCost = unitCost !== undefined;
+  const rows = await db()`
+    UPDATE cross_pool SET
+      qty = COALESCE(${qty}::int, qty),
+      unit_cost = CASE WHEN ${hasCost} THEN ${hasCost ? unitCost : null}::numeric ELSE unit_cost END,
+      updated_by = ${actor}, updated_at = now()
+    WHERE id = ${id} AND (${qty}::int IS NULL OR ${qty}::int >= sold)
+    RETURNING *`;
+  return rows[0] || null;
+}
+export async function insertCrossListing(l, actor) {
+  const rows = await db()`
+    INSERT INTO cross_listings (pool_id, group_sku_id, external_id, size_value, price_cents, status, created_by, updated_by)
+    VALUES (${l.pool_id}, ${l.group_sku_id}, ${l.external_id}, ${l.size_value ?? null}, ${l.price_cents}, ${l.status}, ${actor}, ${actor})
+    ON CONFLICT (external_id) DO NOTHING RETURNING id`;
+  return rows[0] ? Number(rows[0].id) : null;
+}
+export async function updateCrossListing(id, p, actor) {
+  const has = (k) => Object.prototype.hasOwnProperty.call(p, k);
+  await db()`
+    UPDATE cross_listings SET
+      status = CASE WHEN ${has('status')} THEN ${p.status ?? null} ELSE status END,
+      price_cents = CASE WHEN ${has('price_cents')} THEN ${p.price_cents ?? null}::int ELSE price_cents END,
+      last_error = CASE WHEN ${has('last_error')} THEN ${p.last_error ?? null} ELSE last_error END,
+      delete_reason = CASE WHEN ${has('delete_reason')} THEN ${p.delete_reason ?? null} ELSE delete_reason END,
+      deleted_at = CASE WHEN ${p.status === 'deleted'} AND deleted_at IS NULL THEN now() ELSE deleted_at END,
+      updated_by = ${actor}, updated_at = now()
+    WHERE id = ${id}`;
+}
+// Listings still on Alias for a size of a group (live or switched off), oldest first.
+export async function openCrossListings(poolId) {
+  return await db()`
+    SELECT l.*, k.sku, k.catalog_id FROM cross_listings l JOIN cross_group_skus k ON k.id = l.group_sku_id
+    WHERE l.pool_id = ${poolId} AND l.status IN ('live', 'off') ORDER BY l.created_at, l.id`;
+}
+export async function crossListingsByExternal(ids) {
+  const list = [...new Set((ids || []).map(String).filter(Boolean))];
+  if (!list.length) return [];
+  return await db()`
+    SELECT l.*, k.sku, k.name AS sku_name, k.image FROM cross_listings l JOIN cross_group_skus k ON k.id = l.group_sku_id
+    WHERE l.external_id = ANY(${list})`;
+}
+export async function crossHasOpenListings() {
+  return !!(await db()`SELECT 1 FROM cross_listings WHERE status IN ('live', 'off') LIMIT 1`)[0];
+}
+// One Alias order lands ONCE: the sale row is the lock (unique order_id); only then is the
+// listing marked sold and the pool's sold count raised.
+export async function recordCrossSale({ listing, orderId, priceCents, payoutCents, soldAt, raw }, actor) {
+  const sql = db();
+  const ins = await sql`
+    INSERT INTO cross_sales (pool_id, listing_id, group_sku_id, order_id, price_cents, payout_cents, unit_cost, sold_at, raw)
+    VALUES (${listing.pool_id}, ${listing.id}, ${listing.group_sku_id}, ${orderId}, ${priceCents}, ${payoutCents},
+            (SELECT unit_cost FROM cross_pool WHERE id = ${listing.pool_id}), ${soldAt}::timestamptz, ${JSON.stringify(raw || {})}::jsonb)
+    ON CONFLICT (order_id) DO NOTHING RETURNING id`;
+  if (!ins[0]) return null;
+  await sql.transaction([
+    sql`UPDATE cross_listings SET status = 'sold', sold_at = ${soldAt}::timestamptz, updated_by = ${actor}, updated_at = now() WHERE id = ${listing.id}`,
+    sql`UPDATE cross_pool SET sold = sold + 1, updated_by = ${actor}, updated_at = now() WHERE id = ${listing.pool_id}`,
+  ]);
+  return Number(ins[0].id);
+}
+export async function markCrossSaleNotified(id, error = null) {
+  await db()`UPDATE cross_sales SET notified_at = CASE WHEN ${error}::text IS NULL THEN now() ELSE notified_at END, notify_error = ${error} WHERE id = ${id}`;
+}
+// Everything the page shows: groups, their SKUs, each size's pool, the open listings and
+// the newest sales.
+export async function listCrossAll() {
+  const sql = db();
+  const [groups, skus, pools, listings, sales] = await Promise.all([
+    sql`SELECT * FROM cross_groups ORDER BY id DESC LIMIT 300`,
+    sql`SELECT * FROM cross_group_skus ORDER BY id`,
+    sql`SELECT * FROM cross_pool ORDER BY id`,
+    sql`SELECT id, pool_id, group_sku_id, external_id, price_cents, status, last_error, created_at FROM cross_listings WHERE status IN ('live', 'off') ORDER BY id`,
+    sql`SELECT s.id, s.pool_id, s.group_sku_id, s.order_id, s.price_cents, s.payout_cents, s.unit_cost, s.sold_at, s.notified_at, s.notify_error,
+               p.size, p.group_id, k.sku, k.name AS sku_name, k.image, g.name AS group_name
+        FROM cross_sales s JOIN cross_pool p ON p.id = s.pool_id JOIN cross_groups g ON g.id = p.group_id
+        LEFT JOIN cross_group_skus k ON k.id = s.group_sku_id
+        ORDER BY s.sold_at DESC, s.id DESC LIMIT 500`,
+  ]);
+  return { groups, skus, pools, listings, sales };
+}

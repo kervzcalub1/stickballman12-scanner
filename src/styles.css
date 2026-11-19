@@ -7937,3 +7937,43 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
 .batch-evidence .rcv-ev:first-child { margin-top: 0; }
 .oo-claim-why { margin: 4px 0 6px; padding-left: 18px; }
 .mr-nolabel { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); margin-top: 4px; }
+/* Alias Cross-Listing — src/screens/AliasCross.jsx */
+.xl-h { margin: 0 0 6px; font-size: 16px; }
+.xl-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.xl-search { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.xl-search .input { flex: 1 1 220px; min-width: 0; }
+.xl-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 12px; }
+.xl-card { display: flex; align-items: center; gap: 10px; text-align: left; padding: 8px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer; min-width: 0; font: inherit; }
+.xl-card:hover { border-color: #3a4150; }
+.xl-card.on { border-color: var(--primary); background: rgba(79,124,255,0.12); }
+.xl-card-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; font-size: 13px; }
+.xl-card-body b { overflow-wrap: anywhere; }
+.xl-sku { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--primary); }
+.xl-tick { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-content: center; border: 1px solid var(--border); font-weight: 700; }
+.xl-card.on .xl-tick { background: var(--primary); border-color: var(--primary); color: #fff; }
+.xl-thumb { flex: none; width: 72px; height: 54px; object-fit: contain; background: #fff; border-radius: 8px; }
+.xl-thumb-none { display: grid; place-content: center; font-size: 10px; color: #6b7280; }
+.xl-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.xl-chip { display: inline-flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); font-size: 13px; max-width: 100%; min-width: 0; }
+.xl-chip .xl-thumb, .xl-th .xl-thumb { width: 48px; height: 36px; }
+.xl-chip > span { min-width: 0; overflow-wrap: anywhere; }
+.xl-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+.xl-tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 16px; margin: 10px 0; }
+.xl-field { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; max-width: 520px; }
+.xl-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.xl-num { width: 84px; min-width: 0; padding: 6px 8px; }
+.xl-table th, .xl-table td { white-space: nowrap; vertical-align: top; }
+.xl-table tr.xl-on td { background: rgba(79,124,255,0.07); }
+.xl-th { display: inline-flex; align-items: center; gap: 6px; text-align: left; }
+.xl-mkt { font-size: 11px; margin-top: 2px; }
+.xl-use { background: none; border: 0; padding: 0; color: var(--primary); cursor: pointer; font: inherit; text-decoration: underline; }
+.xl-short { color: #e9c46a; }
+.xl-good { color: var(--ok); }
+.xl-done { margin-top: 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(46,204,113,0.4); background: rgba(46,204,113,0.08); display: grid; gap: 4px; }
+.xl-done.warn { border-color: rgba(233,196,106,0.4); background: rgba(233,196,106,0.10); }
+.xl-edit { display: grid; gap: 8px; padding: 6px 0; white-space: normal; }
+.xl-edit-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.xl-edit-sku { min-width: 150px; }
+.xl-steps { margin: 6px 0 4px; padding-left: 20px; display: grid; gap: 4px; }
+.xl-sizes { max-height: 68vh; overflow: auto; }
+.xl-sizes thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); }

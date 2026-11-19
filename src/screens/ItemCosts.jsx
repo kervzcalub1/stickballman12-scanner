@@ -15,13 +15,21 @@ import { CostLookup } from '../components/CostLookup.jsx';
 import { TopBar, DateRangeBar, PriceInput } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useLive } from '../hooks.js';
-import { rangeOf, PH_DATE } from '../lib/format.js';
+import { rangeOf, PH_DATE, estToday } from '../lib/format.js';
+import { downloadCSV } from '../lib/csv.js';
 import { sizeLabel } from '../lib/codes.js';
-import { groupCostRows, costFieldValue, costChanged } from '../lib/costs.js';
+import {
+  groupCostRows, costFieldValue, costChanged,
+  costExportRows, costExportCsv, NO_SUPPLIER,
+} from '../lib/costs.js';
 import { useQueryParam, useQueryDateRange } from '../lib/urlstate.js';
 
 export function ItemCosts({ onHome, onSignOut }) {
   const [rows, setRows] = useState(null);
+  // The backlog's suppliers and its full size, counted on the server over the whole
+  // range: `rows` is the newest 5,000 only.
+  const [meta, setMeta] = useState({ suppliers: [], total: 0 });
+  const [exporting, setExporting] = useState(false);
   const [drafts, setDrafts] = useState({});      // `${groupKey}|${size}` -> typed string
   const [savingKey, setSavingKey] = useState(null);
   const [error, setError] = useState('');
@@ -43,13 +51,23 @@ export function ItemCosts({ onHome, onSignOut }) {
   // order line for a SKU with what a pair cost — read-only, its own search (?lq=).
   const tab = tabRaw === 'zero' ? 'zero' : tabRaw === 'lookup' ? 'lookup' : 'blank'; // the URL is a pointer, not a value to trust
   const counts = usePendingCounts();
+  // The two filters on the backlog (2026-11-20), both in the URL and both carried into
+  // the CSV: a supplier (?sup=), and a date range typed by hand (?cf= from, ?ct= to;
+  // no "to" = up to today). A typed range replaces the Day/Week/Month bar while it is on.
+  const [sup, setSup] = useQueryParam('sup');
+  const [cfRaw, setCf] = useQueryParam('cf');
+  const [ctRaw, setCt] = useQueryParam('ct');
+  const isYmd = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+  const cf = isYmd(cfRaw) ? cfRaw : '';
+  const ct = cf && isYmd(ctRaw) && ctRaw >= cf ? ctRaw : '';
+  const range = () => (cf ? [cf, ct || null] : rangeOf(dr.mode, dr.anchor));
 
   async function loadWorklist(nextTab = tab) {
     setError(''); setRows(null);
     try {
-      const [from, to] = rangeOf(dr.mode, dr.anchor);
-      const { rows: r } = await api.costsList(from, to, nextTab === 'zero' ? 'zero' : null);
-      setRows(r); setDrafts({}); setSearched('');
+      const [from, to] = range();
+      const { rows: r, suppliers, total } = await api.costsList(from, to, nextTab === 'zero' ? 'zero' : null, sup);
+      setRows(r); setMeta({ suppliers: suppliers || [], total: total ?? r.length }); setDrafts({}); setSearched('');
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => {
@@ -58,7 +76,7 @@ export function ItemCosts({ onHome, onSignOut }) {
     // instead of loading the backlog the person didn't ask for.
     if (!searched && query.trim() && rows === null) { runSearch(); return; }
     if (!searched) loadWorklist();
-  }, [dr, tab]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dr, tab, cf, ct, sup]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function runSearch(e) {
     e?.preventDefault?.();
@@ -76,6 +94,25 @@ export function ItemCosts({ onHome, onSignOut }) {
   }
 
   const groups = rows ? groupCostRows(rows) : null;
+  const supplierOptions = searched ? [] : meta.suppliers;
+  const capped = !searched && rows != null && meta.total > rows.length;   // more pairs than the page loaded
+  const exportSkus = rows && !searched ? costExportRows(rows).length : 0;
+  // The file is what the filters say, not what the page managed to load: when the range
+  // holds more than the page's 5,000 pairs, the whole of it is fetched for the export.
+  async function exportCsv() {
+    if (!rows?.length || exporting) return;
+    const [from, to] = range();
+    setExporting(true); setError('');
+    try {
+      let all = rows;
+      if (capped) ({ rows: all } = await api.costsList(from, to, tab === 'zero' ? 'zero' : null, sup, true));
+      const slug = (v) => String(v).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const name = ['costs', tab === 'zero' ? 'at-0' : 'no-cost', sup ? slug(sup === NO_SUPPLIER ? 'no-supplier' : sup) : '',
+        `${from}-to-${to || estToday()}`].filter(Boolean).join('-');
+      downloadCSV(`${name}.csv`, costExportCsv(all, { zero: tab === 'zero' }));
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setExporting(false); }
+  }
   const draftKey = (g, s) => `${g.key}|${s.size}`;
   const draftFor = (g, s) => {
     const k = draftKey(g, s);
@@ -134,8 +171,13 @@ export function ItemCosts({ onHome, onSignOut }) {
     let r;
     if (searched) ({ rows: r } = await api.costsSearch(searched));
     else {
-      const [from, to] = rangeOf(dr.mode, dr.anchor);
-      ({ rows: r } = await api.costsList(from, to, tab === 'zero' ? 'zero' : null));
+      const [from, to] = range();
+      let suppliers; let total;
+      ({ rows: r, suppliers, total } = await api.costsList(from, to, tab === 'zero' ? 'zero' : null, sup));
+      setMeta((m) => {
+        const next = { suppliers: suppliers || [], total: total ?? r.length };
+        return JSON.stringify(m) === JSON.stringify(next) ? m : next;
+      });
     }
     setRows((cur) => {
       if (!cur) return cur;
@@ -147,6 +189,8 @@ export function ItemCosts({ onHome, onSignOut }) {
 
   const totalPairs = groups ? groups.reduce((n, g) => n + g.qty, 0) : 0;
   const totalMissing = groups ? groups.reduce((n, g) => n + g.missing, 0) : 0;
+  const shownPairs = capped ? meta.total : totalPairs;
+  const pairsLine = groups ? `${shownPairs.toLocaleString('en-US')} pair${shownPairs === 1 ? '' : 's'} ${tab === 'zero' ? 'at $0' : 'with no cost'}${sup ? ` · ${sup === NO_SUPPLIER ? 'no supplier' : sup}` : ''}` : '';
 
   const tabs = (
     <div className="seg cost-tabs" role="tablist">
@@ -214,8 +258,57 @@ export function ItemCosts({ onHome, onSignOut }) {
                 Type the real amount, or leave the ones that are correct alone.
               </p>
             )}
-            <DateRangeBar mode={dr.mode} anchor={dr.anchor} onChange={(mode, anchor) => setDr({ mode, anchor })}
-              right={<span className="muted sm">{groups ? `${totalPairs} pair${totalPairs === 1 ? '' : 's'} ${tab === 'zero' ? 'at $0' : 'with no cost'}` : ''}</span>} />
+            {cf ? (
+              <p className="cost-range-on sm">
+                Showing pairs received <b>from {cf}</b> {ct ? <>to <b>{ct}</b></> : <>until <b>today</b></>} (EST).{' '}
+                <span className="muted">{pairsLine}</span>
+              </p>
+            ) : (
+              <DateRangeBar mode={dr.mode} anchor={dr.anchor} onChange={(mode, anchor) => setDr({ mode, anchor })}
+                right={<span className="muted sm">{pairsLine}</span>} />
+            )}
+            <div className="cost-filters">
+              <label className="cost-filter">
+                <span>Supplier</span>
+                <select value={sup} onChange={(e) => setSup(e.target.value)} aria-label="Supplier">
+                  <option value="">All suppliers</option>
+                  {sup && !supplierOptions.some((o) => o.value === sup) && (
+                    <option value={sup}>{sup === NO_SUPPLIER ? 'No supplier' : sup} (0)</option>
+                  )}
+                  {supplierOptions.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.value === NO_SUPPLIER ? 'No supplier' : o.value} ({o.pairs})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="cost-filter">
+                <span>From</span>
+                <input type="date" value={cf} max={estToday()} aria-label="From date"
+                  onChange={(e) => setCf(e.target.value)} />
+              </label>
+              <label className="cost-filter">
+                <span>To</span>
+                <input type="date" value={ct} min={cf || undefined} max={estToday()} disabled={!cf}
+                  aria-label="To date" title={cf ? 'Leave empty for “until today”' : 'Pick a From date first'}
+                  onChange={(e) => setCt(e.target.value)} />
+              </label>
+              {(cf || sup) && (
+                <button className="btn sm ghost" type="button" onClick={() => { setCf(''); setCt(''); setSup(''); }}>
+                  Clear filters
+                </button>
+              )}
+              <button className="btn sm cost-export" type="button" onClick={exportCsv} disabled={!exportSkus || exporting}
+                title="One row per SKU, with its sizes — everything the filters above match">
+                <Icon name="download" /> {exporting ? 'Exporting…' : `Export CSV${exportSkus && !capped ? ` (${exportSkus} SKU${exportSkus === 1 ? '' : 's'})` : ''}`}
+              </button>
+            </div>
+            {capped && (
+              <p className="cost-zero-note sm">
+                This range holds <b>{meta.total.toLocaleString('en-US')}</b> pairs; the page shows the newest {rows.length.toLocaleString('en-US')}.
+                Pick a supplier or narrow the dates to see the rest. <b>Export CSV includes all of them.</b>
+              </p>
+            )}
           </>
         )}
 
@@ -231,7 +324,9 @@ export function ItemCosts({ onHome, onSignOut }) {
         {!groups ? <p className="muted">Loading…</p>
           : !groups.length ? (
             <p className="ok">
-              {searched ? 'No pairs found.' : 'All clear — every pair in this range has a cost on file.'}
+              {searched ? 'No pairs found.'
+                : sup ? 'Nothing for this supplier in this range.'
+                : 'All clear — every pair in this range has a cost on file.'}
             </p>
           ) : (
             <div className="cost-groups">

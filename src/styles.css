@@ -1147,6 +1147,22 @@ body {
   border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 14px;
 }
 .cost-tabs { margin: 4px 0 8px; flex-wrap: wrap; }
+/* Supplier + typed date range + Export CSV, under the period bar (2026-11-20). */
+.cost-filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; margin: 10px 0 4px; }
+.cost-filter { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); min-width: 0; }
+.cost-filter select, .cost-filter input {
+  padding: 7px 9px; border-radius: 9px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); font-size: 14px; max-width: 100%;
+}
+.cost-filter select { min-width: 180px; }
+.cost-filters .cost-export { margin-left: auto; }
+.cost-range-on { margin: 6px 0 0; }
+@media (max-width: 640px) {
+  .cost-filter { flex: 1 1 140px; }
+  .cost-filter select { min-width: 0; width: 100%; }
+  .cost-filter input { width: 100%; }
+  .cost-filters .cost-export { margin-left: 0; width: 100%; justify-content: center; }
+}
 /* Cost lookup tab (CostLookup.jsx): a read-only spreadsheet of every PO + online order
    line for a SKU. Tables reuse .und-table (cards under 760px). */
 .cl-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }

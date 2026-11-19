@@ -363,7 +363,7 @@ export const api = {
   instoreListed: (vins, flags) => post('/api/items/instore-listed', { vins, ...flags }),
   // Costs page: the "no cost on file" backlog, a SKU lookup for fixing one that's
   // already there, and the save. Blank cost clears to unknown, never to $0.
-  costsList: (from, to, mode) => get(`/api/items/costs?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(mode ? { mode } : {}) }).toString()}`),
+  costsList: (from, to, mode, supplier, all) => get(`/api/items/costs?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(mode ? { mode } : {}), ...(supplier ? { supplier } : {}), ...(all ? { all: '1' } : {}) }).toString()}`),
   costsSearch: (q) => get(`/api/items/costs?q=${encodeURIComponent(q)}`),
   costLookup: (q) => get(`/api/items/cost-lookup${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   setItemsCost: (vins, cost) => post('/api/items/set-cost', { vins, cost }),

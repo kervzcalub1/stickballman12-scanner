@@ -20,7 +20,7 @@ import { downloadCSV } from '../lib/csv.js';
 import { sizeLabel } from '../lib/codes.js';
 import {
   groupCostRows, costFieldValue, costChanged,
-  costExportRows, costExportCsv, NO_SUPPLIER,
+  costExportRows, costExportCsv, NO_SUPPLIER, readCostImport,
 } from '../lib/costs.js';
 import { useQueryParam, useQueryDateRange } from '../lib/urlstate.js';
 
@@ -30,6 +30,11 @@ export function ItemCosts({ onHome, onSignOut }) {
   // range: `rows` is the newest 5,000 only.
   const [meta, setMeta] = useState({ suppliers: [], total: 0 });
   const [exporting, setExporting] = useState(false);
+  // The filled-in export coming back: { name, rows, skipped, blank, plan } once read and
+  // previewed. Nothing is written until "Fill" is pressed.
+  const [upload, setUpload] = useState(null);
+  const [uploadBusy, setUploadBusy] = useState('');
+  const fileRef = useRef(null);
   const [drafts, setDrafts] = useState({});      // `${groupKey}|${size}` -> typed string
   const [savingKey, setSavingKey] = useState(null);
   const [error, setError] = useState('');
@@ -113,6 +118,42 @@ export function ItemCosts({ onHome, onSignOut }) {
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
     finally { setExporting(false); }
   }
+  const importBody = (rowsToSend, bySupplier) => {
+    const [from, to] = range();
+    return { rows: rowsToSend, bySupplier, from, to, supplier: sup || null, mode: tab === 'zero' ? 'zero' : null };
+  };
+  async function onUploadFile(e) {
+    const file = e.target.files?.[0];
+    if (e.target) e.target.value = '';
+    if (!file) return;
+    setError(''); setNotice(''); setUpload(null); setUploadBusy('read');
+    try {
+      const read = readCostImport(await file.text());
+      if (read.error) { setError(read.error); return; }
+      if (!read.rows.length) {
+        setError(read.skipped.length
+          ? `No cost in that file could be used: ${read.skipped.slice(0, 3).map((s) => `${s.sku} (${s.why})`).join('; ')}.`
+          : 'The “Cost per pair” column is still empty in that file. Fill it in, save, and upload it again.');
+        return;
+      }
+      const plan = await api.costImport(importBody(read.rows, read.bySupplier));
+      setUpload({ name: file.name, ...read, plan });
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setUploadBusy(''); }
+  }
+  async function applyUpload() {
+    if (!upload?.plan?.pairs) return;
+    setUploadBusy('fill'); setError('');
+    try {
+      // Only the SKUs the preview found pairs for: the rest have nothing to fill.
+      const r = await api.costImport({ ...importBody(upload.plan.matched.map((m) => ({ sku: m.sku, supplier: m.supplier, cost: m.cost })), upload.bySupplier), apply: true });
+      setUpload(null);
+      setNotice(`Filled ${r.pairs.toLocaleString('en-US')} pair${r.pairs === 1 ? '' : 's'} across ${r.skus} SKU${r.skus === 1 ? '' : 's'} from ${upload.name}. Each pair’s history says “CSV upload”.`);
+      await loadWorklist();
+    } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
+    finally { setUploadBusy(''); }
+  }
+
   const draftKey = (g, s) => `${g.key}|${s.size}`;
   const draftFor = (g, s) => {
     const k = draftKey(g, s);
@@ -185,7 +226,7 @@ export function ItemCosts({ onHome, onSignOut }) {
       const next = [...r, ...cur.filter((x) => !have.has(x.vin) && keptVins.current.has(x.vin))];
       return JSON.stringify(cur) === JSON.stringify(next) ? cur : next;
     });
-  }, { mount: false, paused: tab === 'lookup' || rows == null || !!savingKey || Object.keys(drafts).length > 0 });
+  }, { mount: false, paused: tab === 'lookup' || rows == null || !!savingKey || !!upload || Object.keys(drafts).length > 0 });
 
   const totalPairs = groups ? groups.reduce((n, g) => n + g.qty, 0) : 0;
   const totalMissing = groups ? groups.reduce((n, g) => n + g.missing, 0) : 0;
@@ -298,11 +339,56 @@ export function ItemCosts({ onHome, onSignOut }) {
                   Clear filters
                 </button>
               )}
-              <button className="btn sm cost-export" type="button" onClick={exportCsv} disabled={!exportSkus || exporting}
-                title="One row per SKU, with its sizes — everything the filters above match">
-                <Icon name="download" /> {exporting ? 'Exporting…' : `Export CSV${exportSkus && !capped ? ` (${exportSkus} SKU${exportSkus === 1 ? '' : 's'})` : ''}`}
+              <button className="btn sm cost-export" type="button" onClick={() => fileRef.current?.click()} disabled={!!uploadBusy}
+                title="Upload the exported file with “Cost per pair” filled in. You see what it will fill before anything is saved">
+                {uploadBusy === 'read' ? 'Reading…' : '⬆ Upload filled CSV'}
+              </button>
+              <button className="btn sm" type="button" onClick={exportCsv} disabled={!exportSkus || exporting}
+                title="One row per SKU and supplier, with its sizes — everything the filters above match">
+                <Icon name="download" /> {exporting ? 'Exporting…' : `Export CSV${exportSkus && !capped ? ` (${exportSkus} row${exportSkus === 1 ? '' : 's'})` : ''}`}
               </button>
             </div>
+            <input ref={fileRef} type="file" accept=".csv,text/csv" hidden aria-label="Filled CSV file" onChange={onUploadFile} />
+            {upload && (
+              <div className="cost-upload" role="region" aria-label="Upload preview">
+                <p className="sm">
+                  <b>{upload.name}</b>: <b>{upload.plan.pairs.toLocaleString('en-US')}</b> pair{upload.plan.pairs === 1 ? '' : 's'} across{' '}
+                  <b>{upload.plan.skus}</b> SKU{upload.plan.skus === 1 ? '' : 's'} will get a cost.{' '}
+                  <span className="muted">
+                    {upload.bySupplier ? 'One cost per SKU and supplier (the file’s Supplier column)' : 'One cost per SKU, whoever the supplier (the file has no Supplier column)'}, for every size, within the filters above
+                    ({cf ? `from ${cf} ${ct ? `to ${ct}` : 'until today'}` : 'the period shown'}{sup ? `, ${sup === NO_SUPPLIER ? 'no supplier' : sup}` : ', every supplier'}).
+                    Pairs that already have a cost are not touched.
+                  </span>
+                </p>
+                {upload.plan.matched.length > 0 && (
+                  <ul className="cost-backfill-list sm cost-upload-list">
+                    {upload.plan.matched.slice(0, 40).map((m) => (
+                      <li key={`${m.sku}|${m.supplier}`}><b>{m.sku}</b>{upload.bySupplier ? ` · ${m.supplier || 'no supplier'}` : ''} · ${m.cost.toFixed(2)} · {m.pairs} pair{m.pairs === 1 ? '' : 's'}</li>
+                    ))}
+                    {upload.plan.matched.length > 40 && <li className="muted">…and {upload.plan.matched.length - 40} more rows.</li>}
+                  </ul>
+                )}
+                {upload.plan.unmatched.length > 0 && (
+                  <p className="sm cost-upload-warn">
+                    <b>{upload.plan.unmatched.length}</b> row{upload.plan.unmatched.length === 1 ? ' has' : 's have'} no pair waiting for a cost in these filters, so nothing is filled for {upload.plan.unmatched.length === 1 ? 'it' : 'them'}:{' '}
+                    {upload.plan.unmatched.slice(0, 12).map((u) => (u.supplier ? `${u.sku} (${u.supplier})` : u.sku)).join(', ')}{upload.plan.unmatched.length > 12 ? '…' : ''}
+                  </p>
+                )}
+                {upload.skipped.length > 0 && (
+                  <p className="sm cost-upload-warn">
+                    <b>{upload.skipped.length}</b> row{upload.skipped.length === 1 ? '' : 's'} left out:{' '}
+                    {upload.skipped.slice(0, 8).map((s) => `${s.sku} (${s.why})`).join('; ')}{upload.skipped.length > 8 ? '…' : ''}
+                  </p>
+                )}
+                {upload.blank > 0 && <p className="muted sm">{upload.blank} row{upload.blank === 1 ? '' : 's'} with the cost still empty: left as they are.</p>}
+                <div className="cost-upload-actions">
+                  <button className="btn sm primary" type="button" disabled={!upload.plan.pairs || !!uploadBusy} onClick={applyUpload}>
+                    {uploadBusy === 'fill' ? 'Filling…' : `Fill ${upload.plan.pairs.toLocaleString('en-US')} pair${upload.plan.pairs === 1 ? '' : 's'}`}
+                  </button>
+                  <button className="btn sm ghost" type="button" disabled={!!uploadBusy} onClick={() => setUpload(null)}>Cancel</button>
+                </div>
+              </div>
+            )}
             {capped && (
               <p className="cost-zero-note sm">
                 This range holds <b>{meta.total.toLocaleString('en-US')}</b> pairs; the page shows the newest {rows.length.toLocaleString('en-US')}.

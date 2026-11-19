@@ -3251,6 +3251,64 @@ export async function listItemsMissingCost(from = null, to = null, zero = false,
   `;
 }
 
+// The filled-in export coming back (costs.md → "Upload the filled CSV"): one cost per SKU
+// (per supplier when the file names one),
+// for every pair of it the SAME filters as the list hold. `keys` are bare SKUs (letters and
+// digits), `costs` the amount for each. apply=false counts what would be filled and writes
+// nothing; apply=true writes the cost and one history note per pair in ONE statement, with
+// the blank (or $0, on that tab) re-checked in the UPDATE itself, so a cost typed between
+// the preview and the click is never overwritten.
+export async function costImport({ keys, sups = null, costs, from = null, to = null, zero = false, supplier = null, apply = false, by = null }) {
+  if (!keys?.length) return [];
+  const sup = supplier == null || String(supplier).trim() === '' ? null : String(supplier).trim();
+  const none = sup === COST_NO_SUPPLIER;
+  // `sups` (one per key, lower case, '' = no supplier): the file's own Supplier column. When
+  // given, a cost goes only to that supplier's pairs; null = the SKU whoever it came from.
+  const bySup = Array.isArray(sups);
+  const supList = bySup ? sups : keys.map(() => '');
+  if (!apply) {
+    return await db()`
+      SELECT u.key, u.sup, count(*)::int AS pairs
+        FROM unnest(${keys}::text[], ${supList}::text[], ${costs}::numeric[]) AS u(key, sup, cost)
+        JOIN items i ON regexp_replace(upper(coalesce(i.sku, '')), '[^A-Z0-9]', '', 'g') = u.key
+        LEFT JOIN batches b ON b.id = i.batch_id
+       WHERE (CASE WHEN ${zero}::boolean THEN i.cost = 0 ELSE i.cost IS NULL END)
+         AND i.status NOT IN ('missing', 'issue')
+         AND (b.kind IS NULL OR b.kind <> ALL(${COST_EXCLUDED_KINDS}))
+         AND (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+         AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+         AND (${sup}::text IS NULL
+              OR (CASE WHEN ${none}::boolean THEN coalesce(btrim(b.supplier_name), '') = ''
+                       ELSE lower(btrim(b.supplier_name)) = lower(${sup}::text) END))
+         AND (${bySup}::boolean = false OR lower(coalesce(btrim(b.supplier_name), '')) = u.sup)
+       GROUP BY u.key, u.sup`;
+  }
+  return await db()`
+    WITH pick AS (
+      SELECT i.id, u.key, u.sup, u.cost
+        FROM unnest(${keys}::text[], ${supList}::text[], ${costs}::numeric[]) AS u(key, sup, cost)
+        JOIN items i ON regexp_replace(upper(coalesce(i.sku, '')), '[^A-Z0-9]', '', 'g') = u.key
+        LEFT JOIN batches b ON b.id = i.batch_id
+       WHERE (CASE WHEN ${zero}::boolean THEN i.cost = 0 ELSE i.cost IS NULL END)
+         AND i.status NOT IN ('missing', 'issue')
+         AND (b.kind IS NULL OR b.kind <> ALL(${COST_EXCLUDED_KINDS}))
+         AND (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+         AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+         AND (${sup}::text IS NULL
+              OR (CASE WHEN ${none}::boolean THEN coalesce(btrim(b.supplier_name), '') = ''
+                       ELSE lower(btrim(b.supplier_name)) = lower(${sup}::text) END))
+         AND (${bySup}::boolean = false OR lower(coalesce(btrim(b.supplier_name), '')) = u.sup)),
+    up AS (
+      UPDATE items i SET cost = pick.cost, updated_at = now()
+        FROM pick
+       WHERE i.id = pick.id AND (CASE WHEN ${zero}::boolean THEN i.cost = 0 ELSE i.cost IS NULL END)
+      RETURNING i.id, pick.key, pick.sup, pick.cost),
+    ev AS (
+      INSERT INTO item_events (item_id, type, details, created_by)
+      SELECT id, 'note', jsonb_build_object('text', 'Cost set to $' || to_char(cost, 'FM999999990.00') || ' (CSV upload)'), ${by || null} FROM up)
+    SELECT key, sup, count(*)::int AS pairs FROM up GROUP BY key, sup`;
+}
+
 // The suppliers behind the backlog in a date range, with how many pairs each has — the
 // Costs page's supplier filter. Counted over EVERY pair in the range (no cap), so the
 // list and its numbers stay true when the page itself shows only the newest 5,000.

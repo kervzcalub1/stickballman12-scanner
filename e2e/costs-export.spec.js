@@ -65,7 +65,7 @@ test('supplier + date range narrow the page and the CSV, one row per SKU', async
   await expect(page.locator('.cost-groups')).not.toContainText('E2E CX Other');
   await expect(page.getByLabel('Supplier').locator('option:checked')).toContainText('(4)');
 
-  let [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /Export CSV \(1 SKU\)/ }).click()]);
+  let [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /Export CSV \(1 row\)/ }).click()]);
   expect(dl.suggestedFilename()).toContain(`${longAgo}-to-${today}`);
   let lines = await readCsv(dl);
   expect(lines[0]).toContain('SKU,Name');

@@ -108,6 +108,28 @@ Owner: export what still needs a cost, by SKU, and filter by supplier and by a d
 - The page says so when the range holds more pairs than it shows.
 - E2E: `e2e/costs-export.spec.js`.
 
+## Upload the filled CSV (2026-11-20)
+Owner: the exported file should be uploaded back for bulk filling, mapped by supplier.
+- **The export is one row per SKU PER SUPPLIER** (was per SKU): the same shoe from two
+  suppliers has two costs, and the Supplier column is what the upload maps a cost back by.
+- **⬆ Upload filled CSV** (beside Export): the file is read in the browser (`readCostImport`,
+  `src/lib/costs.js`: needs a `SKU` and a `Cost per pair` column; `Supplier` optional; `,` or `;`
+  separated; `$` and thousands commas accepted) → `POST /api/items/cost-import` **preview**
+  (writes nothing) → the page lists each SKU · supplier · cost · pairs, what has no pair waiting,
+  what was left out and why → **Fill N pairs** (`apply: true`).
+- **Mapping:** SKU on letters and digits only (`skuKey`), supplier case-insensitive. An empty
+  Supplier cell = pairs with no supplier. A file with no Supplier column fills the SKU whoever
+  it came from. One cost covers every size and shipment of that SKU + supplier.
+- **Only inside the filters on screen** (dates, supplier, the blank / $0 tab), the same ones the
+  export used; the preview says which.
+- **Only a blank cost is filled** (a `$0` on that tab). Re-checked inside the UPDATE, so a cost
+  typed between the preview and the click is kept. A cost on file is never overwritten.
+- **Left out and named:** not an amount, `$0` (never in bulk), the same SKU + supplier twice
+  with two costs. An empty cost cell is simply not filled yet.
+- One `item_events` note per pair: "Cost set to $X (CSV upload)", by the person. Up to 3,000
+  rows a file. Same roles as `set-cost`. `costImport` in `api/_lib/db.js`, one statement.
+- E2E: `e2e/costs-import.spec.js`.
+
 ## Granularity: batch + SKU + size
 `groupCostRows` makes one card per **batch + SKU**, with a row per size. One amount
 covers every pair of that size **in that shipment** — matching `po_lines.unit_cost`

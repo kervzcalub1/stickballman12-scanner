@@ -1157,6 +1157,12 @@ body {
 .cost-filter select { min-width: 180px; }
 .cost-filters .cost-export { margin-left: auto; }
 .cost-range-on { margin: 6px 0 0; }
+/* The uploaded file's preview: what it will fill, before anything is saved. */
+.cost-upload { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid rgba(110,168,254,.45); background: rgba(110,168,254,.08); border-radius: 12px; }
+.cost-upload p { margin: 0 0 6px; }
+.cost-upload-list { max-height: 220px; overflow: auto; margin: 4px 0 8px; }
+.cost-upload-warn { color: #e0a33f; overflow-wrap: anywhere; }
+.cost-upload-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 @media (max-width: 640px) {
   .cost-filter { flex: 1 1 140px; }
   .cost-filter select { min-width: 0; width: 100%; }

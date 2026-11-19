@@ -10,7 +10,8 @@
 //   · every 15 min (PRESELL_COMP_EVERY_MIN) — the 🔒 price lock + market competition.
 //   · every 2 min — fulfilment: each sale's order read back (status, label, tracking, ship by)
 //     until it ships (presell-fulfill.js; a fresh sale at once, the rest every 10 min).
-import { pendingPresellListings, presellListingsByExternal, presellHasOpenListings, updatePresellListing, getSetting, claimMarketplaceSale, markMarketplaceSaleAlerted } from './db.js';
+import { pendingPresellListings, presellListingsByExternal, presellHasOpenListings, updatePresellListing, getSetting, claimMarketplaceSale, markMarketplaceSaleAlerted, crossListingsByExternal, crossHasOpenListings } from './db.js';
+import { handleCrossSale } from './cross.js';
 import { sendPresellSale } from './telegram.js';
 import { PLATFORMS, applyResult, handleSale } from './presell.js';
 import { aliasRecentOrders } from './alias.js';
@@ -84,14 +85,26 @@ async function alertRegularSale(platform, orderId, orderAt, since, lines) {
 async function checkSales() {
   const sinceRaw = await getSetting('sales_alert_all_since').catch(() => null);
   const since = sinceRaw && !Number.isNaN(Date.parse(sinceRaw)) ? new Date(sinceRaw) : null;
-  if (!since && !(await presellHasOpenListings())) return;
+  if (!since && !(await presellHasOpenListings()) && !(await crossHasOpenListings())) return;
   // Alias — newest orders first; each names the listing it sold from.
   try {
     const r = await aliasRecentOrders(50);
     const orders = (r.ok && Array.isArray(r.data?.results) ? r.data.results : [])
       .filter((o) => o.listing_id && !/CANCEL/i.test(o.status || ''));
     const mine = await presellListingsByExternal('alias', orders.map((o) => o.listing_id));
+    // Alias Cross-Listing (alias-cross-listing.md): the same pair listed under several SKUs.
+    const cross = await crossListingsByExternal(orders.map((o) => o.listing_id));
     for (const o of orders) {
+      const x = cross.find((c) => c.external_id === o.listing_id);
+      if (x) {
+        if (x.status !== 'sold') {
+          await handleCrossSale({
+            listing: x, orderId: String(o.id), priceCents: Number(o.price_cents) || null,
+            payoutCents: o.price_cents_after_take != null ? Number(o.price_cents_after_take) : null, soldAt: o.sold_at || new Date().toISOString(), raw: o,
+          });
+        }
+        continue;
+      }
       const l = mine.find((x) => x.external_id === o.listing_id);
       if (!l) {
         await alertRegularSale('alias', String(o.id), o.sold_at, since, [

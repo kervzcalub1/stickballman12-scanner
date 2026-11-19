@@ -5,7 +5,7 @@ import { CARD_WORDS } from './sheinWords.js';
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'expected', 'presell', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'poizon', 'shein', 'cancellations', 'inbound-issues', 'manifest-reports', 'stock-check', 'my-scans', 'lost-packages'];
+export const ROUTES = ['receiving', 'inbound', 'expected', 'presell', 'alias-cross', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'poizon', 'shein', 'cancellations', 'inbound-issues', 'manifest-reports', 'stock-check', 'my-scans', 'lost-packages'];
 // No Box lives at /no-box (and /no-box/box-swap, /no-box/print-box-labels — no-box.md);
 // the old /nobox still opens it.
 const PATH_ALIAS = { nobox: 'no-box' };
@@ -206,6 +206,7 @@ export const HOME_SECTIONS = [
     { key: 'buy-carts', icon: '🛒', title: 'Buying Requests', sub: 'Buyers ask, you approve, the desk funds the cards — then receipt, audit and reconcile', priv: true },
     { key: 'receipts', icon: '🧾', title: 'Receipts', sub: 'Store receipts found in our order mailboxes — where each pair was bought, and by whom' },
     { key: 'presell-listings', icon: '⚡', title: 'Pre-sell Listings', sub: 'Scan or type a SKU and list pairs straight to Alias + StockX — own stock, sales deduct, Telegram on every sale' },
+    { key: 'alias-cross', icon: '🔀', title: 'Alias Cross-Listing', sub: 'One pair on Alias under several SKUs of the same shoe — a sale on one takes it down on the others' },
   ] },
   // The eBay account (docs/context/ebay-listings.md): the same page the PH workspace has
   // (listings, orders, sales report, reprice, coupons) — here so an ADMIN can reach it and

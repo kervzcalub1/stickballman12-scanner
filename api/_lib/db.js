@@ -3223,10 +3223,16 @@ export async function backfillUpcBySkuSize({ upc, sku, size, by = null }) {
 // number under a backlog nobody will ever work. The `b.kind IS NULL` half matters:
 // this is a LEFT JOIN, and a unit with no batch would otherwise fail the test.
 // missing/issue units are dead paperwork, not something to cost.
-export async function listItemsMissingCost(from = null, to = null, zero = false) {
+export async function listItemsMissingCost(from = null, to = null, zero = false, { supplier = null, limit = 5000 } = {}) {
   // One query, not an if/else pair: the shim can't nest `sql` fragments, and the two
   // branches are identical but for this one predicate — duplicating 15 lines of SELECT
   // to vary it is how the two drift out of step later.
+  // `supplier`: null = everyone, COST_NO_SUPPLIER = pairs whose batch names none, else
+  // that supplier (case and outer spaces ignored). Filtered HERE, not in the browser:
+  // the list is capped, and a filter over a capped list silently drops pairs.
+  const sup = supplier == null || String(supplier).trim() === '' ? null : String(supplier).trim();
+  const none = sup === COST_NO_SUPPLIER;
+  const cap = Math.max(1, Math.min(Number(limit) || 5000, 50000));
   return await db()`
     SELECT i.vin, i.name, i.sku, i.size, i.gender, i.colorway, i.status,
            i.cost, i.created_at, i.created_by, i.batch_id,
@@ -3237,9 +3243,32 @@ export async function listItemsMissingCost(from = null, to = null, zero = false)
       AND (b.kind IS NULL OR b.kind <> ALL(${COST_EXCLUDED_KINDS}))
       AND (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
       AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+      AND (${sup}::text IS NULL
+           OR (CASE WHEN ${none}::boolean THEN coalesce(btrim(b.supplier_name), '') = ''
+                    ELSE lower(btrim(b.supplier_name)) = lower(${sup}::text) END))
     ORDER BY i.created_at DESC, i.sku, i.id
-    LIMIT 5000
+    LIMIT ${cap}
   `;
+}
+
+// The suppliers behind the backlog in a date range, with how many pairs each has — the
+// Costs page's supplier filter. Counted over EVERY pair in the range (no cap), so the
+// list and its numbers stay true when the page itself shows only the newest 5,000.
+// A blank supplier comes back as COST_NO_SUPPLIER, last.
+export const COST_NO_SUPPLIER = '(none)';
+export async function listCostBacklogSuppliers(from = null, to = null, zero = false) {
+  const rows = await db()`
+    SELECT min(btrim(b.supplier_name)) AS value, count(*)::int AS pairs
+    FROM items i LEFT JOIN batches b ON b.id = i.batch_id
+    WHERE (CASE WHEN ${zero}::boolean THEN i.cost = 0 ELSE i.cost IS NULL END)
+      AND i.status NOT IN ('missing', 'issue')
+      AND (b.kind IS NULL OR b.kind <> ALL(${COST_EXCLUDED_KINDS}))
+      AND (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+      AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+    GROUP BY lower(coalesce(btrim(b.supplier_name), ''))
+    ORDER BY (lower(coalesce(btrim(b.supplier_name), '')) = ''), lower(coalesce(btrim(b.supplier_name), ''))
+  `;
+  return rows.map((r) => ({ value: r.value ? r.value : COST_NO_SUPPLIER, pairs: Number(r.pairs) }));
 }
 
 // Platform Profit report (docs/context/payout-calculator.md → "Where to sell"): the

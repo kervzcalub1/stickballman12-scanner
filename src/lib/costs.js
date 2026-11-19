@@ -1,7 +1,8 @@
 // Costs page domain logic. `items.cost` is written once, at intake — suppliers
 // routinely leave cost off a manifest, so pairs land with nothing on file and
 // nothing in the app could fill it in afterwards.
-import { sizeNum, compareSizes } from './codes.js';
+import { sizeNum, compareSizes, sizeLabel } from './codes.js';
+import { estDate } from './format.js';
 import { calcCostBreakdown } from './payout.js';
 
 // Group flat item rows into one card per BATCH + SKU, with a row per size inside.
@@ -189,4 +190,63 @@ export function requestShipping({ perLabel, labels, pairs }) {
 // `poCost` what the PO declared for the size, `defaultCost` the batch header.
 export function unitCost(shoeCost, poCost, defaultCost) {
   return costOrNull(shoeCost) ?? costOrNull(poCost) ?? costOrNull(defaultCost);
+}
+
+// ── Costs page: filter by supplier + export (2026-11-20) ─────────────────────
+// The supplier is the batch's (`batches.supplier_name`), filtered on the server
+// (listItemsMissingCost). A pair with none (an in-store trip, a receive with no supplier
+// typed) is its own choice in the list, not hidden. Same value as db.js COST_NO_SUPPLIER.
+export const NO_SUPPLIER = '(none)';
+const supKey = (s) => String(s || '').trim().toLowerCase();
+
+// One row per SKU, whatever the size and whatever shipment it came in on: the list
+// someone takes away to find the costs. Sizes ride along as one cell ("8 ×2 · 9.5 ×1").
+// SKUs group with case/spaces/dashes ignored, the way the rest of the app matches them.
+export function costExportRows(rows) {
+  const bare = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const map = new Map();
+  for (const r of rows || []) {
+    const key = bare(r.sku) || `name:${supKey(r.name)}`;
+    let g = map.get(key);
+    if (!g) {
+      g = { sku: r.sku || '', name: r.name || '', colorway: r.colorway || '', pairs: 0,
+            _sizes: new Map(), _sup: new Map(), _batches: new Set(), first: null, last: null };
+      map.set(key, g);
+    }
+    g.pairs += 1;
+    if (!g.name && r.name) g.name = r.name;
+    if (!g.colorway && r.colorway) g.colorway = r.colorway;
+    const label = sizeLabel(r.size, r.gender, r.name) || String(r.size || '').trim() || '?';
+    const s = g._sizes.get(label);
+    if (s) s.qty += 1; else g._sizes.set(label, { label, size: r.size || '', qty: 1 });
+    const sk = supKey(r.supplier_name);
+    if (sk && !g._sup.has(sk)) g._sup.set(sk, String(r.supplier_name).trim());
+    if (r.batch_code) g._batches.add(r.batch_code);
+    const day = r.created_at ? estDate(r.created_at) : '';
+    if (day) {
+      if (!g.first || day < g.first) g.first = day;
+      if (!g.last || day > g.last) g.last = day;
+    }
+  }
+  return [...map.values()]
+    .map((g) => ({
+      sku: g.sku, name: g.name, colorway: g.colorway, pairs: g.pairs,
+      sizes: [...g._sizes.values()].sort((a, b) => compareSizes(a.size, b.size))
+        .map((s) => `${s.label} ×${s.qty}`).join(' · '),
+      suppliers: [...g._sup.values()].sort().join('; '),
+      batches: [...g._batches].sort().join('; '),
+      first: g.first || '', last: g.last || '',
+    }))
+    .sort((a, b) => a.sku.localeCompare(b.sku) || a.name.localeCompare(b.name));
+}
+
+// The CSV of exactly the rows on screen. `zero` = the "$0, check these" tab. The last
+// column is left empty on purpose: it is where the cost gets written in.
+export function costExportCsv(rows, { zero = false } = {}) {
+  const cell = (v) => { const s = String(v ?? ''); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const head = ['SKU', 'Name', 'Colorway', zero ? 'Pairs at $0' : 'Pairs without a cost', 'Sizes',
+    'Supplier', 'Batch', 'First received (EST)', 'Last received (EST)', 'Cost per pair'];
+  const body = costExportRows(rows).map((r) =>
+    [r.sku, r.name, r.colorway, r.pairs, r.sizes, r.suppliers, r.batches, r.first, r.last, '']);
+  return '﻿' + [head, ...body].map((r) => r.map(cell).join(',')).join('\r\n') + '\r\n';
 }

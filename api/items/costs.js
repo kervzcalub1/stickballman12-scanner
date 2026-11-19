@@ -1,11 +1,16 @@
-// GET /api/items/costs?from&to&mode -> { ok, rows } — cost backlog. mode=zero lists
-//                                   pairs recorded as $0 (review) instead of blanks
+// GET /api/items/costs?from&to&mode&supplier&all
+//                                -> { ok, rows, suppliers, total } — cost backlog. mode=zero
+//                                   lists pairs recorded as $0 (review) instead of blanks.
+//                                   supplier = one supplier's pairs ("(none)" = no supplier);
+//                                   suppliers/total are counted over the whole range, so the
+//                                   page can say when `rows` (newest 5,000) is not all of it.
+//                                   all=1 = the export: up to 50,000 rows.
 // GET /api/items/costs?q=<code>  -> { ok, rows } — every unit of the SKU behind a
 //                                   VIN / UPC / SKU, costed or not (fix a wrong one)
 // Powers the Costs page. Admin + warehouse + PH: suppliers leave cost off the
 // manifest often enough that whoever notices should be able to fill it in.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { listItemsMissingCost, listItemCostsByCode, dbConfigured } from '../_lib/db.js';
+import { listItemsMissingCost, listCostBacklogSuppliers, listItemCostsByCode, COST_NO_SUPPLIER, dbConfigured } from '../_lib/db.js';
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -22,8 +27,18 @@ export default async function handler(req, res) {
   const zero = url.searchParams.get('mode') === 'zero';
 
   try {
-    const rows = q ? await listItemCostsByCode(q) : await listItemsMissingCost(from, to, zero);
-    return send(res, 200, { ok: true, rows });
+    if (q) return send(res, 200, { ok: true, rows: await listItemCostsByCode(q) });
+    const supplier = (url.searchParams.get('supplier') || '').trim().slice(0, 200) || null;
+    const all = url.searchParams.get('all') === '1';
+    const [rows, suppliers] = await Promise.all([
+      listItemsMissingCost(from, to, zero, { supplier, limit: all ? 50000 : 5000 }),
+      listCostBacklogSuppliers(from, to, zero),
+    ]);
+    const want = supplier ? supplier.toLowerCase() : null;
+    const total = suppliers
+      .filter((s) => !want || (want === COST_NO_SUPPLIER ? s.value === COST_NO_SUPPLIER : s.value.toLowerCase() === want))
+      .reduce((n, s) => n + s.pairs, 0);
+    return send(res, 200, { ok: true, rows, suppliers, total });
   } catch (e) {
     console.error('[items/costs]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load costs.' });

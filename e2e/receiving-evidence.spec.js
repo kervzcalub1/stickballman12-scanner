@@ -88,3 +88,36 @@ test('a clean receive is asked for the label photo, not blocked; the photo is ke
   await q('DELETE FROM items WHERE batch_id = $1', [batch_id]);
   await q('DELETE FROM batches WHERE id = $1', [batch_id]);
 });
+
+// Alex buys in a store and drives the pairs over: no courier, no label, nobody to claim from.
+// "No tracking number" on step 1 switches the whole photo step off — even with no manifest.
+test('carried in by hand ("No tracking number"): no photos are asked for, even without a manifest', async ({ page }) => {
+  test.setTimeout(90_000);
+  const sku = `${SKU}-H`;
+  await loginAs(page, 'warehouse');
+  await page.route('**/api/sku-search', (route) => route.fulfill({ json: { ok: true, product: { name: 'E2E Evidence Hand Carry', sku, image: '', source: 'manual', scannedSize: '9', sizes: ['9'] } } }));
+  await page.goto('/receiving');
+  await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
+  await page.locator('.no-track-check input[type=checkbox]').check();
+  await page.locator('.manifest-q').getByRole('button', { name: 'No' }).click();
+  await page.getByRole('button', { name: 'Next →' }).click();
+  await page.locator('.scanbar input').first().fill(sku);
+  await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
+  await expect(page.locator(`.recv-item[data-sku="${sku}"]`)).toBeVisible();
+  await page.getByRole('button', { name: 'Review →' }).click();
+  await page.getByRole('button', { name: 'Next →' }).click();
+
+  await expect(page.getByRole('button', { name: 'Finish batch' })).toBeVisible();
+  await expect(page.locator('.oo-claim')).toHaveCount(0);
+  await expect(page.locator('[data-claim-optional="label"]')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Finish batch' }).click();
+  await page.getByRole('button', { name: 'Yes, commit' }).click();
+  await expect(page.getByText(/^Batch .* saved$/)).toBeVisible({ timeout: 15_000 });
+
+  const [{ batch_id }] = await q('SELECT batch_id FROM items WHERE sku = $1 LIMIT 1', [sku]);
+  const [b] = await q('SELECT evidence, no_tracking FROM batches WHERE id = $1', [batch_id]);
+  expect(b).toMatchObject({ evidence: null, no_tracking: true });
+  await q('DELETE FROM shipment_issues WHERE batch_id = $1', [batch_id]);
+  await q('DELETE FROM items WHERE batch_id = $1', [batch_id]);
+  await q('DELETE FROM batches WHERE id = $1', [batch_id]);
+});

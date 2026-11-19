@@ -33,6 +33,13 @@ On every **supplier-delivery receive** (not rescale, not in-store), Step 4 asks:
 | A problem **typed on the Issues step** (any type except `box_missing` / `box_no_lid`) | required |
 | **"Did this package come with a manifest?" → No** | label + boxes required; the slip only "if there is one in the box" |
 
+**Carried in by hand — nothing is asked (owner, 2026-11-20).** When **"No tracking number"**
+is ticked on step 1 (`header.noTracking`, or the open batch's `no_tracking` in box mode) the
+whole photo step is off: no required card, no recommended label card, even with no manifest
+or a typed problem. That is Alex buying in a store and driving the pairs over — no courier,
+no label, no carrier to claim from. One switch: `handCarried` → `evidenceApplies` in
+`Receiving.jsx`. A PO receive never shows that tick, so it is never exempt.
+
 `evidenceReasons()` builds the reasons (shown on the card, saved with the photos);
 `evidenceLeft()` says which photos are still missing. The three: **shipping label** (tracking
 number readable) · **every shoe box that arrived, in one picture** · **packing slip /

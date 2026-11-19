@@ -2165,7 +2165,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
   // receiving-evidence.md): short or wrong against the PO's own list, any problem typed on the
   // Issues step, or a parcel received without a manifest. By the time a shortage is found
   // days later the carton and its label are in the bin; they are still on the bench now.
-  const evidenceApplies = !noShipment;
+  // Carried in by hand (Alex buys in store and drives it over): "No tracking number" is ticked
+  // on step 1, so there is no courier, no label and no carrier claim to prove — nothing is asked.
+  const handCarried = header.noTracking === true || (isBoxMode && batchContext?.no_tracking === true);
+  const evidenceApplies = !noShipment && !handCarried;
   const poCheck = isPoReceive && poBoxHasChecklist ? manifestSummary(items) : null;
   const poOff = poCheck && !poCheck.totals.clean ? poCheck.totals : null;
   const noManifest = evidenceApplies && !isBoxMode && header.manifestReceived === false;

@@ -46,6 +46,7 @@ import { ManifestReports } from './ManifestReports.jsx';
 import { Receipts } from './Receipts.jsx';
 import { PresellListings } from './PresellListings.jsx';
 import { EbayReprice } from './EbayReprice.jsx';
+import { TemuReprice } from './TemuReprice.jsx';
 import { EbayListings } from './EbayListings.jsx';
 import { StockxListings } from './StockxListings.jsx';
 import { PoizonOrders } from './PoizonOrders.jsx';
@@ -111,6 +112,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     if (page === 'manifestreports') return <ManifestReports onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'shopifylistings') return <ShopifyListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'ebayreprice') return <EbayReprice onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'temureprice') return <TemuReprice onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'shein') return <Shein user={user} base="/ph/shein" onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'ebaylistings') return <EbayListings user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'poizon') return <PoizonOrders onHome={() => goPage(null)} onSignOut={onSignOut} />;

@@ -6008,6 +6008,9 @@ span.ap-pill.none { display: inline-flex; align-items: center; min-width: 128px;
 .er-markup-field { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
 .er-markup-field input { width: 80px; text-align: right; font-size: 16px; font-weight: 700; }
 .er-dry { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+/* Temu Reprice — an option row under the files / the markup (src/screens/TemuReprice.jsx) */
+.er-check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 13px; min-height: 36px; margin-top: 6px; }
+.er-check select { max-width: 100%; }
 .er-result { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
 .er-result-head { font-size: 14px; }
 .er-verify { padding: 10px 14px; border-radius: 10px; font-size: 13px; }

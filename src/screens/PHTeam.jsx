@@ -42,6 +42,7 @@ import { Expected } from './Expected.jsx';
 import { TrackingDuplicates } from './TrackingDuplicates.jsx';
 import { Cancellations } from './Cancellations.jsx';
 import { InboundIssues } from './InboundIssues.jsx';
+import { ManifestReports } from './ManifestReports.jsx';
 import { Receipts } from './Receipts.jsx';
 import { PresellListings } from './PresellListings.jsx';
 import { EbayReprice } from './EbayReprice.jsx';
@@ -107,6 +108,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     if (page === 'duptracking') return <TrackingDuplicates user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'cancellations') return <Cancellations onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'inboundissues') return <InboundIssues onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'manifestreports') return <ManifestReports onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'shopifylistings') return <ShopifyListings onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'ebayreprice') return <EbayReprice onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'shein') return <Shein user={user} base="/ph/shein" onHome={() => goPage(null)} onSignOut={onSignOut} />;

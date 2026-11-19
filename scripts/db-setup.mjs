@@ -3632,6 +3632,11 @@ await sql(`
 // What we ASKED the supplier for — beside refund_amount (what came back), so a short
 // refund shows as a gap instead of reading as "refunded" (inbound-issues.md).
 await sql(`ALTER TABLE inbound_issues ADD COLUMN IF NOT EXISTS claim_amount NUMERIC(12,2)`);
+// A manifest discrepancy report (manifest-reports.md): what the paper in the parcel lists
+// against what the box holds — { origin, store, orderNumber, lines:[{shoe,size,listed,got}],
+// boxPhotos, manifestPhotos }. NULL on every other case.
+await sql(`ALTER TABLE inbound_issues ADD COLUMN IF NOT EXISTS manifest JSONB`);
+await sql(`CREATE INDEX IF NOT EXISTS inbound_issues_type_idx ON inbound_issues (type, status)`);
 await sql(`ALTER TABLE inbound_issues DROP CONSTRAINT IF EXISTS inbound_issues_status_check`);
 await sql(`ALTER TABLE inbound_issues ADD CONSTRAINT inbound_issues_status_check
              CHECK (status IN ('open','in_progress','waiting','resolved'))`);

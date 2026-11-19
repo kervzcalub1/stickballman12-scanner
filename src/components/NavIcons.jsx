@@ -235,6 +235,12 @@ const PATHS = {
     <path d="M12 9v4" />
     <path d="M12 16h.01" />
   </>),
+  // Manifest Discrepancies — a packing list with a line that doesn't add up
+  'manifest-reports': (<>
+    <path d="M6 3h12v18H6z" />
+    <path d="M9 8h6M9 12h3" />
+    <path d="M12 16v.01M15 11.5v3" />
+  </>),
   // Order Cancellations — an order slip struck through
   cancellations: (<>
     <path d="M6 3h9l3 3v15H6z" />

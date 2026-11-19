@@ -2394,6 +2394,8 @@ export async function pendingCounts() {
       -- Inbound issues (inbound-issues.md): new = nobody owns it yet; open = not resolved;
       -- warehouse = a PH owner asked the floor to do something (ship it back, shelve it).
       (SELECT count(*) FROM inbound_issues WHERE status = 'open')::int AS inbound_issues_new,
+      -- Manifest discrepancies nobody has taken yet (manifest-reports.md): urgent, own badge.
+      (SELECT count(*) FROM inbound_issues WHERE status = 'open' AND type IN ('manifest', 'online_order'))::int AS manifest_reports_new,
       (SELECT count(*) FROM inbound_issues WHERE status <> 'resolved')::int AS inbound_issues_open,
       (SELECT count(*) FROM inbound_issues WHERE status <> 'resolved'
           AND warehouse_task IS NOT NULL AND warehouse_done_at IS NULL)::int AS inbound_issues_warehouse
@@ -13799,7 +13801,7 @@ const INBOUND_ISSUE_COLS = `
   ii.status, ii.owner_user_id, ii.owner, ii.claimed_at, ii.supplier_ref,
   ii.warehouse_task, ii.warehouse_task_by, ii.warehouse_task_at, ii.warehouse_done_by, ii.warehouse_done_at,
   ii.outcome, ii.claim_amount, ii.refund_amount, ii.disposition, ii.resolution_note, ii.resolved_by, ii.resolved_at,
-  ii.source, ii.reported_by, ii.reported_by_user_id, ii.created_at, ii.updated_at, ii.last_activity_at,
+  ii.source, ii.reported_by, ii.reported_by_user_id, ii.created_at, ii.updated_at, ii.last_activity_at, ii.manifest,
   coalesce(b.supplier_name, ii.supplier) AS supplier,
   coalesce(bx.tracking_number, b.tracking_number, ii.tracking_number) AS tracking_number,
   coalesce(b.po_id, ii.po_id) AS po_id,
@@ -13848,7 +13850,10 @@ export async function logInboundIssueEvent(issueId, action, actor, detail = null
 /**
  * Open a case for every recorded issue that is a real problem (`opensCase` decided by the
  * caller). Copies the shipment facts in, holds each flagged pair, logs "reported".
- *   shipment: [{ shipmentIssueId, type, description, expectedCount, receivedCount, photos }]
+ *   shipment: [{ shipmentIssueId, type, description, expectedCount, receivedCount, photos,
+ *                supplier?, trackingNumber?, manifest? }] — the last three are a manifest
+ *                discrepancy report's own facts (manifest-reports.md): it can be filed before
+ *                the parcel is received, when no batch exists to copy them from.
  *   pairs:    [{ itemId, type, note, photos }]
  * Returns the created rows (full, with the live joins) for the alert.
  */
@@ -13867,12 +13872,12 @@ export async function openInboundIssues({ batchId = null, boxId = null, shipment
     const rows = await sql`
       INSERT INTO inbound_issues (scope, type, description, expected_count, received_count, photos,
              batch_id, box_id, shipment_issue_id, supplier, tracking_number, po_id, po_code, batch_code, box_number,
-             source, reported_by, reported_by_user_id)
+             source, reported_by, reported_by_user_id, manifest)
       VALUES ('shipment', ${s.type || 'other'}, ${s.description || null}, ${s.expectedCount ?? null}, ${s.receivedCount ?? null},
-             ${cleanPhotoUrls(s.photos)}::text[], ${batchId}, ${boxId}, ${s.shipmentIssueId ?? null},
-             ${facts.supplier_name || null}, ${facts.box_tracking || facts.tracking_number || null},
+             ${cleanPhotoUrls(s.photos, s.manifest ? 16 : 8)}::text[], ${batchId}, ${boxId}, ${s.shipmentIssueId ?? null},
+             ${facts.supplier_name || s.supplier || null}, ${facts.box_tracking || facts.tracking_number || s.trackingNumber || null},
              ${facts.po_id ?? null}, ${facts.po_code || null}, ${facts.batch_code || null}, ${facts.box_number ?? null},
-             ${source}, ${by}, ${byUid})
+             ${source}, ${by}, ${byUid}, ${s.manifest ? JSON.stringify(s.manifest) : null}::jsonb)
       ON CONFLICT (shipment_issue_id) WHERE shipment_issue_id IS NOT NULL DO NOTHING
       RETURNING id`;
     if (rows[0]) ids.push(Number(rows[0].id));
@@ -13903,7 +13908,8 @@ export async function openInboundIssues({ batchId = null, boxId = null, shipment
     ids.push(id);
     await holdPairForIssue(id, it, by);
   }
-  for (const id of ids) await logInboundIssueEvent(id, 'reported', by, source === 'receiving' ? 'at receiving' : 'reported on the Inbound Issues page');
+  for (const id of ids) await logInboundIssueEvent(id, 'reported', by, source === 'receiving' ? 'at receiving'
+    : source === 'manifest' ? 'manifest discrepancy report' : 'reported on the Inbound Issues page');
   return ids.length ? listInboundIssuesByIds(ids) : [];
 }
 
@@ -13971,6 +13977,48 @@ export async function listInboundIssues({ view = 'open', days = null, uid = null
            count(*) FILTER (WHERE status <> 'resolved' AND warehouse_task IS NOT NULL AND warehouse_done_at IS NULL)::int AS warehouse
       FROM inbound_issues`;
   return { rows: rows.map(inboundRow), counts: c };
+}
+
+/**
+ * The Manifest Discrepancies page (manifest-reports.md): the cases about a parcel that does
+ * not match its paperwork — reported by hand (`manifest`) or found against a recorded online
+ * order (`online_order`). view: open | working | resolved | all. Resolved ones from the last
+ * `days` only; open work whatever its age.
+ */
+export async function listManifestReports({ view = 'open', days = 90 } = {}) {
+  const rows = await rawQuery(`
+    SELECT ${INBOUND_ISSUE_COLS} ${INBOUND_ISSUE_FROM}
+     WHERE ii.type = ANY($2::text[])
+       AND (  $1 = 'all'
+           OR ($1 = 'open' AND ii.status = 'open')
+           OR ($1 = 'working' AND ii.status IN ('in_progress', 'waiting'))
+           OR ($1 = 'resolved' AND ii.status = 'resolved'))
+       AND (ii.status <> 'resolved' OR ii.resolved_at > now() - make_interval(days => $3::int))
+     ORDER BY CASE WHEN ii.status = 'resolved' THEN 1 ELSE 0 END,
+              CASE WHEN ii.status = 'open' THEN 0 ELSE 1 END, ii.created_at DESC, ii.id DESC
+     LIMIT 1000`, [view, MANIFEST_CASE_TYPES, days]);
+  const [c] = await db()`
+    SELECT count(*) FILTER (WHERE status = 'open')::int AS open,
+           count(*) FILTER (WHERE status IN ('in_progress', 'waiting'))::int AS working
+      FROM inbound_issues WHERE type = ANY(${MANIFEST_CASE_TYPES})`;
+  return { rows: rows.map(inboundRow), counts: c };
+}
+const MANIFEST_CASE_TYPES = ['manifest', 'online_order'];
+
+/**
+ * An OPEN manifest / online-order case already about this parcel (same tracking number,
+ * letters and digits only) — the report's duplicate guard, and what stops the automatic
+ * online-order compare from opening a twin of a report made by hand.
+ */
+export async function findOpenManifestCase(tracking, types = MANIFEST_CASE_TYPES) {
+  const key = String(tracking || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (key.length < 6) return null;
+  const rows = await rawQuery(`
+    SELECT ii.id ${INBOUND_ISSUE_FROM}
+     WHERE ii.status <> 'resolved' AND ii.type = ANY($2::text[])
+       AND regexp_replace(upper(coalesce(bx.tracking_number, b.tracking_number, ii.tracking_number, '')), '[^A-Z0-9]', '', 'g') = $1
+     ORDER BY ii.id LIMIT 1`, [key, types]);
+  return rows[0] ? Number(rows[0].id) : null;
 }
 
 /** Every case not resolved — the daily oversight summary. */
@@ -14183,10 +14231,12 @@ export async function findOpenInboundIssue({ itemId = null, batchId = null, boxI
 }
 
 /** Cases still on New (nobody took them) older than `hours` — the worker's one re-ping. */
-export async function listUnclaimedInboundIssues(hours) {
+export async function listUnclaimedInboundIssues(hours, urgentHours = hours) {
+  // A manifest discrepancy is urgent (manifest-reports.md): it is asked about again sooner.
   const rows = await rawQuery(`SELECT ${INBOUND_ISSUE_COLS} ${INBOUND_ISSUE_FROM}
-                                WHERE ii.status = 'open' AND ii.created_at < now() - make_interval(hours => $1::int)
-                                ORDER BY ii.created_at, ii.id`, [hours]);
+                                WHERE ii.status = 'open'
+                                  AND ii.created_at < now() - make_interval(hours => CASE WHEN ii.type = 'manifest' THEN $2::int ELSE $1::int END)
+                                ORDER BY ii.created_at, ii.id`, [hours, urgentHours]);
   return rows.map(inboundRow);
 }
 

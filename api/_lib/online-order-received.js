@@ -8,7 +8,7 @@
 // the PH team (Telegram, as every inbound issue), with a job for the warehouse — the photos a
 // claim needs, uploaded on the case and sent to the team on WhatsApp.
 import {
-  getOnlineOrder, receivedForTracking, onlineOrdersToCompare, markOnlineOrderCompared, onlineOrderIssueOnBatch,
+  getOnlineOrder, receivedForTracking, onlineOrdersToCompare, markOnlineOrderCompared, onlineOrderIssueOnBatch, findOpenManifestCase,
   insertIssues, openInboundIssues, setInboundWarehouseTask, dbConfigured, receiveOnlineOrder, resetOnlineOrderCompareOnce,
 } from './db.js';
 import { alertInboundIssuesReported, alertInboundWarehouseTask, alertOnlineOrderArrived } from './alerts.js';
@@ -67,6 +67,8 @@ export const PHOTO_TASK = `This parcel doesn’t match its online order, photos 
 export async function compareOrderWithReceived(orderId, { io = {} } = {}) {
   const x = {
     order: getOnlineOrder, received: receivedForTracking, mark: markOnlineOrderCompared, flagged: onlineOrderIssueOnBatch,
+    // A person already reported this parcel's manifest by hand (manifest-reports.md): that case stands.
+    reported: (tracking) => findOpenManifestCase(tracking, ['manifest']),
     issue: insertIssues, open: openInboundIssues, task: setInboundWarehouseTask, count: receiveOnlineOrder,
     alert: alertInboundIssuesReported, alertTask: alertInboundWarehouseTask, arrived: alertOnlineOrderArrived, ...io,
   };
@@ -114,7 +116,7 @@ export async function compareOrderWithReceived(orderId, { io = {} } = {}) {
     x.arrived({ order: o, batchCode: got.batch_code, items: got.items, expected, received, short, wrong, text: short || wrong ? onlineCheckText(o, summary).split(': ').slice(1).join(': ') : '', ...extra });
   };
   if (!short && !wrong) { const counted = await countIn(); tell({ counted }); return { state: 'ok', expected, received, counted }; }
-  if (await x.flagged(got.batch_id)) {
+  if (await x.flagged(got.batch_id) || await x.reported(o.tracking_number)) {
     // Flagged at the bench: the case exists; still count it in and say what was found.
     const counted = await countIn(); tell({ counted });
     return { state: 'already', expected, received, counted };

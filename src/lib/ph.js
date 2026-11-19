@@ -453,7 +453,7 @@ export function phListingStatus(g) {
 
 // PH pages are URL-routed under /ph/* (their own namespace, separate from the
 // warehouse/admin ROUTES) so a refresh restores the page and Back/Forward work.
-export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', expected: '/ph/expected', undelivered: '/ph/undelivered', lostpackages: '/ph/lost-packages', duptracking: '/ph/duplicate-tracking', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', shein: '/ph/shein', ebaylistings: '/ph/ebay-listings', stockxlistings: '/ph/stockx-listings', poizon: '/ph/poizon', shopifylistings: '/ph/shopify-listings', cancellations: '/ph/cancellations', inboundissues: '/ph/inbound-issues', myscans: '/ph/my-scans', access: '/ph/access' };
+export const PH_PATHS = { receiving: '/ph/new-inventory', rescale: '/ph/rescale', nobox: '/ph/nobox', costs: '/ph/costs', request: '/ph/request', imagefinder: '/ph/image-finder', inquiry: '/ph/price-inquiry', payout: '/ph/payout', buycarts: '/ph/gift-card-buying', po: '/ph/purchase-orders', postatus: '/ph/po-status', reconcile: '/ph/reconciliation', sop: '/ph/sop', deleted: '/ph/deleted', inventory: '/ph/inventory', batches: '/ph/batches', profit: '/ph/platform-profit', online: '/ph/online-orders', expected: '/ph/expected', undelivered: '/ph/undelivered', lostpackages: '/ph/lost-packages', duptracking: '/ph/duplicate-tracking', receipts: '/ph/receipts', presellListings: '/ph/presell-listings', ebayreprice: '/ph/ebay-reprice', shein: '/ph/shein', ebaylistings: '/ph/ebay-listings', stockxlistings: '/ph/stockx-listings', poizon: '/ph/poizon', shopifylistings: '/ph/shopify-listings', cancellations: '/ph/cancellations', inboundissues: '/ph/inbound-issues', manifestreports: '/ph/manifest-reports', myscans: '/ph/my-scans', access: '/ph/access' };
 export const phPathForPage = (page) => (page && PH_PATHS[page]) || '/';
 export const phPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';
@@ -500,6 +500,7 @@ export const PH_HOME_SECTIONS = [
   { title: 'Queues & Requests', accent: 'requests', cards: [
     { key: 'costs', icon: 'costs', title: 'Costs', sub: 'Fill in what a pair cost when the manifest left it off' },
     { key: 'request', icon: 'rescalereq', title: 'Request Rescale', sub: 'Ask the warehouse to recount / rescan a SKU' },
+    { key: 'manifestreports', icon: 'manifest-reports', title: 'Manifest Discrepancies', sub: 'A parcel’s packing slip or manifest doesn’t match the box — urgent: take it and claim with the photos' },
     { key: 'inboundissues', icon: 'inbound-issues', title: 'Inbound Issues', sub: 'Damaged, short or wrong deliveries — take a case, claim from the supplier, resolve it' },
     { key: 'cancellations', icon: 'cancellations', title: 'Order Cancellations', sub: 'Orders the warehouse sent to cancel — order #, shoe, SKU, size, by platform and day' },
     { key: 'nobox', icon: 'nobox', title: 'No Box / Not Ready', sub: 'Units without a box — view-only, warehouse resolves' },
@@ -545,6 +546,8 @@ export const PH_ATTENTION = [
   { key: 'rescale', icon: 'rescale', label: 'Restock to re-list', count: 'restock_pending', tier: 'now' },
   { key: 'request', icon: 'rescalereq', label: 'Rescale audits to close', count: 'rescale_requests_audited', tier: 'now' },
   // A problem the warehouse reported that nobody on PH has taken yet (inbound-issues.md).
+  // Urgent: a parcel that doesn't match its own manifest, not taken yet (manifest-reports.md).
+  { key: 'manifestreports', icon: 'manifest-reports', label: 'Manifest discrepancies to take', count: 'manifest_reports_new', query: { view: 'open' }, tier: 'now' },
   { key: 'inboundissues', icon: 'inbound-issues', label: 'Inbound issues to take', count: 'inbound_issues_new', query: { view: 'open' }, tier: 'now' },
   { key: 'reconcile', icon: 'reconcile', label: 'POs to reconcile', count: 'po_to_reconcile', tier: 'now' },
   // Shipments received without a manifest, not yet signed off. PH does these audits (they

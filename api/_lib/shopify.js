@@ -1036,6 +1036,28 @@ const ORDERS_FULL = `query OrdersFull($ids: [ID!]!) {
     fulfillments(first: 10) { status createdAt trackingInfo { number company url } }
   } }
 }`;
+// Every order changed since `sinceIso`, oldest change first, WITH everything a marketplace's own
+// order number could be in (api/_lib/shopify-order-index.js). 50 a page: the nested lists make
+// each order cost ~11 points and one query may not ask for more than 1,000.
+const ORDERS_INDEX = `query OrdersIndex($q: String!, $after: String) {
+  orders(first: 50, query: $q, sortKey: UPDATED_AT, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    edges { node {
+      id name createdAt updatedAt cancelledAt note tags sourceName sourceIdentifier
+      app { name }
+      channelInformation { channelDefinition { channelName } }
+      customAttributes { key value }
+      lineItems(first: 5) { edges { node { title variantTitle sku customAttributes { key value } } } }
+      fulfillments(first: 5) { trackingInfo { number company } }
+    } }
+  }
+}`;
+export async function shopifyOrdersIndexPage(sinceIso, after = null) {
+  const r = await gqlPaced(ORDERS_INDEX, { q: `updated_at:>='${sinceIso}'`, after });
+  if (!r.ok) return failure(r, 'orders');
+  const conn = r.data?.orders;
+  return { ok: true, orders: (conn?.edges || []).map((e) => e.node), next: conn?.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null };
+}
 export async function shopifyOrdersChangedPage(sinceIso, after = null) {
   const r = await gqlPaced(ORDERS_LIGHT, { q: `updated_at:>='${sinceIso}'`, after });
   if (!r.ok) return failure(r, 'orders');

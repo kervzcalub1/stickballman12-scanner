@@ -35,6 +35,10 @@ const PREP = {
   first: [3600, true, 'SPARSE_TEXT'],   // large + sharpened, scattered text
   second: [2400, false, 'AUTO'],        // smaller + plain grey, as a page
   third: [3000, false, 'AUTO'],         // the tie-break: only when the first two disagree
+  // Only when NEITHER of the first two found a number. Measured on a real SHEIN slip (thin serif
+  // print, 1200 px photo): of 60 preparations, sharpened at 3000 px as a page was one of the
+  // few that read the "Order Number: GS…" line as one piece.
+  rescue: [3000, true, 'AUTO'],
 };
 
 /** tesseract over the picture, once per named prep → { name: text | null }. */
@@ -182,6 +186,13 @@ export async function readCancellationLocally(buf, platform = null) {
     c = await queued(() => readWith(buf, ['third'])).then((r) => r.third, () => null);
     third = c == null ? null : ordersFromText(c, platform);
     orders = settleWithThird(orders, third, first, second);
+  } else if (!orders.length) {
+    // Neither read found a number: one more look, prepared another way (rescue), before giving up
+    // (a SHEIN slip's thin serif "Order Number:" line can read on one preparation and not the
+    // others). What only this read saw is recorded as unchecked — one read is not two.
+    c = await queued(() => readWith(buf, ['rescue'])).then((r) => r.rescue, () => null);
+    third = c == null ? null : ordersFromText(c, platform);
+    orders = (third || []).map((o) => ({ ...o, agreed: null }));
   }
   // The style code / size from whichever read found them.
   const one = (k) => first.find((o) => o[k])?.[k] || second?.find((o) => o[k])?.[k] || third?.find((o) => o[k])?.[k] || null;

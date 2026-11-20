@@ -184,7 +184,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
   const [supplier, setSupplier] = useQueryParam('supplier');
   const [status, setStatus] = useQueryParam('status');
   const [intake, setIntake] = useQueryParam('intake'); // '' | 'receiving' | 'rescale'
-  const [periodMode, setPeriodMode] = useQueryParam('period', 'week'); // 'day' | 'week' | 'month' | 'custom'
+  const [periodMode, setPeriodMode] = useQueryParam('period', 'week'); // 'day' | 'week' | 'month' | 'custom' | 'all'
   // The period anchor is a Date; it round-trips through the URL as a plain ymd string.
   // Falls back to today if absent or unparseable, so a hand-edited URL can't produce an
   // Invalid Date that would poison every period calculation downstream.
@@ -391,9 +391,11 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
   // `submit()` does (it clears the window), and it is what Home's find box hands over.
   // Without this the page would restore `?q=` inside the default week, so a refresh
   // after a search, or a search started from Home, found only this week's arrivals.
+  // `?period=all` is the same thing said out loud ("All time" on the date bar): no dates
+  // travel in the URL for it, so it has to be read here or a refresh lands on this week.
   useEffect(() => {
-    if (readParam('q') && !readParam('from') && !readParam('to')) {
-      setFrom(''); setTo(''); load({ from: '', to: '' });
+    if (readParam('period') === 'all' || (readParam('q') && !readParam('from') && !readParam('to'))) {
+      setPeriodMode('all'); setFrom(''); setTo(''); load({ from: '', to: '' });
     } else load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -470,7 +472,9 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
     }
     // Text search (incl. a shelf code → shelf contents): clear the date window so
     // it isn't limited to today, but keep the query visible so it can be refined.
-    setFrom(''); setTo(''); load({ q: v, from: '', to: '' });
+    // The date bar says so ("All time"), rather than still showing "Week" over a list
+    // that is no longer this week's.
+    setPeriodMode('all'); setFrom(''); setTo(''); load({ q: v, from: '', to: '' });
   }
   // Route a camera scan: a VIN opens its detail; a shelf barcode searches that
   // shelf's contents; anything else falls back to a text search.
@@ -478,7 +482,7 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
     const c = String(code).trim();
     // A shelf barcode is a search either way — it isn't a pair, so it has nothing to add
     // to a scan list. It closes the camera because the answer is the table below.
-    if (isLocationCode(c)) { setShowCam(false); setQ(c); setFrom(''); setTo(''); load({ q: c, from: '', to: '' }); return; }
+    if (isLocationCode(c)) { setShowCam(false); setQ(c); setPeriodMode('all'); setFrom(''); setTo(''); load({ q: c, from: '', to: '' }); return; }
     if (rapid) { addScan(c, { fromCamera: true }); return; }
     openDetail(c);
   }
@@ -502,6 +506,13 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
     const fs = ymd(s); const es = ymd(e);
     setPeriodMode(mode); setAnchor(a); setFrom(fs); setTo(es);
     load({ from: fs, to: es });
+  }
+
+  // "All time" (owner, 2026-11-21): no date filter at all, so a SKU or a shoe's name is
+  // searched across everything ever received. The search, supplier and status stay.
+  function gotoAllTime() {
+    setPeriodMode('all'); setFrom(''); setTo('');
+    load({ from: '', to: '' });
   }
 
   async function openDetail(vin) {
@@ -1091,12 +1102,13 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
 
         <div className="cal-bar mt">
           <div className="seg cal-modes" role="group" aria-label="Date range">
-            {[['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['custom', 'Custom']].map(([m, lbl]) => (
-              <button key={m} type="button" className={`seg-btn ${periodMode === m ? 'on' : ''}`}
-                onClick={() => (m === 'custom' ? setPeriodMode('custom') : gotoPeriod(m, anchor))}>{lbl}</button>
+            {[['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['custom', 'Custom'], ['all', 'All time']].map(([m, lbl]) => (
+              <button key={m} type="button" className={`seg-btn ${periodMode === m ? 'on' : ''}`} aria-pressed={periodMode === m}
+                onClick={() => (m === 'custom' ? setPeriodMode('custom') : m === 'all' ? gotoAllTime() : gotoPeriod(m, anchor))}>{lbl}</button>
             ))}
           </div>
-          {periodMode !== 'custom' && (
+          {periodMode === 'all' && <span className="muted sm cal-label" data-inv-alltime="">Every date — no date filter</span>}
+          {periodMode !== 'custom' && periodMode !== 'all' && (
             <div className="cal-nav">
               <button type="button" className="btn ghost sm" onClick={() => gotoPeriod(periodMode, shiftAnchor(periodMode, anchor, -1))} aria-label="Previous">‹</button>
               <span className="cal-label">{periodLabel(periodMode, anchor)}</span>
@@ -1140,6 +1152,11 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
 
       {data && (
         <>
+          {/* A list that stops at the cap must say so — "All time" with nothing typed is
+              longer than one page of 2,000, and it must not read as the whole inventory. */}
+          {data.capped && (
+            <div className="notice" data-inv-capped="">Showing the first <b>{Number(data.limit).toLocaleString('en-US')}</b> pairs — more match. The totals below cover only these. Search a SKU or name, or pick a supplier, status or date, to see the rest.</div>
+          )}
           <div className="batch-bar">
             <div className="batch-totals">
               <b>{data.totals.count}</b> items · <b>${data.totals.totalCost.toFixed(2)}</b>
@@ -1164,9 +1181,9 @@ export function Inventory({ navBack, openVin, onConsumedVin, onOpenCosts, onHome
                 gotoPeriod like every other date control now, and "Show all dates" loads
                 its own cleared range instead of waiting for Apply. */}
             {!rows.length ? (
-              <p className="muted inv-empty">No items in this range.{' '}
+              <p className="muted inv-empty">{periodMode === 'all' ? 'No items match.' : 'No items in this range.'}{' '}
                 {periodMode !== 'month' && <button className="btn ghost sm" onClick={() => gotoPeriod('month', anchor)}>Try this month</button>}{' '}
-                <button className="btn ghost sm" onClick={() => { setPeriodMode('custom'); setFrom(''); setTo(''); load({ from: '', to: '' }); }}>Show all dates</button>
+                {periodMode !== 'all' && <button className="btn ghost sm" onClick={gotoAllTime}>Show all dates</button>}
                 {' '}— or search a VIN / SKU above.
               </p>
             ) : isMobile ? (

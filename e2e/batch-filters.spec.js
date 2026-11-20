@@ -115,7 +115,7 @@ test('a search inside a filter stays inside it', async ({ page }) => {
   await loginAs(page, 'warehouse');
   await page.goto(`/batches?supplier=${encodeURIComponent(SUP_A)}`);
   await page.locator('.batch-search input').fill(`B-FC-${stamp}`);   // belongs to supplier B
-  await expect(page.getByText('No batch carries that number')).toBeVisible();
+  await expect(page.getByText('No batch matches that.')).toBeVisible();
   await page.goto(`/batches?supplier=${encodeURIComponent(SUP_B)}`);
   await page.locator('.batch-search input').fill(`B-FC-${stamp}`);
   await expect(page.locator('.batch-nav-row')).toHaveCount(1);

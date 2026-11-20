@@ -714,3 +714,15 @@ checked, `1z 999…` didn't match `1Z999…`, and nothing listed or counted the 
   home page's counts fail.
 - E2E: `e2e/duplicate-tracking.spec.js`.
 
+
+## Batch search: SKU, PO and online order too (2026-11-21)
+The Batches search box (`searchBatches`, `api/_lib/db.js`) still matches the batch code and
+any tracking number (batch or box, substring, A-Z0-9 only). It now also matches, for a term
+of **3+ characters**: a **SKU** in the batch (`items.sku`, so `hm6803 019` works), the
+**PO** it was received against (`po_code`), and the **online order** it came from — `OO-12`
+/ `OO-0012` (the id) or the store's order number — joined through the order's tracking
+numbers (`online_orders.tracking_number` + `online_order_shipments`), since tracking is the
+only link between an online order and a batch. Each hit says why: `matched_skus`
+(`SKU × pairs`, up to 6), `po_code`, `matched_oo` → the blue line under the row. The date /
+supplier / PO / audit filters and the PH-excluded kinds apply exactly as before.
+E2E: `e2e/inventory-alltime-batch-search.spec.js`.

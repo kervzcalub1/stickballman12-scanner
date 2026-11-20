@@ -214,7 +214,7 @@ export const HOME_SECTIONS = [
   { title: 'Marketplaces', adminOnly: true, accent: 'listing', cards: [
     { key: 'ebay', privKey: 'connect_integrations', icon: '🛒', title: 'eBay', sub: 'Orders & late shipments, sales report (CSV), listings, reprice, coupons — and connect the account' },
     { key: 'stockx-listings', icon: '📈', title: 'StockX Listings', sub: 'Our StockX asks vs the Standard / Direct lowest ask — bulk reprice to the market, never under the floor' },
-    { key: 'poizon', icon: '📦', title: 'POIZON Orders', sub: 'Every POIZON order from Shopify — what’s still to ship, and a 4 × 6 pick list' },
+    { key: 'poizon', icon: '📦', title: 'POIZON', sub: 'Orders still to ship + a 4 × 6 pick list · cut prices above market + markup' },
     // privKey: a warehouse account holding Connect integrations gets the two sections it may use (sheinPage.js).
     { key: 'shein', privKey: 'connect_integrations', icon: '🏷️', title: CARD_WORDS.title, sub: CARD_WORDS.sub },
   ] },

@@ -495,7 +495,7 @@ export const PH_HOME_SECTIONS = [
     { key: 'temureprice', icon: 'ebay-reprice', title: 'Temu Reprice', sub: 'Answer Temu’s price recommendations — accept at market + markup, counter the rest' },
     { key: 'stockxlistings', icon: 'profit', title: 'StockX Listings', sub: 'Our StockX asks vs the Standard / Direct lowest ask — bulk reprice to the market' },
     { key: 'shein', icon: 'shein', title: CARD_WORDS.title, sub: CARD_WORDS.sub },
-    { key: 'poizon', icon: 'shipped', title: 'POIZON Orders', sub: 'Every POIZON order from Shopify — what’s still to ship, and a 4 × 6 pick list' },
+    { key: 'poizon', icon: 'shipped', title: 'POIZON', sub: 'Orders still to ship + a 4 × 6 pick list · cut prices above market + markup' },
     { key: 'presellListings', icon: 'presell-listings', title: 'Pre-sell Listings', sub: 'List pairs straight to Alias + StockX from a scan' },
     { key: 'aliascross', icon: 'presell-listings', title: 'Alias Cross-Listing', sub: 'One pair on Alias under several SKUs of the same shoe — a sale on one takes it down on the others' },
   ] },

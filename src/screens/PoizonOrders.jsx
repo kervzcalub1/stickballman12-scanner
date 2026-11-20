@@ -1,4 +1,5 @@
-// POIZON Orders (docs/context/poizon-orders.md) — /poizon (admin), /ph/poizon (PH). POIZON sales
+// POIZON (docs/context/poizon-orders.md) — /poizon (admin), /ph/poizon (PH). Two sections: Orders
+// (this file) and Prices (?section=reprice, PoizonReprice.jsx). POIZON sales
 // land in Shopify as orders made by the "POIZON" app; the server keeps a copy of them
 // (poizon_orders, read every 10 minutes on the live server). This page only watches: every order
 // with its pairs and where it stands (to ship · shipped · cancelled), and a pick list — tick the
@@ -13,6 +14,7 @@ import { useQueryParam } from '../lib/urlstate.js';
 import { estToday, PH_DATETIME } from '../lib/format.js';
 import { poizonOrdersSorted, poizonPickEntries, poizonLineShoe, poizonToShip, POIZON_ORDER_STATES, POIZON_AWAITING, POIZON_ORDER_RANK } from '../lib/pickList.js';
 import { PickListBar } from '../components/PickListBar.jsx';
+import { PoizonReprice } from './PoizonReprice.jsx';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const when = (iso) => (iso ? `${PH_DATETIME.format(new Date(iso))} EST` : '—');
@@ -21,7 +23,7 @@ const RANGES = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['60', 'Last 60 da
 const FILTERS = ['all', ...POIZON_ORDER_RANK];
 const RUNNING_STALE_MS = 10 * 60 * 1000;
 
-export function PoizonOrders({ onHome, onSignOut }) {
+function OrdersSection({ onSignOut }) {
   const [range, setRange] = useQueryParam('days', '30');
   const [filter, setFilter] = useQueryParam('state', 'to_ship');
   const [q, setQ] = useQueryParam('q', '');
@@ -71,8 +73,7 @@ export function PoizonOrders({ onHome, onSignOut }) {
 
   const never = data && !sync?.lastAt && !running;
   return (
-    <div className="app">
-      <TopBar title="POIZON Orders" onHome={onHome} onSignOut={onSignOut} />
+    <>
       {err && <div className="error mt" role="alert">Couldn’t read POIZON orders: {err}</div>}
       <div className="card" data-poizon-orders="">
         <p className="muted sm">Every POIZON order, read from Shopify (the orders made by the POIZON app). Tick the ones to pick and download the pick list. This page only watches: nothing here changes Shopify or POIZON.</p>
@@ -157,6 +158,26 @@ export function PoizonOrders({ onHome, onSignOut }) {
           </div>
         )}
       </div>
+    </>
+  );
+}
+
+// The one POIZON page (owner's rule: one page per marketplace, sections not pages).
+//   Orders  the orders and the pick list (above)
+//   Prices  cut listings above market + markup — PoizonReprice.jsx, docs/context/poizon-reprice.md
+const SECTIONS = [['orders', 'Orders'], ['reprice', 'Prices']];
+export function PoizonOrders({ onHome, onSignOut }) {
+  const [section, setSection] = useQueryParam('section', 'orders');
+  const cur = SECTIONS.some(([k]) => k === section) ? section : 'orders';
+  return (
+    <div className="app">
+      <TopBar title="POIZON" onHome={onHome} onSignOut={onSignOut} />
+      <div className="tabs" role="tablist" aria-label="POIZON">
+        {SECTIONS.map(([k, label]) => (
+          <button key={k} type="button" role="tab" aria-selected={cur === k} className={`tab${cur === k ? ' active' : ''}`} onClick={() => setSection(k)}>{label}</button>
+        ))}
+      </div>
+      {cur === 'reprice' ? <PoizonReprice onSignOut={onSignOut} /> : <OrdersSection onSignOut={onSignOut} />}
     </div>
   );
 }

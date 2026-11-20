@@ -34,8 +34,11 @@ platform and by the EST day it was sent.
     minutes), per PERSON per chat (`chat:<chat id>:<telegram user id>`), **restarted by every
     photo that uses it** (`useCancellationCtx` = read + touch in one UPDATE). The bot answers
     "StockX mode on for 90 s — send your photos" (+ the note when one was typed).
-  - **C — photos first, nothing else**: the photo row is written **held** (`held_at`), nothing
-    is read or recorded, and the bot asks ONCE — "2 photos from Karon — which platform?" —
+  - **C — photos first, nothing else**: the photo is **READ first** (2026-11-21, "The platform
+    without being told" below) — the number may be one of our Shopify orders, or its shape or
+    the slip's own words may say whose it is, and then it is recorded with nobody asked. Only
+    a photo none of that can place is **held** (`held_at`), nothing recorded, and the bot asks
+    ONCE — "2 photos from Karon — I couldn't tell the platform. Which is it?" —
     with a 2-row keyboard (Alias · StockX · eBay · SHEIN / TikTok · Temu · SG · KC,
     `pickerKeyboard`, `cxpick:<platform>`). A tap files those photos on that platform and the
     question **becomes the summary** (edited in place). Sending the command instead of tapping
@@ -147,6 +150,86 @@ Deploys restart the server mid-shift, so **the state is in the database, not in 
 - An album photo that ends up held is taken OUT of the live batch (`cancelBatchDrop`), so the
   batch's reply doesn't mark it answered and hide it from the tap that will file it.
 
+## The platform without being told (2026-11-21)
+Measured first (read-only): every channel's orders are in Shopify WITH the marketplace's own
+order number, and 13 of the 18 Alias numbers the bot had recorded matched a Shopify order,
+each with the full shoe. So a photo with no platform is read, and the platform comes from, in
+this order of trust:
+1. **The sender** (a command, a caption, the 90 s session) — always wins.
+2. **Our own order with that number** — `ebay_orders`, `shein_order_units`, `presell_sales`,
+   and now the **Shopify order index** (below): the platform, the confirmed number and the shoe.
+3. **The number's shape** (`platformFromNumber`): StockX `12345678-12345678` **or**
+   `06-B1P9GP5N4H` (what its Shopify orders carry now — two digits, ten letters/digits, at
+   least two letters), eBay `12-34567-89012`, Temu `PO-211-` + 15–19 digits (or the same
+   order's line number `211-…`), SHEIN `GS` + 11–15.
+4. **What the slip says** (`platformFromText`, words — never logos): "alias" / "GOAT" /
+   "Sneakers.com" → Alias (read on 16 of 18 real labels), "STADIUM GOODS" → sg (3 of 3),
+   StockX, eBay, Kicks Crew, Temu, TikTok, SHEIN by name. **Only when exactly one is named**
+   (a shoe called "Flight Club" names none). A row whose platform came from here carries the
+   flag `platform_guess` → **[CHECK] (platform read off the slip)**.
+5. **Nothing says** → held, and the buttons ask (`fileCancellationPhoto` returns
+   `{ needsPlatform: true }` under `requirePlatform`, nothing recorded; after the tap it is read
+   again with the platform as the hint). While more of that person's photos are still being
+   read the question waits (`cancelReading`), so it is one question about the ones that need it.
+
+**A number that matches none of our orders** when it should: flag `not_in_shopify` →
+**[CHECK] (not found in our orders)**. Only for the platforms the index covers whole (`INDEXED`:
+alias, stockx, temu, kc, ebay, shein — not sg, whose slip number isn't in Shopify, and not
+tiktok, seen on one order only), and only while the index is complete and current
+(`shopifyIndexFresh`: first run finished, last run < 30 min ago — never on a dev machine).
+
+**When the two reads disagree**, the other reading is looked up too: whichever of the two is
+exactly one of our orders is the number (the real Temu slip 3: `…0560 0 904…` / `…0560 9 904…`
+— the second is the order). Recorded as that, tagged [OK], with a note.
+
+**Look-alikes folded together** (`canonKey`, `matchOurOrder`'s third step): a long
+letters-and-digits number comes back with several look-alikes swapped at once — the real SHEIN
+slip read `GSUT9K45BO00O2R` for `GSU19K45B000Q2R`. Folding 0 O Q D → 0 · 1 I L T → 1 · 5 S → 5 ·
+8 B → 8 · 2 Z → 2 · 6 G → 6 makes them equal; exactly ONE of our orders that folds the same →
+recorded as that order, **[CHECK] (read as …)**. Digits are never folded onto each other, so a
+digits-only Alias number is untouched and "never correct digit for digit" still holds. In the
+database: `shopify_order_index.numbers_canon`, and `translate(…)` on `shein_order_units`.
+
+### The Shopify order index (`api/_lib/shopify-order-index.js`, table `shopify_order_index`)
+Shopify's own search finds a marketplace number only where the connector put it in the order
+name or the source identifier — never in an attribute or a note (measured). Where each keeps it:
+
+| Channel (Shopify app) | Platform | The marketplace's number |
+|---|---|---|
+| StockX | stockx | order name `06-B1P9GP5N4H` (+ attribute `StockX Order Number`) |
+| My Store: GOAT | alias | attribute `g_order_number` (`g_platform` goat / flight_club / sneakers_dot_com — all Alias); the name is our own `#33938`, never indexed |
+| My Store: SGAPP | sg | attribute `Order Number` = the note (`CK…`, `SH…`, `113-…`) + `Tracking Number` — **not what the slip prints** |
+| Temu | temu | source identifier `PO-211-…` (+ line attribute `ORDER_SN`) |
+| Kicks Crew | kc | order name `KS2699631` |
+| eBay (DPL) | ebay | order name |
+| SHEIN (ours / CedCommerce) | shein | source identifier `GS…` |
+| TikTok | tiktok | a tag `TikTokOrderID:…` (one order seen) |
+
+So a worker keeps our own copy: every Shopify order **changed** since the cursor (50 a page —
+the nested lists cost ~11 points an order and a query may ask for 1,000), `orderIndexRow` (pure)
+→ one row per marketplace order: `numbers` (keys), `number_texts` (as printed),
+`numbers_canon`, `trackings`, `lines` (style from the title via `styleFromTitle`, size, name).
+Our own web store and POIZON are not kept. First run = 30 days (~110 pages, a few minutes, in
+runs of 80 pages); then every 5 min (`SHOPIFY_ORDER_INDEX_MIN`); rows older than 75 days are
+dropped. **Production only** by default (`SHOPIFY_ORDER_INDEX=on|off`); state in
+`app_settings.shopify_order_index_sync`. Read-only on Shopify. `knownOrdersFor` asks it LAST,
+so an order we hold first-hand (eBay, SHEIN, pre-sell) is the one a number matches; a database
+without the table yet answers "no match", not an error.
+
+### Stadium Goods: the order number is the BARCODE (owner, 2026-11-21)
+The slip prints no order number in words — "the number below the barcode is the order number"
+(`AMA00386134`, `ETH00380838`: three letters, eight digits). It is in Shopify nowhere, so there
+is nothing to check a read against: `decodeSlipBarcode` (`api/_lib/cancelBarcode.js`, zxing)
+decodes the bars — exact or nothing — and is tried only on a slip that names Stadium Goods (or
+sent with `/sg`) where no number was read.
+**Measured limit:** on three real slips at Telegram's photo size (1200 px wide) the barcode is
+~200 px wide, ~1.6 px a bar, and does NOT decode (0 of 3), and tesseract read the number under
+it wrong on all three. A clean barcode of the same kind decodes down to ~1 px a bar, so the
+limit is the photo. When it doesn't decode the row is recorded with the platform, SKU and size
+(those read on 3 of 3: `SKU: 151186 003` / `SIZE: 13C`, `slipDetails`) and **no number**, and
+the [MISSED] line says to send the photo **as a file** (full phone resolution) or closer.
+**Decoding a real full-size photo was never tested** — no such sample existed.
+
 ## The shoe: name + SKU + size (`fillDetails`), in this order of trust — never invented
 1. **OUR order with that number** (`knownOrdersFor`, one query per source):
    - `ebay_orders` (order_id; `lines[]` title / Shopify SKU / size). The line SKU is OUR
@@ -154,6 +237,8 @@ Deploys restart the server mid-shift, so **the state is in the database, not in 
      `shopify_listing_variants` row; else a style code in the title; else blank.
    - `shein_order_units` (order_no; seller_sku → `shopify_listing_variants`, title).
    - `presell_sales` → `presell_stock` (Alias / StockX pre-sell: sku, size, name).
+   - `shopify_order_index` (every other channel, 2026-11-21; `order_match` = shopify, "shoe
+     from our Shopify order"): style code from the line title, size, name.
    A match **confirms the number** (`order_match` = ebay | shein | presell, a "✓ our … order"
    chip on the page) and fills the shoe. An order of several pairs → the line the photo's
    SKU / size points at, else every line joined with " + " (`detailsFromOrder`).
@@ -278,6 +363,9 @@ carry customer addresses, never public) · `POST …/save` (no id = add by hand;
 `as_file`, `held_at`, `prompt_message_id`, `reply_message_id`, `voided_at` (2026-11-20).
 **Prod needs `db:setup` BEFORE this code is deployed** — the webhook writes `as_file` /
 `held_at` on every photo, so without the columns every photo answers "That wasn't logged".
+`shopify_order_index` (2026-11-21; not in LIVE_TABLES — no screen reads it) also needs
+`db:setup`; until it runs the lookup just finds nothing there (a missing table is caught) and
+the index worker logs an error every 5 minutes.
 
 ## Tests
 `e2e/cancellations.spec.js`: fake Bot API on :5198 (getFile + the download), fake reader on
@@ -295,7 +383,23 @@ a second tap, Void Batch (and a second void), the note after a command, an image
 file, photos-then-command, and the unanswered question filed by the sweep. The fake Bot API
 now gives each message its own id and keeps `editMessageText` / `answerCallbackQuery` bodies.
 
+Added 2026-11-21: the rules against the text tesseract really read off the sample slips (Temu,
+SHEIN, Stadium Goods), `orderIndexRow` against the real Shopify shapes, look-alike folding,
+and — with a database — a photo with no platform filed from the index, a Temu number by its
+shape, and `not_in_shopify`. **Written without a database; first run is CI.** Checked by hand
+on this machine against the seven sample photos and live Shopify (read-only): Temu 3 of 3
+[OK] with the shoe (one via the other reading), SHEIN [CHECK] recovered through look-alikes,
+Stadium Goods platform + SKU + size and no number; the index sync read 150 live orders and
+kept 149. The samples carry customer addresses and are NOT in the repo.
+
 ## Not yet / can't be verified locally
+- **Stadium Goods barcodes**: no full-size photo to test with (see above).
+- **StockX, Kicks Crew, TikTok, eBay slips**: no sample photos. Their numbers are in the index
+  and the StockX shapes come from Shopify, but what their labels print was not seen.
+- **SHEIN reads rest on ONE slip**, and its number only came out through the rescue read plus
+  look-alike folding — it needs the order to be in `shein_order_units` or the index.
+- An order made minutes ago may not be in the index yet (5-minute sync): it is recorded as
+  read, tagged [CHECK], not refused.
 - The 2026-11-20 flows were never exercised against the real Bot API: check on the first
   real batch that the question's buttons fit four across on the floor's phones, and that the
   group's "/" menu shows the platforms after the next deploy (`[cancellations] bot menu set` in the log).

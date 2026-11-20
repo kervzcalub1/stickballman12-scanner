@@ -21,6 +21,7 @@ import { signToken, hashPassword } from '../api/_lib/util.js';
 import {
   ordersFromText, trackingFromText, labelProduct, confusableKeys, matchOurOrder, detailsFromOrder, typedDetails,
   batchReplyText, periodDays, cancellationsCsv, rowStatus, flagsFor, splitCommand, extractImageFile, pickerKeyboard,
+  platformFromText, slipDetails, platformFromNumber, canonKey,
 } from '../src/lib/cancellations.js';
 import { loadEnv, loginAs } from './helpers/auth.js';
 
@@ -122,7 +123,7 @@ test.beforeAll(async () => {
 });
 
 async function cleanup() {
-  await q(`DELETE FROM cancellations WHERE sent_by LIKE 'E2E Cx%' OR order_number LIKE 'E2ECX%' OR order_number LIKE '9911%' OR order_number LIKE 'GS%E2E'`);
+  await q(`DELETE FROM cancellations WHERE sent_by LIKE 'E2E Cx%' OR order_number LIKE 'E2ECX%' OR order_number LIKE '9911%' OR order_number LIKE 'PO-211-9911%' OR order_number LIKE 'GS%E2E'`);
   await q(`DELETE FROM cancellation_photos WHERE sent_by LIKE 'E2E Cx%'`);
   await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001' OR key LIKE 'album:mg%'`);
   await q(`DELETE FROM ebay_orders WHERE buyer = 'e2e-cx'`);
@@ -131,6 +132,8 @@ async function cleanup() {
   await q(`DELETE FROM presell_stock WHERE created_by = 'e2e-cx'`);
   await q(`DELETE FROM shopify_listing_variants WHERE variant_id LIKE 'e2e-cx-%'`);
   await q(`DELETE FROM products WHERE source = 'e2e-cx'`);
+  await q(`DELETE FROM shopify_order_index WHERE channel = 'e2e-cx'`);
+  await q(`DELETE FROM app_settings WHERE key = 'shopify_order_index_sync' AND updated_by = 'e2e-cx'`);
 }
 
 test.afterAll(async () => {
@@ -546,6 +549,108 @@ test('the cancellations group: photos and commands are recorded, chatter (even a
   expect(await lastSaid(GROUP, 3)).toMatch(/connect this chat first/);
 });
 
+// ── The platform without being told: our Shopify orders, the number's shape, the slip's words (2026-11-21) ──
+test('the slips of each marketplace: Temu and StockX by their number, Stadium Goods by its name, SHEIN through its look-alikes (pure)', async () => {
+  const nums = (t, h) => ordersFromText(t, h).map((o) => `${o.platform}:${o.order_number}`);
+  // Temu's packing slip, as tesseract read the real ones: the PO number whole, in pieces, and with the O as a zero.
+  const temu = 'Tracking Number:\n1ZZKTWGRO03928084 35\nShipping Service: UPS\nPurchase Order ID:\nPO-211-00591237806711370\nOrder Date: 14 nov 2026, 7:09 pm CST\nNike Court Legacy Next Nature White Desert Ochre\n(DH3162-100)\nBRAND: Nike\nSKU: DH3162-100\nSIZE: 14';
+  expect(nums(temu)).toEqual(['temu:PO-211-00591237806711370']);
+  expect(ordersFromText(temu)[0]).toMatchObject({ sku: 'DH3162-100', size: '14' });
+  expect(nums('Purchase Order ID:\nPO-211-05609904394872 563')).toEqual(['temu:PO-211-05609904394872563']);
+  expect(nums('P0-211-05600904394872 563')).toEqual(['temu:PO-211-05600904394872563']);
+  expect(nums('Purchase Order ID: PO-211-19319877274232381 ORDER')).toEqual(['temu:PO-211-19319877274232381']);
+  // StockX: the shape its Shopify orders carry now, and the older one; eBay is still eBay.
+  expect(nums('Order 06-B1P9GP5N4H')).toEqual(['stockx:06-B1P9GP5N4H']);
+  expect(nums('06-LZQ93WHGEL')).toEqual(['stockx:06-LZQ93WHGEL']);                        // four digits: a shape, not "mostly digits"
+  expect(nums('12345678-12345678')).toEqual(['stockx:12345678-12345678']);
+  expect(nums('07-15461-19264')).toEqual(['ebay:07-15461-19264']);
+  expect(nums('call 48-0618534469 now')).toEqual([]);                                     // digits only is not the new StockX shape
+  expect(flagsFor({ order_number: '06-B1P9GP5N4H', platform: 'stockx' })).toEqual([]);
+  expect(platformFromNumber('PO-211-00591237806711370')).toBe('temu');
+  expect(platformFromNumber('211-15609680886391006')).toBe('temu');                       // the same order's line number
+  expect(platformFromNumber('GSU19K45B000Q2R')).toBe('shein');
+  expect(platformFromNumber('206557037')).toBe(null);
+  // A Stadium Goods slip prints no order number in words (it is the barcode): nothing is made
+  // up from the fulfilment number, the dates or the phone — but its name and the shoe are read.
+  const sg = 'STADIUM GOODS\nOrder Date: 11/14/2026\nShipment Date: 11/13/2026\nFulfillment Number\nSONDSS_CKRS00003248\nAMA00386134\n218726 Air Jordan 12 Retro PS 151186 003 13C 1 $96\nSKU: 151186 003\nSIZE: 13C\nBRAND: JORDAN';
+  expect(nums(sg)).toEqual([]);
+  expect(nums(sg, 'sg')).toEqual([]);
+  expect(platformFromText(sg)).toBe('sg');
+  expect(slipDetails(sg)).toEqual({ sku: '151186-003', size: '13C', product: null });
+  expect(slipDetails('BRAND: Nike\nSKU: FQ8706-300\nSIZE: 9W')).toEqual({ sku: 'FQ8706-300', size: '9W', product: null });
+  // The platform a slip names — only when it names exactly one. A shoe called "Flight Club" names none.
+  expect(platformFromText('alias\nSold on Sneakers.com')).toBe('alias');
+  expect(platformFromText('GOAT ORDER # 123')).toBe('alias');
+  expect(platformFromText('Jordan 4 Retro OG Flight Club')).toBe(null);
+  expect(platformFromText('STADIUM GOODS … sold on eBay')).toBe(null);
+  expect(platformFromText(temu)).toBe(null);
+  // SHEIN's thin print came back three look-alikes off; folded together it is the same number.
+  const k = (id, platform = 'shein') => ({ key: id.replace(/[^A-Z0-9]/g, ''), order_id: id, platform, source: 'shopify', lines: [] });
+  expect(nums('Order Number: GSUT9K45BO00O2R')).toEqual(['shein:GSUT9K45BO00O2R']);
+  expect(canonKey('GSUT9K45BO00O2R')).toBe(canonKey('GSU19K45B000Q2R'));
+  expect(matchOurOrder('GSUT9K45BO00O2R', null, [k('GSU19K45B000Q2R')])).toMatchObject({ corrected: true, order: { order_id: 'GSU19K45B000Q2R' } });
+  expect(matchOurOrder('GSUT9K45BO00O2R', null, [k('GSU19K45B000Q2R'), k('GSUI9K45B0000ZR')])).toBe(null);   // two fold to the same: no guess
+  expect(canonKey('206557037')).toBe('206557037');                                        // digits are never folded onto each other
+  expect(matchOurOrder('206557031', null, [k('206557037', 'alias')])).toBe(null);
+  expect(rowStatus({ order_number: '1', flags: ['not_in_shopify'] })).toEqual({ tag: 'CHECK', why: 'not found in our orders' });
+  expect(rowStatus({ order_number: '1', flags: ['platform_guess'] })).toEqual({ tag: 'CHECK', why: 'platform read off the slip' });
+
+  // The Shopify order index: where each channel keeps the marketplace's own number (the real shapes).
+  const { orderIndexRow } = await import('../api/_lib/shopify-order-index.js');
+  const line = (title, variantTitle, customAttributes = []) => ({ node: { title, variantTitle, sku: '10123948', customAttributes } });
+  const row = (o) => orderIndexRow({ id: 'gid://shopify/Order/1', createdAt: '2026-11-20T17:00:00Z', updatedAt: '2026-11-20T17:00:00Z', tags: [], customAttributes: [], fulfillments: [], lineItems: { edges: [] }, ...o });
+  expect(row({ name: '06-B1P9GP5N4H', app: { name: 'StockX' }, customAttributes: [{ key: 'StockX Order Number', value: '06-B1P9GP5N4H' }], lineItems: { edges: [line('adidas AE 2 With Love (JS3514)', '10.5')] } }))
+    .toMatchObject({ platform: 'stockx', numbers: ['06B1P9GP5N4H'], number_texts: ['06-B1P9GP5N4H'], lines: [{ style: 'JS3514', size: '10.5', name: 'adidas AE 2 With Love' }] });
+  expect(row({ name: '#33938', app: { name: 'My Store: GOAT' }, customAttributes: [{ key: 'g_order_number', value: '637973365' }, { key: 'g_platform', value: 'flight_club' }], lineItems: { edges: [line('Nike Air Max 97 Black White Anthracite (921826-015)', '12')] } }))
+    .toMatchObject({ platform: 'alias', numbers: ['637973365'], lines: [{ style: '921826-015', size: '12', name: 'Nike Air Max 97 Black White Anthracite' }] });   // never our own "#33938"
+  expect(row({ name: '#33943', app: { name: 'My Store: SGAPP' }, note: 'CK5191645963', customAttributes: [{ key: 'Order Number', value: 'CK5191645963' }, { key: 'Tracking Number', value: '3638579394' }] }))
+    .toMatchObject({ platform: 'sg', numbers: ['CK5191645963'], trackings: ['3638579394'] });
+  expect(row({ name: '#33921', app: { name: 'Temu' }, sourceName: 'TEMU', sourceIdentifier: 'PO-211-15609528842871006',
+    lineItems: { edges: [line('Nike Air Max Plus Golf NRG Eastside Golf (HV4363-400)', '13', [{ key: 'ORDER_SN', value: '211-15609680886391006' }])] }, fulfillments: [{ trackingInfo: [{ number: '1Z2K1W600399808439' }] }] }))
+    .toMatchObject({ platform: 'temu', numbers: ['PO21115609528842871006', '21115609680886391006'], trackings: ['1Z2K1W600399808439'] });
+  expect(row({ name: 'KS2699631', app: { name: 'Kicks Crew Stickballman12 ' }, sourceIdentifier: '91180836' }).numbers).toEqual(['KS2699631']);
+  expect(row({ name: '07-15461-19264', app: { name: 'eBay Integration - DPL' }, sourceName: 'eBay', sourceIdentifier: '07-15461-19264' }).numbers).toEqual(['071546119264']);
+  expect(row({ name: '#33772', app: { name: 'SHEIN via Stickballman12.com' }, sourceIdentifier: 'GSU1A607200MC1M' })).toMatchObject({ platform: 'shein', numbers: ['GSU1A607200MC1M'], numbers_canon: [canonKey('GSU1A607200MC1M')] });
+  expect(row({ name: '#33846', app: { name: 'TikTok' }, sourceName: 'tiktok', tags: ['Shipped by TikTok', 'TikTokOrderID:577694771234567890'] }).numbers).toEqual(['577694771234567890']);
+  expect(row({ name: '#33000', app: { name: 'Online Store' } })).toBe(null);               // our own web store: not a marketplace order
+  expect(row({ name: '21315226930833298', app: { name: 'POIZON' } })).toBe(null);
+});
+
+test('a photo with NO platform is read first: one of our Shopify orders (or a Temu number) files itself; a number in none of them is [CHECK]', async ({ request }) => {
+  await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
+  sent.length = 0; edits.length = 0;
+  const s = String(Date.now()).slice(-6);
+  const alias = `9911${s}77`; const temu = `PO-211-9911${s}0000000`; const stray = `9911${s}55`;
+  // What the index holds: a GOAT (Alias) order under its g_order_number.
+  await q(`INSERT INTO shopify_order_index (shopify_order_id, name, channel, platform, numbers, number_texts, numbers_canon, lines, ordered_at)
+           VALUES ($1, '#30001', 'e2e-cx', 'alias', $2::text[], $2::text[], $2::text[], $3::jsonb, now())`,
+  [`e2e-cx-${s}`, [alias], JSON.stringify([{ style: 'IM4002-100', size: '11', name: 'Jordan 4 Retro OG Flight Club', title: 'Jordan 4 Retro OG Flight Club (IM4002-100)' }])]);
+  try {
+    // No command, no caption, nothing on: the number IS our Alias order → recorded as Alias, the
+    // shoe from the order, and nobody is asked.
+    const first = await hook(request, photo(TG_WH, await picture(`cx-ix1-${s}`, read({ order_number: alias }))));
+    expect(await lastSaid(TG_WH)).toBe(`[dev] Alias · 1 order recorded\n[OK] #${alias} — Jordan 4 Retro OG Flight Club · IM4002-100 · size 11`);
+    expect(saidTo(TG_WH)[0].reply_parameters.message_id).toBe(first);
+    expect(saidTo(TG_WH)[0].reply_markup.inline_keyboard.flat().map((x) => x.callback_data)).toEqual(['cxvoid']);   // no platform buttons
+    expect((await list(request)).rows.find((r) => r.order_number === alias)).toMatchObject({ platform: 'alias', order_match: 'shopify', details_from: 'shopify', sku: 'IM4002-100', size: '11' });
+    // A Temu purchase order names its platform by its shape.
+    await hook(request, photo(TG_WH, await picture(`cx-ix2-${s}`, read({ order_number: temu }))));
+    expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`^\\[dev\\] Temu · 1 order recorded\\n\\[OK\\] #${temu}`));
+
+    // The index is complete and current: an Alias number in none of our orders is most likely misread.
+    await q(`INSERT INTO app_settings (key, value, updated_by) VALUES ('shopify_order_index_sync', $1, 'e2e-cx')
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = 'e2e-cx'`,
+    [JSON.stringify({ state: 'done', firstDone: true, lastAt: new Date().toISOString(), cursor: new Date().toISOString() })]);
+    await hook(request, photo(TG_WH, await picture(`cx-ix3-${s}`, read({ order_number: stray })), '/alias'));
+    expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`\\[CHECK\\] #${stray} — no shoe details found \\(not found in our orders\\)`));
+    expect((await list(request)).rows.find((r) => r.order_number === stray).flags).toContain('not_in_shopify');
+  } finally {
+    await q(`DELETE FROM app_settings WHERE key = 'shopify_order_index_sync' AND updated_by = 'e2e-cx'`);
+    await q(`DELETE FROM shopify_order_index WHERE channel = 'e2e-cx'`);
+    await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
+  }
+});
+
 // ── The forgiving flows (2026-11-20) ────────────────────────────────────────────────
 test('photos with no platform wait for a tap: ONE question, the pick files them into that message, Void Batch takes the rows back', async ({ request }) => {
   await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
@@ -561,7 +666,7 @@ test('photos with no platform wait for a tap: ONE question, the pick files them 
   await new Promise((r) => setTimeout(r, 2500));
   expect(saidTo(TG_WH)).toHaveLength(1);
   const ask = saidTo(TG_WH)[0];
-  expect(ask.text).toMatch(/^\[dev\] 2 photos from E2E Cx Warehouse — which platform\?/);
+  expect(ask.text).toMatch(/^\[dev\] 2 photos from E2E Cx Warehouse — I couldn't tell the platform\. Which is it\?/);
   expect(ask.reply_parameters.message_id).toBe(first);
   expect(ask.reply_markup.inline_keyboard.map((r) => r.map((x) => x.callback_data))).toEqual([
     ['cxpick:alias', 'cxpick:stockx', 'cxpick:ebay', 'cxpick:shein'], ['cxpick:tiktok', 'cxpick:temu', 'cxpick:sg', 'cxpick:kc']]);

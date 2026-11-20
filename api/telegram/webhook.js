@@ -29,7 +29,7 @@ import { telegramConfigured, telegramChatId, cancelChatId, tg, enqueue } from '.
 import { decideFromTelegram, decideTipFromTelegram } from '../_lib/telegramDecide.js';
 import { notifyEnv } from '../_lib/notify.js';
 import { alertCancellationsLogged } from '../_lib/alerts.js';
-import { fileTypedCancellation, typedReplyText, sayTo, HOW_TO, dayFrom, msgPicker, msgFor, msgAll, sendDayReport, cancelBatchStart, cancelBatchDone, cancelBatchDrop, readTelegramPhoto, askPlatformSoon, readReleasedPhotos } from '../_lib/cancellations.js';
+import { fileTypedCancellation, typedReplyText, sayTo, HOW_TO, dayFrom, msgPicker, msgFor, msgAll, sendDayReport, cancelBatchStart, cancelBatchDone, cancelBatchDrop, readTelegramPhoto, askPlatformSoon, readReleasedPhotos, cancelReading } from '../_lib/cancellations.js';
 import { platformLabel, PLATFORMS, splitCommand, extractImageFile } from '../../src/lib/cancellations.js';
 import { parseApprovalReply, splitTipReply, sizeKey } from '../../src/lib/buyPaste.js';
 const PLATFORM_KEYS = new Set(PLATFORMS.map((p) => p.key));
@@ -517,8 +517,10 @@ const VOID_MIN = 60;
 //   A  /alias as the caption — of one photo, or of one photo of an album (the whole album
 //      takes the platform and the note)
 //   B  /alias first, then the photos — on for SESSION_SEC, restarted by each photo
-//   C  photos with nothing at all — HELD, and the bot asks once with buttons; a tap (or the
-//      command, sent after) files them and the question becomes the summary
+//   C  photos with nothing at all — READ first: our Shopify orders, the number's shape or the
+//      slip's own words usually say the platform (2026-11-21). Only what that can't place is
+//      HELD, and the bot asks once with buttons; a tap (or the command, sent after) files
+//      them and the question becomes the summary
 // Text after the command is the note on every row it covers ("/ebay wrong size shipped").
 //
 // In the CANCELLATIONS GROUP (TELEGRAM_CANCEL_CHAT_ID) people also talk, so only a photo or
@@ -619,15 +621,12 @@ async function fileFromChat(msg, { group = false } = {}) {
   const on = (words.platform || album) ? null : await useCancellationCtx(mine, SESSION_SEC);
   const known = words.platform || on?.platform || null;
   const note = captionNote || on?.note || null;
-  // Nothing names a platform and it isn't part of an album: it is HELD from the start (C).
-  const hold = !known && !album;
   // The photo row FIRST, before Telegram gets its 200: a re-sent update stops here.
   const photoId = await createCancellationPhoto({ caption: note, tgChatId: chatId, tgMessageId: msg.message_id,
     tgFileId: image, mediaGroupId: msg.media_group_id || null, platform: known, sentByUserId: who.id, sentBy: who.name,
-    asFile: file.uncompressed, hold });
+    asFile: file.uncompressed });
   if (photoId == null) return null;
   if (words.platform) await releaseWaiting(captionNote);
-  if (hold) { askPlatformSoon(chatId, who.id); return null; }
 
   if (known) {
     cancelBatchStart(batch, chatId, photoId);
@@ -641,30 +640,40 @@ async function fileFromChat(msg, { group = false } = {}) {
     return null;
   }
 
-  // An album photo with no caption of its own. Its row is written; now give the photo that
-  // carries the caption a moment to arrive, then take the album's platform and note — or,
-  // failing that, what is on for this person — or ask.
+  // Nobody has named a platform for this photo (C). Its row is written. An album photo first
+  // gives the photo that carries the caption a moment to arrive (then takes the album's
+  // platform and note, or what is on for this person). Otherwise the photo is READ: the number
+  // may be one of our Shopify orders, or its shape or the slip's own words may say whose it
+  // is — and only when none of that names a platform is it held and asked about.
   cancelBatchStart(batch, chatId, photoId);
+  cancelReading(chatId, who.id, +1);
   setImmediate(async () => {
-    let read = false;
+    let filed = false;
     try {
-      await new Promise((r) => setTimeout(r, ALBUM_WAIT_MS));
-      const named = await useCancellationCtx(album, SESSION_SEC) || await useCancellationCtx(mine, SESSION_SEC);
+      let named = null;
+      if (album) {
+        await new Promise((r) => setTimeout(r, ALBUM_WAIT_MS));
+        named = await useCancellationCtx(album, SESSION_SEC) || await useCancellationCtx(mine, SESSION_SEC);
+      }
       if (named) {
         await setCancellationPhotoPlatform(photoId, named.platform, named.note).catch(() => {});
-        read = true;                             // from here it is this batch's, whatever the read gives
+        filed = true;                            // from here it is this batch's, whatever the read gives
         await readTelegramPhoto({ id: photoId, fileId: image, chatId, messageId: msg.message_id, caption: named.note || null,
           platform: named.platform, who: ctx.who });
-      } else if (await holdCancellationPhoto(photoId)) {
-        askPlatformSoon(chatId, who.id);         // it waits for a tap now
+      } else {
+        const out = await readTelegramPhoto({ id: photoId, fileId: image, chatId, messageId: msg.message_id, caption: note, platform: null, who: ctx.who },
+          { requirePlatform: true });
+        if (!out?.needsPlatform) filed = true;
+        else if (await holdCancellationPhoto(photoId)) askPlatformSoon(chatId, who.id);   // it waits for a tap now
       }
     } catch (e) {
       // Left 'pending' with no platform: the restart sweep reads it, so it is never lost.
-      console.error('[telegram/webhook] album photo:', e.message);
+      console.error('[telegram/webhook] photo with no platform:', e.message);
     } finally {
-      // Not read here = not answered here: out of the batch, so the batch's reply doesn't
+      cancelReading(chatId, who.id, -1);
+      // Not filed here = not answered here: out of the batch, so the batch's reply doesn't
       // mark it answered and hide it from the tap (or the sweep) that will file it.
-      if (read) cancelBatchDone(batch); else cancelBatchDrop(batch, photoId);
+      if (filed) cancelBatchDone(batch); else cancelBatchDrop(batch, photoId);
     }
   });
   return null;

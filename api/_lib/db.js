@@ -13769,10 +13769,14 @@ export async function cancellationIdsForPhoto(photoId) {
 // { key, order_id, platform, source, tracking, lines:[{ sku, size, name, title }] } — the
 // eBay / SHEIN line SKU is OUR Shopify SKU, so its style code + size come from the Shopify
 // variant (shopify_listing_variants) where we have it.
-export async function knownOrdersFor({ keys = [], tracks = [] } = {}) {
+export async function knownOrdersFor({ keys = [], tracks = [], canon = [] } = {}) {
   const K = [...new Set(keys.filter(Boolean))];
+  // canon = the read numbers with their look-alike characters folded together (canonKey in
+  // src/lib/cancellations.js): finds the order a long letters-and-digits number was misread
+  // from. Only SHEIN's own table and the Shopify index are asked that way.
+  const C = [...new Set(canon.filter(Boolean))];
   const T = [...new Set(tracks.filter(Boolean).map((t) => String(t).toUpperCase().replace(/[^A-Z0-9]/g, '')))];
-  if (!K.length && !T.length) return [];
+  if (!K.length && !T.length && !C.length) return [];
   const out = [];
   const ebay = await db()`
     SELECT o.order_id, o.lines,
@@ -13787,9 +13791,10 @@ export async function knownOrdersFor({ keys = [], tracks = [] } = {}) {
     out.push({ source: 'ebay', platform: 'ebay', order_id: o.order_id, tracking: o.tracking || null,
       lines: (Array.isArray(o.lines) ? o.lines : []).map((l) => ({ sku: l.sku || null, size: l.size || null, title: l.title || null })) });
   }
-  const shein = K.length ? await db()`
+  const shein = K.length || C.length ? await db()`
     SELECT order_no, seller_sku, title FROM shein_order_units
      WHERE upper(regexp_replace(order_no, '[^A-Za-z0-9]', '', 'g')) = ANY(${K}::text[])
+        OR translate(upper(regexp_replace(order_no, '[^A-Za-z0-9]', '', 'g')), 'OQDILTSBZG', '0001115826') = ANY(${C}::text[])
      ORDER BY order_no, goods_id LIMIT 200` : [];
   const byNo = new Map();
   for (const u of shein) {
@@ -13808,8 +13813,33 @@ export async function knownOrdersFor({ keys = [], tracks = [] } = {}) {
     out.push({ source: 'presell', platform: s.platform, order_id: s.order_id, tracking: s.tracking_number || null,
       lines: [{ style: s.sku || null, size: s.size || null, name: s.name || null }] });
   }
+  // Every other channel: the Shopify order index (shopify_order_index — the marketplace's own
+  // number per Shopify order; api/_lib/shopify-order-index.js). One entry per number that
+  // matched, so the caller's key is the number the label printed. Last, so an order we hold
+  // first-hand (eBay, SHEIN, pre-sell) is the one a number matches. A database that has not
+  // run db:setup yet has no such table: that is "no Shopify match", not a failure.
+  let idx = [];
+  try {
+    idx = await db()`
+      SELECT platform, name, numbers, number_texts, numbers_canon, trackings, lines
+        FROM shopify_order_index
+       WHERE numbers && ${K}::text[] OR trackings && ${T}::text[] OR numbers_canon && ${C}::text[]
+       ORDER BY ordered_at DESC NULLS LAST LIMIT 50`;
+  } catch (e) {
+    if (e.code !== '42P01') throw e;
+  }
+  for (const o of idx) {
+    const lines = (Array.isArray(o.lines) ? o.lines : []).map((l) => ({ style: l.style || null, size: l.size || null, name: l.name || null, title: l.title || null }));
+    const nums = o.numbers || []; const texts = o.number_texts || [];
+    const byTrack = (o.trackings || []).find((t) => T.includes(t)) || null;
+    const canons = o.numbers_canon || [];
+    const hits = nums.map((k, i) => ({ k, text: texts[i] || k, c: canons[i] })).filter((n) => K.includes(n.k) || (n.c && C.includes(n.c)));
+    // Found by its tracking number alone: it answers to its first (its main) number.
+    if (!hits.length && byTrack && nums.length) hits.push({ k: nums[0], text: texts[0] || nums[0] });
+    for (const h of hits) out.push({ source: 'shopify', platform: o.platform, order_id: h.text, tracking: byTrack, lines });
+  }
   // Shopify SKU → style code / size / product title, for the eBay + SHEIN lines.
-  const skus = [...new Set(out.filter((o) => o.source !== 'presell').flatMap((o) => o.lines.map((l) => l.sku)).filter(Boolean))];
+  const skus = [...new Set(out.filter((o) => o.source !== 'presell' && o.source !== 'shopify').flatMap((o) => o.lines.map((l) => l.sku)).filter(Boolean))];
   const variants = skus.length ? await db()`
     SELECT DISTINCT ON (sku) sku, style, size, product_title FROM shopify_listing_variants
      WHERE sku = ANY(${skus}::text[]) ORDER BY sku, updated_at DESC` : [];
@@ -13839,6 +13869,34 @@ export async function catalogueNamesBySku(skus) {
                     ORDER BY upper(sku), created_at DESC`);
   take(await db()`SELECT sku, name FROM presell_stock WHERE upper(sku) = ANY(${forms}::text[]) AND coalesce(name, '') <> ''`);
   return out;
+}
+
+// ── The Shopify order index (api/_lib/shopify-order-index.js) ──
+// A row is rewritten only when Shopify's own updatedAt moved.
+export async function upsertShopifyOrderIndex(rows) {
+  let changed = 0;
+  for (const r of rows || []) {
+    const out = await db()`
+      INSERT INTO shopify_order_index (shopify_order_id, name, channel, platform, numbers, number_texts, numbers_canon, trackings, lines,
+                                       ordered_at, cancelled_at, shopify_updated_at)
+      VALUES (${r.shopify_order_id}, ${r.name}, ${r.channel}, ${r.platform}, ${r.numbers || []}::text[], ${r.number_texts || []}::text[],
+              ${r.numbers_canon || []}::text[], ${r.trackings || []}::text[], ${JSON.stringify(r.lines || [])}::jsonb, ${r.ordered_at}, ${r.cancelled_at}, ${r.shopify_updated_at})
+      ON CONFLICT (shopify_order_id) DO UPDATE SET
+        name = EXCLUDED.name, channel = EXCLUDED.channel, platform = EXCLUDED.platform, numbers = EXCLUDED.numbers,
+        number_texts = EXCLUDED.number_texts, numbers_canon = EXCLUDED.numbers_canon, trackings = EXCLUDED.trackings, lines = EXCLUDED.lines,
+        ordered_at = EXCLUDED.ordered_at, cancelled_at = EXCLUDED.cancelled_at,
+        shopify_updated_at = EXCLUDED.shopify_updated_at, updated_at = now()
+      WHERE shopify_order_index.shopify_updated_at IS DISTINCT FROM EXCLUDED.shopify_updated_at
+         OR shopify_order_index.numbers IS DISTINCT FROM EXCLUDED.numbers
+         OR shopify_order_index.trackings IS DISTINCT FROM EXCLUDED.trackings
+      RETURNING shopify_order_id`;
+    changed += out.length;
+  }
+  return changed;
+}
+/** Orders older than this are past any cancellation: out of the index. */
+export async function pruneShopifyOrderIndex(days = 75) {
+  await db()`DELETE FROM shopify_order_index WHERE ordered_at < now() - make_interval(days => ${days}::int)`;
 }
 
 /** The live (not removed) row already holding this number, if any. */

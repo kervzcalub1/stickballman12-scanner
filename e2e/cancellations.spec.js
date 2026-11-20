@@ -480,6 +480,10 @@ test('an AI account with no credit left is said plainly, and the photo is still 
 });
 
 test('a stranger is told to connect; a by-hand add refuses a duplicate; a removed number may come back', async ({ request }) => {
+  // A platform named by the test before this one stays on for 90 s, and a row it left with no
+  // number would be filled by the number typed here: start with neither.
+  await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
+  await q(`UPDATE cancellations SET status = 'rejected' WHERE sent_by = $1 AND order_key IS NULL AND status <> 'rejected'`, [WH.name]);
   sent.length = 0;
   const n = `${String(Date.now()).slice(-8)}-${String(Date.now()).slice(-8)}`;
   await hook(request, { from: TG_WH, body: { text: `${n} - customer asked` } });
@@ -705,13 +709,15 @@ test('the note after a command rides on every photo; an image sent "as a file" i
   sent.length = 0; edits.length = 0;
   const s = String(Date.now()).slice(-6);
   const a = `9911${s}4`; const b = `9911${s}0`;
-  // "/temu wrong size shipped" has no order number in it: it is a note, and Temu is on.
-  await hook(request, { from: TG_WH, body: { text: '/temu wrong size shipped' } });
-  expect(await lastSaid(TG_WH)).toMatch(/Temu mode on for 90 s — send your photos[\s\S]*Note on each: "wrong size shipped"/);
+  // "/tiktok wrong size shipped" has no order number in it: it is a note, and TikTok is on.
+  // (TikTok: a platform with no number shape of its own, so this made-up number is not [CHECK]ed
+  // for its format — a Temu number has to look like PO-211-… since 2026-11-21.)
+  await hook(request, { from: TG_WH, body: { text: '/tiktok wrong size shipped' } });
+  expect(await lastSaid(TG_WH)).toMatch(/TikTok Shop mode on for 90 s — send your photos[\s\S]*Note on each: "wrong size shipped"/);
   const fa = await picture(`cx-doc-${s}`, read({ order_number: a }));
   await hook(request, { from: TG_WH, body: { document: { file_id: fa, mime_type: 'image/jpeg', file_name: 'label.jpg' } } });
-  expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`Temu · 1 order recorded\\n\\[OK\\] #${a}`));
-  expect((await list(request)).rows.find((r) => r.order_number === a)).toMatchObject({ platform: 'temu', reason: 'wrong size shipped' });
+  expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`TikTok Shop · 1 order recorded\\n\\[OK\\] #${a}`));
+  expect((await list(request)).rows.find((r) => r.order_number === a)).toMatchObject({ platform: 'tiktok', reason: 'wrong size shipped' });
   expect((await q('SELECT as_file FROM cancellation_photos WHERE tg_file_id = $1', [fa]))[0].as_file).toBe(true);
 
   // A photo first (it is asked about), then the command instead of a tap: filed by the command.

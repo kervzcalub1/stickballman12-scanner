@@ -667,6 +667,17 @@ stock was built and rejected as unnecessary.
 - E2E: `e2e/receiving-gs-as-mens.spec.js` (convert + commit, the suggestion + Keep as GS,
   PO reconciliation stays clean).
 
+## A failed save leaves no batch (2026-11-21)
+`batches/commit.js` writes the batch row, then the pairs (`insertItems`, ONE transaction — all
+or none). If the pairs fail (usual cause: a 1ID already on another shoe → 409), the row is
+taken back out with `dropEmptyBatch` (refuses a batch holding any pair or box) and the same
+error goes back. Before this the row stayed: one **Empty** batch on the Batches page per
+retry, plus a false duplicate-tracking alert between them (found on a Shoe Palace package,
+B-101970 / B-101972). The PO link (`markPoReceiving`) and courier registration now run only
+AFTER the pairs are in. An **Empty** badge today means every pair was removed afterwards
+(see the Deleted archive) — or an open multi-box batch nobody has scanned into yet.
+Guarded by `e2e/failed-save-no-empty-batch.spec.js`.
+
 ## Duplicate tracking numbers (2026-10-06)
 Alexander saw **Foot Locker send two single-pair packages under ONE tracking number**
 instead of one box of two. The task: handle duplicates and **log every instance per

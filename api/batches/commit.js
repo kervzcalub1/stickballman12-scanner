@@ -14,7 +14,7 @@ import {
 } from '../_lib/util.js';
 import { alertPoDiscrepancy, alertDuplicateTracking } from '../_lib/alerts.js';
 import {
-  createBatch, insertItems, insertIntakeEvents, insertIssues, insertIssueEvents,
+  createBatch, dropEmptyBatch, insertItems, insertIntakeEvents, insertIssues, insertIssueEvents,
   addSupplier, getPo, markPoReceiving, reconcileOutcomeForIntake, dbConfigured,
   getLocationByCode, shelveItems, PH_EXCLUDED_KINDS, claimForTracking, logTrackingDuplicate, saveReceivingEvidence,
 } from '../_lib/db.js';
@@ -196,6 +196,19 @@ export default async function handler(req, res) {
 
   try {
     const batch = await createBatch(bh, createdBy);
+    // The pairs go in as ONE transaction, so a failure here saves none of them — and the
+    // batch row above would be left behind with nothing in it. That is where every "Empty"
+    // batch came from (2026-11-21: two for one Shoe Palace tracking number, each a retry of
+    // the same failed save, plus a false duplicate-tracking alert between them). Take the
+    // row back out, then fail as before. Nothing else may touch the batch before this
+    // point: the PO link and the courier registration both wait for the pairs.
+    let created;
+    try {
+      created = await insertItems(batch.id, items, createdBy, bh.dateReceived);
+    } catch (e) {
+      await dropEmptyBatch(batch.id).catch((x) => console.error('[commit] drop empty batch', batch.batch_code, x.message));
+      throw e;
+    }
     // Link + advance the PO (best-effort — the batch is already saved).
     // Kept as a promise (not fire-and-forget) so the auto-reconcile below runs only
     // after the PO is actually on 'receiving' with its batch linked.
@@ -212,7 +225,6 @@ export default async function handler(req, res) {
       registerWarehouseTracking([bh.tracking], { claim: claimForTracking, label: 'batches/commit' })
         .catch((e) => console.warn('[commit] register:', e.message));
     }
-    const created = await insertItems(batch.id, items, createdBy, bh.dateReceived);
     // First history per item: "Scanned by <user>" then received / rescaled.
     await insertIntakeEvents(created.map((r) => r.id), createdBy, kind);
     // The claim photos taken at the bench ride on the batch (receiving-evidence.md). Best effort.

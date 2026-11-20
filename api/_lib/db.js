@@ -1032,6 +1032,19 @@ export async function reserveVins(count, dateReceived = null) {
   return rows.map((r) => r.vin);
 }
 
+// A save that failed before any pair went in: take its batch row back out, so a failed
+// commit leaves nothing behind (batches/commit.js). Refuses a batch that holds anything —
+// a pair, a box — so it can never remove real work; returns whether a row went.
+export async function dropEmptyBatch(batchId) {
+  const rows = await db()`
+    DELETE FROM batches b
+     WHERE b.id = ${batchId}
+       AND NOT EXISTS (SELECT 1 FROM items i WHERE i.batch_id = b.id)
+       AND NOT EXISTS (SELECT 1 FROM batch_boxes x WHERE x.batch_id = b.id)
+    RETURNING b.id`;
+  return rows.length > 0;
+}
+
 export async function insertItems(batchId, items, createdBy, dateReceived = null) {
   const sql = db();
   const queries = items.map((it) => sql`

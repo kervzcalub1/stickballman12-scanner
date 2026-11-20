@@ -2561,6 +2561,46 @@ await sql(`
     notify_error  TEXT,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
+// ⚔ PRICE COMPETE for cross-listed pairs (2026-11-20, owner: "like the one we have in pre-sell
+// listing"; api/_lib/cross-compete.js). Same rules as pre-sell's (undercut $1 / match, $5
+// floor under the price we set, follow the market up, 2-hour re-base, 🔒 lock) — but the unit
+// is a size of a group ON ONE SKU: every SKU has its own market on Alias.
+//   cross_groups.comp_enabled / comp_mode   the shoe's own switch (NULL = follow "All shoes",
+//                      app_settings cross_comp_all / _all_mode)
+//   cross_pool.comp_override                per size: 'on' | 'off' | NULL = follow the shoe
+//   cross_comp        per size × SKU: lock_cents (the price THIS APP last set), base_cents
+//                      (the price WE set — the floor is this − $5), state (the last check)
+//   cross_comp_log    every move, floor hit, re-base, put-back, drift and error
+await sql(`ALTER TABLE cross_groups ADD COLUMN IF NOT EXISTS comp_enabled BOOLEAN`);
+await sql(`ALTER TABLE cross_groups ADD COLUMN IF NOT EXISTS comp_mode TEXT CHECK (comp_mode IN ('undercut', 'match'))`);
+await sql(`ALTER TABLE cross_pool ADD COLUMN IF NOT EXISTS comp_override TEXT CHECK (comp_override IN ('on', 'off'))`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS cross_comp (
+    pool_id       BIGINT NOT NULL REFERENCES cross_pool(id) ON DELETE CASCADE,
+    group_sku_id  BIGINT NOT NULL REFERENCES cross_group_skus(id) ON DELETE CASCADE,
+    lock_cents    INTEGER,
+    base_cents    INTEGER,
+    state         JSONB NOT NULL DEFAULT '{}',
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (pool_id, group_sku_id)
+  )`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS cross_comp_log (
+    id            BIGSERIAL PRIMARY KEY,
+    pool_id       BIGINT REFERENCES cross_pool(id) ON DELETE CASCADE,
+    group_sku_id  BIGINT REFERENCES cross_group_skus(id) ON DELETE CASCADE,
+    mode          TEXT,
+    market_cents  INTEGER,
+    from_cents    INTEGER,
+    to_cents      INTEGER,
+    floor_cents   INTEGER,
+    action        TEXT NOT NULL,          -- down | up | floor | rebase | restore | drift | error
+    note          TEXT,
+    changed       INTEGER NOT NULL DEFAULT 0,
+    failed        INTEGER NOT NULL DEFAULT 0,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS cross_comp_log_at_idx ON cross_comp_log (created_at DESC)`);
 // IN TRANSIT (2026-10-10, Alex): pairs listed while still on their way, to catch the hype.
 // When the warehouse RECEIVES that SKU + size, every unsold Alias/StockX listing for it is
 // DELETED and the pre-sell group is told, so PH / Nikki list the real pairs properly.
@@ -4078,7 +4118,7 @@ const LIVE_TABLES = [
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
   'products', 'product_photos', 'locations', 'vin_stock', 'sales', 'suppliers', 'users',
   'shein_category_map', 'shein_brand_map',
-  'cross_pool', 'cross_listings', 'cross_sales',
+  'cross_pool', 'cross_listings', 'cross_sales', 'cross_groups', 'cross_comp_log',
   'app_settings', 'payout_presets', 'shipment_issues', 'shipment_tracking',
   'purchase_orders', 'po_boxes', 'po_lines', 'po_comments', 'po_resolutions', 'deleted_pos',
   'po_stores', 'po_store_charges', 'po_store_receipts', 'po_dropoff_receipts', 'po_label_files', 'presell_stock_po', 'presell_box_lines',

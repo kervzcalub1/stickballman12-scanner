@@ -7,13 +7,17 @@
 import { aliasCreateListing, aliasDeleteListing, aliasUpdateListing, aliasListingError } from './alias.js';
 import {
   getCrossPool, openCrossListings, insertCrossListing, updateCrossListing, recordCrossSale, markCrossSaleNotified,
-  getCrossGroupSkus, getSetting,
+  getCrossGroupSkus, getSetting, setCrossComp,
 } from './db.js';
 import { sendToChat } from './telegram.js';
 import { takeDownPlan, roomFor, pairsLeft, saleLines } from '../../src/lib/crossListing.js';
 
 export const CHAT_KEY = 'cross_listing_chat_id';
 export const crossChatId = async () => String((await getSetting(CHAT_KEY).catch(() => null)) || '').trim() || null;
+// ⚔ price changes (cross-compete.js) post to their own chat when one is set, else to the sales chat.
+export const PRICE_CHAT_KEY = 'cross_price_chat_id';
+export const crossPriceChatOwn = async () => String((await getSetting(PRICE_CHAT_KEY).catch(() => null)) || '').trim() || null;
+export const crossPriceChatId = async () => (await crossPriceChatOwn()) || crossChatId();
 
 const why = (e, what) => (e?.name === 'AbortError' || e?.name === 'TimeoutError' ? `Alias timed out — ${what}` : `Could not reach Alias: ${e?.message || 'network'}`);
 const ALIAS = {
@@ -37,6 +41,7 @@ const ALIAS = {
 export async function topUpSku(pool, groupSku, { sizeValue, priceCents, active }, actor, io = ALIAS) {
   const open = await openCrossListings(pool.id);
   const wanted = roomFor(pool, open, groupSku.id);
+  const had = open.filter((l) => Number(l.group_sku_id) === Number(groupSku.id)).length;
   const out = { wanted, created: 0, errors: [] };
   for (let i = 0; i < wanted; i++) {
     try {
@@ -50,6 +55,9 @@ export async function topUpSku(pool, groupSku, { sizeValue, priceCents, active }
       break;
     }
   }
+  // The SKU had nothing up for this size: this price is "the price we set" from here on
+  // (⚔ floor and 🔒 lock) — an older one would be put back over it by the lock.
+  if (out.created && !had) await setCrossComp(pool.id, groupSku.id, { lock: priceCents, base: priceCents });
   return out;
 }
 
@@ -87,6 +95,8 @@ export async function repriceSku(poolId, groupSkuId, priceCents, actor, io = ALI
       else { await updateCrossListing(l.id, { last_error: `Price change failed: ${r.error}` }, actor); out.errors.push(r.error); }
     } catch (e) { out.errors.push(why(e, 'the price may not have changed.')); }
   }
+  // A price edited here is the new "price we set": the floor is measured from it and the 🔒 lock holds it.
+  if (out.changed) await setCrossComp(poolId, groupSkuId, { lock: priceCents, base: priceCents });
   return out;
 }
 

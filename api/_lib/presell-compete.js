@@ -156,7 +156,7 @@ export function priceAlertLines(moves, at = new Date()) {
   return lines;
 }
 // Telegram caps a message at 4096 characters — split on SKU boundaries well under that.
-function chunks(lines, max = 3500) {
+export function chunks(lines, max = 3500) {
   const out = []; let cur = []; let len = 0;
   for (const l of lines) {
     const n = (typeof l === 'string' ? l : `${l.b}${l.t || ''}`).length + 1;

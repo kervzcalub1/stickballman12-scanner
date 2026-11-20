@@ -4,18 +4,20 @@
 //   New       search Alias by NAME → tick the entries that are the same shoe (photo, SKU,
 //             release) → every size with each SKU's market → pairs, cost, a price per SKU → list
 //   Listed    each group: per size the pairs / sold / left / cost and what each SKU holds
+//   Compete   ⚔ keep each SKU's live price at its own market (components/CrossCompete.jsx)
 //   Sales     every sale: which SKU it sold under, price, payout, cost, net
 //   Settings  the Telegram chat the sales post to (admin / Check Access)
 // The rules (how many listings a SKU may hold, the money) are src/lib/crossListing.js.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TopBar } from '../components/common.jsx';
+import { CrossCompete } from '../components/CrossCompete.jsx';
 import { api } from '../api.js';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { PH_DATETIME } from '../lib/format.js';
 import { bySize, pairsLeft, priceCents, costValue, saleMoney, money, MAX_SKUS, MAX_PAIRS, MAX_NEW_LISTINGS } from '../lib/crossListing.js';
 
-const TABS = [['new', 'New'], ['listed', 'Listed'], ['sales', 'Sales'], ['settings', 'Settings']];
+const TABS = [['new', 'New'], ['listed', 'Listed'], ['compete', '⚔ Compete'], ['sales', 'Sales'], ['settings', 'Settings']];
 const when = (v) => { const d = new Date(v); return Number.isNaN(d.getTime()) ? '' : `${PH_DATETIME.format(d)} EST`; };
 const errText = (e) => e?.message || 'Something went wrong — try again.';
 
@@ -410,12 +412,13 @@ function SalesTab({ data }) {
 function SettingsTab({ onSaved }) {
   const [s, setS] = useState(null);
   const [chat, setChat] = useState('');
+  const [priceChat, setPriceChat] = useState('');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
-  useEffect(() => { api.crossSettings().then((r) => { setS(r); setChat(r.chatId || ''); }).catch((x) => setMsg(`⚠ ${errText(x)}`)); }, []);
+  useEffect(() => { api.crossSettings().then((r) => { setS(r); setChat(r.chatId || ''); setPriceChat(r.priceChatId || ''); }).catch((x) => setMsg(`⚠ ${errText(x)}`)); }, []);
   async function go(body, ok) {
     setBusy(true); setMsg('');
-    try { const r = await api.crossSettingsSave(body); if (body.test !== true) setS((c) => ({ ...c, chatId: r.chatId })); setMsg(ok); onSaved(); }
+    try { const r = await api.crossSettingsSave(body); if (body.chatId !== undefined) setS((c) => ({ ...c, chatId: r.chatId })); if (body.priceChatId !== undefined) setS((c) => ({ ...c, priceChatId: r.priceChatId })); setMsg(ok); onSaved(); }
     catch (x) { setMsg(`⚠ ${errText(x)}`); } finally { setBusy(false); }
   }
   if (!s) return <div className="card muted">{msg || 'Loading…'}</div>;
@@ -433,6 +436,13 @@ function SettingsTab({ onSaved }) {
         <input className="input" value={chat} onChange={(e) => setChat(e.target.value)} placeholder="-1001234567890" aria-label="Telegram chat id" />
         <button type="button" className="btn primary" disabled={busy || chat.trim() === (s.chatId || '')} onClick={() => go({ chatId: chat.trim() }, chat.trim() ? 'Saved.' : 'Chat removed — sales will not be posted.')}>Save</button>
         <button type="button" className="btn" disabled={busy || !s.chatId} onClick={() => go({ test: true }, 'Test sent — check the group.')}>Send a test</button>
+      </div>
+      <h3 className="xl-h xl-h-next">Telegram chat for ⚔ price changes</h3>
+      <p className="muted sm">Every price the Compete tab moves (down, up, at the floor, put back by the lock) posts here, one message per check. Leave it blank to post them in the sales chat above.</p>
+      <div className="xl-search">
+        <input className="input" value={priceChat} onChange={(e) => setPriceChat(e.target.value)} placeholder="blank = the sales chat" aria-label="Telegram chat id for price changes" />
+        <button type="button" className="btn primary" disabled={busy || priceChat.trim() === (s.priceChatId || '')} onClick={() => go({ priceChatId: priceChat.trim() }, priceChat.trim() ? 'Saved.' : 'Removed — price changes post in the sales chat.')}>Save</button>
+        <button type="button" className="btn" disabled={busy || !(s.priceChatId || s.chatId)} onClick={() => go({ testPrice: true }, 'Test sent — check the group.')}>Send a test</button>
       </div>
       {msg && <div className={`sm mt${msg.startsWith('⚠') ? ' error' : ''}`} role="status">{msg}</div>}
     </div>
@@ -457,7 +467,7 @@ export function AliasCross({ onHome, onSignOut }) {
   return (
     <div className="app">
       <TopBar title="Alias Cross-Listing" onHome={onHome} onSignOut={onSignOut} />
-      <div className="tabs" role="tablist" aria-label="Alias Cross-Listing">
+      <div className="tabs xl-tabs" role="tablist" aria-label="Alias Cross-Listing">
         {tabs.map(([k, label]) => (
           <button key={k} type="button" role="tab" aria-selected={cur === k} className={`tab${cur === k ? ' active' : ''}`} onClick={() => setTab(k)}>
             {label}{k === 'listed' && data?.groups.length ? ` (${data.groups.length})` : ''}{k === 'sales' && data?.sales.length ? ` (${data.sales.length})` : ''}
@@ -469,6 +479,7 @@ export function AliasCross({ onHome, onSignOut }) {
       {/* New stays mounted so a half-filled size table survives a look at another tab. */}
       <div hidden={cur !== 'new'}><NewTab seed={seed} onSeedUsed={() => setSeed(null)} onListed={load} /></div>
       {cur === 'listed' && <ListedTab data={data} reload={load} onAdd={(g) => { setSeed(g); setTab('new'); }} />}
+      {cur === 'compete' && <CrossCompete canSettings={!!data?.canSettings} />}
       {cur === 'sales' && <SalesTab data={data} />}
       {cur === 'settings' && <SettingsTab onSaved={load} />}
     </div>

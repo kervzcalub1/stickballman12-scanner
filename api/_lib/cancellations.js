@@ -23,10 +23,13 @@ import { estToday } from '../../src/lib/format.js';
 import { notifyEnv } from './notify.js';
 import { alertCancellationsLogged } from './alerts.js';
 import { readCancellationLocally, canOpenImage } from './cancelOcr.js';
+import { decodeSlipBarcode } from './cancelBarcode.js';
+import { shopifyIndexFresh } from './shopify-order-index.js';
+import { platformFromText, slipDetails } from '../../src/lib/cancellations.js';
 import { cancelMessage, cancelMessageAll, dayCounts, cancellationsCsv, batchReplyText, batchReplyNeedsLook, typedDetails, pickerKeyboard } from '../../src/lib/cancellations.js';
 import {
   PLATFORMS, cleanSku, cleanOrderNo, orderKey, flagsFor, platformFromNumber, platformLabel,
-  confusableKeys, matchOurOrder, detailsFromOrder, trackingFromText,
+  confusableKeys, matchOurOrder, detailsFromOrder, trackingFromText, canonKey,
 } from '../../src/lib/cancellations.js';
 
 // What the bot's "/" menu lists (scripts/telegram-webhook.mjs → setMyCommands).
@@ -217,8 +220,8 @@ async function storePhoto(photoId, jpeg) {
 //   2. what the label says (style code, size, the name line).
 //   3. a name for that style code from our own catalogue (products / items / pre-sell stock).
 // Never invented: a detail none of them has stays blank. No paid lookups.
-async function lookupKnown({ keys, tracks }) {
-  try { return await knownOrdersFor({ keys, tracks }); } catch (e) {
+async function lookupKnown({ keys, tracks, canon = [] }) {
+  try { return await knownOrdersFor({ keys, tracks, canon }); } catch (e) {
     console.warn('[cancellations] order lookup failed:', e.message);
     return [];
   }
@@ -230,10 +233,31 @@ async function lookupKnown({ keys, tracks }) {
  * → the same orders with platform / number / shoe filled, plus details_from, order_match,
  *   read_as (the number as read, when it was put right), by_tracking, note.
  */
-export async function fillDetails(orders, named, { text = '', typed = false } = {}) {
-  const keys = orders.flatMap((o) => { const k = orderKey(o.order_number); return !k ? [] : typed ? [k] : [k, ...confusableKeys(k)]; });
+// The platforms whose every order is in the Shopify order index, number and all — so a number
+// that matches none of them is most likely misread. Not Stadium Goods (the number its slip
+// prints is not in Shopify) and not TikTok (where its number sits was seen on one order only).
+const INDEXED = new Set(['alias', 'stockx', 'temu', 'kc', 'ebay', 'shein']);
+/**
+ * … `opts.guess` = the platform the slip itself names (platformFromText) or the AI reader's —
+ * used only when nothing better says: the sender, our own order, the number's shape.
+ * Each order also gets `extra_flags`: 'platform_guess' (it came from that guess) and
+ * 'not_in_shopify' (the index is complete and current, the platform is one it covers, and
+ * the number is in it nowhere) — both make the summary line [CHECK].
+ */
+export async function fillDetails(orders, named, { text = '', typed = false, guess = null } = {}) {
+  const keys = orders.flatMap((o) => {
+    const k = orderKey(o.order_number);
+    if (!k) return [];
+    // The other reading of a number the reads disagreed on is looked up too: whichever of the
+    // two is one of OUR orders is the number.
+    const alt = !typed && o.other ? orderKey(o.other) : null;
+    return typed ? [k] : [k, ...confusableKeys(k), ...(alt ? [alt] : [])];
+  });
   const tracks = typed ? [] : trackingFromText(text);
-  const known = keys.length || tracks.length ? await lookupKnown({ keys, tracks }) : [];
+  // A long letters-and-digits number (SHEIN, StockX) misread in several look-alikes at once.
+  const canon = typed ? [] : orders.map((o) => orderKey(o.order_number)).filter((k) => k && /[A-Z]/.test(k)).map((k) => canonKey(k));
+  const known = keys.length || tracks.length ? await lookupKnown({ keys, tracks, canon }) : [];
+  const fresh = orders.some((o) => orderKey(o.order_number)) ? await shopifyIndexFresh().catch(() => false) : false;
   let list = orders;
   // No order number on the label, but a tracking number one of OUR orders shipped under.
   if (!orders.some((o) => orderKey(o.order_number)) && tracks.length) {
@@ -245,14 +269,22 @@ export async function fillDetails(orders, named, { text = '', typed = false } = 
   }
   const out = list.map((o) => {
     const order_number = o.order_number ? cleanOrderNo(o.order_number) : null;
-    const m = order_number ? matchOurOrder(order_number, named || o.platform || null, known) : null;
-    const f = { ...o, order_number, platform: named || o.platform || platformFromNumber(order_number) || null, from: [] };
+    let m = order_number ? matchOurOrder(order_number, named || o.platform || null, known) : null;
+    // The two reads disagreed, and it is the OTHER reading that is exactly one of our orders.
+    let other = null;
+    if ((!m || m.corrected) && !typed && o.other) {
+      const alt = matchOurOrder(cleanOrderNo(o.other), named || o.platform || null, known);
+      if (alt && !alt.corrected) { m = alt; other = order_number; }
+    }
+    const f = { ...o, order_number, platform: named || o.platform || platformFromNumber(order_number) || null, from: [], extra_flags: [] };
     if (m && (!m.corrected || !typed)) {
       const d = detailsFromOrder(m.order, o) || {};
       f.platform = named || m.order.platform;
       if (m.corrected) {
         f.read_as = order_number;
-        f.note = `Read as ${order_number} on the photo; one character off our ${platformLabel(m.order.platform)} order ${m.order.order_id}, so recorded as that.`;
+        f.note = `Read as ${order_number} on the photo; one character off our ${platformLabel(m.order.platform)} order ${m.order.order_id} (or its look-alike characters misread), so recorded as that.`;
+      } else if (other) {
+        f.note = `The reads disagreed (${other} / ${cleanOrderNo(o.other)}); ${cleanOrderNo(o.other)} is our ${platformLabel(m.order.platform)} order, so recorded as that.`;
       }
       f.order_number = cleanOrderNo(m.order.order_id);
       f.order_match = m.order.source;
@@ -264,6 +296,9 @@ export async function fillDetails(orders, named, { text = '', typed = false } = 
     } else {
       f.sku = cleanSku(o.sku) || null;
       if (o.product || f.sku || o.size) f.from.push(typed ? 'typed' : 'label');
+      // Nobody named the platform and the number's shape doesn't: what the slip says, flagged.
+      if (!f.platform && guess) { f.platform = guess; f.extra_flags.push('platform_guess'); }
+      if (order_number && fresh && INDEXED.has(f.platform)) f.extra_flags.push('not_in_shopify');
     }
     return f;
   });
@@ -291,7 +326,12 @@ export async function fillDetails(orders, named, { text = '', typed = false } = 
 // AFTER the read, because an album's other photos arrive with no caption at the same moment
 // as the one that carries "/alias", and the read is what gives that one time to be noted.
 // The sender's word beats the reader's guess.
-export async function fileCancellationPhoto(buf, { photoId = null, who, caption = null, platform = null, resolvePlatform = null, tgChatId = null, tgMessageId = null }) {
+//
+// `requirePlatform` (a photo sent with NO platform, 2026-11-21): read it first — the number may
+// be one of our Shopify orders, or its shape or the slip's own words may say whose it is. Only
+// when none of those names a platform does this return { needsPlatform: true } WITHOUT
+// recording anything, and the caller asks with the buttons.
+export async function fileCancellationPhoto(buf, { photoId = null, who, caption = null, platform = null, resolvePlatform = null, tgChatId = null, tgMessageId = null, requirePlatform = false }) {
   const reason = caption ? String(caption).trim().slice(0, 300) || null : null;
   if (photoId == null) {
     photoId = await createCancellationPhoto({ caption: reason, tgChatId, tgMessageId, sentByUserId: who.id, sentBy: who.name });
@@ -304,6 +344,8 @@ export async function fileCancellationPhoto(buf, { photoId = null, who, caption 
   await storePhoto(photoId, jpeg);
 
   let read = null; let error = null; let byTracking = null;
+  let worded = null;      // the platform the slip itself names ("STADIUM GOODS", "GOAT" …)
+  let hintLine = null;    // said next to a [MISSED] line: how to send it so it CAN be read
   if (!opens) error = "this picture's format can't be opened — send it as a photo (not as a file)";
   else {
     // 1. Our own server, no AI: tesseract on the ORIGINAL picture (more pixels than the copy we keep).
@@ -314,6 +356,18 @@ export async function fileCancellationPhoto(buf, { photoId = null, who, caption 
       if (local.orders.length) read = { ...local, by: 'ocr' };
     } catch (e) {
       console.warn('[cancellations] local read failed:', e.message);
+    }
+    worded = local?.text ? platformFromText(local.text) : null;
+    // A Stadium Goods slip prints no order number in words: it is the BARCODE (and the small
+    // print under it, which doesn't read reliably). Exact or nothing.
+    if (!read && (hint || worded) === 'sg') {
+      const code = await decodeSlipBarcode(buf);
+      if (code) {
+        read = { what: '', text: local?.text || '', by: 'barcode',
+          orders: [{ platform: 'sg', order_number: code, ...slipDetails(local?.text || ''), confidence: 0.99, unclear: [], agreed: true, why: 'barcode' }] };
+      } else {
+        hintLine = "a Stadium Goods order number is its barcode, and it can't be read at this size — send the photo as a FILE (not compressed), or take it closer";
+      }
     }
     // No order number, but a tracking number one of OUR orders shipped under (an eBay FedEx
     // label prints only the tracking number): that order — before any AI.
@@ -333,7 +387,15 @@ export async function fileCancellationPhoto(buf, { photoId = null, who, caption 
 
   // Our orders / the label / the catalogue: number confirmed and the shoe filled. A label
   // with only a tracking number can still name one of our orders here.
-  const found = byTracking || (read && !error ? await fillDetails(read.orders, named, { text: read.text || '' }) : []);
+  // What the slip itself says the platform is (`worded`) is a fallback only, and flagged.
+  const found = byTracking || (read && !error ? await fillDetails(read.orders, named, { text: read.text || '', guess: worded }) : []);
+  // Nobody named a platform. Is there one for every order on the photo — from our own order,
+  // the number's shape, or the slip's words? If not, nothing is recorded: the sender is asked.
+  if (requirePlatform && !named && !error) {
+    const numbered = found.filter((o) => o.order_number);
+    const known = numbered.length ? numbered.every((o) => o.platform) : !!worded;
+    if (!known) return { photoId, needsPlatform: true };
+  }
   const finish = async (rows, dupes, extra = {}) => {
     const result = { rows: rows.map((r) => ({ id: r.id, ...(r.read_as ? { read_as: r.read_as } : {}), ...(r.by_tracking ? { by_tracking: true } : {}) })),
       dupes: dupes.map((d) => ({ order_number: d.order_number, existing: { id: d.existing?.id, sent_by: d.existing?.sent_by || null } })), ...extra };
@@ -342,11 +404,16 @@ export async function fileCancellationPhoto(buf, { photoId = null, who, caption 
   };
   // Nothing usable: still one row with the photo, so the request reaches a person.
   if (error || !found.some((o) => o.order_number)) {
-    const flags = ['unreadable', 'no_number', ...(named ? [] : ['no_platform'])];
-    const { row } = await createCancellation({ ...base, platform: named, flags,
+    // The platform the slip names and the shoe it prints are kept even with no number: a
+    // Stadium Goods slip whose barcode didn't read still says STADIUM GOODS, SKU and SIZE.
+    const where = named || (error ? null : worded);
+    const shoe = !error && read?.text ? slipDetails(read.text) : { sku: null, size: null, product: null };
+    const flags = ['unreadable', 'no_number', ...(where ? [] : ['no_platform']), ...(where && !named ? ['platform_guess'] : [])];
+    const { row } = await createCancellation({ ...base, platform: where, flags, sku: shoe.sku, size: shoe.size, product: shoe.product,
+      details_from: shoe.sku || shoe.size || shoe.product ? 'label' : null,
       ai_raw: read ? { by: read.by, what: read.what, ...(read.text ? { text: read.text } : {}) } : { error },
       note: error ? `Could not read the photo: ${error}` : (read.what ? `Reader: ${read.what}` : null) });
-    return finish(row ? [row] : [], []);
+    return finish(row ? [row] : [], [], hintLine ? { hint: hintLine } : {});
   }
   const rows = []; const dupes = []; const seen = new Set();
   const raws = new Map(read.orders.map((o) => [orderKey(o.order_number), o]));
@@ -359,7 +426,7 @@ export async function fileCancellationPhoto(buf, { photoId = null, who, caption 
     const ai = raws.get(orderKey(o.read_as || o.order_number)) || o;
     const row = { platform: o.platform, order_number: o.order_number, sku: o.sku, size: o.size, product: o.product };
     // Our own order matched = certain: the reader's own doubts don't apply.
-    const flags = flagsFor(row, o.order_match ? null : ai);
+    const flags = [...new Set([...flagsFor(row, o.order_match ? null : ai), ...(o.extra_flags || [])])];
     const note = [o.note, ai.agreed !== false || o.order_match ? null
       : ai.onlySecond ? 'Only one of the two reads found this number'
         : ai.other ? `Second read said ${ai.other}` : 'The second read did not find this number',
@@ -391,13 +458,15 @@ export async function fileTypedCancellation(text, { who, platform: given = null,
   const platform = given || named || platformFromNumber(order_number);
   const key = orderKey(order_number);
   // An order number is mostly digits; "hello world123" is not a request to cancel anything.
-  if (!key || (key.match(/\d/g) || []).length < 6) return null;
+  // …unless its shape is a platform's own (StockX "06-LZQ93WHGEL" has four digits).
+  if (!key || ((key.match(/\d/g) || []).length < 6 && !platformFromNumber(order_number))) return null;
   const existing = await findLiveCancellation(key);
   if (existing) return { rows: [], dupes: [{ order_number, existing }] };
   const t = typedDetails(rest);
   const [o] = await fillDetails([{ order_number, platform, sku: t.sku, size: t.size, product: null }], platform, { typed: true });
   const row = { platform: o.platform, order_number: o.order_number, sku: o.sku, size: o.size, product: o.product };
-  const f = { ...row, order_key: orderKey(o.order_number), flags: flagsFor(row), details_from: o.details_from, order_match: o.order_match || null };
+  const f = { ...row, order_key: orderKey(o.order_number), flags: [...new Set([...flagsFor(row), ...(o.extra_flags || [])])],
+    details_from: o.details_from, order_match: o.order_match || null };
   // "Photo 4: no order number found — type it": the number fills that photo's row.
   const open = await openUnreadCancellation(who.id, platform);
   if (open) {
@@ -498,7 +567,7 @@ export async function sendBatchReply(chatId, photoIds) {
     const items = photos.map((p, i) => ({
       n: photos.length > 1 ? i + 1 : null,
       error: !p.result?.rows?.length && p.read_status === 'failed' ? (p.read_error || 'it could not be read') : null,
-      why: p.read_status === 'failed' ? p.read_error || null : null,
+      why: p.read_status === 'failed' ? p.read_error || null : p.result?.hint || null,
       rows: (p.result?.rows || []).map((r) => rows.get(r.id) && { ...rows.get(r.id), ...r }).filter(Boolean),
       dupes: p.result?.dupes || [],
     }));
@@ -557,7 +626,17 @@ export const HOLD_SEC = () => {
   return Number.isFinite(n) && n >= 30 && n <= 6 * 3600 ? n : 600;
 };
 const asks = new Map();          // `${chat}:${app user}` → { timer, chain }
-export const askText = (n, name) => `${n === 1 ? '1 photo' : `${n} photos`}${name ? ` from ${name}` : ''} — which platform?\n`
+// Since 2026-11-21 a photo with no platform is READ first (our Shopify orders, the number's
+// shape and the slip's words usually say whose it is) and asked about only when that fails.
+// While more of that person's photos are still being read the question waits, so five photos
+// are one question about the ones that need it — not one per photo as each read finishes.
+const reading = new Map();       // `${chat}:${app user}` → photos of theirs being read now
+export function cancelReading(chatId, userId, delta) {
+  const key = `${chatId}:${userId}`;
+  const n = Math.max(0, (reading.get(key) || 0) + delta);
+  if (n) reading.set(key, n); else reading.delete(key);
+}
+export const askText = (n, name) => `${n === 1 ? '1 photo' : `${n} photos`}${name ? ` from ${name}` : ''} — I couldn't tell the platform. Which is it?\n`
   + 'Tap one (or send the command, e.g. /alias). Nothing is recorded until then.';
 export function askPlatformSoon(chatId, userId) {
   const key = `${chatId}:${userId}`;
@@ -566,6 +645,7 @@ export function askPlatformSoon(chatId, userId) {
   clearTimeout(a.timer);
   a.timer = setTimeout(() => {
     a.timer = null;
+    if (reading.get(key)) return askPlatformSoon(chatId, userId);   // more of theirs still being read
     a.chain = a.chain.then(() => askPlatform(chatId, userId))
       .catch((e) => console.error('[cancellations] platform question:', e.message))
       .finally(() => { if (asks.get(key) === a && !a.timer) asks.delete(key); });
@@ -614,12 +694,12 @@ export function readReleasedPhotos(rows, platform, batchKey) {
 }
 
 /** Read one photo that came in on Telegram (its row already written) — the live path and the sweep. */
-export async function readTelegramPhoto(p, { resolvePlatform = null } = {}) {
+export async function readTelegramPhoto(p, { resolvePlatform = null, requirePlatform = false } = {}) {
   inFlight.add(p.id);
   try {
     const buf = await downloadTelegramFile(p.fileId);
     return await fileCancellationPhoto(buf, { photoId: p.id, who: p.who, caption: p.caption || null, platform: p.platform || null,
-      resolvePlatform, tgChatId: p.chatId, tgMessageId: p.messageId });
+      resolvePlatform, requirePlatform, tgChatId: p.chatId, tgMessageId: p.messageId });
   } catch (e) {
     console.error('[cancellations] photo:', e.message);
     await setCancellationPhotoRead(p.id, { status: 'failed', error: e.message.slice(0, 300), result: { rows: [], dupes: [], error: e.message.slice(0, 300) } }).catch(() => {});

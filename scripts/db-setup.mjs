@@ -4113,6 +4113,38 @@ await sql(`
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS poizon_orders_ordered ON poizon_orders (ordered_at DESC)`);
 
+// The marketplace's OWN order number for every Shopify order of the last ~2 months
+// (docs/context/cancellations.md "The Shopify order index"). Every channel lands in Shopify, each
+// keeping its number somewhere different (StockX: the order name; GOAT/Alias: the attribute
+// g_order_number; Stadium Goods: the note; Temu: the source identifier …) and Shopify's search
+// reaches only some of those. So a sync keeps this copy: one row per order, `numbers` = the
+// keys (letters + digits, upper-case) a label or packing slip could print for it, `trackings`
+// likewise. The Order Cancellations bot looks a photographed number up here to confirm it and to
+// learn the platform and the shoe. Read-only copy; no screen reads it (not in LIVE_TABLES).
+await sql(`
+  CREATE TABLE IF NOT EXISTS shopify_order_index (
+    shopify_order_id   TEXT PRIMARY KEY,
+    name               TEXT,
+    channel            TEXT,
+    platform           TEXT NOT NULL,
+    numbers            TEXT[] NOT NULL DEFAULT '{}',
+    number_texts       TEXT[] NOT NULL DEFAULT '{}',
+    numbers_canon      TEXT[] NOT NULL DEFAULT '{}',
+    trackings          TEXT[] NOT NULL DEFAULT '{}',
+    lines              JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ordered_at         TIMESTAMPTZ,
+    cancelled_at       TIMESTAMPTZ,
+    shopify_updated_at TIMESTAMPTZ,
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS shopify_order_index_numbers ON shopify_order_index USING GIN (numbers)`);
+await sql(`CREATE INDEX IF NOT EXISTS shopify_order_index_trackings ON shopify_order_index USING GIN (trackings)`);
+// numbers_canon = the same numbers with look-alike characters folded together (0 O Q D → 0,
+// 1 I L T → 1 …; canonKey): how a long letters-and-digits number misread in several places
+// at once (a SHEIN "GS…") still finds its order.
+await sql(`CREATE INDEX IF NOT EXISTS shopify_order_index_canon ON shopify_order_index USING GIN (numbers_canon)`);
+await sql(`CREATE INDEX IF NOT EXISTS shopify_order_index_ordered ON shopify_order_index (ordered_at)`);
+
 const LIVE_TABLES = [
   'shopify_listing_variants', 'listing_market_prices',
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',

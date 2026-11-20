@@ -220,6 +220,13 @@ import('./api/_lib/inbound-issues-worker.js')
   .then((m) => m.startInboundIssuesWorker())
   .catch((e) => console.error('[inbound-issues-worker] failed to start:', e.message));
 
+// The Shopify order index — the marketplace's own order number for every recent Shopify order,
+// which is how the cancellations bot confirms a photographed number and learns its platform
+// (docs/context/cancellations.md). Read-only on Shopify. Production only by default.
+import('./api/_lib/shopify-order-index.js')
+  .then((m) => m.startShopifyOrderIndexWorker())
+  .catch((e) => console.error('[shopify-order-index] failed to start:', e.message));
+
 // Order cancellations — answers a batch of photos a restart cut off (docs/context/cancellations.md).
 // Production only by default: dev and prod share one Telegram bot.
 import('./api/_lib/cancellations-worker.js')

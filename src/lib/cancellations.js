@@ -17,9 +17,14 @@ import { estDate, estTime } from './format.js';
 // 2026-10-20: Stadium Goods is /sg and Kicks Crew is /kc, nothing longer.
 export const PLATFORMS = [
   { key: 'alias', label: 'Alias', cmd: 'alias' },
-  { key: 'stockx', label: 'StockX', cmd: 'stockx', pattern: /^\d{8}-\d{8}$/, shape: '12345678-12345678' },
+  // StockX has two shapes: the older 12345678-12345678 and the one its Shopify orders carry
+  // now, 06-B1P9GP5N4H (two digits, then ten letters and digits — at least two letters, which
+  // is what keeps a phone or a date from looking like one). Measured on the live store 2026-11-21.
+  { key: 'stockx', label: 'StockX', cmd: 'stockx', pattern: /^(?:\d{8}-\d{8}|\d{2}-(?=[A-Z0-9]*[A-Z][A-Z0-9]*[A-Z])[A-Z0-9]{10})$/, shape: '12345678-12345678 or 06-B1P9GP5N4H' },
   { key: 'ebay', label: 'eBay', cmd: 'ebay', pattern: /^\d{2}-\d{5}-\d{5}$/, shape: '12-34567-89012' },
-  { key: 'temu', label: 'Temu', cmd: 'temu' },
+  // Temu's packing slip prints "Purchase Order ID: PO-211-00591237806711370"; the same order's
+  // line number is "211-15609680886391006" — either is that order (both are in Shopify).
+  { key: 'temu', label: 'Temu', cmd: 'temu', pattern: /^(?:PO-)?\d{3}-\d{15,19}$/, shape: 'PO-211-00591237806711370' },
   { key: 'tiktok', label: 'TikTok Shop', cmd: 'tiktok' },
   { key: 'shein', label: 'SHEIN', cmd: 'shein' },
   { key: 'sg', label: 'Stadium Goods', cmd: 'sg' },
@@ -86,6 +91,8 @@ export const FLAGS = {
   low_confidence: 'The reader was not sure — compare with the photo',
   reads_disagree: 'Two reads of the photo gave different numbers — check every digit',
   unchecked: 'Only one read of the photo worked — check every digit',
+  not_in_shopify: 'This number is in none of our orders — most often a misread character',
+  platform_guess: 'The platform was read off the slip, not named by the sender — check it',
   tie_break: 'The first two reads disagreed and a third decided — check every digit',
   unclear: 'The order number was hard to read on the photo',
   submit_failed: 'Cancelling on the platform failed — see the note',
@@ -180,6 +187,47 @@ const fixLine = (line) => line.split(' ').map(fixDigits).join(' ');
 // Letters are part of it, so fixDigits never touches it; an OCR "G5" for "GS" is put back.
 const SHEIN_NO = /\bG[S5][A-Z0-9]{11,15}\b/g;
 const sheinLike = (t) => (t.match(/\d/g) || []).length >= 4 && (t.match(/[A-Z]/g) || []).length >= 3;
+// A Temu purchase order: "PO-211-00591237806711370" (the O may read as 0, the digits in pieces).
+const TEMU_NO = /(?<![A-Z0-9])P[O0]\s?-?\s?(\d{3})\s?-\s?((?:[0-9OILSB]\s?){15,20})(?![0-9])/g;
+
+// ── What the slip itself says about the platform, and the shoe ───────────────────────
+// Measured on real slips (2026-11-21): an Alias packing label prints "alias", "GOAT" or
+// "Sneakers.com" (16 of 18 read); a Stadium Goods slip its wordmark (3 of 3). Temu and SHEIN
+// print no name — their NUMBER is the mark (PO-211-…, GS…). Words are read, never logos.
+// Only an unambiguous slip names a platform: two different marketplaces on one photo → null.
+const PLATFORM_WORDS = [
+  ['alias', /\b(?:alias|goat)\b|sneakers\s*\.\s*com/i],
+  ['sg', /stadium\s*goods/i],
+  ['stockx', /\bstock\s?x\b/i],
+  ['ebay', /\bebay\b/i],
+  ['kc', /kicks\s*crew/i],
+  ['temu', /\btemu\b/i],
+  ['tiktok', /\btik\s?tok\b/i],
+  ['shein', /\bshein\b/i],
+];
+/** The platform the text names — only when it names exactly one. */
+export function platformFromText(text) {
+  const t = String(text || '');
+  const hits = PLATFORM_WORDS.filter(([, re]) => re.test(t)).map(([k]) => k);
+  return hits.length === 1 ? hits[0] : null;
+}
+// "SKU: 151186 003" / "SKU: DH3162-100" and "SIZE: 13C" / "SIZE: 9W" — the big lines a Stadium
+// Goods or Temu slip prints. A labelled value beats a style code spotted elsewhere on the page.
+const SKU_LINE = /\bSKU\s*[:;.]\s*([A-Z0-9]{5,7})[\s-]{1,2}([A-Z0-9]{3})\b/;
+const SIZE_LINE = /\bSIZE\s*[:;.]?\s*(\d{1,2}(?:[.,]5)?)\s?([CYWM]|GS|PS|TD)?(?![A-Z0-9])/;
+/** The shoe as the slip prints it → { sku, size, product } (each null when not read). */
+export function slipDetails(text) {
+  const lines = String(text || '').split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const all = lines.join('\n'); const up = all.toUpperCase();
+  const labelled = SKU_LINE.exec(up);
+  const s = labelled || STYLE_CODE.exec(up);
+  const sku = s ? cleanSku(`${s[1]}-${s[2]}`) : null;
+  const z = SIZE_RE.exec(all);
+  const zl = z ? null : SIZE_LINE.exec(up);
+  const size = z ? `US ${z[1] ? `${z[1].toUpperCase()} ` : ''}${fixSize(z[2])}${z[3] ? z[3].toUpperCase() : ''}`
+    : zl ? `${fixSize(zl[1])}${zl[2] || ''}` : null;
+  return { sku, size, product: labelProduct(lines) };
+}
 
 // The shoe's NAME on an Alias packing label is the line under the small "ITEM" caption
 // ("Nike Free Run 5.0 'Phantom Sail'"). It is the smallest print on the label and a phone
@@ -231,7 +279,9 @@ export function ordersFromText(text, hint = null) {
   const add = (num, platform, why) => {
     const n = cleanOrderNo(num);
     const k = orderKey(n);
-    if (!k || (k.match(/\d/g) || []).length < 6 || looksLikeTracking(k)) return;
+    // Mostly digits (6 or more) — except a number taken by its platform's own SHAPE, which may
+    // be mostly letters (StockX "06-LZQ93WHGEL" has four digits).
+    if (!k || (k.match(/\d/g) || []).length < (why === 'shape' ? 2 : 6) || looksLikeTracking(k)) return;
     if (!found.has(k)) found.set(k, { order_number: n, platform, why });
   };
   for (const line of lines) {
@@ -241,11 +291,26 @@ export function ordersFromText(text, hint = null) {
       if (sheinLike(n)) add(n, 'shein', 'shape');
     }
   }
+  // Temu: "PO-211-" and 15-19 digits. OCR splits the long run ("…394872 563") and reads the O
+  // as a zero; both are put back. On a line of its own or after "Purchase Order ID:".
+  for (const line of lines) {
+    if (TRACKING_LINE.test(line)) continue;
+    for (const m of line.toUpperCase().matchAll(TEMU_NO)) {
+      // A word after the number ("… 370 ORDER") is not part of it: letters count only inside.
+      const digits = fixDigits(m[2].replace(/\s/g, '').replace(/[^0-9]+$/, '')).replace(/\D/g, '');
+      if (digits.length >= 15 && digits.length <= 19) add(`PO-${m[1]}-${digits}`, 'temu', 'shape');
+    }
+  }
   for (const p of PLATFORMS.filter((x) => x.pattern)) {
-    const loose = new RegExp(p.pattern.source.replace(/^\^|\$$/g, '').replace(/-/g, '\\s?-\\s?'), 'g');
+    // A dash on the label may have a space either side — but not the dash inside "[A-Z0-9]".
+    const loose = new RegExp(`(?<![A-Z0-9-])(?:${p.pattern.source.replace(/^\^|\$$/g, '').replace(/-(?![^[]*\])/g, '\\s?-\\s?')})(?![A-Z0-9-])`, 'g');
     for (const line of lines) {
       if (TRACKING_LINE.test(line)) continue;
-      for (const m of fixLine(line).matchAll(loose)) add(m[0].replace(/\s/g, ''), p.key, 'shape');
+      for (const m of fixLine(line).toUpperCase().matchAll(loose)) {
+        const n = m[0].replace(/\s/g, '');
+        // Already taken whole as a Temu "PO-211-…": its "211-…" tail is not a second order.
+        if (![...found.keys()].some((f) => f !== orderKey(n) && f.endsWith(orderKey(n)))) add(n, p.key, 'shape');
+      }
     }
   }
   lines.forEach((line, i) => {
@@ -268,21 +333,18 @@ export function ordersFromText(text, hint = null) {
   }
   const orders = [...found.values()].map((o) => ({ ...o, platform: hint || o.platform || null }));
   // A style code, size and name belong to the order only when the picture shows ONE order.
-  let sku = null; let size = null; let product = null;
-  if (orders.length === 1) {
-    const s = STYLE_CODE.exec(all.toUpperCase());
-    sku = s ? cleanSku(`${s[1]}-${s[2]}`) : null;
-    const z = SIZE_RE.exec(all);
-    size = z ? `US ${z[1] ? `${z[1].toUpperCase()} ` : ''}${fixSize(z[2])}${z[3] ? z[3].toUpperCase() : ''}` : null;
-    product = labelProduct(lines);
-  }
+  const { sku, size, product } = orders.length === 1 ? slipDetails(all) : { sku: null, size: null, product: null };
   return orders.map((o) => ({ ...o, sku, size, product }));
 }
 
 /** Guess the platform from the number's shape alone — for a number typed to the bot. */
 export function platformFromNumber(v) {
   const n = cleanOrderNo(v);
-  return PLATFORMS.find((p) => p.pattern && p.pattern.test(n))?.key || null;
+  const byPattern = PLATFORMS.find((p) => p.pattern && p.pattern.test(n))?.key;
+  if (byPattern) return byPattern;
+  // SHEIN has no `pattern` (a typed SHEIN number is never flagged for its shape), but GS + 11-15
+  // letters and digits is nobody else's.
+  return /^GS[A-Z0-9]{11,15}$/.test(n) && sheinLike(n) ? 'shein' : null;
 }
 
 // ── Matching a read number to OUR orders (2026-11-12) ────────────────────────────────
@@ -306,6 +368,19 @@ export function confusableKeys(v) {
   return [...out];
 }
 
+// A LONG LETTERS-AND-DIGITS number (SHEIN "GSU19K45B000Q2R", StockX "06-B1P9GP5N4H") read off a
+// phone photo comes back with several look-alikes swapped at once — measured on a real SHEIN
+// slip: "GSUT9K45BO00O2R", three characters off, every one a look-alike. `canonKey` folds each
+// family of look-alikes onto one character (0 O Q D → 0 · 1 I L T → 1 · 5 S → 5 · 8 B → 8 ·
+// 2 Z → 2 · 6 G → 6), so the read and the real number come out the same. Digits are never
+// folded onto each other, so a digits-only number (Alias) is its own canon and nothing changes
+// for it — the rule above about never correcting digit for digit still holds.
+const CANON = { O: '0', Q: '0', D: '0', I: '1', L: '1', T: '1', S: '5', B: '8', Z: '2', G: '6' };
+export function canonKey(v) {
+  const k = orderKey(v);
+  return k ? k.replace(/[OQDILTSBZG]/g, (c) => CANON[c]) : null;
+}
+
 /**
  * The read number against our orders. `known` = [{ key, order_id, platform, source, lines }]
  * (whatever the lookup found for this number and its confusable neighbours). A platform the
@@ -320,7 +395,14 @@ export function matchOurOrder(read, platform, known) {
   if (exact) return { order: exact, corrected: false };
   const near = new Set(confusableKeys(k));
   const close = [...new Map(mine.filter((o) => near.has(o.key)).map((o) => [o.key, o])).values()];
-  return close.length === 1 ? { order: close[0], corrected: true } : null;
+  if (close.length === 1) return { order: close[0], corrected: true };
+  if (close.length > 1) return null;
+  // Several look-alikes off at once: the same number once the look-alikes are folded together.
+  // Only a number with letters in it can differ that way; exactly ONE order, or no guess.
+  if (!/[A-Z]/.test(k)) return null;
+  const ck = canonKey(k);
+  const same = [...new Map(mine.filter((o) => canonKey(o.key) === ck).map((o) => [o.key, o])).values()];
+  return same.length === 1 ? { order: same[0], corrected: true } : null;
 }
 
 const sizeNum = (v) => { const m = /(\d{1,2}(?:\.5)?)/.exec(String(v ?? '').replace(/^US\s*[MW]?\s*/i, '')); return m ? m[1] : ''; };
@@ -372,7 +454,7 @@ export function typedDetails(rest) {
 
 // Where a row's shoe details came from (cancellations.details_from, comma-separated).
 export const DETAILS_FROM = {
-  ebay: 'our eBay order', shein: 'our SHEIN order', presell: 'our pre-sell sale',
+  ebay: 'our eBay order', shein: 'our SHEIN order', presell: 'our pre-sell sale', shopify: 'our Shopify order',
   label: 'the photo', catalogue: 'our catalogue (by SKU)', typed: 'typed', edited: 'edited by hand',
 };
 export const detailsFromLabel = (v) => String(v || '').split(',').map((k) => DETAILS_FROM[k.trim()] || k.trim()).filter(Boolean).join(' + ');
@@ -397,6 +479,7 @@ const CHECK_WHY = [
   ['reads_disagree', 'reads disagreed'], ['unchecked', 'only one read worked'], ['tie_break', 'a third read decided'],
   ['unclear', 'hard to read'], ['low_confidence', 'the reader was not sure'],
   ['short_number', 'number looks too short'], ['format', "doesn't look like this platform's numbers"],
+  ['not_in_shopify', 'not found in our orders'], ['platform_guess', 'platform read off the slip'],
 ];
 /**
  * What a recorded row needs from a person → { tag: 'OK' | 'CHECK' | 'MISSED', why }.

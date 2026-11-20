@@ -17,13 +17,13 @@ import {
   createCancellationPhoto, setCancellationPhotoRead, createCancellation, findLiveCancellation, listCancellationsForDay,
   knownOrdersFor, catalogueNamesBySku, getCancellation, getCancellationsByIds, updateCancellationFields, openUnreadCancellation,
   claimCancellationPhotoReplies, releaseCancellationPhotoReplies, cancellationPhotosForReply, strandedCancellationPhotos,
-  cancellationIdsForPhoto,
+  cancellationIdsForPhoto, heldCancellationPhotos, setCancellationPrompt, expireHeldCancellationPhotos, setCancellationReplyMessage,
 } from './db.js';
 import { estToday } from '../../src/lib/format.js';
 import { notifyEnv } from './notify.js';
 import { alertCancellationsLogged } from './alerts.js';
 import { readCancellationLocally, canOpenImage } from './cancelOcr.js';
-import { cancelMessage, cancelMessageAll, dayCounts, cancellationsCsv, batchReplyText, typedDetails } from '../../src/lib/cancellations.js';
+import { cancelMessage, cancelMessageAll, dayCounts, cancellationsCsv, batchReplyText, batchReplyNeedsLook, typedDetails, pickerKeyboard } from '../../src/lib/cancellations.js';
 import {
   PLATFORMS, cleanSku, cleanOrderNo, orderKey, flagsFor, platformFromNumber, platformLabel,
   confusableKeys, matchOurOrder, detailsFromOrder, trackingFromText,
@@ -36,7 +36,24 @@ export const BOT_COMMANDS = [
   { command: 'msgall', description: "Today's cancel messages for every platform" },
   { command: 'report', description: "Today's cancellations as a CSV file" },
 ];
+// The "/" menu, set by the server itself when it starts (so a phone offers /alias … as soon
+// as someone types "/") and by `npm run telegram:webhook -- commands`. Private chats, and the
+// cancellations group when there is one — never the approval groups.
+export const botCommandScopes = () => {
+  const group = env('TELEGRAM_CANCEL_CHAT_ID');
+  return [{ type: 'all_private_chats' }, ...(group ? [{ type: 'chat', chat_id: Number(group) }] : [])];
+};
+export async function registerBotCommands(call = tg) {
+  const commands = [...BOT_COMMANDS, { command: 'help', description: 'How to log an order to cancel' }];
+  const done = [];
+  for (const scope of botCommandScopes()) {
+    await call('setMyCommands', { commands, scope });
+    done.push(scope.type === 'chat' ? `chat ${scope.chat_id}` : scope.type);
+  }
+  return { commands: commands.map((c) => `/${c.command}`), scopes: done };
+}
 export const HOW_TO = 'To record orders to cancel: send the platform, then the photo(s) — e.g. /alias and the pictures (or put /alias in the caption). '
+  + 'Photos with no platform get buttons to pick it. Anything after the command is kept as the note (/ebay wrong size shipped). '
   + 'I record each order and answer once with the list: order number + shoe, SKU, size.\n'
   + `Platforms: ${PLATFORMS.map((p) => `/${p.cmd} ${p.label}`).join(' · ')}\n`
   + 'Or type it: /stockx 12345678-12345678 · /alias 206557037 DD1391-100 9.5 - wrong size\n\n'
@@ -446,6 +463,15 @@ export function cancelBatchStart(key, chatId, photoId) {
   clearTimeout(b.timer); b.timer = null;
   b.ids.push(photoId); b.pending += 1; inFlight.add(photoId);
 }
+/** A photo that turned out NOT to be this batch's (it is held for a platform): take it back out. */
+export function cancelBatchDrop(key, photoId) {
+  const b = batches.get(key);
+  inFlight.delete(photoId);
+  if (!b) return;
+  b.ids = b.ids.filter((id) => id !== photoId);
+  if (!b.ids.length && b.pending <= 1) { clearTimeout(b.timer); batches.delete(key); return; }
+  cancelBatchDone(key);
+}
 export function cancelBatchDone(key) {
   const b = batches.get(key);
   if (!b) return;
@@ -477,14 +503,114 @@ export async function sendBatchReply(chatId, photoIds) {
       dupes: p.result?.dupes || [],
     }));
     const first = photos.find((p) => p.tg_message_id)?.tg_message_id || null;
-    await sayTo(chatId ?? photos[0].tg_chat_id, `${devTag()}${batchReplyText(items)}`, first);
+    const chat = chatId ?? photos[0].tg_chat_id;
     const recorded = items.flatMap((x) => x.rows);
+    const text = `${devTag()}${batchReplyText(items, { link: batchReplyNeedsLook(items) ? cancellationsLink() : null })}`;
+    // "Void Batch" only when this batch put rows on the record — there is nothing to void otherwise.
+    const markup = recorded.length ? { reply_markup: { inline_keyboard: [[{ text: 'Void Batch', callback_data: 'cxvoid' }]] } } : {};
+    const quiet = { link_preview_options: { is_disabled: true } };
+    // Photos that waited for a platform: the "Which platform?" message BECOMES the summary.
+    const promptId = photos.find((p) => p.prompt_message_id)?.prompt_message_id || null;
+    let messageId = null;
+    if (promptId) {
+      messageId = await enqueue(() => tg('editMessageText', { chat_id: chat, message_id: promptId, text, ...quiet,
+        reply_markup: markup.reply_markup || { inline_keyboard: [] } }))
+        .then(() => promptId, (e) => { console.warn('[cancellations] could not edit the picker into the summary:', e.message); return null; });
+    }
+    if (!messageId) {
+      const m = await enqueue(() => tg('sendMessage', { chat_id: chat, text, ...quiet, ...markup,
+        ...(first ? { reply_parameters: { message_id: first, allow_sending_without_reply: true } } : {}) }));
+      messageId = Number(m?.message_id) || null;
+    }
+    // Which photos this message answered — what a tap on "Void Batch" voids.
+    await setCancellationReplyMessage(claimed, messageId).catch((e) => console.warn('[cancellations] reply message not noted:', e.message));
     if (recorded.length) alertCancellationsLogged(recorded, { id: photos[0].sent_by_user_id, name: photos[0].sent_by });
     return true;
   } catch (e) {
     await releaseCancellationPhotoReplies(claimed).catch(() => {});
     throw e;
   }
+}
+
+/** Where the page is, for the summary's "check them" line (APP_BASE_URL; null = no link, just the words). */
+export const cancellationsLink = () => {
+  const base = env('APP_BASE_URL').replace(/\/+$/, '');
+  return /^https?:\/\//.test(base) ? `${base}/cancellations` : null;
+};
+
+// ── A photo with NO platform: ask once, with buttons (2026-11-20) ────────────────────
+// The photo row is already written and HELD (held_at) — that is what survives a restart.
+// What lives in memory is only the short wait that turns "three photos in three seconds"
+// into ONE question: each new photo restarts the timer, and when it fires the question is
+// sent (or, if that person already has one open, updated with the new count). Per person
+// per chat, one at a time (`chain`), so two timers can never both send a question. Entries
+// delete themselves when they fire; nothing is left behind.
+//
+// Nobody taps: after HOLD_SEC the sweep lets the photos go and reads them with no platform
+// (what happened to every such photo before) — a request is never lost to an unanswered question.
+const ASK_MS = () => {
+  const n = Number(env('CANCEL_ASK_MS'));
+  return Number.isFinite(n) && n >= 100 && n <= 30_000 ? n : 1200;
+};
+export const HOLD_SEC = () => {
+  const n = Number(env('CANCEL_HOLD_SEC'));
+  return Number.isFinite(n) && n >= 30 && n <= 6 * 3600 ? n : 600;
+};
+const asks = new Map();          // `${chat}:${app user}` → { timer, chain }
+export const askText = (n, name) => `${n === 1 ? '1 photo' : `${n} photos`}${name ? ` from ${name}` : ''} — which platform?\n`
+  + 'Tap one (or send the command, e.g. /alias). Nothing is recorded until then.';
+export function askPlatformSoon(chatId, userId) {
+  const key = `${chatId}:${userId}`;
+  let a = asks.get(key);
+  if (!a) { a = { timer: null, chain: Promise.resolve() }; asks.set(key, a); }
+  clearTimeout(a.timer);
+  a.timer = setTimeout(() => {
+    a.timer = null;
+    a.chain = a.chain.then(() => askPlatform(chatId, userId))
+      .catch((e) => console.error('[cancellations] platform question:', e.message))
+      .finally(() => { if (asks.get(key) === a && !a.timer) asks.delete(key); });
+  }, ASK_MS());
+  a.timer.unref?.();
+}
+/** Send (or update) the "Which platform?" question for what this person has waiting. */
+export async function askPlatform(chatId, userId) {
+  const held = await heldCancellationPhotos(chatId, userId);
+  if (!held.length) return null;               // a command or a tap got there first
+  const text = `${devTag()}${askText(held.length, held[0].sent_by)}`;
+  const keyboard = { inline_keyboard: pickerKeyboard() };
+  const open = held.find((p) => p.prompt_message_id)?.prompt_message_id || null;
+  const fresh = held.filter((p) => !p.prompt_message_id).map((p) => p.id);
+  if (open) {
+    if (!fresh.length) return open;
+    await setCancellationPrompt(fresh, open);
+    // "message is not modified" and a deleted question are both fine: the photos are attached.
+    await enqueue(() => tg('editMessageText', { chat_id: chatId, message_id: open, text, reply_markup: keyboard })).catch(() => null);
+    return open;
+  }
+  const m = await enqueue(() => tg('sendMessage', { chat_id: chatId, text, reply_markup: keyboard,
+    ...(held[0].tg_message_id ? { reply_parameters: { message_id: held[0].tg_message_id, allow_sending_without_reply: true } } : {}) }));
+  const id = Number(m?.message_id) || null;
+  if (id) await setCancellationPrompt(held.map((p) => p.id), id);
+  return id;
+}
+/**
+ * Photos just released with a platform (a tap, or a command after the photos): read them as
+ * ONE batch. `rows` = what the release returned. Returns at once; the reads run behind.
+ */
+export function readReleasedPhotos(rows, platform, batchKey) {
+  if (!rows.length) return;
+  const chatId = rows[0].tg_chat_id;
+  for (const p of rows) cancelBatchStart(batchKey, chatId, p.id);
+  setImmediate(async () => {
+    for (const p of rows) {
+      try {
+        await readTelegramPhoto({ id: p.id, fileId: p.tg_file_id, chatId, messageId: p.tg_message_id, caption: p.caption || null,
+          platform, who: { id: p.sent_by_user_id, name: p.sent_by } });
+      } finally {
+        cancelBatchDone(batchKey);
+      }
+    }
+  });
 }
 
 /** Read one photo that came in on Telegram (its row already written) — the live path and the sweep. */
@@ -506,6 +632,9 @@ export async function readTelegramPhoto(p, { resolvePlatform = null } = {}) {
  * finished, then answer every photo still unanswered, one message per person per chat.
  */
 export async function sweepCancellationPhotos(opts = {}) {
+  // A "Which platform?" nobody answered: let those photos go — they are read below with no
+  // platform, and the question is rewritten into their summary.
+  await expireHeldCancellationPhotos(opts.holdSec ?? HOLD_SEC()).catch((e) => console.warn('[cancellations] held photos:', e.message));
   const { stuck } = await strandedCancellationPhotos(opts);
   let reread = 0;
   for (const p of stuck.filter((x) => !inFlight.has(x.id))) {

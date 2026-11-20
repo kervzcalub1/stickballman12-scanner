@@ -24,13 +24,13 @@
 // passes a dev card's taps on to TELEGRAM_DEV_FORWARD_URL (the dev tunnel) untouched, so a
 // test card is recorded in the dev database and never in the real one.
 import { send, applySecurity, getJsonBody } from '../_lib/util.js';
-import { dbConfigured, buyerChatIds, recordReplyMiss, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, getCancellationCtx, createCancellationPhoto, setCancellationPhotoPlatform } from '../_lib/db.js';
+import { dbConfigured, buyerChatIds, recordReplyMiss, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, useCancellationCtx, createCancellationPhoto, setCancellationPhotoPlatform, holdCancellationPhoto, heldCancellationPhotosByPrompt, releaseHeldCancellationPhotosByPrompt, releaseHeldCancellationPhotosOf, cancellationBatchByReply, voidCancellationBatch } from '../_lib/db.js';
 import { telegramConfigured, telegramChatId, cancelChatId, tg, enqueue } from '../_lib/telegram.js';
 import { decideFromTelegram, decideTipFromTelegram } from '../_lib/telegramDecide.js';
 import { notifyEnv } from '../_lib/notify.js';
 import { alertCancellationsLogged } from '../_lib/alerts.js';
-import { fileTypedCancellation, typedReplyText, sayTo, HOW_TO, dayFrom, msgPicker, msgFor, msgAll, sendDayReport, cancelBatchStart, cancelBatchDone, readTelegramPhoto } from '../_lib/cancellations.js';
-import { platformFromCommand, platformLabel, PLATFORMS } from '../../src/lib/cancellations.js';
+import { fileTypedCancellation, typedReplyText, sayTo, HOW_TO, dayFrom, msgPicker, msgFor, msgAll, sendDayReport, cancelBatchStart, cancelBatchDone, cancelBatchDrop, readTelegramPhoto, askPlatformSoon, readReleasedPhotos } from '../_lib/cancellations.js';
+import { platformLabel, PLATFORMS, splitCommand, extractImageFile } from '../../src/lib/cancellations.js';
 import { parseApprovalReply, splitTipReply, sizeKey } from '../../src/lib/buyPaste.js';
 const PLATFORM_KEYS = new Set(PLATFORMS.map((p) => p.key));
 
@@ -76,6 +76,9 @@ async function inOurChat(chatId) {
 
 async function handleTap(update, cq) {
   // Stop the spinner on the tapper's button first, whatever happens next. Best-effort.
+  // The cancellation buttons answer the tap THEMSELVES — a tap that can't be honoured (an
+  // old button, someone else's photos) says why in a pop-up, and a tap is answered only once.
+  if (/^cxpick:|^cxvoid$/.test(String(cq.data || ''))) return handleCancelTap(cq);
   tg('answerCallbackQuery', { callback_query_id: cq.id }).catch(() => {});
   if (String(cq.data || '').startsWith('cxmsg:')) return handleCancelMsgTap(cq);
   const chatId = cq.message?.chat?.id;
@@ -490,7 +493,8 @@ async function handlePrivate(update, msg) {
 // Only a connected, approved warehouse / PH / admin account may file one — the chat id is
 // who they are. The platform comes from a command, the owner's way (2026-10-20):
 //   /alias + the photo (the command as the caption)        → that photo, and the album it opens
-//   /alias, then photos                                    → every photo for the next 10 minutes
+//   /alias, then photos                                    → every photo for the next 90 s (each restarts it)
+//   photos with no platform                                → held; the bot asks once, with buttons
 //   /stockx 12345678-12345678 - wrong size                 → a typed number
 // The read takes several seconds, so it runs AFTER the webhook has answered Telegram. The
 // photo ROW is written first, before the answer (keyed on the message — a re-sent update
@@ -498,13 +502,24 @@ async function handlePrivate(update, msg) {
 // mid-read can still fetch the picture). The bot answers once per batch: every photo one
 // person sends close together, as a reply to the first (cancelBatchStart / cancelBatchDone).
 const CAN_FILE = ['warehouse', 'ph_team', 'admin', 'superadmin'];
-const CTX_MIN = 10;
-// "/alias wrong size" → { cmd:'/alias', platform:'alias', rest:'wrong size' }; no command → cmd null.
-function splitCommand(text) {
-  const m = /^\s*(\/[A-Za-z]+(?:@\w+)?)\s*([\s\S]*)$/.exec(String(text || ''));
-  if (!m) return { cmd: null, platform: null, rest: String(text || '').trim() };
-  return { cmd: m[1].replace(/@\w+$/, '').toLowerCase(), platform: platformFromCommand(m[1]), rest: m[2].trim() };
-}
+// "/stockx, then the photos": how long the platform (and its note) stays on for that person
+// in that chat. Every photo that uses it restarts the clock, so a long run of photos never
+// falls out of it — and a platform named a few minutes ago is never applied to something new.
+const SESSION_SEC = 90;
+// An album's photos arrive as separate updates and only ONE carries the caption: the others
+// wait this long for it before deciding they have no platform.
+const ALBUM_WAIT_MS = 1500;
+// "Void Batch" is for the slip you notice at once (the wrong platform tapped). Later than
+// this, a row is removed on the page, where the reason is typed.
+const VOID_MIN = 60;
+//
+// THREE WAYS IN, all forgiving (2026-11-20):
+//   A  /alias as the caption — of one photo, or of one photo of an album (the whole album
+//      takes the platform and the note)
+//   B  /alias first, then the photos — on for SESSION_SEC, restarted by each photo
+//   C  photos with nothing at all — HELD, and the bot asks once with buttons; a tap (or the
+//      command, sent after) files them and the question becomes the summary
+// Text after the command is the note on every row it covers ("/ebay wrong size shipped").
 //
 // In the CANCELLATIONS GROUP (TELEGRAM_CANCEL_CHAT_ID) people also talk, so only a photo or
 // a slash command is acted on — a bare number typed there (a phone, a price) is chat, not
@@ -524,8 +539,9 @@ async function handleCancellation(msg, opts = {}) {
 }
 async function fileFromChat(msg, { group = false } = {}) {
   const chatId = msg.chat.id;
-  const image = msg.photo?.length ? msg.photo[msg.photo.length - 1].file_id
-    : /^image\//.test(String(msg.document?.mime_type || '')) ? msg.document.file_id : null;
+  // A compressed photo, or an image sent "as a file" (uncompressed — small print reads better).
+  const file = extractImageFile(msg);
+  const image = file?.fileId || null;
   const words = splitCommand(image ? msg.caption : msg.text);
   if (!image && !words.cmd && !words.rest) return null;
   if (group && !image && !words.cmd) return null;
@@ -557,44 +573,175 @@ async function fileFromChat(msg, { group = false } = {}) {
   const ctx = { who: { id: who.id, name: who.name }, tgChatId: chatId, tgMessageId: msg.message_id };
   const mine = `chat:${chatId}:${msg.from?.id}`;
   const album = msg.media_group_id ? `album:${msg.media_group_id}` : null;
-  if (words.platform) {
-    await setCancellationCtx(mine, words.platform);
-    if (album) await setCancellationCtx(album, words.platform);
-  }
+  const batch = `${chatId}:${msg.from?.id}`;
+  const label = platformLabel(words.platform);
+  // Photos this person sent BEFORE naming the platform are waiting for it: a command — typed
+  // alone, or as the caption of a later photo — files them too, in the same batch.
+  const releaseWaiting = async (note) => {
+    const waiting = await releaseHeldCancellationPhotosOf(chatId, who.id, words.platform, note);
+    readReleasedPhotos(waiting, words.platform, batch);
+    return waiting.length;
+  };
 
   if (!image) {
-    if (!words.rest && words.platform) {
-      return say(`📸 ${platformLabel(words.platform)} — send the photo(s) now. Every photo in the next ${CTX_MIN} minutes is logged as ${platformLabel(words.platform)}.`);
+    if (words.platform) {
+      // "/alias 206557037 DD1391-100 9.5" is an order typed in; "/ebay wrong size shipped" is
+      // a note for the photos that follow. A number (6+ digits) is what tells them apart.
+      const typed = words.rest ? await fileTypedCancellation(words.rest, { ...ctx, platform: words.platform }) : null;
+      if (typed) {
+        await setCancellationCtx(mine, words.platform, null);
+        if (typed.rows.length) alertCancellationsLogged(typed.rows, who);
+        return say(typedReplyText(typed));
+      }
+      const note = words.rest ? words.rest.slice(0, 300) : null;
+      await setCancellationCtx(mine, words.platform, note);
+      const n = await releaseWaiting(note);
+      const noted = note ? `\nNote on each: "${note}"` : '';
+      if (n) return say(`📸 ${label} — reading the ${n === 1 ? 'photo' : `${n} photos`} you already sent.${noted}\n${label} stays on for ${SESSION_SEC} s for more.`);
+      return say(`📸 ${label} mode on for ${SESSION_SEC} s — send your photos. Each photo restarts the ${SESSION_SEC} s.${noted}`);
     }
-    const platform = words.platform || await getCancellationCtx(mine, CTX_MIN);
-    const out = await fileTypedCancellation(words.rest, { ...ctx, platform });
+    // No command: a bare order number in a private chat, on the platform that is on (if any).
+    const on = await useCancellationCtx(mine, SESSION_SEC);
+    const out = await fileTypedCancellation(words.rest, { ...ctx, platform: on?.platform || null });
     if (!out) return say(HOW_TO, false);
     if (out.rows.length) alertCancellationsLogged(out.rows, who);
     return say(typedReplyText(out));
   }
+
+  // ── A picture ──
+  const captionNote = words.rest ? words.rest.slice(0, 300) : null;
+  if (words.platform) {
+    // The caption names it: for this photo, for the rest of its album, and for what follows.
+    await setCancellationCtx(mine, words.platform, captionNote);
+    if (album) await setCancellationCtx(album, words.platform, captionNote);
+  }
+  // The platform that is ON for this person (B). An album waits for its own caption first.
+  const on = (words.platform || album) ? null : await useCancellationCtx(mine, SESSION_SEC);
+  const known = words.platform || on?.platform || null;
+  const note = captionNote || on?.note || null;
+  // Nothing names a platform and it isn't part of an album: it is HELD from the start (C).
+  const hold = !known && !album;
   // The photo row FIRST, before Telegram gets its 200: a re-sent update stops here.
-  const known = words.platform || (album ? null : await getCancellationCtx(mine, CTX_MIN));
-  const photoId = await createCancellationPhoto({ caption: words.rest || null, tgChatId: chatId, tgMessageId: msg.message_id,
-    tgFileId: image, mediaGroupId: msg.media_group_id || null, platform: known, sentByUserId: who.id, sentBy: who.name });
+  const photoId = await createCancellationPhoto({ caption: note, tgChatId: chatId, tgMessageId: msg.message_id,
+    tgFileId: image, mediaGroupId: msg.media_group_id || null, platform: known, sentByUserId: who.id, sentBy: who.name,
+    asFile: file.uncompressed, hold });
   if (photoId == null) return null;
-  const batch = `${chatId}:${msg.from?.id}`;
+  if (words.platform) await releaseWaiting(captionNote);
+  if (hold) { askPlatformSoon(chatId, who.id); return null; }
+
+  if (known) {
+    cancelBatchStart(batch, chatId, photoId);
+    setImmediate(async () => {
+      try {
+        await readTelegramPhoto({ id: photoId, fileId: image, chatId, messageId: msg.message_id, caption: note, platform: known, who: ctx.who });
+      } finally {
+        cancelBatchDone(batch);
+      }
+    });
+    return null;
+  }
+
+  // An album photo with no caption of its own. Its row is written; now give the photo that
+  // carries the caption a moment to arrive, then take the album's platform and note — or,
+  // failing that, what is on for this person — or ask.
   cancelBatchStart(batch, chatId, photoId);
   setImmediate(async () => {
+    let read = false;
     try {
-      // An album's photos arrive together and only ONE carries the caption: give that one
-      // a moment to be noted before reading the others.
-      if (album && !words.platform) await new Promise((r) => setTimeout(r, 1500));
-      const resolvePlatform = async () => (album && await getCancellationCtx(album, CTX_MIN))
-        || getCancellationCtx(mine, CTX_MIN);
-      const platform = known || await resolvePlatform().catch(() => null);
-      if (platform && !known) await setCancellationPhotoPlatform(photoId, platform).catch(() => {});
-      await readTelegramPhoto({ id: photoId, fileId: image, chatId, messageId: msg.message_id, caption: words.rest || null,
-        platform, who: ctx.who }, { resolvePlatform });
+      await new Promise((r) => setTimeout(r, ALBUM_WAIT_MS));
+      const named = await useCancellationCtx(album, SESSION_SEC) || await useCancellationCtx(mine, SESSION_SEC);
+      if (named) {
+        await setCancellationPhotoPlatform(photoId, named.platform, named.note).catch(() => {});
+        read = true;                             // from here it is this batch's, whatever the read gives
+        await readTelegramPhoto({ id: photoId, fileId: image, chatId, messageId: msg.message_id, caption: named.note || null,
+          platform: named.platform, who: ctx.who });
+      } else if (await holdCancellationPhoto(photoId)) {
+        askPlatformSoon(chatId, who.id);         // it waits for a tap now
+      }
+    } catch (e) {
+      // Left 'pending' with no platform: the restart sweep reads it, so it is never lost.
+      console.error('[telegram/webhook] album photo:', e.message);
     } finally {
-      cancelBatchDone(batch);
+      // Not read here = not answered here: out of the batch, so the batch's reply doesn't
+      // mark it answered and hide it from the tap (or the sweep) that will file it.
+      if (read) cancelBatchDone(batch); else cancelBatchDrop(batch, photoId);
     }
   });
   return null;
+}
+
+// ── Buttons on the cancellation messages ─────────────────────────────────────────────
+//   cxpick:<platform>  on "Which platform?"  → those photos are filed on that platform
+//   cxvoid             on a batch summary    → every row that batch recorded is removed
+// The MESSAGE that was tapped says which photos (prompt_message_id / reply_message_id), so
+// a button carries nothing that could go stale or be forged. Every state change is
+// compare-and-set in the database: two people tapping, a double tap, a tap racing the
+// time-out — exactly one of them does it, and the other is told what happened.
+async function handleCancelTap(cq) {
+  const answer = (text, alert = false) => tg('answerCallbackQuery', { callback_query_id: cq.id, ...(text ? { text: text.slice(0, 190) } : {}), show_alert: alert })
+    .catch(() => {});
+  try {
+    const chatId = cq.message?.chat?.id;
+    const messageId = cq.message?.message_id;
+    const isCancelChat = cq.message?.chat?.type === 'private' || (cancelChatId() && String(chatId) === cancelChatId());
+    // A message too old for Telegram to hand back has no chat on it.
+    if (!chatId || !messageId || !isCancelChat) return await answer("These buttons don't work here any more. Use the Cancellations page.", true);
+    const who = await telegramSender(cq.from?.id);
+    if (!who || !CAN_FILE.includes(who.role)) return await answer('Connect this Telegram first: in the app, 🔔 Alerts → Connect Telegram.', true);
+    // The same rule as Remove on the page: whoever sent the photos, PH, or an admin.
+    const mayAct = (ownerId) => who.role !== 'warehouse' || Number(ownerId) === Number(who.id);
+    const tag = notifyEnv() === 'dev' ? '[dev] ' : '';
+    const data = String(cq.data || '');
+
+    if (data.startsWith('cxpick:')) {
+      const platform = data.slice(7);
+      if (!PLATFORM_KEYS.has(platform)) return await answer('That button is not a platform.', true);
+      const held = await heldCancellationPhotosByPrompt(chatId, messageId);
+      if (!held.length) {
+        // Already filed (a tap, a command, or the time-out got there first). If this message
+        // never became a summary, its buttons are dead weight: take them off.
+        const done = await cancellationBatchByReply(chatId, messageId);
+        if (!done.length) tg('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+        return await answer('These photos were already logged — nothing left to pick. Send them again if the platform was wrong.', true);
+      }
+      if (!mayAct(held[0].sent_by_user_id)) return await answer(`Only ${held[0].sent_by || 'whoever sent these'}, PH or an admin can pick the platform for these photos.`, true);
+      const released = await releaseHeldCancellationPhotosByPrompt(chatId, messageId, platform);
+      if (!released.length) return await answer('Someone picked just before you — they are being logged.', true);
+      const n = released.length;
+      await answer(`${platformLabel(platform)} — reading ${n === 1 ? 'the photo' : `${n} photos`}…`);
+      // The buttons go at once (no second pick); the summary replaces this text when the reads are done.
+      enqueue(() => tg('editMessageText', { chat_id: chatId, message_id: messageId,
+        text: `${tag}${platformLabel(platform)} — reading ${n === 1 ? '1 photo' : `${n} photos`}…`, reply_markup: { inline_keyboard: [] } })).catch(() => {});
+      readReleasedPhotos(released, platform, `${chatId}:pick:${messageId}`);
+      return null;
+    }
+
+    if (data === 'cxvoid') {
+      const photos = await cancellationBatchByReply(chatId, messageId);
+      const off = () => tg('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+      if (!photos.length) { off(); return await answer("This batch isn't on record here any more. Remove the rows on the Cancellations page.", true); }
+      if (photos.every((p) => p.voided_at)) { off(); return await answer('This batch was already voided.', true); }
+      if (!mayAct(photos[0].sent_by_user_id)) return await answer(`Only ${photos[0].sent_by || 'whoever sent these'}, PH or an admin can void this batch.`, true);
+      const at = Math.max(...photos.map((p) => new Date(p.replied_at || 0).getTime()));
+      if (Date.now() - at > VOID_MIN * 60_000) {
+        off();
+        return await answer(`This batch is more than ${VOID_MIN} minutes old. Remove its rows on the Cancellations page instead (it asks for the reason).`, true);
+      }
+      const removed = await voidCancellationBatch(photos.map((p) => p.id), { actor: who.name, reason: 'Batch voided on Telegram (wrong platform, or sent by mistake)' });
+      // 0 rows: someone removed them on the page already, or another tap voided first.
+      const n = removed.length;
+      await answer(n ? `Voided — ${n} ${n === 1 ? 'row' : 'rows'} removed.` : 'Nothing was left to void.');
+      const was = String(cq.message.text || '').replace(/^\[dev\] /, '');
+      const head = `🚫 VOIDED by ${who.name} — ${n} ${n === 1 ? 'row' : 'rows'} removed from the record. Send the photos again with the right platform.`;
+      enqueue(() => tg('editMessageText', { chat_id: chatId, message_id: messageId, link_preview_options: { is_disabled: true },
+        text: `${tag}${head}${was ? `\n\nWhat it said:\n${was}` : ''}`.slice(0, 4090), reply_markup: { inline_keyboard: [] } })).catch(() => off());
+      return null;
+    }
+    return await answer();
+  } catch (e) {
+    console.error('[telegram/webhook] cancel button:', e.message);
+    return answer(`That didn't go through (${e.message.slice(0, 100)}). Try again, or use the Cancellations page.`, true);
+  }
 }
 
 // A platform tapped on the /msg picker → that platform's message, under the picker. Only

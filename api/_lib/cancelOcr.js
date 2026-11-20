@@ -194,6 +194,8 @@ export async function readCancellationLocally(buf, platform = null) {
       product: o.product || (orders.length === 1 ? one('product') : null),
       // tesseract has no honest "how sure" for a whole number; the two reads ARE the check.
       confidence: o.agreed ? 0.99 : 0.5, unclear: [], agreed: o.agreed, onlySecond: !!o.onlySecond, why: o.why,
+      // The first two reads disagreed and the third decided: recorded, and marked [CHECK].
+      ...(o.byThird ? { byThird: true } : {}),
       // The second read's version of a one-character misread (the row says "Second read said …").
       ...(o.other ? { other: o.other } : {}),
     })),

@@ -23,18 +23,37 @@ platform and by the EST day it was sent.
   identity (`telegramSender`: an approved account with that `telegram_user_id`). Unlinked
   chat → "connect this chat first"; supplier → refused.
 - **The platform is a command**: `/alias` `/stockx` `/ebay` `/temu` `/tiktok` `/shein` `/sg`
-  (Stadium Goods) `/kc` (Kicks Crew) — `PLATFORMS[].cmd`. Three ways:
-  - `/alias` as the photo's **caption** (anything after it = the reason). On an album the
-    caption rides on ONE photo; its platform is noted for the album (`album:<media_group_id>`)
-    and the other photos wait 1.5 s, then pick it up.
-  - `/alias` alone, **then the photos** — every photo in the next 10 minutes is Alias
-    (`chat:<chat id>:<telegram user id>` in `cancellation_tg_ctx` — per PERSON).
+  (Stadium Goods) `/kc` (Kicks Crew) — `PLATFORMS[].cmd`. `/alias@Bot` (what a group's "/"
+  menu inserts) is the same command (`splitCommand`, pure). **Text after the command is the
+  note** on every row it covers (`/ebay wrong size shipped` → `reason`). Three forgiving
+  ways in (2026-11-20, `fileFromChat`):
+  - **A — caption**: `/alias` as the caption of a photo, or of ONE photo of an album. The
+    album's platform AND note are noted (`album:<media_group_id>` in `cancellation_tg_ctx`);
+    its other photos wait 1.5 s (`ALBUM_WAIT_MS`), then take them.
+  - **B — command first, then the photos**: on for **90 seconds** (`SESSION_SEC`; was 10
+    minutes), per PERSON per chat (`chat:<chat id>:<telegram user id>`), **restarted by every
+    photo that uses it** (`useCancellationCtx` = read + touch in one UPDATE). The bot answers
+    "StockX mode on for 90 s — send your photos" (+ the note when one was typed).
+  - **C — photos first, nothing else**: the photo row is written **held** (`held_at`), nothing
+    is read or recorded, and the bot asks ONCE — "2 photos from Karon — which platform?" —
+    with a 2-row keyboard (Alias · StockX · eBay · SHEIN / TikTok · Temu · SG · KC,
+    `pickerKeyboard`, `cxpick:<platform>`). A tap files those photos on that platform and the
+    question **becomes the summary** (edited in place). Sending the command instead of tapping
+    (`/alias` typed after, or as the caption of a later photo) files them too. More photos
+    before the tap join the same question (its count is updated). See "The picker" below.
   - **typed**: `/alias 206557037 DD1391-100 9.5 - wrong size` (`fileTypedCancellation` +
     `typedDetails`: number, then an optional style code, size, reason; ≥ 6 digits). A size
     is taken after a style code, as `size 9.5` / `US 9.5`, or standing first after the number.
+    What tells an order from a note after a command is the **6+ digit number**.
   The named platform beats the reader's guess. Unknown command (`/goat`) → "isn't one of
-  the platforms", nothing recorded. `/help` → the how-to. The "/" menu:
-  `npm run telegram:webhook -- commands`.
+  the platforms", nothing recorded. `/help` → the how-to.
+- **The "/" menu is set by the server at start** (`registerBotCommandsAtStart` in
+  `cancellations-worker.js` → `registerBotCommands`: private chats + the cancellations group,
+  never the approval groups; production only by default, `TELEGRAM_SET_COMMANDS=on|off`;
+  retried 3 times, never fatal). `npm run telegram:webhook -- commands` sets the same list by hand.
+- **Photo or file**: `extractImageFile(msg)` (pure) takes the largest size of a compressed
+  photo, or an image sent with **"Send as File"** (`document`, `mime_type image/*`) —
+  uncompressed, better for small print; kept on the row as `cancellation_photos.as_file`.
 - **+ Add by hand** on the page for a picture that never made it to Telegram.
 
 ## One reply per batch (`api/_lib/cancellations.js`, `api/telegram/webhook.js`)
@@ -51,20 +70,43 @@ platform and by the EST day it was sent.
   batch's first photo. Why 4 s: album photos land within ~1 s and someone sending photos one
   by one is 2–3 s apart, while each read is 1–2.5 s — the window only covers the gap after
   the last read; longer only makes everyone wait for the answer.
-- The reply (`batchReplyText`, pure):
+- The reply (`batchReplyText`, pure) — every line starts with what a person has to do (2026-11-20):
   ```
   Alias · 2 orders recorded
-  1. #206557037 — Nike Free Run 5.0 'Phantom Sail' · CZ1884-010 · size 8.5
-  2. #176889923 — no shoe details found
+  [OK] #206557037 — Nike Free Run 5.0 'Phantom Sail' · CZ1884-010 · size 8.5
+  [CHECK] #176889923 — no shoe details found (reads disagreed)
 
-  ⚠️ Photo 3: no order number found — it's kept with the photo. Type it: /alias 123456789 (it fills that photo's row)
-  ⚠️ Photo 4: not saved (could not download the picture (HTTP 500)) — send it again.
+  [MISSED] Photo 3: no order number found — re-snap it, or type it: /alias 123456789 (it fills that photo's row)
+  [MISSED] Photo 4: not saved (could not download the picture (HTTP 500)) — send it again.
   ↩️ #300000001 is already logged as #12 by Karon — not added again
+
+  Check them, or + Add by hand: https://…/cancellations
   ```
-  One block per platform (PLATFORMS order); a number put right shows `(read as …)`, one found
-  by its tracking number `(found by its tracking number)`; a photo with nothing readable says
-  why when there is one (e.g. the AI reader's error). No platform → a "No platform" block +
-  "Tip: send the platform first".
+  `rowStatus(row)` (pure, from the row's stored `flags` + `read_as`):
+  - **[OK]** both reads agreed, or the number is one of OUR orders (a matched row carries no
+    reader flags), or it was typed.
+  - **[CHECK]** `(read as …)` a character was put right to match our order · `(reads
+    disagreed)` · `(only one read worked)` · `(a third read decided)` — the new `tie_break`
+    flag, set from `byThird` · `(hard to read)` / `(the reader was not sure)` (AI only) ·
+    `(number looks too short)` · `(doesn't look like this platform's numbers)`.
+  - **[MISSED]** no order number came off that photo, or the photo wasn't saved.
+  An Alias number both reads agree on is **[OK]** even though it can't be confirmed against
+  our records (most Alias orders aren't in them) — otherwise nearly every Alias line would be
+  [CHECK] and the tag would mean nothing.
+  The last line (the page: `APP_BASE_URL` + `/cancellations`, or just the words when that
+  isn't a public origin) is there only when something is [CHECK] or [MISSED]. One block per
+  platform (PLATFORMS order); a number found by its tracking number says so; a photo with
+  nothing readable says why when there is one (e.g. the AI reader's error). No platform (only
+  after an unanswered question timed out) → a "No platform" block + "Tip: send the platform first".
+- **`[ Void Batch ]`** under every summary that recorded rows (`cxvoid`). The batch is found
+  by the MESSAGE tapped (`cancellation_photos.reply_message_id`), so the button carries
+  nothing. A tap: `voidCancellationBatch` claims `voided_at` (two taps void once), sets every
+  live row of those photos to `'rejected'` (= Remove on the page: kept, never listed, the
+  number may be recorded again) with `cancellation_events` "removed" by the tapper, and the
+  message is rewritten "🚫 VOIDED by Karon — 2 rows removed … What it said: …". Who: whoever
+  sent the photos, PH or an admin (the page's Remove rule). **60 minutes** (`VOID_MIN`) —
+  later the button is taken off and the tap says to remove on the page (it asks for a reason).
+  Already voided / batch unknown → said in a pop-up, button removed.
 - **"Type it"**: a number typed within 30 minutes on the SAME platform fills that person's
   oldest photo row still without a number (`openUnreadCancellation`) — one row, photo and
   number together — and the bot says "(Filled the photo row #N …)".
@@ -77,6 +119,33 @@ platform and by the EST day it was sent.
   sweep. Only the last 6 hours. Worst case after a restart the batch is answered in a
   different grouping — never lost, never twice.
 - Each batch alerts **`cancel.logged`** once (PH + admin, opt-out in 🔔 Alerts).
+
+## The picker (photos with no platform) — what is in memory and what is not
+Deploys restart the server mid-shift, so **the state is in the database, not in buffers**:
+- **Held photos** = `cancellation_photos.held_at IS NOT NULL` (+ `prompt_message_id` = the
+  question they sit behind). Written before Telegram gets its 200, like every photo row.
+- **Sessions and album captions** = `cancellation_tg_ctx` (`platform`, `note`, `set_at`).
+- **In memory only**: the short wait before asking (`asks`, `askPlatformSoon`:
+  `CANCEL_ASK_MS`, default 1.2 s, restarted by each photo, so three photos in three seconds
+  get ONE question; serialised per person per chat so two timers can't both ask; the entry
+  deletes itself when it fires) and the existing batch map. Losing either costs nothing: see
+  the time-out.
+- **Every state change is compare-and-set**: a tap releases with `UPDATE … WHERE held_at IS
+  NOT NULL … RETURNING` (`releaseHeldCancellationPhotosByPrompt`), so a double tap, two
+  people tapping, a tap racing a command or the time-out — one of them files the photos; the
+  others get a pop-up ("already logged", "someone picked just before you").
+- **Buttons answer for themselves** (`handleCancelTap`): `cxpick` / `cxvoid` are routed before
+  the webhook's blanket `answerCallbackQuery`, because a tap can be answered only once and a
+  refusal has to say why (`show_alert`). Not connected / supplier / another warehouse
+  person's photos / a chat that isn't the cancellations group or a private chat → refused.
+- **Nobody taps** (`CANCEL_HOLD_SEC`, default 10 min): the sweep (`expireHeldCancellationPhotos`
+  → the normal stuck-photo re-read) files them with NO platform, as every such photo was
+  before, and writes the summary into the question. Never lost to an unanswered question.
+  (The sweep runs in production only — on a dev server a question waits until answered.)
+- **An album whose caption arrives late** (> 1.5 s after its other photos): those photos are
+  already held and asked about; the caption's command releases them, into the same batch.
+- An album photo that ends up held is taken OUT of the live batch (`cancelBatchDrop`), so the
+  batch's reply doesn't mark it answered and hide it from the tap that will file it.
 
 ## The shoe: name + SKU + size (`fillDetails`), in this order of trust — never invented
 1. **OUR order with that number** (`knownOrdersFor`, one query per source):
@@ -205,7 +274,10 @@ carry customer addresses, never public) · `POST …/save` (no id = add by hand;
 `cancellations` (one row per ORDER; + `details_from`, `order_match` 2026-11-12),
 `cancellation_photos` (one per picture, R2 key or bytes; + `tg_file_id`, `media_group_id`,
 `platform`, `result` JSONB = what filing it gave, `replied_at` 2026-11-12),
-`cancellation_events`, `cancellation_tg_ctx`. **Prod needs `db:setup`** for the 2026-11-12 columns.
+`cancellation_events`, `cancellation_tg_ctx` (+ `note` 2026-11-20). `cancellation_photos` +
+`as_file`, `held_at`, `prompt_message_id`, `reply_message_id`, `voided_at` (2026-11-20).
+**Prod needs `db:setup` BEFORE this code is deployed** — the webhook writes `as_file` /
+`held_at` on every photo, so without the columns every photo answers "That wasn't logged".
 
 ## Tests
 `e2e/cancellations.spec.js`: fake Bot API on :5198 (getFile + the download), fake reader on
@@ -217,7 +289,16 @@ correction, the tracking-number match on a rendered FedEx label, the rendered Al
 sweep (called in the test process against the fake), end of shift, and the page from
 Asia/Manila. Run with `E2E_PORT=…` when another suite is running.
 
+Added 2026-11-20 (**written but NOT RUN** — the machine they were written on had no database
+or `.env`; run the file before deploying): the question for photos with no platform, the tap,
+a second tap, Void Batch (and a second void), the note after a command, an image sent as a
+file, photos-then-command, and the unanswered question filed by the sweep. The fake Bot API
+now gives each message its own id and keeps `editMessageText` / `answerCallbackQuery` bodies.
+
 ## Not yet / can't be verified locally
+- The 2026-11-20 flows were never exercised against the real Bot API: check on the first
+  real batch that the question's buttons fit four across on the floor's phones, and that the
+  group's "/" menu shows the platforms after the next deploy (`[cancellations] bot menu set` in the log).
 - No real prod photos were read for this change (prod reads are not allowed): the name-line
   rule and the SHEIN shape rest on the two real Alias labels, the eBay FedEx label PNGs and
   the SHEIN numbers in the docs. Check the first real batch's `ai_raw.text`.

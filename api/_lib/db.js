@@ -13581,12 +13581,14 @@ export async function listManualDelivered({ days = null } = {}) {
  * (Telegram re-sends an update it didn't get a 200 for).
  */
 export async function createCancellationPhoto({ r2Key = null, bytes = null, contentType = 'image/jpeg', caption = null,
-  tgChatId = null, tgMessageId = null, tgFileId = null, mediaGroupId = null, platform = null, sentByUserId = null, sentBy = null }) {
+  tgChatId = null, tgMessageId = null, tgFileId = null, mediaGroupId = null, platform = null, sentByUserId = null, sentBy = null,
+  asFile = false, hold = false }) {
+  // hold = it came with no platform: it waits (held_at) for a tap on the picker.
   const rows = await db()`
     INSERT INTO cancellation_photos (r2_key, bytes, content_type, caption, tg_chat_id, tg_message_id, tg_file_id, media_group_id,
-                                     platform, sent_by_user_id, sent_by)
+                                     platform, sent_by_user_id, sent_by, as_file, held_at)
     VALUES (${r2Key}, ${bytes}, ${contentType}, ${caption}, ${tgChatId}, ${tgMessageId}, ${tgFileId}, ${mediaGroupId},
-            ${platform}, ${sentByUserId}, ${sentBy})
+            ${platform}, ${sentByUserId}, ${sentBy}, ${!!asFile}, CASE WHEN ${!!hold}::boolean THEN now() END)
     ON CONFLICT (tg_chat_id, tg_message_id) WHERE tg_message_id IS NOT NULL DO NOTHING
     RETURNING id`;
   return rows[0] ? Number(rows[0].id) : null;
@@ -13600,8 +13602,96 @@ export async function setCancellationPhotoRead(id, { status, error = null, r2Key
                       result = ${result ? JSON.stringify(result) : null}::jsonb WHERE id = ${id}`;
   }
 }
-export async function setCancellationPhotoPlatform(id, platform) {
-  await db()`UPDATE cancellation_photos SET platform = ${platform} WHERE id = ${id} AND platform IS NULL`;
+export async function setCancellationPhotoPlatform(id, platform, note = null) {
+  await db()`UPDATE cancellation_photos SET platform = ${platform}, caption = COALESCE(caption, ${note})
+              WHERE id = ${id} AND platform IS NULL`;
+}
+
+// ── A photo sent with NO platform: held until someone says which (the picker) ──
+// Everything here is compare-and-set on held_at, so two taps (or a tap and a command, or a
+// tap and the sweep's time-out) can't both file the same photo.
+const heldRow = (r) => ({ ...r, id: Number(r.id), tg_chat_id: r.tg_chat_id == null ? null : Number(r.tg_chat_id),
+  tg_message_id: r.tg_message_id == null ? null : Number(r.tg_message_id),
+  prompt_message_id: r.prompt_message_id == null ? null : Number(r.prompt_message_id),
+  sent_by_user_id: r.sent_by_user_id == null ? null : Number(r.sent_by_user_id) });
+/** An album photo that turned out to have no platform after all → held. false = it was already taken. */
+export async function holdCancellationPhoto(id) {
+  const rows = await db()`UPDATE cancellation_photos SET held_at = now()
+                            WHERE id = ${id} AND held_at IS NULL AND platform IS NULL AND read_status = 'pending' AND replied_at IS NULL
+                        RETURNING id`;
+  return rows.length > 0;
+}
+/** What one person has waiting in one chat, oldest first. */
+export async function heldCancellationPhotos(chatId, userId) {
+  const rows = await db()`SELECT id, tg_chat_id, tg_message_id, prompt_message_id, sent_by_user_id, sent_by
+                            FROM cancellation_photos
+                           WHERE held_at IS NOT NULL AND tg_chat_id = ${chatId} AND sent_by_user_id = ${userId}
+                           ORDER BY tg_message_id NULLS LAST, id`;
+  return rows.map(heldRow);
+}
+/** The photos waiting behind one "Which platform?" message. */
+export async function heldCancellationPhotosByPrompt(chatId, promptMessageId) {
+  const rows = await db()`SELECT id, tg_chat_id, tg_message_id, prompt_message_id, sent_by_user_id, sent_by
+                            FROM cancellation_photos
+                           WHERE held_at IS NOT NULL AND tg_chat_id = ${chatId} AND prompt_message_id = ${promptMessageId}
+                           ORDER BY tg_message_id NULLS LAST, id`;
+  return rows.map(heldRow);
+}
+export async function setCancellationPrompt(ids, promptMessageId) {
+  if (!ids?.length) return;
+  await db()`UPDATE cancellation_photos SET prompt_message_id = ${promptMessageId}
+              WHERE id = ANY(${ids.map(Number)}::bigint[]) AND held_at IS NOT NULL`;
+}
+/** A tap on the picker: those photos are this platform's now. → the ones THIS call released. */
+export async function releaseHeldCancellationPhotosByPrompt(chatId, promptMessageId, platform) {
+  const rows = await db()`UPDATE cancellation_photos SET held_at = NULL, platform = ${platform}
+                            WHERE held_at IS NOT NULL AND tg_chat_id = ${chatId} AND prompt_message_id = ${promptMessageId}
+                        RETURNING id, tg_chat_id, tg_message_id, tg_file_id, caption, prompt_message_id, sent_by_user_id, sent_by`;
+  return rows.map(heldRow).sort((a, b) => a.id - b.id);
+}
+/** A platform command after the photos ("photos, then /alias"): everything that person has waiting. */
+export async function releaseHeldCancellationPhotosOf(chatId, userId, platform, note = null) {
+  const rows = await db()`UPDATE cancellation_photos SET held_at = NULL, platform = ${platform}, caption = COALESCE(caption, ${note})
+                            WHERE held_at IS NOT NULL AND tg_chat_id = ${chatId} AND sent_by_user_id = ${userId}
+                        RETURNING id, tg_chat_id, tg_message_id, tg_file_id, caption, prompt_message_id, sent_by_user_id, sent_by`;
+  return rows.map(heldRow).sort((a, b) => a.id - b.id);
+}
+/** Nobody picked in time: let go, so the sweep reads them with no platform (never lost). */
+export async function expireHeldCancellationPhotos(afterSec = 600) {
+  const rows = await db()`UPDATE cancellation_photos SET held_at = NULL
+                            WHERE held_at IS NOT NULL AND held_at < now() - make_interval(secs => ${afterSec}::int)
+                        RETURNING id`;
+  return rows.map((r) => Number(r.id));
+}
+
+// ── The summary message, and voiding the batch it lists ──
+export async function setCancellationReplyMessage(ids, messageId) {
+  if (!ids?.length || !messageId) return;
+  await db()`UPDATE cancellation_photos SET reply_message_id = ${messageId} WHERE id = ANY(${ids.map(Number)}::bigint[])`;
+}
+/** The photos one summary message answered. */
+export async function cancellationBatchByReply(chatId, messageId) {
+  const rows = await db()`SELECT id, sent_by_user_id, sent_by, replied_at, voided_at
+                            FROM cancellation_photos
+                           WHERE tg_chat_id = ${chatId} AND reply_message_id = ${messageId}
+                           ORDER BY id`;
+  return rows.map((r) => ({ ...r, id: Number(r.id), sent_by_user_id: r.sent_by_user_id == null ? null : Number(r.sent_by_user_id) }));
+}
+/**
+ * Void a batch: every live row those photos gave becomes 'rejected' (removed — kept, never
+ * listed, the number may be recorded again), with who and why in cancellation_events.
+ * voided_at is claimed first, so two taps void once. → the rows removed.
+ */
+export async function voidCancellationBatch(photoIds, { actor, reason }) {
+  if (!photoIds?.length) return [];
+  const claimed = await db()`UPDATE cancellation_photos SET voided_at = now()
+                               WHERE id = ANY(${photoIds.map(Number)}::bigint[]) AND voided_at IS NULL RETURNING id`;
+  if (!claimed.length) return [];
+  const rows = await db()`UPDATE cancellations SET status = 'rejected', rejected_reason = ${reason}, updated_at = now()
+                            WHERE photo_id = ANY(${claimed.map((r) => Number(r.id))}::bigint[]) AND status <> 'rejected'
+                        RETURNING id, order_number`;
+  for (const r of rows) await logCancellationEvent(Number(r.id), 'removed', actor, reason);
+  return rows.map((r) => ({ id: Number(r.id), order_number: r.order_number }));
 }
 export async function getCancellationPhoto(id) {
   const rows = await db()`SELECT id, r2_key, bytes, content_type, caption, read_status, read_error, sent_by, created_at
@@ -13625,11 +13715,13 @@ export async function releaseCancellationPhotoReplies(ids) {
 }
 export async function cancellationPhotosForReply(ids) {
   if (!ids?.length) return [];
-  const rows = await db()`SELECT id, tg_chat_id, tg_message_id, sent_by_user_id, sent_by, read_status, read_error, result, created_at
+  const rows = await db()`SELECT id, tg_chat_id, tg_message_id, sent_by_user_id, sent_by, read_status, read_error, result, created_at,
+                                 prompt_message_id
                             FROM cancellation_photos WHERE id = ANY(${ids.map(Number)}::bigint[])
                            ORDER BY tg_message_id NULLS LAST, id`;
   return rows.map((r) => ({ ...r, id: Number(r.id), tg_chat_id: r.tg_chat_id == null ? null : Number(r.tg_chat_id),
-    tg_message_id: r.tg_message_id == null ? null : Number(r.tg_message_id) }));
+    tg_message_id: r.tg_message_id == null ? null : Number(r.tg_message_id),
+    prompt_message_id: r.prompt_message_id == null ? null : Number(r.prompt_message_id) }));
 }
 /**
  * After a restart: photos whose read never finished (`stuck`, re-read from Telegram) and
@@ -13640,7 +13732,7 @@ export async function strandedCancellationPhotos({ stuckAfterSec = 180, quietSec
   const stuck = await db()`
     SELECT id, tg_chat_id, tg_message_id, tg_file_id, media_group_id, platform, caption, sent_by_user_id, sent_by
       FROM cancellation_photos
-     WHERE tg_file_id IS NOT NULL AND replied_at IS NULL AND read_status = 'pending'
+     WHERE tg_file_id IS NOT NULL AND replied_at IS NULL AND read_status = 'pending' AND held_at IS NULL
        AND created_at > now() - interval '6 hours' AND created_at < now() - make_interval(secs => ${stuckAfterSec}::int)
      ORDER BY id`;
   const unanswered = await db()`
@@ -13848,16 +13940,21 @@ export async function openUnreadCancellation(userId, platform, minutes = 30) {
 
 // "/alias, then the photos" (docs/context/cancellations.md): what a chat or an album named
 // last. Read back only while fresh — a platform named this morning is not the afternoon's.
-export async function setCancellationCtx(key, platform) {
-  await db()`INSERT INTO cancellation_tg_ctx (key, platform, set_at) VALUES (${key}, ${platform}, now())
-             ON CONFLICT (key) DO UPDATE SET platform = EXCLUDED.platform, set_at = now()`;
+export async function setCancellationCtx(key, platform, note = null) {
+  await db()`INSERT INTO cancellation_tg_ctx (key, platform, note, set_at) VALUES (${key}, ${platform}, ${note}, now())
+             ON CONFLICT (key) DO UPDATE SET platform = EXCLUDED.platform, note = EXCLUDED.note, set_at = now()`;
   // Housekeeping: nothing older than a day is ever read again.
   await db()`DELETE FROM cancellation_tg_ctx WHERE set_at < now() - interval '1 day'`;
 }
-export async function getCancellationCtx(key, minutes = 10) {
-  const rows = await db()`SELECT platform FROM cancellation_tg_ctx
-                            WHERE key = ${key} AND set_at > now() - make_interval(mins => ${minutes}::int)`;
-  return rows[0]?.platform || null;
+/**
+ * The session a key holds, while it is fresh — and using it restarts its clock (one
+ * statement, so two photos arriving together both get it). → { platform, note } or null.
+ */
+export async function useCancellationCtx(key, seconds = 90) {
+  const rows = await db()`UPDATE cancellation_tg_ctx SET set_at = now()
+                            WHERE key = ${key} AND set_at > now() - make_interval(secs => ${seconds}::int)
+                        RETURNING platform, note`;
+  return rows[0] ? { platform: rows[0].platform, note: rows[0].note || null } : null;
 }
 
 // One EST day of cancellations (the end-of-shift /msg, /msgall, /report on Telegram) —

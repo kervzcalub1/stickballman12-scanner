@@ -15938,6 +15938,81 @@ export async function recordCrossSale({ listing, orderId, priceCents, payoutCent
 export async function markCrossSaleNotified(id, error = null) {
   await db()`UPDATE cross_sales SET notified_at = CASE WHEN ${error}::text IS NULL THEN now() ELSE notified_at END, notify_error = ${error} WHERE id = ${id}`;
 }
+/* ⚔ Price compete for cross-listed pairs — the engine is cross-compete.js. Per size × SKU. */
+const CROSS_COMP_KEYS = ['cross_comp_master', 'cross_comp_all', 'cross_comp_all_mode', 'cross_comp_last_run', 'cross_lock'];
+export async function crossCompSettings() {
+  const rows = await db()`SELECT key, value FROM app_settings WHERE key = ANY(${CROSS_COMP_KEYS}::text[])`;
+  const v = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  return {
+    master: v.cross_comp_master === 'on',
+    all: { on: v.cross_comp_all === 'on', mode: v.cross_comp_all_mode === 'match' ? 'match' : 'undercut' },
+    lastRun: v.cross_comp_last_run || null,
+    // 🔒 OFF until someone switches it on (pre-sell's is on by default; here nothing on Alias
+    // moves until a switch on the page is flipped).
+    lock: v.cross_lock === 'on',
+  };
+}
+// The shoe's own switch. enabled null = follow "All shoes".
+export async function setCrossGroupComp(groupId, { enabled, mode }) {
+  const rows = await db()`UPDATE cross_groups SET comp_enabled = ${enabled}, comp_mode = ${enabled == null ? null : mode} WHERE id = ${groupId} RETURNING id`;
+  return !!rows[0];
+}
+export async function setCrossPoolOverride(poolId, override, actor) {
+  const rows = await db()`UPDATE cross_pool SET comp_override = ${override}, updated_by = ${actor}, updated_at = now() WHERE id = ${poolId} RETURNING id`;
+  return !!rows[0];
+}
+// lock = the price this app last set (🔒); base = the price WE set (floor = base − $5).
+// A key left out is kept; null = take it from the live price at the next check.
+export async function setCrossComp(poolId, groupSkuId, p) {
+  const hasLock = Object.prototype.hasOwnProperty.call(p, 'lock');
+  const hasBase = Object.prototype.hasOwnProperty.call(p, 'base');
+  await db()`
+    INSERT INTO cross_comp (pool_id, group_sku_id, lock_cents, base_cents)
+    VALUES (${poolId}, ${groupSkuId}, ${hasLock ? p.lock : null}::int, ${hasBase ? p.base : null}::int)
+    ON CONFLICT (pool_id, group_sku_id) DO UPDATE SET
+      lock_cents = CASE WHEN ${hasLock} THEN EXCLUDED.lock_cents ELSE cross_comp.lock_cents END,
+      base_cents = CASE WHEN ${hasBase} THEN EXCLUDED.base_cents ELSE cross_comp.base_cents END,
+      updated_at = now()`;
+}
+export async function saveCrossCompState(poolId, groupSkuId, state) {
+  await db()`
+    INSERT INTO cross_comp (pool_id, group_sku_id, state) VALUES (${poolId}, ${groupSkuId}, ${JSON.stringify(state)}::jsonb)
+    ON CONFLICT (pool_id, group_sku_id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()`;
+}
+export async function insertCrossCompLog(r) {
+  await db()`INSERT INTO cross_comp_log (pool_id, group_sku_id, mode, market_cents, from_cents, to_cents, floor_cents, action, note, changed, failed)
+             VALUES (${r.pool_id}, ${r.group_sku_id}, ${r.mode || null}, ${r.market_cents ?? null}, ${r.from_cents ?? null}, ${r.to_cents ?? null},
+                     ${r.floor_cents ?? null}, ${r.action}, ${r.note || null}, ${r.changed || 0}, ${r.failed || 0})`;
+}
+export async function listCrossCompLog(limit = 150) {
+  return await db()`
+    SELECT c.*, p.size, g.name AS group_name, k.sku
+      FROM cross_comp_log c LEFT JOIN cross_pool p ON p.id = c.pool_id LEFT JOIN cross_groups g ON g.id = p.group_id
+      LEFT JOIN cross_group_skus k ON k.id = c.group_sku_id
+     ORDER BY c.created_at DESC, c.id DESC LIMIT ${limit}`;
+}
+// One row per size × SKU with a listing still on Alias: its counts, its settings and its
+// last check — what the Compete tab shows and what the engine walks.
+export async function crossCompRows() {
+  return await db()`
+    SELECT p.id AS pool_id, p.group_id, p.size, p.comp_override, g.name AS group_name, g.comp_enabled, g.comp_mode,
+           k.id AS group_sku_id, k.sku, k.name AS sku_name, k.image, k.catalog_id, k.sizes,
+           c.lock_cents, c.base_cents, c.state,
+           count(*) FILTER (WHERE l.status = 'live')::int AS live,
+           count(*) FILTER (WHERE l.status = 'off')::int AS off,
+           min(l.price_cents) FILTER (WHERE l.status = 'live')::int AS price,
+           max(l.size_value) AS size_value
+      FROM cross_listings l JOIN cross_pool p ON p.id = l.pool_id JOIN cross_groups g ON g.id = p.group_id
+      JOIN cross_group_skus k ON k.id = l.group_sku_id
+      LEFT JOIN cross_comp c ON c.pool_id = p.id AND c.group_sku_id = k.id
+     WHERE l.status IN ('live', 'off')
+     GROUP BY p.id, g.id, k.id, c.pool_id, c.group_sku_id
+     ORDER BY g.id DESC, CASE WHEN regexp_replace(p.size, '[^0-9.]', '', 'g') ~ '^[0-9]+([.][0-9]+)?$'
+                              THEN regexp_replace(p.size, '[^0-9.]', '', 'g')::numeric END NULLS LAST, p.size, k.id`;
+}
+export async function liveCrossListings(poolId, groupSkuId) {
+  return await db()`SELECT * FROM cross_listings WHERE pool_id = ${poolId} AND group_sku_id = ${groupSkuId} AND status = 'live' ORDER BY created_at, id`;
+}
 // Everything the page shows: groups, their SKUs, each size's pool, the open listings and
 // the newest sales.
 export async function listCrossAll() {

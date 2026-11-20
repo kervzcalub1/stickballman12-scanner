@@ -542,6 +542,8 @@ export const api = {
   crossAction: (body) => post('/api/cross-listing/action', body),
   crossSettings: () => get('/api/cross-listing/settings'),
   crossSettingsSave: (body) => post('/api/cross-listing/settings', body),
+  crossCompete: () => get('/api/cross-listing/compete'),
+  crossCompeteSet: (body) => post('/api/cross-listing/compete', body),
   presellCompete: () => get('/api/presell-listings/compete'),
   presellFulfill: (params = {}) => get(`/api/presell-listings/fulfill?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString()}`),
   presellFulfillSync: () => post('/api/presell-listings/fulfill', { action: 'sync' }),

@@ -7939,6 +7939,11 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
 .mr-nolabel { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); margin-top: 4px; }
 /* Alias Cross-Listing — src/screens/AliasCross.jsx */
 .xl-h { margin: 0 0 6px; font-size: 16px; }
+.xl-h-next { margin-top: 22px; }
+/* Five tabs on a phone: scroll the bar sideways instead of squeezing a label onto two lines. */
+.xl-tabs { overflow-x: auto; scrollbar-width: none; }
+.xl-tabs::-webkit-scrollbar { display: none; }
+.xl-tabs .tab { flex: 1 0 auto; white-space: nowrap; }
 .xl-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .xl-search { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .xl-search .input { flex: 1 1 220px; min-width: 0; }

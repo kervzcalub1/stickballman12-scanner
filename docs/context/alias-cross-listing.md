@@ -39,8 +39,9 @@ own page, its own Telegram chat. Nothing here touches inventory, Shopify or Stoc
   ("short by N" when a SKU holds fewer than the pairs left). **Edit**: pairs (not below sold;
   a cut takes extras down), cost, per SKU change price / **List N more** / take down, take
   every listing of the size down. **＋ Add pairs** re-opens New with the group's SKUs.
+- **⚔ Compete** — price compete, below.
 - **Sales** — sold as which SKU, size, price, payout, cost, net, order, whether Telegram went out.
-- **Settings** (admin, or `manage_access`) — the Telegram chat id, Save, Send a test.
+- **Settings** (admin, or `manage_access`) — the sales chat id and the price-changes chat id, Save, Send a test.
 
 ## A sale
 `presell-worker.js` `checkSales` (prod only, `PRESELL_WATCH=on`, every 60 s) reads Alias's
@@ -53,6 +54,42 @@ newest orders; an order whose `listing_id` is a cross listing goes to `handleCro
 3. Telegram post to the cross-listing chat (`saleLines`): **sold as which SKU** (ship the
    pair whose box matches it — Alias verifies against that SKU), price, payout (Alias's own,
    else price − 9.9 %), cost, NET, pairs left, what came down.
+
+## ⚔ Price compete (owner, 2026-11-20: "like the one we have in pre-sell listing")
+Tab **⚔ Compete** (`src/components/CrossCompete.jsx`). Engine `api/_lib/cross-compete.js`, run by
+`presell-worker.js` right AFTER pre-sell's pass (same loop, never beside it — one Alias account),
+every `PRESELL_COMP_EVERY_MIN` (default 15) — only where `PRESELL_WATCH=on`.
+- **The rules are pre-sell's, the same pure functions** (`src/lib/presellCompete.js`: `compDecide`,
+  `compEffective`, `compFarCheck`, `compFloor`): Undercut $1 / Match lowest ask; never more than
+  **$5 under the price we set**; market up → follow it; lowest ask = ours → hold; market under the
+  floor for 2 h → it becomes the price we set. Read `presell-listings.md` → "Market competition".
+- **What differs: the unit is a size ON ONE SKU.** Every SKU of a group has its own market on
+  Alias, so each is read and priced on its own (`cross_comp`, PK `pool_id + group_sku_id`:
+  `lock_cents`, `base_cents`, `state`). Two SKUs of the same pair end at different prices — intended.
+- **Market** (`crossMarketLowest`): the lower of With You / consigned lowest ask for the SKU's
+  `catalog_id` + its own size number (`cross_group_skus.sizes`).
+- **Who takes part** (`compEffective`): master (`app_settings cross_comp_master`, off by default) →
+  size override (`cross_pool.comp_override` on/off/NULL) → shoe (`cross_groups.comp_enabled`
+  true/false/NULL + `comp_mode`) → All shoes (`cross_comp_all` + `_all_mode`).
+- **🔒 Lock** (`app_settings cross_lock`): **OFF unless 'on'** — the one default that differs from
+  pre-sell (there it is on unless 'off'): nothing on Alias moves until a switch here is flipped.
+  On → a live price ≠ the price this app last set is put back (`restore`); off → kept, logged `drift`.
+  `lock_cents` NULL → the live price is adopted at the next check.
+- **"The price we set"** (lock + base) is written by: every engine move; **Change price** on the
+  Listed tab (`repriceSku`); listing a SKU that had nothing up for the size (`topUpSku` — otherwise
+  an old lock would be put back over the new price). "reset floor" clears `base_cents` only.
+- **One pass**, per size × SKU with LIVE listings: read our listing back (the first one still live —
+  one Alias says is switched off is set `off`, one it deleted / 404 is set `deleted`,
+  `delete_reason 'platform'`, a sold one is left to the sales watcher) → lock check → market →
+  decide → update every live listing one at a time (a 429 ends the pass). `cross_comp_log` = every
+  move / floor / rebase / restore / drift / error. The pass ends by writing `cross_comp_last_run`
+  (app_settings is a live table → an open tab re-reads).
+- **Telegram**: ONE post per pass (`crossPriceLines`, grouped by shoe, `US 9 · HF3063-002 ↓ $180 →
+  $178 (market … · floor …)`) to `app_settings.cross_price_chat_id` when set, else the sales chat.
+  Neither set → logged only, the tab says so.
+- Endpoint `api/cross-listing/compete.js` (GET overview; POST master / lock / all / group / size /
+  base / run; run = 409 off the live server). Tests: `e2e/alias-cross-compete.spec.js` (fake Alias
+  + Telegram).
 
 ## Telegram chat
 `app_settings.cross_listing_chat_id`, set on the page (not an env var — no deploy to change
@@ -70,8 +107,9 @@ still come down; `cross_sales.notify_error` says why, and the page shows a banne
 `GET search?q=` · `POST prices {catalogId, sizes:[{label,value}]}` · `POST create {groupId? |
 name, skus:[{catalogId, sku, name, image, sizes}], activate, lines:[{size, qty, cost?,
 skus:[{catalogId, price}]}]}` · `GET list` · `POST action {action: qty|cost|price|list|down,
-poolId, …}` · `GET/POST settings {chatId} | {test:true}`. Tables in `LIVE_TABLES`:
-`cross_pool`, `cross_listings`, `cross_sales`.
+poolId, …}` · `GET/POST settings {chatId} | {priceChatId} | {test:true} | {testPrice:true}` ·
+`GET/POST compete` (above). Tables in `LIVE_TABLES`: `cross_pool`, `cross_listings`, `cross_sales`,
+`cross_groups`, `cross_comp_log`.
 
 ## Tests
 `e2e/alias-cross.spec.js` — never reaches Alias or Telegram: the rules; a sale against our

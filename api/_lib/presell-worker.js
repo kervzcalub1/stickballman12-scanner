@@ -17,6 +17,7 @@ import { PLATFORMS, applyResult, handleSale } from './presell.js';
 import { aliasRecentOrders } from './alias.js';
 import { stockxActiveOrders, stockxConfigured } from './stockx.js';
 import { runCompetition } from './presell-compete.js';
+import { runCrossCompetition } from './cross-compete.js';
 import { checkReleased, checkAtRisk } from './presell-arrival.js';
 import { syncFulfillment } from './presell-fulfill.js';
 
@@ -174,7 +175,12 @@ export function startPresellWorker() {
   loop(checkSales, SALES_EVERY_MS, 'sales');
   // 🔒 Price lock + market competition (presell-compete.js): idle while both are off.
   const compMin = Math.max(5, Number(process.env.PRESELL_COMP_EVERY_MIN) || 15);
-  loop(runCompetition, compMin * 60_000, 'competition');
+  // Alias Cross-Listing's own ⚔ compete (cross-compete.js) runs right AFTER pre-sell's, never
+  // beside it: both read and write the same Alias account.
+  loop(async () => {
+    try { await runCompetition(); } catch (e) { console.error('[presell-worker] competition', e.message); }
+    await runCrossCompetition();
+  }, compMin * 60_000, 'competition');
   // Safety net for "PH listed an arrived pair → its pre-sell listing comes down" (normally
   // right after the PH save): every 15 min.
   loop(checkReleased, 15 * 60_000, 'released');

@@ -88,7 +88,7 @@ test('warehouse: a number nobody has says so, instead of falling back to the rec
   await loginAs(page, 'warehouse');
   await page.goto('/batches');
   await search(page, `NOSUCHPARCEL${stamp}`);
-  await expect(page.getByText('No batch carries that number')).toBeVisible();
+  await expect(page.getByText('No batch matches that.')).toBeVisible();
   await expect(page.locator('.batch-nav-row')).toHaveCount(0);
 });
 
@@ -113,7 +113,7 @@ test('PH_EXCLUDED_KINDS still holds: an in-store batch is invisible to PH, visib
   await page.context().clearCookies();
   await loginAs(page, 'ph_team');
   await page.goto(`/ph/batches?q=${instoreCode}`);
-  await expect(page.getByText('No batch carries that number')).toBeVisible();
+  await expect(page.getByText('No batch matches that.')).toBeVisible();
   await expect(page.locator('.batch-nav-row')).toHaveCount(0);
 });
 

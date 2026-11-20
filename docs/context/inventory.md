@@ -407,3 +407,13 @@ A person's **scan history** (user's call): every Stock Check scan, newest first,
 Anyone on staff can read anyone's (see above); **admin and PH open on Everyone** (titled
 "Scan History") and can pick one person (anyone who has scanned). **CSV + PDF** per tab (`src/lib/scanReport.js`,
 same rows for both; PDF via presell's `tablePdf`). Needs **`db:setup`** (two tables + index).
+
+## All time (2026-11-21)
+The date bar has a fifth choice, **All time** (`?period=all`): no `from` / `to` is sent, so
+a SKU or a shoe's name is searched across everything ever received; supplier, status and
+intake still apply. A typed search always widened to every date — now the bar switches to
+All time to say so (it used to keep showing "Week"). `period=all` carries no dates in the
+URL, so the mount effect reads it and clears the default week. ‹ › and Today are hidden.
+`GET /api/items/query` answers `capped` + `limit` (2,000): it asks for one row more than it
+shows, and the page prints "Showing the first 2,000 pairs — more match" above totals that
+then cover only those rows. E2E: `e2e/inventory-alltime-batch-search.spec.js`.

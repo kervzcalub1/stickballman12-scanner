@@ -845,6 +845,13 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
         <span className="muted xs batch-nav-track">
           {allTracking(b).length ? allTracking(b).join(' · ') : b.no_tracking ? 'no tracking #' : ''}
         </span>
+        {/* Found by what is IN it or what it belongs to, not by the number on the parcel:
+            say which — a row with no visible reason reads as a wrong answer. */}
+        {(b.matched_skus || b.matched_oo || (searchingNow && b.po_code)) && (
+          <span className="xs batch-nav-why" data-batch-why="">
+            {[b.matched_skus && `SKU ${b.matched_skus}`, b.po_code, b.matched_oo && `Online order ${b.matched_oo}`].filter(Boolean).join(' · ')}
+          </span>
+        )}
       </div>
       <span className="batch-nav-prog">
         {b.received_boxes != null ? <><b>{b.received_boxes}{b.expected_boxes ? `/${b.expected_boxes}` : ''}</b> boxes · </> : null}
@@ -891,11 +898,11 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
           </label>
           {filtering && <button className="btn sm ghost" onClick={clearFilters}>Clear filters</button>}
         </div>
-        <label className="batch-search"><span className="muted xs">Tracking number</span>
+        <label className="batch-search"><span className="muted xs">Search</span>
           <input type="search" value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder="Paste or scan a tracking number — or a batch code"
-            aria-label="Search batches by tracking number or batch code" /></label>
-        <p className="muted sm">Searches every batch, not just the recent ones — the number on any box counts, and the last few digits are enough.</p>
+            placeholder="Tracking number, batch code, SKU, PO or online order"
+            aria-label="Search batches by tracking number, batch code, SKU, PO or online order" /></label>
+        <p className="muted sm">Searches every batch, not just the recent ones. Type a tracking number (the last few digits are enough), a batch code (B-101972), a SKU (HM6803-019), a PO (PO-100107) or an online order (OO-0012 or the store’s order number).</p>
       </div>
 
       {searchingNow ? (
@@ -905,7 +912,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
           </h3>
           {!hits.length ? (
             searching ? <p className="muted">Searching…</p>
-              : <p className="muted">No batch carries that number. Check the digits, or try the batch code printed on the carton.</p>
+              : <p className="muted">No batch matches that. Check the digits or the spelling — a SKU, PO or online order needs at least 3 characters.</p>
           ) : (
             <>
               <div className="batch-nav-list">{hits.map((b) => row(b, { showKind: true }))}</div>

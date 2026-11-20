@@ -1450,8 +1450,41 @@ export async function searchBatches(query,
   const key = searchTrackKey(query);
   if (!key) return [];              // "----" normalises to nothing: match nothing, not everything
   const like = `%${key}%`;
+  // Beyond the number on the parcel (owner, 2026-11-21): the shoe inside it, the purchase
+  // order it was received against, and the online order it came from. All three are
+  // substring matches on the same A-Z0-9 key, so "hm6803 019", "po 118" and "oo-12" work
+  // as typed. They need 3 characters: "10" would match half the stock by SKU.
+  const wide = key.length >= 3;
+  // "OO-12" and "OO-0012" are the same order: the code is the id, zero-padded for show.
+  const ooId = /^OO0*([1-9]\d{0,8})$/.exec(key)?.[1] ?? null;
   return await db()`
+    WITH oo AS (
+      -- Every tracking number of each online order that matches: the order's own, and one
+      -- per parcel when the store split it (online_order_shipments).
+      SELECT o.id, o.order_number, upper(regexp_replace(t.num, '[[:space:]]', '', 'g')) AS track_key
+        FROM online_orders o
+        CROSS JOIN LATERAL (
+          SELECT o.tracking_number AS num
+          UNION ALL
+          SELECT s.tracking_number FROM online_order_shipments s WHERE s.order_key = upper(btrim(o.order_number))
+        ) t
+       WHERE ${wide} AND t.num IS NOT NULL AND btrim(t.num) <> ''
+         AND (o.id = ${ooId}::bigint
+              OR regexp_replace(upper(coalesce(o.order_number, '')), '[^A-Z0-9]', '', 'g') LIKE ${like})
+    )
     SELECT b.id, b.batch_code, b.kind, b.buyer_name, b.supplier_name, b.tracking_number,
+           (SELECT p.po_code FROM purchase_orders p WHERE p.id = b.po_id) AS po_code,
+           -- WHY this row matched, when it was not the tracking number or the batch code.
+           (SELECT string_agg(x.sku || ' × ' || x.n, ', ' ORDER BY x.sku)
+              FROM (SELECT i.sku, count(*) AS n FROM items i
+                     WHERE ${wide} AND i.batch_id = b.id
+                       AND regexp_replace(upper(coalesce(i.sku, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
+                     GROUP BY i.sku ORDER BY i.sku LIMIT 6) x) AS matched_skus,
+           (SELECT string_agg(DISTINCT 'OO-' || lpad(oo.id::text, 4, '0') || coalesce(' · #' || nullif(btrim(oo.order_number), ''), ''), ', ')
+              FROM oo
+             WHERE oo.track_key = upper(regexp_replace(coalesce(b.tracking_number, ''), '[[:space:]]', '', 'g'))
+                OR oo.track_key IN (SELECT upper(regexp_replace(bx.tracking_number, '[[:space:]]', '', 'g'))
+                                      FROM batch_boxes bx WHERE bx.batch_id = b.id AND bx.tracking_number IS NOT NULL)) AS matched_oo,
            b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.pre_sell_scope, b.merged_into_batch_id,
            b.manifest_received, b.audited_at, b.audited_by,
            (SELECT m.batch_code FROM batches m WHERE m.id = b.merged_into_batch_id) AS merged_into_code,
@@ -1484,6 +1517,20 @@ export async function searchBatches(query,
           SELECT 1 FROM batch_boxes bx
            WHERE bx.batch_id = b.id
              AND regexp_replace(upper(coalesce(bx.tracking_number, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
+        )
+        OR (${wide} AND b.id IN (
+          SELECT i.batch_id FROM items i
+           WHERE regexp_replace(upper(coalesce(i.sku, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
+        ))
+        OR (${wide} AND b.po_id IN (
+          SELECT p.id FROM purchase_orders p
+           WHERE regexp_replace(upper(coalesce(p.po_code, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
+        ))
+        OR upper(regexp_replace(coalesce(b.tracking_number, ''), '[[:space:]]', '', 'g')) IN (SELECT oo.track_key FROM oo)
+        OR EXISTS (
+          SELECT 1 FROM batch_boxes bx
+           WHERE bx.batch_id = b.id AND bx.tracking_number IS NOT NULL
+             AND upper(regexp_replace(bx.tracking_number, '[[:space:]]', '', 'g')) IN (SELECT oo.track_key FROM oo)
         )
       )
     ORDER BY b.created_at DESC

@@ -1,9 +1,11 @@
-// GET /api/items/query?q=&from=&to=&supplier=&status=  ->  { ok, rows, totals }
+// GET /api/items/query?q=&from=&to=&supplier=&status=  ->  { ok, rows, totals, capped, limit }
+// No from/to = every date ("All time"). `capped` = more than `limit` pairs matched; only the first `limit` are here.
 // Unified inventory list for the merged Inventory page (search + date/supplier/
 // status filters + totals for the daily-report view).
 import { send, applySecurity, requireRole } from '../_lib/util.js';
 import { queryItems, dbConfigured } from '../_lib/db.js';
 
+const MAX_ROWS = 2000;
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
 
 export default async function handler(req, res) {
@@ -24,13 +26,18 @@ export default async function handler(req, res) {
   const kind = ['receiving', 'rescale', 'instore', 'existing'].includes(kindParam) ? kindParam : null;
 
   try {
-    const rows = await queryItems({ q, from, to, supplier, status, kind });
+    // One more than we show, so "there is more" is known rather than guessed. With "All
+    // time" on the page (2026-11-21) an unfiltered list really can be longer than this,
+    // and a list that silently stops at 2,000 reads as the whole inventory.
+    const found = await queryItems({ q, from, to, supplier, status, kind, limit: MAX_ROWS + 1 });
+    const capped = found.length > MAX_ROWS;
+    const rows = capped ? found.slice(0, MAX_ROWS) : found;
     const totals = { count: rows.length, totalCost: 0, byStatus: {} };
     for (const r of rows) {
       totals.totalCost += Number(r.cost) || 0;
       totals.byStatus[r.status] = (totals.byStatus[r.status] || 0) + 1;
     }
-    return send(res, 200, { ok: true, rows, totals });
+    return send(res, 200, { ok: true, rows, totals, capped, limit: MAX_ROWS });
   } catch (e) {
     console.error('[items/query]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load inventory.' });

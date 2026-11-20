@@ -160,7 +160,7 @@ test.describe('POIZON orders — the page', () => {
     await page.route('**/api/poizon/orders**', (r) => { if (r.request().method() === 'POST') { posts += 1; return r.fulfill({ json: { ok: true, started: true } }); } return r.fulfill({ json: answer() }); });
     await loginAs(page, 'ph_team');
     await page.goto('/ph');
-    await page.getByText('POIZON Orders').first().click();
+    await page.getByText('POIZON', { exact: true }).first().click();
     await expect(page).toHaveURL(/\/ph\/poizon/);
     const rows = page.locator('[data-poizon-orders] .ebo-table tbody tr');
     await expect(rows).toHaveCount(2);                                         // To ship by default

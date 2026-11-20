@@ -1,6 +1,8 @@
 # POIZON Orders — watch the orders, print the pick list
 
 Page: `/ph/poizon` (PH), `/poizon` (admin). Screen `src/screens/PoizonOrders.jsx`. Added 2026-11-17.
+Since 2026-11-21 the page is **POIZON** with two sections: **Orders** (this file, the default) and
+**Prices** (`?section=reprice`, `poizon-reprice.md`). `PoizonOrders` is the shell with the tabs.
 **Read-only**: nothing here writes to Shopify or POIZON. It shows every POIZON order and where it
 stands, and makes the same 4 × 6 in pick list eBay and SHEIN use (`src/lib/pickList.js`,
 `PickListBar`).

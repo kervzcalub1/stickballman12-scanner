@@ -20,7 +20,7 @@ import sharp from 'sharp';
 import { signToken, hashPassword } from '../api/_lib/util.js';
 import {
   ordersFromText, trackingFromText, labelProduct, confusableKeys, matchOurOrder, detailsFromOrder, typedDetails,
-  batchReplyText, periodDays, cancellationsCsv,
+  batchReplyText, periodDays, cancellationsCsv, rowStatus, flagsFor, splitCommand, extractImageFile, pickerKeyboard,
 } from '../src/lib/cancellations.js';
 import { loadEnv, loginAs } from './helpers/auth.js';
 
@@ -38,6 +38,9 @@ const TG_WH = 7710001; const TG_STRANGER = 7710002;
 let pool; let tgFake; let aiFake;
 const sent = [];          // sendMessage bodies
 const docs = [];          // sendDocument multipart bodies
+const edits = [];         // editMessageText bodies
+const answers = [];       // answerCallbackQuery bodies
+let botMsgId = 800_000;   // the fake's message ids
 let nextRead = null;      // what the fake reader answers when no per-picture answer is set
 const readsByWidth = new Map(); // picture width → its answer
 const pictures = new Map(); // file_id → the picture the fake Telegram serves
@@ -82,8 +85,12 @@ test.beforeAll(async () => {
       if (method === 'sendDocument') docs.push(raw);
       res.setHeader('content-type', 'application/json');
       if (method === 'getFile') return res.end(JSON.stringify({ ok: true, result: { file_id: body.file_id, file_path: `photos/${body.file_id}.jpg`, file_size: 1000 } }));
-      if (method === 'sendMessage') sent.push(body);
-      return res.end(JSON.stringify({ ok: true, result: { message_id: 1, chat: { id: body.chat_id } } }));
+      // Every message the bot sends gets its own id (a tap and "Void Batch" find their photos
+      // by the message they are on); edits and button answers are kept to assert on.
+      if (method === 'sendMessage') { body.message_id = ++botMsgId; sent.push(body); }
+      if (method === 'editMessageText') edits.push(body);
+      if (method === 'answerCallbackQuery') answers.push(body);
+      return res.end(JSON.stringify({ ok: true, result: { message_id: body.message_id || 1, chat: { id: body.chat_id } } }));
     });
   });
   aiFake = http.createServer((req, res) => {
@@ -137,10 +144,10 @@ test.afterAll(async () => {
 
 let msgId = 50_000;
 const GROUP = -100555;   // playwright.config TELEGRAM_CANCEL_CHAT_ID
-const tap = (request, from, chat, data) => request.post('/api/telegram/webhook', {
+const tap = (request, from, chat, data, on = {}) => request.post('/api/telegram/webhook', {
   headers: { 'x-telegram-bot-api-secret-token': SECRET },
   data: { update_id: ++msgId, callback_query: { id: `cq${msgId}`, data, from: { id: from },
-    message: { message_id: 1, chat: chat ? { id: chat, type: 'supergroup' } : { id: from, type: 'private' } } } },
+    message: { message_id: on.message_id || 1, ...(on.text ? { text: on.text } : {}), chat: chat ? { id: chat, type: 'supergroup' } : { id: from, type: 'private' } } } },
 });
 // Sends one update; resolves to the message_id it carried.
 const hook = async (request, message) => {
@@ -224,15 +231,35 @@ test('the batch reply: one list per platform, then what needs a person', () => {
     { n: 3, rows: [{ platform: 'alias', order_number: null }] },
     { n: 4, rows: [], dupes: [{ order_number: '300000001', existing: { id: 12, sent_by: 'Karon' } }] },
     { n: 5, error: 'could not download the picture (HTTP 500)' },
-  ])).toBe([
+  ], { link: 'https://app.example/cancellations' })).toBe([
     'Alias · 2 orders recorded',
-    "1. #206557037 — Nike Free Run 5.0 'Phantom Sail' · CZ1884-010 · size 8.5",
-    '2. #176889923 — DQ4071-001 · size 9.5 (read as 176889923)',
+    "[OK] #206557037 — Nike Free Run 5.0 'Phantom Sail' · CZ1884-010 · size 8.5",
+    '[CHECK] #176889923 — DQ4071-001 · size 9.5 (read as 176889923)',
     '',
-    "⚠️ Photo 3: no order number found — it's kept with the photo. Type it: /alias 123456789 (it fills that photo's row)",
-    '⚠️ Photo 5: not saved (could not download the picture (HTTP 500)) — send it again.',
+    "[MISSED] Photo 3: no order number found — re-snap it, or type it: /alias 123456789 (it fills that photo's row)",
+    '[MISSED] Photo 5: not saved (could not download the picture (HTTP 500)) — send it again.',
     '↩️ #300000001 is already logged as #12 by Karon — not added again',
+    '',
+    'Check them, or + Add by hand: https://app.example/cancellations',
   ].join('\n'));
+  // [OK] = both reads agreed or it is one of our orders; [CHECK] = a person compares it with
+  // the photo; nothing to look at → no link.
+  expect(rowStatus({ order_number: '1', flags: [] })).toEqual({ tag: 'OK', why: null });
+  expect(rowStatus({ order_number: '1', flags: ['low_confidence', 'reads_disagree'] })).toEqual({ tag: 'CHECK', why: 'reads disagreed' });
+  expect(rowStatus({ order_number: '1', flags: ['tie_break'] })).toEqual({ tag: 'CHECK', why: 'a third read decided' });
+  expect(rowStatus({ order_number: null })).toEqual({ tag: 'MISSED', why: null });
+  expect(flagsFor({ order_number: '206557037', platform: 'alias' }, { confidence: 0.99, agreed: true, byThird: true })).toEqual(['tie_break']);
+  expect(batchReplyText([{ n: null, rows: [{ platform: 'alias', order_number: '206557037', flags: [] }] }], { link: 'x' }))
+    .toBe('Alias · 1 order recorded\n[OK] #206557037 — no shoe details found');
+  // Commands: "/alias@Bot" in a group is "/alias"; what follows is the note.
+  expect(splitCommand('/alias@StickballBot wrong size')).toEqual({ cmd: '/alias', platform: 'alias', rest: 'wrong size' });
+  expect(splitCommand('/goat')).toEqual({ cmd: '/goat', platform: null, rest: '' });
+  // The picture: the largest compressed size, or an image sent "as a file" (uncompressed).
+  expect(extractImageFile({ photo: [{ file_id: 's', width: 90, height: 60 }, { file_id: 'L', width: 1280, height: 960 }, { file_id: 'm', width: 320, height: 240 }] }))
+    .toMatchObject({ fileId: 'L', uncompressed: false });
+  expect(extractImageFile({ document: { file_id: 'D', mime_type: 'image/png' } })).toMatchObject({ fileId: 'D', uncompressed: true });
+  expect(extractImageFile({ document: { file_id: 'D', mime_type: 'application/pdf' } })).toBe(null);
+  expect(pickerKeyboard().map((r) => r.map((b) => b.text))).toEqual([['Alias', 'StockX', 'eBay', 'SHEIN'], ['TikTok', 'Temu', 'SG', 'KC']]);
   // EST days for the page's periods.
   expect(periodDays('today', '2026-03-01')).toEqual({ from: '2026-03-01', to: '2026-03-01' });
   expect(periodDays('yesterday', '2026-03-01')).toEqual({ from: '2026-02-28', to: '2026-02-28' });
@@ -261,13 +288,17 @@ test('separate photos sent together → ONE reply, under the first photo, listin
   await new Promise((r) => setTimeout(r, 2500));                       // …and nothing else comes
   expect(saidTo(TG_WH)).toHaveLength(1);
   expect(saidTo(TG_WH)[0].reply_parameters.message_id).toBe(first);
-  expect(said).toBe([
+  // (The last line is where to check them: a link when APP_BASE_URL is set, the words otherwise.)
+  expect(said.split('\n').slice(0, 5).join('\n')).toBe([
     '[dev] Alias · 2 orders recorded',
-    `1. #${a} — Nike Dunk Low 'Panda' · DD1391-100 · size 9.5`,
-    `2. #${b} — no shoe details found`,
+    `[OK] #${a} — Nike Dunk Low 'Panda' · DD1391-100 · size 9.5`,
+    `[OK] #${b} — no shoe details found`,
     '',
-    "⚠️ Photo 3: no order number found (the reader did not answer (HTTP 500)) — it's kept with the photo. Type it: /alias 123456789 (it fills that photo's row)",
+    "[MISSED] Photo 3: no order number found (the reader did not answer (HTTP 500)) — re-snap it, or type it: /alias 123456789 (it fills that photo's row)",
   ].join('\n'));
+  expect(said).toMatch(/\n\nCheck them, or \+ Add by hand/);
+  // The summary carries the way out for a batch sent on the wrong platform.
+  expect(saidTo(TG_WH)[0].reply_markup.inline_keyboard.flat().map((x) => x.callback_data)).toEqual(['cxvoid']);
   const rows =(await list(request)).rows.filter((r) => r.sent_by === WH.name);
   expect(rows.find((r) => r.order_number === a)).toMatchObject({ status: 'to_review', platform: 'alias', product: "Nike Dunk Low 'Panda'", details_from: 'label' });
   const blank = rows.find((r) => !r.order_number && r.platform === 'alias');
@@ -377,7 +408,7 @@ test('an eBay label with no order number is matched by its tracking number — t
   pictures.set(fileId, await sharp(await page.screenshot()).jpeg({ quality: 85 }).toBuffer());
   nextRead = 'fail';
   await hook(request, photo(TG_WH, fileId, '/ebay'));
-  expect(await lastSaid(TG_WH)).toBe(`[dev] eBay · 1 order recorded\n1. #${ebayNo} — Air Jordan 4 'Bred Reimagined' · size 11 (found by its tracking number)`);
+  expect(await lastSaid(TG_WH)).toBe(`[dev] eBay · 1 order recorded\n[OK] #${ebayNo} — Air Jordan 4 'Bred Reimagined' · size 11 (found by its tracking number)`);
   expect(prompts).toHaveLength(0);
   expect((await list(request)).rows.find((r) => r.order_number === ebayNo)).toMatchObject({ order_match: 'ebay', platform: 'ebay' });
   await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
@@ -400,7 +431,9 @@ test('a printed Alias label is read on our own server — number, SKU, size and 
   pictures.set(fileId, await sharp(await page.screenshot()).jpeg({ quality: 85 }).toBuffer());
   nextRead = 'fail';   // were the AI asked, the row would come out unreadable
   await hook(request, photo(TG_WH, fileId, '/alias customer asked'));
-  expect(await lastSaid(TG_WH)).toBe(`[dev] Alias · 1 order recorded\n1. #${num} — Nike Air Max 90 'Anthracite Team Red' · DQ4071-001 · size 9.5`);
+  // [OK] when the first two reads agree; [CHECK] when a third read had to decide (it does on
+  // some CI fonts) — the number, the shoe, the SKU and the size are the same either way.
+  expect(await lastSaid(TG_WH)).toMatch(new RegExp(`^\\[dev\\] Alias · 1 order recorded\\n\\[(OK|CHECK)\\] #${num} — Nike Air Max 90 'Anthracite Team Red' · DQ4071-001 · size 9\\.5`));
   const row = (await list(request)).rows.find((r) => r.order_number === num);
   expect(row).toMatchObject({ platform: 'alias', sku: 'DQ4071-001', size: 'US M 9.5', reason: 'customer asked', details_from: 'label' });
   expect(prompts).toHaveLength(0);
@@ -421,7 +454,7 @@ test('a style code with no name on the photo is named from our catalogue; a type
   await q(`INSERT INTO products (sku, size, name, source) VALUES ('ZX9911-001', '9', 'E2E Cx Catalogue Shoe', 'e2e-cx')`);
   const n = `9911${s}8`;
   await hook(request, { from: TG_WH, body: { text: `/alias ${n} ZX9911 001 9 - wrong size` } });
-  expect(await lastSaid(TG_WH)).toBe(`[dev] Alias · 1 order recorded\n1. #${n} — E2E Cx Catalogue Shoe · ZX9911-001 · size 9`);
+  expect(await lastSaid(TG_WH)).toBe(`[dev] Alias · 1 order recorded\n[OK] #${n} — E2E Cx Catalogue Shoe · ZX9911-001 · size 9`);
   expect((await list(request)).rows.find((r) => r.order_number === n)).toMatchObject({ source: 'typed', reason: 'wrong size', details_from: 'typed,catalogue' });
   await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
 });
@@ -430,8 +463,8 @@ test('two reads that disagree still record the number, with what the second read
   sent.length = 0;
   const a = `9911${String(Date.now()).slice(-6)}`; const b = `${a.slice(0, -1)}${(Number(a.at(-1)) + 1) % 10}`;
   const f = await picture(`cx-d-${a}`, [read({ platform: 'alias', order_number: a, confidence: 0.98 }), read({ platform: 'alias', order_number: b, confidence: 0.98 })]);
-  await hook(request, photo(TG_WH, f));
-  expect(await lastSaid(TG_WH)).toContain(`#${a}`);
+  await hook(request, photo(TG_WH, f, '/alias'));
+  expect(await lastSaid(TG_WH)).toContain(`[CHECK] #${a} — no shoe details found (reads disagreed)`);
   const row = (await list(request)).rows.find((r) => r.order_number === a);
   expect(row.note).toBe(`Second read said ${b}`);
 });
@@ -439,15 +472,15 @@ test('two reads that disagree still record the number, with what the second read
 test('an AI account with no credit left is said plainly, and the photo is still recorded', async ({ request }) => {
   sent.length = 0;
   const f = await picture(`cx-quota-${Date.now()}`, 'quota');
-  await hook(request, photo(TG_WH, f));
-  expect(await lastSaid(TG_WH)).toMatch(/This photo: no order number found \(the AI reader is out of credit \(OpenAI billing\) — tell an admin\)/);
+  await hook(request, photo(TG_WH, f, '/alias'));
+  expect(await lastSaid(TG_WH)).toMatch(/\[MISSED\] This photo: no order number found \(the AI reader is out of credit \(OpenAI billing\) — tell an admin\)/);
 });
 
 test('a stranger is told to connect; a by-hand add refuses a duplicate; a removed number may come back', async ({ request }) => {
   sent.length = 0;
   const n = `${String(Date.now()).slice(-8)}-${String(Date.now()).slice(-8)}`;
   await hook(request, { from: TG_WH, body: { text: `${n} - customer asked` } });
-  expect(await lastSaid(TG_WH)).toMatch(new RegExp(`StockX · 1 order recorded\\n1\\. #${n}`));
+  expect(await lastSaid(TG_WH)).toMatch(new RegExp(`StockX · 1 order recorded\\n\\[OK\\] #${n}`));
   const row = (await list(request)).rows.find((r) => r.order_number === n);
   expect(row).toMatchObject({ platform: 'stockx', source: 'typed', reason: 'customer asked', photo_id: null });
 
@@ -473,15 +506,15 @@ test('/sg in the caption names the platform (over the reader\'s guess); /kc firs
   sent.length = 0; prompts.length = 0;
   const n = `9911${String(Date.now()).slice(-7)}`;
   await hook(request, photo(TG_WH, await picture(`cx-sg-${n}`, read({ platform: 'stockx', order_number: n })), '/sg box damaged'));
-  expect(await lastSaid(TG_WH)).toMatch(new RegExp(`Stadium Goods · 1 order recorded\\n1\\. #${n}`));
+  expect(await lastSaid(TG_WH)).toMatch(new RegExp(`Stadium Goods · 1 order recorded\\n\\[OK\\] #${n}`));
   expect(prompts.some((p) => p.includes('The sender says these orders are from Stadium Goods'))).toBe(true);
   expect((await list(request)).rows.find((r) => r.order_number === n)).toMatchObject({ platform: 'sg', reason: 'box damaged' });
 
   await hook(request, { from: TG_WH, body: { text: '/kc' } });
-  expect(await lastSaid(TG_WH, 2)).toMatch(/Kicks Crew — send the photo\(s\) now/);
+  expect(await lastSaid(TG_WH, 2)).toMatch(/Kicks Crew mode on for 90 s — send your photos/);
   const n1 = `9911${String(Date.now()).slice(-7)}1`;
   await hook(request, photo(TG_WH, await picture(`cx-kc-${n1}`, read({ order_number: n1 }))));
-  expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`Kicks Crew · 1 order recorded\\n1\\. #${n1}`));
+  expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`Kicks Crew · 1 order recorded\\n\\[OK\\] #${n1}`));
 
   const before = (await list(request)).rows.length;
   await hook(request, photo(TG_WH, await picture(`cx-unk-${n1}`), '/goat'));
@@ -502,15 +535,108 @@ test('the cancellations group: photos and commands are recorded, chatter (even a
 
   // "/alias@Bot" then a photo — Telegram appends the bot's name to a command in a group.
   await hook(request, { from: TG_WH, chat: GROUP, body: { text: '/alias@StickballBot' } });
-  expect(await lastSaid(GROUP)).toMatch(/Alias — send the photo/);
+  expect(await lastSaid(GROUP)).toMatch(/Alias mode on for 90 s — send your photos/);
   const pid = await hook(request, { from: TG_WH, chat: GROUP, body: { photo: [{ file_id: await picture(`cx-grp-${n}`, read({ order_number: n })) }] } });
-  expect(await lastSaid(GROUP, 2)).toMatch(new RegExp(`Alias · 1 order recorded\\n1\\. #${n}`));
+  expect(await lastSaid(GROUP, 2)).toMatch(new RegExp(`Alias · 1 order recorded\\n\\[OK\\] #${n}`));
   expect(saidTo(GROUP).at(-1).reply_parameters.message_id).toBe(pid);
   expect((await list(request)).rows.find((r) => r.order_number === n)).toMatchObject({ platform: 'alias', sent_by: WH.name });
 
   // Someone in the group who isn't connected is told how.
   await hook(request, { from: TG_STRANGER, chat: GROUP, body: { photo: [{ file_id: 'cx-grp-stranger' }], caption: '/ebay' } });
   expect(await lastSaid(GROUP, 3)).toMatch(/connect this chat first/);
+});
+
+// ── The forgiving flows (2026-11-20) ────────────────────────────────────────────────
+test('photos with no platform wait for a tap: ONE question, the pick files them into that message, Void Batch takes the rows back', async ({ request }) => {
+  await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
+  sent.length = 0; edits.length = 0; answers.length = 0;
+  const s = String(Date.now()).slice(-6);
+  const a = `9911${s}7`; const b = `9911${s}8`;
+  const f1 = await picture(`cx-pk1-${s}`, read({ order_number: a }));
+  const f2 = await picture(`cx-pk2-${s}`, read({ order_number: b }));
+  const first = await hook(request, photo(TG_WH, f1));
+  await hook(request, photo(TG_WH, f2));
+  // One question for both, under the first photo, with the eight platforms; nothing recorded.
+  await lastSaid(TG_WH);
+  await new Promise((r) => setTimeout(r, 2500));
+  expect(saidTo(TG_WH)).toHaveLength(1);
+  const ask = saidTo(TG_WH)[0];
+  expect(ask.text).toMatch(/^\[dev\] 2 photos from E2E Cx Warehouse — which platform\?/);
+  expect(ask.reply_parameters.message_id).toBe(first);
+  expect(ask.reply_markup.inline_keyboard.map((r) => r.map((x) => x.callback_data))).toEqual([
+    ['cxpick:alias', 'cxpick:stockx', 'cxpick:ebay', 'cxpick:shein'], ['cxpick:tiktok', 'cxpick:temu', 'cxpick:sg', 'cxpick:kc']]);
+  expect((await list(request)).rows.some((r) => [a, b].includes(r.order_number))).toBe(false);
+
+  // Someone who isn't connected can't pick for them.
+  await tap(request, TG_STRANGER, null, 'cxpick:alias', { message_id: ask.message_id });
+  await expect.poll(() => answers.at(-1)?.text || '').toMatch(/Connect this Telegram first/);
+
+  // The tap: read as Alias, and the question itself becomes the summary — no second message.
+  await tap(request, TG_WH, null, 'cxpick:alias', { message_id: ask.message_id });
+  const summary = () => edits.filter((e) => e.message_id === ask.message_id).at(-1) || {};
+  await expect.poll(() => summary().text || '', { timeout: 20_000 }).toBe(
+    `[dev] Alias · 2 orders recorded\n[OK] #${a} — no shoe details found\n[OK] #${b} — no shoe details found`);
+  expect(summary().reply_markup.inline_keyboard.flat().map((x) => x.callback_data)).toEqual(['cxvoid']);
+  expect(saidTo(TG_WH)).toHaveLength(1);
+  expect((await list(request)).rows.filter((r) => [a, b].includes(r.order_number)).map((r) => r.platform)).toEqual(['alias', 'alias']);
+
+  // An old button (a second tap) files nothing twice and says why.
+  await tap(request, TG_WH, null, 'cxpick:stockx', { message_id: ask.message_id });
+  await expect.poll(() => answers.at(-1)?.text || '').toMatch(/already logged/);
+  expect((await list(request)).rows.filter((r) => [a, b].includes(r.order_number))).toHaveLength(2);
+
+  // Void Batch: both rows leave the record (kept as removed), the message says who did it.
+  await tap(request, TG_WH, null, 'cxvoid', { message_id: ask.message_id, text: summary().text });
+  await expect.poll(async () => (await list(request)).rows.filter((r) => [a, b].includes(r.order_number)).length).toBe(0);
+  await expect.poll(() => summary().text || '').toMatch(/VOIDED by E2E Cx Warehouse — 2 rows removed from the record/);
+  expect((await q(`SELECT status, rejected_reason FROM cancellations WHERE order_number = $1`, [a]))[0])
+    .toMatchObject({ status: 'rejected', rejected_reason: 'Batch voided on Telegram (wrong platform, or sent by mistake)' });
+  await tap(request, TG_WH, null, 'cxvoid', { message_id: ask.message_id });
+  await expect.poll(() => answers.at(-1)?.text || '').toMatch(/already voided/);
+});
+
+test('the note after a command rides on every photo; an image sent "as a file" is read; photos sent first are filed by the command that follows', async ({ request }) => {
+  await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
+  sent.length = 0; edits.length = 0;
+  const s = String(Date.now()).slice(-6);
+  const a = `9911${s}4`; const b = `9911${s}0`;
+  // "/temu wrong size shipped" has no order number in it: it is a note, and Temu is on.
+  await hook(request, { from: TG_WH, body: { text: '/temu wrong size shipped' } });
+  expect(await lastSaid(TG_WH)).toMatch(/Temu mode on for 90 s — send your photos[\s\S]*Note on each: "wrong size shipped"/);
+  const fa = await picture(`cx-doc-${s}`, read({ order_number: a }));
+  await hook(request, { from: TG_WH, body: { document: { file_id: fa, mime_type: 'image/jpeg', file_name: 'label.jpg' } } });
+  expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`Temu · 1 order recorded\\n\\[OK\\] #${a}`));
+  expect((await list(request)).rows.find((r) => r.order_number === a)).toMatchObject({ platform: 'temu', reason: 'wrong size shipped' });
+  expect((await q('SELECT as_file FROM cancellation_photos WHERE tg_file_id = $1', [fa]))[0].as_file).toBe(true);
+
+  // A photo first (it is asked about), then the command instead of a tap: filed by the command.
+  await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
+  sent.length = 0; edits.length = 0;
+  await hook(request, photo(TG_WH, await picture(`cx-late-${s}`, read({ order_number: b }))));
+  await lastSaid(TG_WH);
+  const askId = saidTo(TG_WH)[0].message_id;
+  await hook(request, { from: TG_WH, body: { text: '/kc' } });
+  expect(await lastSaid(TG_WH, 2)).toMatch(/Kicks Crew — reading the photo you already sent/);
+  await expect.poll(() => edits.filter((e) => e.message_id === askId).at(-1)?.text || '', { timeout: 20_000 })
+    .toMatch(new RegExp(`Kicks Crew · 1 order recorded\\n\\[OK\\] #${b}`));
+  expect((await list(request)).rows.find((r) => r.order_number === b)).toMatchObject({ platform: 'kc' });
+  await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
+});
+
+test('a question nobody answers: the sweep files those photos with no platform, into the question', async () => {
+  sent.length = 0; edits.length = 0;
+  const { sweepCancellationPhotos } = await import('../api/_lib/cancellations.js');
+  const s = String(Date.now()).slice(-6);
+  await picture(`cx-exp-${s}`);
+  const [{ id }] = await q(`INSERT INTO cancellation_photos (tg_chat_id, tg_message_id, tg_file_id, sent_by_user_id, sent_by, held_at, prompt_message_id, created_at)
+    VALUES ($1, $2, $3, $4, $5, now() - interval '11 minutes', 777001, now() - interval '11 minutes') RETURNING id`,
+  [TG_WH, 991000 + Number(s.slice(-3)), `cx-exp-${s}`, whUid, WH.name]);
+  expect(await sweepCancellationPhotos()).toMatchObject({ reread: 1, answered: 1 });
+  expect((await q('SELECT held_at, read_status, reply_message_id FROM cancellation_photos WHERE id = $1', [id]))[0])
+    .toMatchObject({ held_at: null, read_status: 'nothing', reply_message_id: '777001' });
+  expect(edits.at(-1)).toMatchObject({ message_id: 777001 });
+  expect(edits.at(-1).text).toMatch(/\[MISSED\] This photo: no order number found/);
+  expect(saidTo(TG_WH)).toHaveLength(0);
 });
 
 test('a failure before the read is answered, not silent', async ({ request }) => {
@@ -544,7 +670,7 @@ test('a restart mid-batch: the sweep re-reads what never finished and answers on
   expect(out).toMatchObject({ reread: 1, answered: 1 });
   expect(saidTo(TG_WH)).toHaveLength(1);
   expect(saidTo(TG_WH)[0].reply_parameters.message_id).toBe(990000 + Number(s.slice(-3)));
-  expect(saidTo(TG_WH)[0].text).toMatch(new RegExp(`Alias · 1 order recorded\\n1\\. #9911${s}9[\\s\\S]*Photo 2: no order number found`));
+  expect(saidTo(TG_WH)[0].text).toMatch(new RegExp(`Alias · 1 order recorded\\n\\[OK\\] #9911${s}9[\\s\\S]*Photo 2: no order number found`));
   // A second sweep finds nothing to say.
   expect(await sweepCancellationPhotos()).toMatchObject({ reread: 0, answered: 0 });
   expect(saidTo(TG_WH)).toHaveLength(1);

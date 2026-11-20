@@ -39,15 +39,17 @@ if (cmd === 'set') {
   console.log(out.ok ? `Bot now posts to ${url}` : `Refused: ${out.description}`);
   if (!out.ok) process.exit(1);
 } else if (cmd === 'commands') {
-  const { BOT_COMMANDS } = await import('../api/_lib/cancellations.js');
-  const commands = [...BOT_COMMANDS, { command: 'help', description: 'How to log an order to cancel' }];
-  // Private chats, and the cancellations group if there is one — never the approval group.
-  const group = String(process.env.TELEGRAM_CANCEL_CHAT_ID || '').trim();
-  for (const scope of [{ type: 'all_private_chats' }, ...(group ? [{ type: 'chat', chat_id: Number(group) }] : [])]) {
-    const out = await call('setMyCommands', { commands, scope });
-    console.log(out.ok ? `Menu set for ${scope.type}${scope.chat_id ? ` ${scope.chat_id}` : ''}: ${commands.map((c) => `/${c.command}`).join(' ')}` : `Refused (${scope.type}): ${out.description}`);
-    if (!out.ok) process.exit(1);
-  }
+  // The same list and scopes the server sets by itself when it starts (registerBotCommands):
+  // private chats, and the cancellations group if there is one — never the approval group.
+  const { registerBotCommands } = await import('../api/_lib/cancellations.js');
+  try {
+    const out = await registerBotCommands(async (method, params) => {
+      const r = await call(method, params);
+      if (!r.ok) throw new Error(`Refused (${params.scope?.type}): ${r.description}`);
+      return r.result;
+    });
+    console.log(`Menu set for ${out.scopes.join(', ')}: ${out.commands.join(' ')}`);
+  } catch (e) { console.error(e.message); process.exit(1); }
 } else if (cmd === 'delete') {
   const out = await call('deleteWebhook');
   console.log(out.ok ? 'Webhook removed.' : `Refused: ${out.description}`);

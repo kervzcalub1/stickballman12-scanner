@@ -11,9 +11,38 @@
 //
 // Production only by default (dev and prod share one Telegram bot); CANCEL_REPLY_WORKER
 // =on / =off overrides.
-import { sweepCancellationPhotos } from './cancellations.js';
+import { sweepCancellationPhotos, registerBotCommands } from './cancellations.js';
+import { telegramConfigured } from './telegram.js';
 
 const TICK_MS = 60 * 1000;
+
+// The bot's "/" menu (/alias, /stockx … /msg, /report), set every time the server starts, so
+// a phone offers the platforms the moment someone types "/" and a new platform in PLATFORMS
+// reaches the menu with the deploy that adds it. Production only by default (dev and prod
+// share the bot, and the menu is the same either way); TELEGRAM_SET_COMMANDS=on / =off
+// overrides. A failure is logged and tried again a few times — never fatal: the commands
+// work whether or not the menu lists them.
+export function botCommandsAtStartEnabled(env = process.env) {
+  const flag = String(env.TELEGRAM_SET_COMMANDS || '').trim().toLowerCase();
+  if (flag === 'on') return true;
+  if (flag === 'off') return false;
+  return String(env.RAILWAY_ENVIRONMENT_NAME || '').trim().toLowerCase() === 'production';
+}
+let commandsStarted = false;
+export function registerBotCommandsAtStart() {
+  if (commandsStarted || !botCommandsAtStartEnabled() || !telegramConfigured()) return;
+  commandsStarted = true;
+  const attempt = async (n) => {
+    try {
+      const out = await registerBotCommands();
+      console.log(`[cancellations] bot menu set for ${out.scopes.join(', ')}: ${out.commands.join(' ')}`);
+    } catch (e) {
+      console.error(`[cancellations] bot menu not set (try ${n}): ${e.message}`);
+      if (n < 4) setTimeout(() => attempt(n + 1), n * 60_000).unref?.();
+    }
+  };
+  setTimeout(() => attempt(1), 5_000).unref?.();
+}
 
 export function cancellationsWorkerEnabled(env = process.env) {
   const flag = String(env.CANCEL_REPLY_WORKER || '').trim().toLowerCase();

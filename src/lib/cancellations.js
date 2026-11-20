@@ -32,6 +32,38 @@ export function platformFromCommand(word) {
 }
 const BY_KEY = Object.fromEntries(PLATFORMS.map((p) => [p.key, p]));
 export const platformLabel = (k) => BY_KEY[k]?.label || (k ? String(k) : '');
+// The picker's buttons (a photo sent with no platform): two rows of four, in the order the
+// floor uses them most, with names short enough for four across on a phone.
+const SHORT = { tiktok: 'TikTok', sg: 'SG', kc: 'KC' };
+export const platformShort = (k) => SHORT[k] || platformLabel(k);
+export const PICKER_ROWS = [['alias', 'stockx', 'ebay', 'shein'], ['tiktok', 'temu', 'sg', 'kc']];
+/** The "Which platform?" keyboard. One tap = `cxpick:<platform>`; the message tapped says which photos. */
+export const pickerKeyboard = () => PICKER_ROWS.map((row) => row.map((k) => ({ text: platformShort(k), callback_data: `cxpick:${k}` })));
+/** "/alias wrong size" → { cmd:'/alias', platform:'alias', rest:'wrong size' }; "/alias@Bot" is the same command. No command → cmd null. */
+export function splitCommand(text) {
+  const m = /^\s*(\/[A-Za-z]+(?:@\w+)?)\s*([\s\S]*)$/.exec(String(text || ''));
+  if (!m) return { cmd: null, platform: null, rest: String(text || '').trim() };
+  return { cmd: m[1].replace(/@\w+$/, '').toLowerCase(), platform: platformFromCommand(m[1]), rest: m[2].trim() };
+}
+/**
+ * The picture in a Telegram message, at its best: the largest size of a compressed photo, or
+ * an image sent with "Send as File" (uncompressed — what the floor uses for small print).
+ * → { fileId, uncompressed, width, height, bytes } or null when the message carries no image.
+ */
+export function extractImageFile(msg) {
+  const sizes = Array.isArray(msg?.photo) ? msg.photo.filter((p) => p?.file_id) : [];
+  if (sizes.length) {
+    // Telegram lists the sizes smallest first; pick by area rather than trust the order.
+    const score = (p) => (Number(p.width) || 0) * (Number(p.height) || 0) || Number(p.width) || Number(p.file_size) || 0;
+    const best = sizes.reduce((a, b) => (score(b) >= score(a) ? b : a));
+    return { fileId: best.file_id, uncompressed: false, width: best.width ?? null, height: best.height ?? null, bytes: best.file_size ?? null };
+  }
+  const d = msg?.document;
+  if (d?.file_id && /^image\//i.test(String(d.mime_type || ''))) {
+    return { fileId: d.file_id, uncompressed: true, width: null, height: null, bytes: d.file_size ?? null };
+  }
+  return null;
+}
 export const isPlatform = (k) => !!BY_KEY[k];
 
 // The status column no longer drives anything (2026-11-12): new rows keep 'to_review', the
@@ -54,6 +86,7 @@ export const FLAGS = {
   low_confidence: 'The reader was not sure — compare with the photo',
   reads_disagree: 'Two reads of the photo gave different numbers — check every digit',
   unchecked: 'Only one read of the photo worked — check every digit',
+  tie_break: 'The first two reads disagreed and a third decided — check every digit',
   unclear: 'The order number was hard to read on the photo',
   submit_failed: 'Cancelling on the platform failed — see the note',
 };
@@ -89,6 +122,8 @@ export function flagsFor(row, ai = null) {
     // readTwice: the second, independent read did not find this same number.
     if (key && ai.agreed === false) f.push('reads_disagree');
     if (key && ai.agreed === null) f.push('unchecked');
+    // settleWithThird: two of three reads agreed — right far more often than not, still a look.
+    if (key && ai.byThird) f.push('tie_break');
     // Only a doubt about what gets CANCELLED counts — a blurred SKU or size on a clear
     // order number is not a reason to make someone re-check the number.
     if (key && Array.isArray(ai.unclear) && ai.unclear.some((x) => /order|number|platform/i.test(x))) f.push('unclear');
@@ -343,34 +378,64 @@ export const DETAILS_FROM = {
 export const detailsFromLabel = (v) => String(v || '').split(',').map((k) => DETAILS_FROM[k.trim()] || k.trim()).filter(Boolean).join(' + ');
 
 // ── The bot's answer: ONE message per batch of photos, as a reply to the first ─────────
+// Every line starts with what a person has to do about it (2026-11-20):
+//   [OK]      nothing — both reads agreed, or it is one of OUR orders
+//   [CHECK]   compare with the photo — the reads disagreed, a third read decided, only one read
+//             worked, a character was put right, or the number doesn't look like the platform's
+//   [MISSED]  no order number came off that photo (or the photo wasn't saved)
 // e.g.
 //   Alias · 2 orders recorded
-//   1. #206557037 — Nike Free Run 5.0 'Phantom Sail' · CZ1884-010 · size 8.5
-//   2. #176889923 — DQ4071-001 · size 9.5
+//   [OK] #206557037 — Nike Free Run 5.0 'Phantom Sail' · CZ1884-010 · size 8.5
+//   [CHECK] #176889923 — DQ4071-001 · size 9.5 (reads disagreed)
 //
-//   ⚠️ Photo 3: no order number found — it's kept with the photo. Type it: /alias 123456789 (it fills that photo's row)
+//   [MISSED] Photo 3: no order number found — re-snap it, or type it: /alias 123456789 (it fills that photo's row)
 //   ↩️ #206557037 is already logged as #12 by Karon — not added again
+//
+//   Check them: https://…/cancellations
 const sizeWord = (v) => (v ? `size ${shortSize(v)}` : null);
+const CHECK_WHY = [
+  ['reads_disagree', 'reads disagreed'], ['unchecked', 'only one read worked'], ['tie_break', 'a third read decided'],
+  ['unclear', 'hard to read'], ['low_confidence', 'the reader was not sure'],
+  ['short_number', 'number looks too short'], ['format', "doesn't look like this platform's numbers"],
+];
+/**
+ * What a recorded row needs from a person → { tag: 'OK' | 'CHECK' | 'MISSED', why }.
+ * A row matched to one of our own orders carries no reader flags (flagsFor is called without
+ * the read), so it is OK unless a character had to be put right to match it (`read_as`).
+ */
+export function rowStatus(r) {
+  if (!r?.order_number) return { tag: 'MISSED', why: null };
+  if (r.read_as) return { tag: 'CHECK', why: `read as ${r.read_as}` };
+  const flags = Array.isArray(r.flags) ? r.flags : [];
+  const hit = CHECK_WHY.find(([k]) => flags.includes(k));
+  return hit ? { tag: 'CHECK', why: hit[1] } : { tag: 'OK', why: null };
+}
 export function orderLine(r) {
   const what = [r.product, r.sku, sizeWord(r.size)].filter(Boolean).join(' · ');
-  const read = r.read_as ? ` (read as ${r.read_as})` : '';
+  const s = rowStatus(r);
+  const why = s.why ? ` (${s.why})` : '';
   const how = r.by_tracking ? ' (found by its tracking number)' : '';
-  return `#${String(r.order_number).replace(/^#+/, '')} — ${what || 'no shoe details found'}${read}${how}`;
+  return `[${s.tag}] #${String(r.order_number).replace(/^#+/, '')} — ${what || 'no shoe details found'}${why}${how}`;
 }
 const cmdOf = (k) => `/${BY_KEY[k]?.cmd || 'alias'}`;
 /**
  * `photos` = [{ n, rows, dupes:[{ order_number, existing:{ id, sent_by } }], error, why }] in the
  * order they were sent (n = 1-based position; null for a typed number). Rows with an order
- * number are listed per platform; a row without one is that photo's "no order number" line.
+ * number are listed per platform; a row without one is that photo's [MISSED] line.
+ * `link` = where the Cancellations page is; it is added only when something is [CHECK] or
+ * [MISSED]. → the text; `batchReplyNeedsLook(photos)` says whether anything needs a person.
  */
-export function batchReplyText(photos) {
+export function batchReplyNeedsLook(photos) {
+  return (photos || []).some((p) => p.error || (p.rows || []).some((r) => rowStatus(r).tag !== 'OK'));
+}
+export function batchReplyText(photos, { link = null } = {}) {
   const listed = []; const warn = []; const dup = [];
   for (const p of photos || []) {
     const where = p.n ? `Photo ${p.n}` : 'This photo';
-    if (p.error) { warn.push(`⚠️ ${where}: not saved (${p.error}) — send it again.`); continue; }
+    if (p.error) { warn.push(`[MISSED] ${where}: not saved (${p.error}) — send it again.`); continue; }
     for (const r of p.rows || []) {
       if (r.order_number) listed.push(r);
-      else warn.push(`⚠️ ${where}: no order number found${p.why ? ` (${p.why})` : ''} — it's kept with the photo. Type it: ${cmdOf(r.platform)} 123456789 (it fills that photo's row)`);
+      else warn.push(`[MISSED] ${where}: no order number found${p.why ? ` (${p.why})` : ''} — re-snap it, or type it: ${cmdOf(r.platform)} 123456789 (it fills that photo's row)`);
     }
     for (const d of p.dupes || []) {
       dup.push(`↩️ #${d.order_number} is already logged as #${d.existing?.id}${d.existing?.sent_by ? ` by ${d.existing.sent_by}` : ''} — not added again`);
@@ -382,11 +447,14 @@ export function batchReplyText(photos) {
     if (!mine.length) continue;
     if (out.length) out.push('');
     out.push(`${k ? platformLabel(k) : 'No platform'} · ${mine.length} order${mine.length === 1 ? '' : 's'} recorded`);
-    mine.forEach((r, i) => out.push(`${i + 1}. ${orderLine(r)}`));
+    mine.forEach((r) => out.push(orderLine(r)));
   }
   if (!listed.length) out.push(dup.length && !warn.length ? 'Nothing new recorded.' : 'No orders recorded yet.');
   if (warn.length || dup.length) out.push('', ...warn, ...dup);
   if (listed.some((r) => !isPlatform(r.platform))) out.push('', 'Tip: send the platform first — e.g. /alias, then the photos.');
+  if (batchReplyNeedsLook(photos)) {
+    out.push('', link ? `Check them, or + Add by hand: ${link}` : 'Check them, or + Add by hand, on the Cancellations page.');
+  }
   const text = out.join('\n');
   return text.length > 4000 ? `${text.slice(0, 3990)}\n…` : text;
 }

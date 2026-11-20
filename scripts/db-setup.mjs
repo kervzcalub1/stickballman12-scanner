@@ -3642,8 +3642,27 @@ await sql(`
   )
 `);
 await sql(`CREATE INDEX IF NOT EXISTS cancellation_events_idx ON cancellation_events (cancellation_id, created_at)`);
-// "/alias, then the photos": the platform a chat (key 'chat:<id>') or an album
-// ('album:<media_group_id>') named last, good for 10 minutes (cancellationCtx).
+// The forgiving upload flows (2026-11-20):
+//   as_file           = sent with Telegram's "Send as File" (uncompressed, full resolution)
+//   held_at           = a photo that came with NO platform: waiting for a tap on the picker
+//                       (or a platform command). Cleared compare-and-set by whoever releases it.
+//   prompt_message_id = the bot's "Which platform?" message for it — the tap finds its photos
+//                       by this, and the batch summary is written INTO that message
+//   reply_message_id  = the bot's summary message — "Void Batch" finds the batch by this
+//   voided_at         = the batch was voided from Telegram (its rows are status 'rejected')
+await sql(`ALTER TABLE cancellation_photos ADD COLUMN IF NOT EXISTS as_file BOOLEAN NOT NULL DEFAULT false`);
+await sql(`ALTER TABLE cancellation_photos ADD COLUMN IF NOT EXISTS held_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE cancellation_photos ADD COLUMN IF NOT EXISTS prompt_message_id BIGINT`);
+await sql(`ALTER TABLE cancellation_photos ADD COLUMN IF NOT EXISTS reply_message_id BIGINT`);
+await sql(`ALTER TABLE cancellation_photos ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ`);
+await sql(`CREATE INDEX IF NOT EXISTS cancellation_photos_held_idx
+             ON cancellation_photos (tg_chat_id, held_at) WHERE held_at IS NOT NULL`);
+await sql(`CREATE INDEX IF NOT EXISTS cancellation_photos_reply_idx
+             ON cancellation_photos (tg_chat_id, reply_message_id) WHERE reply_message_id IS NOT NULL`);
+// "/alias, then the photos": the platform a person in a chat (key 'chat:<chat>:<telegram
+// user>') or an album ('album:<media_group_id>') named last, and the note typed after the
+// command ("/ebay wrong size shipped"). Good for 90 seconds, restarted by every photo that
+// uses it (useCancellationCtx).
 await sql(`
   CREATE TABLE IF NOT EXISTS cancellation_tg_ctx (
     key       TEXT PRIMARY KEY,
@@ -3651,6 +3670,7 @@ await sql(`
     set_at    TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
+await sql(`ALTER TABLE cancellation_tg_ctx ADD COLUMN IF NOT EXISTS note TEXT`);
 
 // ── Inbound issues (docs/context/inbound-issues.md) ──────────────────────────────────
 // A problem found at receiving (damaged parcel, short count, wrong / creased pair) used to

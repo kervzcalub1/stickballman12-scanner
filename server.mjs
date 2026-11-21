@@ -196,6 +196,12 @@ if (certPath && keyPath) {
   app.listen(port, () => console.log(`Stickballman12 listening on http://localhost:${port}`));
 }
 
+// Railway's web Console is a login shell whose /etc/profile drops Node off the PATH
+// ("npm: command not found") — put it back for whoever opens the console.
+import('./api/_lib/consolePath.js')
+  .then((m) => m.ensureConsolePath())
+  .catch((e) => console.error('[console-path] failed:', e.message));
+
 // Pre-sell Listings watcher — StockX operations + Alias/StockX sales. Opt-in per
 // environment (PRESELL_WATCH=on): dev and prod share the marketplace accounts, and only
 // one of them may act on a sale (docs/context/presell-listings.md).

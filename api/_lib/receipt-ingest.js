@@ -22,6 +22,19 @@ export const ingestKeyOk = (given) => {
 
 export const ingestConfigured = () => !!String(process.env.RECEIPT_INGEST_KEY || '').trim();
 
+// The message_key a RAW email will be filed under, worked out BEFORE it is parsed, so an email
+// that is already filed never reaches the parser (whose lookups cost Make credits and StockX
+// calls on every pass, and every check re-reads the hour before the last one).
+// It must match what the parser's sweep() builds and normalizeReceiptBody stores:
+// mailbox|folder|<Message-ID without <> and spaces>, else from~subject~date. If the two ever
+// drift, nothing is lost: the email is parsed as before and ON CONFLICT keeps one row.
+// e2e/receipts-check.spec.js pins it. null = nothing to go by.
+export function rawMessageKey(email) {
+  const f = (k) => String(email?.[k] ?? '');
+  const idPart = f('message_id').replace(/[<>\s]/g, '') || [f('from'), f('subject'), f('date')].join('~');
+  return str([f('mailbox'), f('folder'), idPart].join('|').slice(0, 500), 500);
+}
+
 // The ingest body → the row ingestEmailReceipt files. null when it has no message_key.
 export function normalizeReceiptBody(b) {
   const messageKey = str(b.message_key, 500);

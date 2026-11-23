@@ -10560,6 +10560,13 @@ export async function sweepFoldersNearCap(runAt, atLeast) {
      ORDER BY newest NULLS FIRST`;
 }
 
+// Is this email filed already? Asked before parsing (api/receipts/ingest-raw.js).
+export async function emailReceiptIdByKey(messageKey) {
+  if (!messageKey) return null;
+  const rows = await db()`SELECT id FROM email_receipts WHERE message_key = ${messageKey}`;
+  return rows[0] ? Number(rows[0].id) : null;
+}
+
 export async function ingestEmailReceipt(r) {
   const sql = db();
   const rows = await sql`

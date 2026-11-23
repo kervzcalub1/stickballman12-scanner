@@ -12,8 +12,8 @@
 // Form fields, not JSON: Make builds a form body from mapped fields safely, while a JSON body
 // assembled from an email's quotes and newlines by string templating breaks on the first one.
 import { send, applySecurity, rateLimit } from '../_lib/util.js';
-import { dbConfigured, ingestEmailReceipt, getSetting, setSetting, noteSweepEmail } from '../_lib/db.js';
-import { ingestKeyOk, ingestConfigured, normalizeReceiptBody } from '../_lib/receipt-ingest.js';
+import { dbConfigured, ingestEmailReceipt, emailReceiptIdByKey, getSetting, setSetting, noteSweepEmail } from '../_lib/db.js';
+import { ingestKeyOk, ingestConfigured, normalizeReceiptBody, rawMessageKey } from '../_lib/receipt-ingest.js';
 import { parseReceiptEmail } from '../_lib/receipt-parser/index.js';
 
 // A receipt email's HTML is often 100–300 KB; marketing mail can be far bigger. 4 MB is room
@@ -57,6 +57,10 @@ export default async function handler(req, res) {
 
   let outcome = 'error';
   try {
+    // Filed already (every check overlaps the last by an hour, a catch-up re-reads days):
+    // answer before parsing, because parsing also runs the style-code lookups.
+    const filedId = await emailReceiptIdByKey(rawMessageKey(email));
+    if (filedId) { outcome = 'duplicate'; return send(res, 200, { ok: true, id: filedId, duplicate: true, buyerMatched: false }); }
     const out = await parseReceiptEmail(email);
     if (!out?.post) { outcome = `skipped:${out?.skip || 'not_a_receipt'}`; return send(res, 200, { ok: true, skipped: out?.skip || 'not_a_receipt' }); }
     const r = normalizeReceiptBody(out.parsed);

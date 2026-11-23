@@ -71,6 +71,17 @@ test('a raw receipt email is parsed and filed here, under the buyer it was sent 
   expect(first).toMatchObject({ ok: true, duplicate: false, buyerMatched: true });
   const again = await (await raw(request, nikeEmail())).json();   // the next check overlaps
   expect(again).toMatchObject({ ok: true, id: first.id, duplicate: true });
+  // A filed email is answered BEFORE it is parsed (the parser's lookups cost money): the same
+  // Message-ID with a body that is no receipt at all is still "already filed", not "skipped".
+  // This also pins that the key worked out up front is the one the parser files under.
+  const unparsed = await (await raw(request, nikeEmail({ text: 'Shop the latest drops now.' }))).json();
+  expect(unparsed).toMatchObject({ ok: true, id: first.id, duplicate: true });
+  // No Message-ID: the key falls back to from + subject + date, the same way on both sides.
+  const noId = { message_id: '', subject: `Your Nike receipt e2e-rcc-${stamp}` };
+  const bare = await (await raw(request, nikeEmail(noId))).json();
+  expect(bare).toMatchObject({ ok: true, duplicate: false });
+  const bareAgain = await (await raw(request, nikeEmail({ ...noId, text: 'Shop the latest drops now.' }))).json();
+  expect(bareAgain).toMatchObject({ ok: true, id: bare.id, duplicate: true });
 
   const { rows } = await db.query(`SELECT store, order_number, total, buyer_user_id, folder FROM email_receipts WHERE id = $1`, [first.id]);
   expect(rows[0]).toMatchObject({ store: 'nike', order_number: ORDER, buyer_user_id: String(buyerId), folder: '[Gmail]/All Mail' });

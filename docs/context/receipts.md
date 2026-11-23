@@ -84,6 +84,13 @@ to, cc, delivered_to, original_to, message_id; ≤4 MB) → parse → not a rece
 `{skipped}` · else the same normaliser + `ingestEmailReceipt` as `/ingest`
 (`api/_lib/receipt-ingest.js`).
 
+**An email that is already filed is answered before it is parsed** (2026-11-24). Parsing also
+runs the lookups (a Make call per Foot Locker name, a StockX call per Nike UPC), and every check
+re-reads the hour before the last one, a catch-up whole days. So `ingest-raw` works out the
+`message_key` first (`rawMessageKey`, the same formula as the parser's `sweep()`) and returns
+`duplicate` if that row exists. If the two formulas ever drift the email is just parsed as
+before and `ON CONFLICT` still keeps one row; `e2e/receipts-check.spec.js` pins them together.
+
 ### Before — the scheduled sweep (2026-10-06, retired)
 The original design, kept for the record: a scheduled Make scenario parsed each email in a
 code module and POSTed the parsed body to `/api/receipts/ingest`, which still exists and

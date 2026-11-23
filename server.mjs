@@ -256,6 +256,12 @@ import('./api/_lib/gc-read-worker.js')
   .then((m) => m.startCardReadWorker())
   .catch((e) => console.error('[gc-read] failed to start:', e.message));
 
+// Receipt emails — ingest-raw stores each one and answers Make at once; this reads and files
+// them, and picks up what a restart left in the queue (docs/context/receipts.md "The queue").
+import('./api/_lib/receipt-queue.js')
+  .then((m) => m.startReceiptQueueWorker())
+  .catch((e) => console.error('[receipt-queue] failed to start:', e.message));
+
 // Lost Package Tracker — Phase 2 asks FedEx / EasyPost about a month's Lost orders, one at a
 // time, on the server; a restart carries on where it stopped (docs/context/lost-packages.md).
 import('./api/_lib/lostpkg-worker.js')

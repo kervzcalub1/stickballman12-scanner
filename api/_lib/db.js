@@ -10542,6 +10542,70 @@ export async function noteSweepEmail({ mailbox, folder, runAt, date, outcome = '
       run_at  = EXCLUDED.run_at`;
 }
 
+// An email counted as 'queued' when it arrived has now been read: move its count to what became
+// of it. Only while that run is still the folder's current one; a count of 0 drops its key.
+export async function moveSweepOutcome({ mailbox, folder, runAt, from = 'queued', to }) {
+  if (!mailbox || !runAt || !to) return;
+  await db()`
+    UPDATE receipt_sweep_folders SET outcomes =
+      (CASE WHEN coalesce((outcomes ->> ${from}::text)::int, 0) > 1
+            THEN outcomes || jsonb_build_object(${from}::text, (outcomes ->> ${from}::text)::int - 1)
+            ELSE outcomes - ${from}::text END)
+      || jsonb_build_object(${to}::text, coalesce((outcomes ->> ${to}::text)::int, 0) + 1)
+     WHERE mailbox = ${mailbox} AND folder = ${folder || ''} AND run_at = ${runAt}::timestamptz
+       AND coalesce((outcomes ->> ${from}::text)::int, 0) > 0`;
+}
+
+// ---- The raw-email queue (api/_lib/receipt-queue.js) ----
+// Put one email in. false = it is in there already, waiting or being read. A FAILED one that is
+// sent again gets a fresh start.
+export async function queueRawReceipt({ messageKey, email, runAt = null }) {
+  const rows = await db()`
+    INSERT INTO receipt_raw_queue (message_key, email, run_at)
+    VALUES (${messageKey}, ${JSON.stringify(email)}::jsonb, ${runAt}::timestamptz)
+    ON CONFLICT (message_key) DO UPDATE
+       SET status = 'queued', attempts = 0, error = NULL, email = EXCLUDED.email, run_at = EXCLUDED.run_at, queued_at = now()
+     WHERE receipt_raw_queue.status = 'failed'
+    RETURNING id`;
+  return !!rows[0];
+}
+
+// The next email, oldest first. SKIP LOCKED: two readers never take the same one.
+export async function claimRawReceipt() {
+  const rows = await db()`
+    UPDATE receipt_raw_queue
+       SET status = 'working', started_at = now(), attempts = attempts + 1
+     WHERE id = (SELECT id FROM receipt_raw_queue WHERE status = 'queued' ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
+     RETURNING id, message_key, email, run_at, attempts`;
+  return rows[0] || null;
+}
+
+export async function finishRawReceipt(id) {
+  await db()`DELETE FROM receipt_raw_queue WHERE id = ${id}`;
+}
+
+// Reading it threw: back in the queue, or kept as failed once it has had its tries.
+export async function failRawReceipt(id, error, final) {
+  await db()`
+    UPDATE receipt_raw_queue SET status = ${final ? 'failed' : 'queued'}, error = ${String(error || '').slice(0, 500)}
+     WHERE id = ${id}`;
+}
+
+// After a restart: whatever was mid-read goes back in the queue (three tries, then failed and
+// returned, so it can be counted). Failed emails are kept two weeks for a look, then dropped:
+// they are whole emails.
+export async function requeueStuckRawReceipts(olderThanMinutes) {
+  const sql = db();
+  const cutoff = new Date(Date.now() - olderThanMinutes * 60_000).toISOString();
+  const failed = await sql`
+    UPDATE receipt_raw_queue SET status = 'failed', error = coalesce(error, 'Reading this email kept stopping the server.')
+     WHERE status = 'working' AND attempts >= 3 AND started_at <= ${cutoff}
+    RETURNING email, run_at`;
+  await sql`UPDATE receipt_raw_queue SET status = 'queued' WHERE status = 'working' AND started_at <= ${cutoff}`;
+  await sql`DELETE FROM receipt_raw_queue WHERE status = 'failed' AND queued_at < now() - interval '14 days'`;
+  return failed;
+}
+
 // Every folder of the run at `runAt`: how many emails, the newest, and what became of them.
 export async function sweepRunFolders(runAt) {
   if (!runAt) return [];

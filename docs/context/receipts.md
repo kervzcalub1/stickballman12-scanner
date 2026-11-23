@@ -80,11 +80,34 @@ Champs / Foot Locker names → the Make Gemini helper 6286830, which still costs
 credits per new name.
 
 `POST /api/receipts/ingest-raw` (form: mailbox, folder, from, subject, date, text, html,
-to, cc, delivered_to, original_to, message_id; ≤4 MB) → parse → not a receipt =
+to, cc, delivered_to, original_to, message_id; ≤4 MB) → stored, answered, then read in the background ("The queue" below) → not a receipt =
 `{skipped}` · else the same normaliser + `ingestEmailReceipt` as `/ingest`
 (`api/_lib/receipt-ingest.js`).
 
-**An email that is already filed is answered before it is parsed** (2026-11-24). Parsing also
+### The queue — an email is stored first, read afterwards (2026-11-24)
+Make posts the emails of a check **one at a time and waits for each answer**. Parsing in the
+request, lookups included (20–25 s each when StockX or the Make name helper is slow), made a
+check run for 45 minutes, which is where Make cuts a run off: the emails it had not reached were
+never posted. So `ingest-raw` no longer parses:
+- It stores the form fields in **`receipt_raw_queue`** (unique on `message_key`) and answers
+  `{ ok, queued: true }` at once. The same email twice → `{ duplicate, queued }`.
+- **`api/_lib/receipt-queue.js`** reads it: parse → normalise → `ingestEmailReceipt`, then
+  **deletes the row** (it is a whole email). Two readers at most (the lookups go to a Make
+  scenario and a small proxy); `FOR UPDATE SKIP LOCKED`, so two server instances are safe.
+- Started two ways: `ingest-raw` kicks it after every stored email (so it also runs under
+  `npm run dev`), and `server.mjs` runs a minute timer that puts back what a restart left
+  mid-read. Three tries, then the row stays as `failed` with its error for 14 days; sending
+  that email again (the next check's overlap) gives it a fresh start.
+- **Counts:** an email is counted `queued` in `receipt_sweep_folders.outcomes` when it arrives
+  and the reader moves that to `filed` / `duplicate` / `skipped:<why>` / `error`
+  (`moveSweepOutcome`). The page shows "**N still being read**" and looks again every 5 s
+  while there are any. `fetched` and `newest` (the near-cap resume) are still written on arrival.
+- **Schema-drift guard:** if the email cannot be stored (the table is missing on a server that
+  has not run `db:setup`), it is read in the request, the old way, and answered
+  `{ ok, inline: true }`. Slow, but nothing is lost.
+- The answer no longer carries `id` / `buyerMatched` for a new email. Make ignores the body.
+
+**An email that is already filed is answered before it is stored or parsed** (2026-11-24). Parsing also
 runs the lookups (a Make call per Foot Locker name, a StockX call per Nike UPC), and every check
 re-reads the hour before the last one, a catch-up whole days. So `ingest-raw` works out the
 `message_key` first (`rawMessageKey`, the same formula as the parser's `sweep()`) and returns

@@ -39,7 +39,15 @@ function MailboxCheck({ onSignOut }) {
     try { setSt(await api.receiptSweepStatus()); } catch (e) { if (e.unauthorized) onSignOut(); }
   }
   useEffect(() => { read(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  useLive(['app_settings'], read, { mount: false });
+  useLive(['app_settings', 'email_receipts'], read, { mount: false });
+  // Emails are stored first and read in the background: while some are still waiting, look
+  // again every few seconds so "still being read" counts down by itself.
+  const waiting = (st?.folders || []).reduce((n, f) => n + Number(f.outcomes?.queued || 0), 0);
+  useEffect(() => {
+    if (!waiting) return undefined;
+    const t = setInterval(read, 5000);
+    return () => clearInterval(t);
+  }, [waiting > 0]); // eslint-disable-line react-hooks/exhaustive-deps
   async function run() {
     setBusy(true); setErr(''); setMsg('');
     try {
@@ -82,10 +90,11 @@ function MailboxCheck({ onSignOut }) {
         const sum = (k) => st.folders.reduce((n, f) => n + Number(f.outcomes?.[k] || 0), 0);
         const read = st.folders.reduce((n, f) => n + Number(f.fetched || 0), 0);
         const empty = st.folders.reduce((n, f) => n + Number(f.empty_bodies || 0), 0);
-        const skipped = read - sum('filed') - sum('duplicate') - sum('error');
+        const skipped = read - sum('filed') - sum('duplicate') - sum('error') - sum('queued');
         return (
           <div className="muted sm rc-check-msg" title={st.folders.map((f) => `${f.mailbox} ${f.folder}: ${f.fetched} — ${Object.entries(f.outcomes || {}).map(([k, v]) => `${k} ${v}`).join(', ')}`).join('\n')}>
             Last check read {read} email{read === 1 ? '' : 's'}: {sum('filed')} receipt{sum('filed') === 1 ? '' : 's'} filed, {sum('duplicate')} already filed, {skipped} not receipts
+            {sum('queued') ? <>, <b>{sum('queued')} still being read</b></> : null}
             {sum('error') ? <>, <b>{sum('error')} failed</b></> : null}
             {empty ? <> — <b>{empty} arrived with no text</b></> : null}.
           </div>

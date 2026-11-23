@@ -4,8 +4,9 @@
 //   · the button starts Make with the time to look back to, and the ingest key, and a
 //     double-tap doesn't start a second run;
 //   · "From a date…" looks back to midnight EST of that day;
-//   · a raw receipt email is parsed and filed (order number, totals, buyer by recipient),
-//     a re-sent one is the same row, and marketing mail is skipped.
+//   · a raw receipt email is stored, answered at once, then parsed and filed in the background
+//     (order number, totals, buyer by recipient); a re-sent one is the same row, and marketing
+//     mail is read and dropped.
 // Make is a fake on 127.0.0.1:5197 (playwright.config.js) — the real scenario never runs.
 import { test, expect } from '@playwright/test';
 import http from 'node:http';
@@ -24,6 +25,12 @@ const SUP = { Authorization: `Bearer ${signToken({ uid: 'rcc-sup', username: 'rc
 
 let db; let fake; const hits = []; let buyerId;
 const raw = (request, form, key = KEY) => request.post('/api/receipts/ingest-raw', { headers: key ? { 'x-api-key': key } : {}, form });
+// The id an email was filed under, once the background reader has got to it.
+async function filed(keyLike) {
+  let id = null;
+  await expect.poll(async () => { id = (await db.query(`SELECT id FROM email_receipts WHERE message_key LIKE $1`, [keyLike])).rows[0]?.id ?? null; return id; }).not.toBeNull();
+  return Number(id);
+}
 const nikeEmail = (over = {}) => ({
   mailbox: 'orderemail@stickballman12llc.com', folder: '[Gmail]/All Mail',
   from: 'nike@official.nike.com', subject: 'Your Nike receipt', date: '2026-10-08T15:12:00-04:00',
@@ -55,6 +62,7 @@ test.afterAll(async () => {
   fake?.close();
   if (!db) return;
   await db.query(`DELETE FROM email_receipts WHERE order_number = $1 OR message_key LIKE $2`, [ORDER, `%e2e-rcc-${stamp}%`]);
+  await db.query(`DELETE FROM receipt_raw_queue WHERE message_key LIKE $1`, [`%e2e-rcc-%${stamp}%`]);
   await db.query(`DELETE FROM user_purchase_emails WHERE user_id = $1`, [buyerId]);
   await db.query(`DELETE FROM users WHERE id = $1`, [buyerId]);
   await db.query(`DELETE FROM app_settings WHERE key IN ('receipt_sweep_last', 'receipt_ingest_rejected')`);
@@ -67,8 +75,9 @@ test('a raw receipt email is parsed and filed here, under the buyer it was sent 
   // A bounce is kept (length only, never the key) — Make's history wouldn't show it.
   await expect.poll(async () => JSON.parse((await db.query(`SELECT value FROM app_settings WHERE key = 'receipt_ingest_rejected'`)).rows[0]?.value || 'null')?.key_length).toBe(5);
 
-  const first = await (await raw(request, nikeEmail())).json();
-  expect(first).toMatchObject({ ok: true, duplicate: false, buyerMatched: true });
+  // Stored and answered at once (Make waits on every answer); read and filed in the background.
+  expect(await (await raw(request, nikeEmail())).json()).toEqual({ ok: true, queued: true });
+  const first = { id: await filed(`%|e2e-rcc-${stamp}@nike.com`) };
   const again = await (await raw(request, nikeEmail())).json();   // the next check overlaps
   expect(again).toMatchObject({ ok: true, id: first.id, duplicate: true });
   // A filed email is answered BEFORE it is parsed (the parser's lookups cost money): the same
@@ -78,8 +87,9 @@ test('a raw receipt email is parsed and filed here, under the buyer it was sent 
   expect(unparsed).toMatchObject({ ok: true, id: first.id, duplicate: true });
   // No Message-ID: the key falls back to from + subject + date, the same way on both sides.
   const noId = { message_id: '', subject: `Your Nike receipt e2e-rcc-${stamp}` };
-  const bare = await (await raw(request, nikeEmail(noId))).json();
-  expect(bare).toMatchObject({ ok: true, duplicate: false });
+  expect(await (await raw(request, nikeEmail(noId))).json()).toEqual({ ok: true, queued: true });
+  const bare = { id: await filed(`%Your Nike receipt e2e-rcc-${stamp}~%`) };
+  expect(bare.id).not.toBe(first.id);
   const bareAgain = await (await raw(request, nikeEmail({ ...noId, text: 'Shop the latest drops now.' }))).json();
   expect(bareAgain).toMatchObject({ ok: true, id: bare.id, duplicate: true });
 
@@ -88,7 +98,12 @@ test('a raw receipt email is parsed and filed here, under the buyer it was sent 
   expect(Number(rows[0].total)).toBe(127.2);
 
   const promo = await (await raw(request, nikeEmail({ subject: 'Just In: new arrivals', text: 'Shop the latest drops now.', message_id: `<e2e-rcc-promo-${stamp}@nike.com>` }))).json();
-  expect(promo).toMatchObject({ ok: true, skipped: 'not_a_receipt' });
+  // Marketing mail is stored like any other, read, found to be no receipt, and dropped.
+  expect(promo).toEqual({ ok: true, queued: true });
+  await expect.poll(async () => (await db.query(`SELECT count(*)::int AS n FROM receipt_raw_queue WHERE message_key LIKE $1`, [`%e2e-rcc-%${stamp}%`])).rows[0].n).toBe(0);
+  expect((await db.query(`SELECT count(*)::int AS n FROM email_receipts WHERE message_key LIKE $1`, [`%e2e-rcc-promo-${stamp}%`])).rows[0].n).toBe(0);
+  // The buyer is matched in the background too.
+  expect((await db.query(`SELECT buyer_source FROM email_receipts WHERE id = $1`, [first.id])).rows[0].buyer_source).toBe('email');
 });
 
 test('Check mailboxes starts Make from the last check, and a double-tap does not start two', async ({ request }) => {
@@ -139,8 +154,9 @@ test('a folder the last run cut off (Make caps each search, oldest first) makes 
   }
   // Counted after the answer goes out, so wait for it.
   await expect.poll(async () => (await db.query(`SELECT fetched FROM receipt_sweep_folders WHERE mailbox = $1`, [MB])).rows[0]?.fetched).toBe(2);
+  // What became of each, per folder: 'queued' when it arrives, then what the reader found.
+  await expect.poll(async () => (await db.query(`SELECT outcomes FROM receipt_sweep_folders WHERE mailbox = $1`, [MB])).rows[0]?.outcomes).toEqual({ 'skipped:not_a_receipt': 2 });
   let row = (await db.query(`SELECT fetched, newest, run_at, outcomes, empty_bodies FROM receipt_sweep_folders WHERE mailbox = $1`, [MB])).rows[0];
-  expect(row.outcomes).toEqual({ 'skipped:not_a_receipt': 2 });   // what became of each, per folder
   expect(row.empty_bodies).toBe(0);
   expect(row.newest.toISOString()).toBe('2026-10-02T12:00:00.000Z');
   expect(row.run_at.toISOString()).toBe(runAt);

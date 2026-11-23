@@ -2428,6 +2428,23 @@ await sql(`
 // html came through (a Make mapping problem, not a parser one).
 await sql(`ALTER TABLE receipt_sweep_folders ADD COLUMN IF NOT EXISTS outcomes JSONB NOT NULL DEFAULT '{}'`);
 await sql(`ALTER TABLE receipt_sweep_folders ADD COLUMN IF NOT EXISTS empty_bodies INT NOT NULL DEFAULT 0`);
+// Raw emails waiting to be read (2026-11-24, docs/context/receipts.md → "The queue"). Make posts
+// each email and waits for our answer; parsing inline (with its style-code lookups) made a check
+// run for 45 minutes. ingest-raw now stores the email here and answers at once; the reader
+// (api/_lib/receipt-queue.js) parses and files it, then DELETES the row. Only a failed one stays.
+await sql(`
+  CREATE TABLE IF NOT EXISTS receipt_raw_queue (
+    id          BIGSERIAL PRIMARY KEY,
+    message_key TEXT NOT NULL UNIQUE,           -- the key the receipt will be filed under
+    email       JSONB NOT NULL,                 -- the form fields ingest-raw was handed
+    run_at      TIMESTAMPTZ,                    -- receipt_sweep_last.at of the check that sent it
+    status      TEXT NOT NULL DEFAULT 'queued', -- queued | working | failed
+    attempts    INT NOT NULL DEFAULT 0,
+    error       TEXT,
+    queued_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at  TIMESTAMPTZ
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS receipt_raw_queue_status_idx ON receipt_raw_queue (status, id)`);
 
 // Pre-sell Listings (2026-10-07, docs/context/presell-listings.md): pairs listed on Alias
 // and/or StockX straight from a scan — never an inventory unit, never on Shopify.

@@ -2191,6 +2191,14 @@ await sql(`
            GROUP BY l.order_id) b
    WHERE b.order_id = o.id AND o.cashback > 0 AND b.base > 0`);
 await sql(`CREATE INDEX IF NOT EXISTS online_orders_track_idx ON online_orders (upper(regexp_replace(tracking_number, '[[:space:]]', '', 'g')))`);
+// A received batch tied to its online order BY HAND (2026-11-25) — the Batch page's "Link to
+// an online order". Until now the only tie was the parcel's tracking number, so a parcel
+// whose number was never typed on the order (or was typed wrong) could not be joined to it.
+// Here, after online_orders exists: a fresh database has to create that table first.
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS online_order_id BIGINT REFERENCES online_orders(id) ON DELETE SET NULL`);
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS online_order_linked_by TEXT`);
+await sql(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS online_order_linked_at TIMESTAMPTZ`);
+await sql(`CREATE INDEX IF NOT EXISTS batches_online_order_idx ON batches (online_order_id) WHERE online_order_id IS NOT NULL`);
 // Tracking numbers are a comma-separated LIST (2026-11-19). Orders typed as "A B", "A & B" or
 // "A,B" were sent to the courier feed glued into one unreadable number. Rewrite each as
 // "A, B" (splitTracking, the same rule the save uses). A field that hit the old 60-character

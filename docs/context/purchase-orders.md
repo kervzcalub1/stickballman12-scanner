@@ -469,7 +469,8 @@ Pick the batch from the candidates, confirm which received box is which label
 panel with an **Unlink** per batch, and — while nothing is linked — **"Delete this
 purchase order"**.
 **From the batch (warehouse + PH, `/batches?b=` and `/ph/batches?b=`):** an unlinked batch
-shows **"Link to a purchase order"** under "Not received against a purchase order". When
+shows **"Link to a purchase order"** under "Not received against a purchase order or an online
+order" (beside it: **Link to an online order**, for a parcel bought online — `online-orders.md`). When
 one of its tracking numbers sits on an open order's label it says so outright ("Tracking
 matches label #6 on PO-100107 — this shipment was probably received without picking the
 order") with a one-tap **Link to PO-…** (`BatchLinkPoModal`, same file: pick the order —

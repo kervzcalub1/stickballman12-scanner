@@ -144,7 +144,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     // question too — but adding boxes, finishing and renumbering are warehouse work (and
     // warehouse-only server-side). The list and detail are filtered for PH_EXCLUDED_KINDS
     // on the server, not here.
-    if (page === 'batches') return <BatchPage readOnly canAudit onHome={() => goPage(null)} onSignOut={onSignOut} />;
+    if (page === 'batches') return <BatchPage readOnly canAudit onlineOrderHref={(id) => `/ph/online-orders?o=${id}`} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     // The warehouse's My Scans, same component (owner, 2026-11-11: PH sees the warehouse's
     // scans). Opens on Everyone; the server leaves out the PH-excluded kinds. No Stock
     // Check button: counting is warehouse work.

@@ -1485,11 +1485,17 @@ export async function searchBatches(query,
                      WHERE ${wide} AND i.batch_id = b.id
                        AND regexp_replace(upper(coalesce(i.sku, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
                      GROUP BY i.sku ORDER BY i.sku LIMIT 6) x) AS matched_skus,
+           -- The order it was linked to by hand, else the one(s) its tracking number is on.
+           coalesce((SELECT 'OO-' || lpad(o.id::text, 4, '0') || coalesce(' · #' || nullif(btrim(o.order_number), ''), '')
+              FROM online_orders o
+             WHERE ${wide} AND o.id = b.online_order_id
+               AND (o.id = ${ooId}::bigint
+                    OR regexp_replace(upper(coalesce(o.order_number, '')), '[^A-Z0-9]', '', 'g') LIKE ${like})),
            (SELECT string_agg(DISTINCT 'OO-' || lpad(oo.id::text, 4, '0') || coalesce(' · #' || nullif(btrim(oo.order_number), ''), ''), ', ')
               FROM oo
              WHERE oo.track_key = upper(regexp_replace(coalesce(b.tracking_number, ''), '[[:space:]]', '', 'g'))
                 OR oo.track_key IN (SELECT upper(regexp_replace(bx.tracking_number, '[[:space:]]', '', 'g'))
-                                      FROM batch_boxes bx WHERE bx.batch_id = b.id AND bx.tracking_number IS NOT NULL)) AS matched_oo,
+                                      FROM batch_boxes bx WHERE bx.batch_id = b.id AND bx.tracking_number IS NOT NULL))) AS matched_oo,
            b.no_tracking, b.batch_tag, b.status, b.pre_sell, b.pre_sell_scope, b.merged_into_batch_id,
            b.manifest_received, b.audited_at, b.audited_by,
            (SELECT m.batch_code FROM batches m WHERE m.id = b.merged_into_batch_id) AS merged_into_code,
@@ -1530,6 +1536,11 @@ export async function searchBatches(query,
         OR (${wide} AND b.po_id IN (
           SELECT p.id FROM purchase_orders p
            WHERE regexp_replace(upper(coalesce(p.po_code, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
+        ))
+        OR (${wide} AND b.online_order_id IN (
+          SELECT o.id FROM online_orders o
+           WHERE o.id = ${ooId}::bigint
+              OR regexp_replace(upper(coalesce(o.order_number, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
         ))
         OR upper(regexp_replace(coalesce(b.tracking_number, ''), '[[:space:]]', '', 'g')) IN (SELECT oo.track_key FROM oo)
         OR EXISTS (
@@ -10286,6 +10297,148 @@ export async function getOnlineOrder(id) {
   return r[0] || null;
 }
 
+// ── A batch and its online order (Batch page, 2026-11-25) ────────────────────────────
+// A parcel from an online store is not a purchase order, so "Link to a purchase order" was
+// the wrong (and only) button on its batch. The order a batch belongs to is the one linked
+// BY HAND (`batches.online_order_id`), else the one whose tracking number the parcel
+// carries — the tie receiving has always used. The hand link wins: it is how a wrong
+// tracking match gets corrected.
+const ooTrackKey = (t) => String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+async function batchTrackKeys(batch) {
+  const boxT = await db()`SELECT tracking_number FROM batch_boxes WHERE batch_id = ${batch.id} AND coalesce(tracking_number, '') <> ''`;
+  // 8+ characters, the same floor by-tracking uses: a short fragment matches by accident.
+  return [...new Set([batch.tracking_number, ...boxT.map((r) => r.tracking_number)].map(ooTrackKey).filter((k) => k.length >= 8))];
+}
+
+// → { id, store, order_number, ordered_on, received_at, source: 'linked' | 'tracking',
+//     linked_by, linked_at, also } or null. `also` = how many OTHER orders share the
+// tracking number (the newest is shown, as everywhere else).
+export async function getBatchOnlineOrder(batchId) {
+  const sql = db();
+  const b = (await sql`
+    SELECT id, tracking_number, po_id, online_order_id, online_order_linked_by, online_order_linked_at
+      FROM batches WHERE id = ${batchId}`)[0];
+  if (!b) return null;
+  if (b.online_order_id != null) {
+    const o = (await sql`
+      SELECT id, store, order_number, ordered_on::text AS ordered_on, received_at
+        FROM online_orders WHERE id = ${b.online_order_id}`)[0];
+    if (o) return { ...o, id: Number(o.id), source: 'linked', linked_by: b.online_order_linked_by, linked_at: b.online_order_linked_at, also: 0 };
+  }
+  // Received against a purchase order: its tracking numbers are that order's labels.
+  if (b.po_id != null) return null;
+  const keys = await batchTrackKeys(b);
+  if (!keys.length) return null;
+  const rows = await sql`
+    SELECT o.id, o.store, o.order_number, o.ordered_on::text AS ordered_on, o.received_at
+      FROM online_orders o
+     WHERE string_to_array(regexp_replace(upper(coalesce(o.tracking_number, '')), '[^A-Z0-9,]', '', 'g'), ',') && ${keys}::text[]
+     ORDER BY o.id DESC LIMIT 6`;
+  if (!rows.length) return null;
+  return { ...rows[0], id: Number(rows[0].id), source: 'tracking', linked_by: null, linked_at: null, also: rows.length - 1 };
+}
+
+// Which online orders could this batch be? Without a search: the ones carrying its
+// tracking number, the ones from a store named like the batch's supplier (120 days), and
+// the last 60 days of orders — the supplier typed at the bench is often not the store on
+// the order (a JD Sports order ships from Shoe Palace). With a search: the store, the
+// order number, "OO-12", a tracking number or a SKU, any age.
+// Each row carries its lines; the handler works out how many of the batch's pairs are on it.
+export async function listBatchOnlineCandidates(batchId, q = '') {
+  const sql = db();
+  const batch = (await sql`SELECT id, batch_code, kind, supplier_name, tracking_number, po_id, online_order_id FROM batches WHERE id = ${batchId}`)[0];
+  if (!batch) return null;
+  const keys = await batchTrackKeys(batch);
+  const supplier = String(batch.supplier_name || '').trim();
+  const term = String(q || '').trim().slice(0, 80);
+  const bare = ooTrackKey(term);
+  const has = bare.length >= 2;
+  const like = `%${bare}%`;
+  const storeLike = `%${term}%`;
+  const ooId = /^OO0*([1-9]\d{0,8})$/.exec(bare)?.[1] ?? null;
+  const orders = await sql`
+    SELECT o.id, o.store, o.order_number, o.tracking_number, o.ordered_on::text AS ordered_on,
+           o.received_at, o.created_at,
+           coalesce((SELECT json_agg(json_build_object('sku', l.sku, 'name', l.name, 'size', l.size, 'qty', l.qty) ORDER BY l.id)
+                       FROM online_order_lines l WHERE l.order_id = o.id AND l.cancelled_at IS NULL), '[]'::json) AS lines,
+           (string_to_array(regexp_replace(upper(coalesce(o.tracking_number, '')), '[^A-Z0-9,]', '', 'g'), ',') && ${keys}::text[]) AS tracking_match,
+           (SELECT coalesce(array_agg(x.batch_code ORDER BY x.id), '{}') FROM batches x
+             WHERE x.online_order_id = o.id AND x.id <> ${batchId}) AS linked_batches
+      FROM online_orders o
+     WHERE (${has} AND (
+              o.id = ${ooId}::bigint
+              OR regexp_replace(upper(coalesce(o.order_number, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
+              OR regexp_replace(upper(coalesce(o.tracking_number, '')), '[^A-Z0-9]', '', 'g') LIKE ${like}
+              OR o.store ILIKE ${storeLike}
+              OR EXISTS (SELECT 1 FROM online_order_lines l WHERE l.order_id = o.id
+                          AND regexp_replace(upper(coalesce(l.sku, '')), '[^A-Z0-9]', '', 'g') LIKE ${like})))
+        OR (NOT ${has} AND (
+              string_to_array(regexp_replace(upper(coalesce(o.tracking_number, '')), '[^A-Z0-9,]', '', 'g'), ',') && ${keys}::text[]
+              OR o.id = ${batch.online_order_id}::bigint
+              OR o.created_at > now() - interval '60 days'
+              OR (${supplier} <> '' AND o.created_at > now() - interval '120 days'
+                  AND (o.store ILIKE ${`%${supplier}%`} OR ${supplier} ILIKE ('%' || o.store || '%')))))
+     ORDER BY tracking_match DESC, o.id DESC
+     LIMIT 300`;
+  const items = await sql`SELECT sku, size, original_sku, original_size FROM items WHERE batch_id = ${batchId}`;
+  return { batch, orders, items };
+}
+
+// The pairs of a batch that still have no cost — what a link can fill from the order.
+export async function listBatchBlankCostItems(batchId) {
+  return db()`SELECT id, sku, size, original_sku, original_size FROM items WHERE batch_id = ${batchId} AND cost IS NULL ORDER BY id`;
+}
+
+// Tie the batch to the order (or move it from another order). Only the join is written
+// here, plus a line in each order's history; the handler fills blank costs afterwards.
+// A batch received against a purchase order is refused — it can't be both.
+export async function linkBatchToOnlineOrder({ batchId, orderId, actor = null }) {
+  const sql = db();
+  const batch = (await sql`SELECT id, batch_code, po_id, online_order_id FROM batches WHERE id = ${batchId}`)[0];
+  if (!batch) return { error: 'Batch not found.', status: 404 };
+  if (batch.po_id != null) return { error: `${batch.batch_code} was received against a purchase order. Unlink it from that order first.` };
+  const order = (await sql`SELECT id, store, order_number FROM online_orders WHERE id = ${orderId}`)[0];
+  if (!order) return { error: 'That online order no longer exists.', status: 404 };
+  const prev = batch.online_order_id == null ? null : Number(batch.online_order_id);
+  if (prev === Number(orderId)) return { ok: true, batch, order, already: true };
+  const qs = [
+    sql`UPDATE batches SET online_order_id = ${orderId}, online_order_linked_by = ${actor}, online_order_linked_at = now()
+         WHERE id = ${batchId} AND po_id IS NULL`,
+    sql`INSERT INTO online_order_events (order_id, action, detail, actor)
+        VALUES (${orderId}, 'batch_linked', ${`Batch ${batch.batch_code}`}, ${actor})`,
+  ];
+  if (prev != null) {
+    qs.push(sql`INSERT INTO online_order_events (order_id, action, detail, actor)
+                SELECT id, 'batch_unlinked', ${`Batch ${batch.batch_code} — moved to another order`}, ${actor}
+                  FROM online_orders WHERE id = ${prev}`);
+  }
+  await sql.transaction(qs);
+  return { ok: true, batch, order };
+}
+
+// Remove the hand link. The batch, its pairs and any cost already filled are untouched;
+// the batch goes back to whatever its tracking number says.
+export async function unlinkBatchFromOnlineOrder({ batchId, actor = null }) {
+  const sql = db();
+  const batch = (await sql`SELECT id, batch_code, online_order_id FROM batches WHERE id = ${batchId}`)[0];
+  if (!batch) return { error: 'Batch not found.', status: 404 };
+  if (batch.online_order_id == null) return { ok: true, batch, already: true };
+  await sql.transaction([
+    sql`UPDATE batches SET online_order_id = NULL, online_order_linked_by = NULL, online_order_linked_at = NULL WHERE id = ${batchId}`,
+    sql`INSERT INTO online_order_events (order_id, action, detail, actor)
+        SELECT id, 'batch_unlinked', ${`Batch ${batch.batch_code}`}, ${actor} FROM online_orders WHERE id = ${batch.online_order_id}`,
+  ]);
+  return { ok: true, batch };
+}
+
+// The batches hand-linked to an order — shown on the order, so the link reads both ways.
+export async function listOnlineOrderBatches(orderId) {
+  return db()`
+    SELECT b.id, b.batch_code, b.status, b.online_order_linked_by AS linked_by, b.online_order_linked_at AS linked_at,
+           (SELECT count(*)::int FROM items i WHERE i.batch_id = b.id) AS pairs
+      FROM batches b WHERE b.online_order_id = ${orderId} ORDER BY b.id`;
+}
+
 export async function onlineOrderEvents(orderId) {
   return await db()`
     SELECT id, line_id, action, detail, actor, at FROM online_order_events
@@ -14204,8 +14357,9 @@ const INBOUND_ISSUE_COLS = `
   po.date_of_purchase AS po_date, po.tag_code AS po_tag,
   i.status AS item_status, i.image_url, i.location_code,
   oo.id AS online_order_id, oo.store AS online_store, oo.order_number AS online_order_number`;
-// The FROM every read shares. The online order is matched by the parcel's tracking
-// number — the same key receiving uses to say "this box is that online order".
+// The FROM every read shares. The online order is the one the batch was linked to by hand
+// (Batch page), else matched by the parcel's tracking number — the same key receiving
+// uses to say "this box is that online order".
 const INBOUND_ISSUE_FROM = `
   FROM inbound_issues ii
   LEFT JOIN batches b ON b.id = ii.batch_id
@@ -14214,8 +14368,9 @@ const INBOUND_ISSUE_FROM = `
   LEFT JOIN items i ON i.id = ii.item_id
   LEFT JOIN LATERAL (
     SELECT o.id, o.store, o.order_number FROM online_orders o
-     WHERE o.tracking_number IS NOT NULL
-       AND nullif(regexp_replace(upper(coalesce(bx.tracking_number, b.tracking_number, ii.tracking_number)), '[^A-Z0-9]', '', 'g'), '') = ANY(string_to_array(regexp_replace(upper(coalesce(o.tracking_number, '')), '[^A-Z0-9,]', '', 'g'), ','))
+     WHERE o.id = b.online_order_id
+        OR (b.online_order_id IS NULL AND o.tracking_number IS NOT NULL
+       AND nullif(regexp_replace(upper(coalesce(bx.tracking_number, b.tracking_number, ii.tracking_number)), '[^A-Z0-9]', '', 'g'), '') = ANY(string_to_array(regexp_replace(upper(coalesce(o.tracking_number, '')), '[^A-Z0-9,]', '', 'g'), ',')))
      ORDER BY o.id DESC LIMIT 1) oo ON true`;
 const inboundRow = (r) => (r ? {
   ...r,

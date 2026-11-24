@@ -172,9 +172,12 @@ export const CLAIM_PHOTOS = [
 export function onlineLineFor(orders, sku, size) {
   for (const o of orders || []) {
     const active = (o.lines || []).filter((l) => !isCancelled(l) && l.each != null);
-    const each = poLineMoney(active.map((l) => ({ sku: l.sku, size: l.size, unit_cost: l.each })), sku, size);
+    // Letters and digits only, like the box-against-order check below: JD Sports prints
+    // "IZ2563/133" where the box says "IZ2563-133", and that pair got no cost.
+    const code = bareCode(sku);
+    const each = poLineMoney(active.map((l) => ({ sku: bareCode(l.sku), size: l.size, unit_cost: l.each })), code, size);
     if (!each) continue;
-    const price = poLineMoney(active.map((l) => ({ sku: l.sku, size: l.size, unit_cost: l.unit_price })), sku, size);
+    const price = poLineMoney(active.map((l) => ({ sku: bareCode(l.sku), size: l.size, unit_cost: l.unit_price })), code, size);
     return { each: each.shelf, price: price?.shelf ?? null, code: orderCode(o.id) };
   }
   return null;

@@ -328,3 +328,42 @@ any estimate), and the team hears about it on Telegram (`tracking.delayed`, `tra
   (`delayFollowUp`): never scanned → the sender; carrier exception → call the carrier; stopped → ask for a trace.
 - **Not alerted:** no tracking number, delivered, received, or stopped over 60 days ago. Those last still show
   as Delayed on the screen. Inbound uses the same 7 for Delayed (`STALL_DAYS`, 2026-11-06, was 4) and 8 days for Investigate.
+
+## Linked to a batch by hand (2026-11-25)
+Owner, looking at B-102714 (Shoe Palace): the batch's only button was **Link to a purchase
+order**, and a parcel bought online has no purchase order. Until now a batch knew its online
+order only through the tracking number.
+
+- **The order a batch is** (`getBatchOnlineOrder`, on `GET /api/batches/full` as `onlineOrder`):
+  the one linked by hand (`batches.online_order_id`, `source: 'linked'`), else the newest order
+  whose tracking list holds one of the batch's numbers (`source: 'tracking'`, 8+ characters; never
+  on a batch that is on a PO). **The hand link wins**: it is how a wrong tracking match is corrected.
+- **Batch page header** (`src/screens/BatchPage.jsx`): "Online order OO-… · store #number · linked
+  by X" / "· matched by the tracking number", the code linking to the order (`onlineOrderHref`;
+  PH gets `/ph/online-orders?o=`). Buttons: **Link to an online order** (nothing tied),
+  **Wrong order? Link another…** (tracking match), **Change the online order…** + **Remove the
+  link** (hand link). A hand-linked batch no longer offers "Link to a purchase order".
+- **Picking the order** (`BatchLinkOnlineModal`, `GET /api/batches/online-candidates?batchId=&q=`):
+  no search = orders on the batch's tracking number, orders from a store named like the supplier
+  (120 days), and the last 60 days (the supplier typed at the bench is often not the store on the
+  order). A search (store, order #, `OO-12`, tracking, SKU) reaches any age. Sorted: tracking match,
+  then **how many of the batch's pairs are on the order** (`on_order`, `lineKey`: letters and
+  digits + numeric size, GS-as-men's read through `original_sku/size`), then newest. Choosing an
+  order that holds none / only some of the pairs warns, and still links.
+- **`POST /api/batches/link-online-order { batchId, orderId }`** (warehouse + PH; `orderId: null`
+  removes the link): writes the join + who/when, a `batch_linked` / `batch_unlinked` row in each
+  order's history, then **fills the cost of every pair in the batch that has none** from the
+  order's actual cost for that SKU + size (`onlineLineFor` → `fillItemsCost`, price paid →
+  `shelf_price`, a note on each pair). A cost already on a pair is never changed; unlinking leaves
+  costs alone. Refused (409) while the batch is on a purchase order.
+- **The order side**: "Received in B-…" on the order (`batches` on `online-orders/get`).
+- **Follows the link**: batch search by `OO-…` / the store's order number, and the Inbound Issues
+  order facts (`INBOUND_ISSUE_FROM`: the linked order, else the tracking match).
+- **Does NOT count the order in.** Counting in by itself still runs off the tracking number
+  (`compareOrderWithReceived`); for a hand-linked batch, press **Count it in…** on the order.
+- **A deleted order lets go** (`ON DELETE SET NULL`); the batch falls back to its tracking number.
+- `onlineLineFor` now compares codes on letters and digits only (`bareCode`), like the
+  box-against-order check: an order typed `IZ2563/133` gave an `IZ2563-133` pair no cost, at
+  receiving too.
+- **Needs db:setup** (`batches.online_order_id`, `online_order_linked_by/_at`) BEFORE the code is
+  live: batch search and Inbound Issues read the column. E2E: `e2e/batch-link-online-order.spec.js`.

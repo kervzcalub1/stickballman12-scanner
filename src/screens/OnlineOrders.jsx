@@ -184,7 +184,7 @@ function OrderDetail({ id, canEdit, canReceive, isAdmin, onSignOut, onBack, onEd
     catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => { load(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
-  useLive(['online_orders', 'online_order_lines', 'online_order_events', 'email_receipts', 'online_order_receipt_checks', 'online_order_shipments'], async () => {
+  useLive(['online_orders', 'online_order_lines', 'online_order_events', 'email_receipts', 'online_order_receipt_checks', 'online_order_shipments', 'batches'], async () => {
     const d = await api.onlineOrder(id);
     setData((cur) => (JSON.stringify(cur) === JSON.stringify(d) ? cur : d));
   }, { mount: false, paused: !!dialog });
@@ -213,6 +213,12 @@ function OrderDetail({ id, canEdit, canReceive, isAdmin, onSignOut, onBack, onEd
           <span><span className="muted xs">Tracking</span> {o.tracking_number ? splitTracking(o.tracking_number).map((n, i) => <React.Fragment key={n}>{i > 0 && ', '}<TrackingLink number={n} /></React.Fragment>) : <i className="muted">none yet</i>}</span>
           {o.received_at && <span><span className="muted xs">Counted in</span> {when(o.received_at)}{o.received_by ? ` · ${o.received_by}` : ''}</span>}
           <span><span className="muted xs">Recorded by</span> {o.created_by || '—'}</span>
+          {/* Linked by hand on the Batch page — the order says which batch it became. */}
+          {(data.batches || []).length > 0 && (
+            <span><span className="muted xs">Received in</span> {data.batches.map((b, i) => (
+              <React.Fragment key={b.id}>{i > 0 && ', '}<a href={`${window.location.pathname.startsWith('/ph/') ? '/ph/batches' : '/batches'}?b=${b.id}`}>{b.batch_code}</a> <span className="muted sm">({b.pairs} pair{b.pairs === 1 ? '' : 's'})</span></React.Fragment>
+            ))}</span>
+          )}
         </div>
         {o.note && <p className="oo-note">{o.note}</p>}
         <ReceiptLink o={o} canEdit={canEdit} onOpen={() => setDialog({ kind: 'receipt' })} onOpenOrder={onOpenOrder} onSignOut={onSignOut} onChanged={load} />
@@ -445,6 +451,7 @@ function Parcels({ o, parcels, canEdit, onOpenOrder, onSignOut, onChanged }) {
 }
 
 const EVENT_LABEL = {
+  batch_linked: 'Linked to a batch', batch_unlinked: 'Batch link removed',
   created: 'Recorded', edited: 'Edited', cancelled: 'Cancelled', restored: 'Cancellation undone', received: 'Counted in',
   refund_requested: 'Refund requested', refund_refunded: 'Refund received', refund_needs_request: 'Refund back to follow-up',
 };

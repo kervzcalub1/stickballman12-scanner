@@ -1,8 +1,8 @@
-// GET /api/online-orders/get?id=N -> { ok, order, events }
+// GET /api/online-orders/get?id=N -> { ok, order, events, parcels, batches }
 // One order with its lines, each pair's actual cost, and the history (created, edited,
 // a line cancelled, a refund requested / received, counted in by the warehouse).
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, getOnlineOrder, onlineOrderEvents, listOrderShipments, orderKey } from '../_lib/db.js';
+import { dbConfigured, getOnlineOrder, onlineOrderEvents, listOrderShipments, listOnlineOrderBatches, orderKey } from '../_lib/db.js';
 import { shapeOrder, idOf } from './_shared.js';
 import { trackKeys } from '../../src/lib/onlineOrders.js';
 
@@ -27,7 +27,9 @@ export default async function handler(req, res) {
       pairs: (s.items || []).reduce((n, it) => n + (Number(it.qty) || 0), 0), items: s.items || [],
       order_id: (o.same_order || []).find((x) => trackKeys(x.tracking_number).includes(s.tracking_key))?.id ?? null,
     }));
-    return send(res, 200, { ok: true, order: shapeOrder(o), events, parcels });
+    // The batches linked to it by hand on the Batch page. Before db:setup: none, not an error.
+    const batches = await listOnlineOrderBatches(id).catch(() => []);
+    return send(res, 200, { ok: true, order: shapeOrder(o), events, parcels, batches: batches.map((b) => ({ ...b, id: Number(b.id) })) });
   } catch (e) {
     console.error('[online-orders/get]', e.message);
     return send(res, 500, { ok: false, error: 'Could not load that order.' });

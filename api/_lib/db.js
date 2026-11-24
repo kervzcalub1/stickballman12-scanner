@@ -16390,3 +16390,81 @@ export async function listCrossAll() {
   ]);
   return { groups, skus, pools, listings, sales };
 }
+
+// ── Costs from the stores' emails (api/_lib/cost-emails.js, docs/context/costs.md) ─────
+// The pairs a run prices: no cost, a supplier parcel (not on a purchase order — those take
+// their cost from the order), and a tracking number to look up. Same exclusions as the
+// Costs list. `supplier` null = every supplier.
+export async function listCostEmailCandidates({ supplier = null, from = null, to = null, limit = 6000 } = {}) {
+  const sup = supplier == null || String(supplier).trim() === '' ? null : String(supplier).trim();
+  return db()`
+    SELECT i.id, i.vin, i.sku, i.size, i.name, b.batch_code, b.supplier_name,
+           regexp_replace(upper(coalesce(nullif(btrim(bb.tracking_number), ''), b.tracking_number, '')), '[^A-Z0-9]', '', 'g') AS trk
+      FROM items i
+      JOIN batches b ON b.id = i.batch_id
+      LEFT JOIN batch_boxes bb ON bb.id = i.box_id
+     WHERE i.cost IS NULL AND i.status NOT IN ('missing', 'issue')
+       AND (b.kind IS NULL OR b.kind = 'receiving') AND b.po_id IS NULL
+       AND length(regexp_replace(upper(coalesce(nullif(btrim(bb.tracking_number), ''), b.tracking_number, '')), '[^A-Z0-9]', '', 'g')) >= 10
+       AND (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+       AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+       AND (${sup}::text IS NULL OR lower(btrim(b.supplier_name)) = lower(${sup}::text))
+     ORDER BY i.id
+     LIMIT ${limit}`;
+}
+
+export async function getCostEmailLookup(key) {
+  const r = await db()`SELECT data, emails, searched_at FROM cost_email_lookups WHERE key = ${key}`;
+  return r[0] || null;
+}
+export async function saveCostEmailLookup(key, data, emails) {
+  await db()`
+    INSERT INTO cost_email_lookups (key, data, emails) VALUES (${key}, ${JSON.stringify(data)}::jsonb, ${emails})
+    ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, emails = EXCLUDED.emails, searched_at = now()`;
+}
+
+export async function createCostEmailRun({ supplier, from, to, by }) {
+  const r = await db()`
+    INSERT INTO cost_email_runs (supplier, date_from, date_to, created_by)
+    VALUES (${supplier || null}, ${from || null}, ${to || null}, ${by || null}) RETURNING id`;
+  return Number(r[0].id);
+}
+// `rows` (the preview, one object per pair) only when asked: the page polls the progress.
+export async function getCostEmailRun(id = null, { rows = false } = {}) {
+  const r = await db()`
+    SELECT id, supplier, date_from::text AS date_from, date_to::text AS date_to, status, parcels_total, parcels_done,
+           summary, error, created_by, created_at, updated_at, finished_at, applied_at, applied_by, applied_pairs,
+           (status = 'running' AND updated_at < now() - interval '3 minutes') AS stalled,
+           CASE WHEN ${rows}::boolean THEN rows END AS rows
+      FROM cost_email_runs
+     WHERE (${id}::bigint IS NULL OR id = ${id}::bigint)
+     ORDER BY id DESC LIMIT 1`;
+  return r[0] ? { ...r[0], id: Number(r[0].id) } : null;
+}
+// A run that is being worked on right now: 'running' and touched in the last 3 minutes.
+export async function costEmailRunBusy() {
+  const r = await db()`SELECT id FROM cost_email_runs WHERE status = 'running' AND updated_at > now() - interval '3 minutes' LIMIT 1`;
+  return r[0] ? Number(r[0].id) : null;
+}
+export async function touchCostEmailRun(id, { total = null, done = null } = {}) {
+  const r = await db()`
+    UPDATE cost_email_runs SET updated_at = now(),
+           parcels_total = coalesce(${total}::int, parcels_total), parcels_done = coalesce(${done}::int, parcels_done)
+     WHERE id = ${id} RETURNING status`;
+  return r[0]?.status || null;
+}
+export async function finishCostEmailRun(id, { status, rows = null, summary = null, error = null }) {
+  await db()`
+    UPDATE cost_email_runs SET status = ${status}, updated_at = now(), finished_at = now(), error = ${error},
+           rows = coalesce(${rows == null ? null : JSON.stringify(rows)}::jsonb, rows),
+           summary = coalesce(${summary == null ? null : JSON.stringify(summary)}::jsonb, summary)
+     WHERE id = ${id} AND status = 'running'`;
+}
+export async function setCostEmailRunStatus(id, from, to) {
+  const r = await db()`UPDATE cost_email_runs SET status = ${to}, updated_at = now() WHERE id = ${id} AND status = ${from} RETURNING id`;
+  return r.length > 0;
+}
+export async function markCostEmailRunApplied(id, by, pairs) {
+  await db()`UPDATE cost_email_runs SET status = 'applied', applied_at = now(), applied_by = ${by || null}, applied_pairs = ${pairs}, updated_at = now() WHERE id = ${id}`;
+}
+

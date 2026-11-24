@@ -217,3 +217,60 @@ plainly had one (HV6103-300 on PO 49 was the report).
 - **Can't reach:** pairs on a PO with no shelf price for that SKU + size (sampled in the
   preview), and pairs received with no PO — those stay on the manual worklist.
 - E2E: `e2e/cost-backfill.spec.js`.
+
+## Fill from emails (2026-11-25) — Costs → "From emails"
+Owner: 1,187 Shoe Palace pairs received in November had no cost, and almost none of their orders
+were typed on Online Orders. The stores' own emails (the order mailbox) have it all. He wants **the
+price PAID**: after the store's discount, **no gift card taken off, no shipping added**. Costs only —
+no online order is created.
+
+**The chain, per parcel** (`src/lib/costEmails.js`, pure; `api/_lib/cost-emails.js`, the run):
+1. The pairs: no cost, a receiving batch **not on a purchase order**, a tracking number of 10+
+   characters on the box (else the batch) — `listCostEmailCandidates`, the Costs list's supplier +
+   date filters.
+2. **Tracking number → the mailbox** (Make scenario 7082222, `MAKE_ORDER_EMAILS_URL`, the one online
+   orders use: every email carrying a text, plain text, ≤ 60, oldest first) → `readParcel`: the
+   store, the **order number** (`orderNumberOf`: needs 4 digits in a row), and the pairs in THIS parcel.
+3. When the parcel's email has no price: **order number → the mailbox** → `readOrder`: the
+   confirmation's lines, `full` (listed) and `each` (**paid** = the line after the discount ÷ pairs).
+4. `priceParcel`: a pair takes the price of the parcel's line for its size (and SKU when the email
+   prints one). The box in women's sizing (9.5W) is the men's 8 the store sold. Two shoes of one size
+   at two prices → settled by the store's name for the SKU, **learned in the same run** from parcels
+   that hold one shoe (`learnNames`), else left for a person. A pair not in the parcel's email (two
+   parcels scanned under one number) is priced from the order only when that name is known.
+
+**Readers** (each store writes its own way; real emails, sampled 2026-11-25):
+| Store | Parcel email | Price from |
+|---|---|---|
+| Shoe Palace, any Shopify store | "A shipment from order #… is on the way": name, `1 of 10`, size | the confirmation ("Order summary": discount code, listed, paid) |
+| DTLR | "Order N Has Been Fulfilled": `SKU Color=…;Size=… … tracking` | its Shopify confirmation |
+| Foot Locker / Champs / Kids FL | "Your order is ready to go": name, `Size 08.0`, `Qty`, `$` | that email (the price shown) |
+| JD Sports | "ORDER UPDATE": pairs under each `Tracking:` | that email; an ORDER-level discount is spread by price and said in the note |
+| Supreme | "online shop order has been shipped": Style / Size / Quantity / Price | that email |
+
+**Not readable, and reported as such, never guessed** (the run's "not priced" reasons):
+- **`no_text`** — Nike, Dick's, Puma: the emails are HTML only and the scenario returns plain text.
+  Needs the Make scenario to return the HTML (not done).
+- **`no_email`** — the tracking number is in no email's text: adidas, Zumiez, Crocs, Academy, Yeezy,
+  Oneness, Solefly in the samples (the number is behind a link, or the order went to another
+  mailbox: the search is Gmail All Mail only, not Yahoo, not Spam).
+- The supplier typed on a batch is not always the store (a "Nike" batch was a Foot Locker order):
+  the store shown is the email's.
+
+**The run** — one at a time, on the server (about 9 s a parcel: two mailbox searches):
+- `cost_email_runs` (status `running` → `done` → `applied`, or `stopped` / `failed`; progress; the
+  preview `rows`; `summary` per store and per reason) and `cost_email_lookups` (`T:<tracking>` /
+  `O:<order>` → what it read as; a hit is kept, a miss is asked again after a day). **Needs db:setup.**
+- A run touches its row after every parcel. Not touched for 3 minutes = cut off by a restart:
+  the page offers **Continue**; what was read is remembered. **Stop** ends it; nothing was written.
+- At most 1,500 parcels a run (`MAX_PARCELS`); the page says when it was capped.
+- `GET/POST /api/items/cost-emails` (start · continue · stop · apply; warehouse + PH + admin).
+- **Apply** fills `cost` and `shelf_price` with the paid price on pairs that STILL have no cost
+  (`fillItemsCost`: a cost typed since the preview wins), with a history note: store, order, listed
+  price. A run is applied once.
+- The page (`src/components/CostsFromEmails.jsx`): the scope (the list's supplier + dates), progress,
+  per-store table, reasons, Priced / Not priced tabs (first 300), the whole preview as CSV.
+- Measured on real data: Shoe Palace Nov 2–3, **152 of 160 pairs** priced (37 parcels).
+- E2E: `e2e/costs-from-emails.spec.js` (the mailbox is handed in, `io.ask`; the suite has no hook URL,
+  so Start answers 503 there).
+

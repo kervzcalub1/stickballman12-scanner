@@ -369,6 +369,9 @@ export const api = {
   costsList: (from, to, mode, supplier, all) => get(`/api/items/costs?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(mode ? { mode } : {}), ...(supplier ? { supplier } : {}), ...(all ? { all: '1' } : {}) }).toString()}`),
   // The filled-in export uploaded back: preview (writes nothing), then apply.
   costImport: (body) => post('/api/items/cost-import', body),
+  // Costs read out of the stores' emails: the latest run (or one), and start / stop / apply.
+  costEmails: (id, rows) => get(`/api/items/cost-emails?${new URLSearchParams({ ...(id ? { id } : {}), ...(rows ? { rows: '1' } : {}) }).toString()}`),
+  costEmailsAct: (body) => post('/api/items/cost-emails', body),
   costsSearch: (q) => get(`/api/items/costs?q=${encodeURIComponent(q)}`),
   costLookup: (q) => get(`/api/items/cost-lookup${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   setItemsCost: (vins, cost) => post('/api/items/set-cost', { vins, cost }),

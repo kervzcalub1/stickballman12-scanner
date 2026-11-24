@@ -255,7 +255,12 @@ test('received first, tracking number later: the short parcel is found, a case o
   // The SKU on the order is typed differently from the box's: short is by COUNT, so it still reads 1.
   const id = await mk({ tracking_number: T, lines: [{ sku: 'TYPED-OTHERWISE', size: '7.5', qty: 4, unit_price: 100 }] });
   await expect.poll(async () => (await db.query('SELECT received_check_at FROM online_orders WHERE id = $1', [id])).rows[0].received_check_at, { timeout: 10_000 }).not.toBeNull();
-  const cases = (await db.query(`SELECT ii.* FROM inbound_issues ii JOIN items i ON i.batch_id = ii.batch_id WHERE i.sku = $1 GROUP BY ii.id`, [S])).rows;
+  // The compare stamps received_check_at BEFORE it opens the case (photos are looked up in
+  // between), so the case is waited for too — reading it at once was a race CI lost (2026-11-24).
+  const readCases = async () => (await db.query(`SELECT ii.* FROM inbound_issues ii JOIN items i ON i.batch_id = ii.batch_id WHERE i.sku = $1 GROUP BY ii.id`, [S])).rows;
+  await expect.poll(async () => (await readCases()).length, { timeout: 10_000 }).toBe(1);
+  await expect.poll(async () => (await readCases())[0]?.warehouse_task || '', { timeout: 10_000 }).toContain('WhatsApp');
+  const cases = await readCases();
   expect(cases).toHaveLength(1);
   expect(cases[0]).toMatchObject({ type: 'online_order', expected_count: 4, received_count: 3, status: 'open', source: 'online_order' });
   expect(cases[0].description).toContain(`Short by 1: 3 of 4 pairs came out of the parcel with tracking ${T}`);
@@ -301,7 +306,11 @@ test('received first, tracking number later: the short parcel is found, a case o
   const w = await compareOrderWithReceived(other);
   expect(['wrong', 'already']).toContain(w.state);
   expect(w.counted).toBe(false);
-  const wc = (await db.query(`SELECT * FROM inbound_issues WHERE batch_id = $1 AND description LIKE 'Wrong pairs:%'`, [cases[0].batch_id])).rows[0];
+  // 'already' = the server's own compare (started by the save) got there first and may still be
+  // writing the case: wait for it.
+  const readWrong = async () => (await db.query(`SELECT * FROM inbound_issues WHERE batch_id = $1 AND description LIKE 'Wrong pairs:%'`, [cases[0].batch_id])).rows[0];
+  await expect.poll(async () => Boolean(await readWrong()), { timeout: 10_000 }).toBe(true);
+  const wc = await readWrong();
   expect((await db.query('SELECT received_at FROM online_orders WHERE id = $1', [other])).rows[0].received_at).toBeNull();
   expect(wc.description).toContain('Wrong pairs: 1 of the 3 in the parcel');
   expect(wc.description).toContain(`${S} US 7.5 extra (+1)`);

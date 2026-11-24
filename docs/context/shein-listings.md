@@ -99,8 +99,9 @@ opens the drawer there, not the check page; the one-shoe dry run / fix is `shein
   `spu`/<spuName> (the compact SHEIN side of one SPU, `spuPayload`), `spu_list`/`current` (the SPUs of
   the last snapshot), `attr_template`/<productTypeId>, `custom_perm`/<categoryId> (24 h).
 - `shein_api_log` — every listing-side SHEIN call: path, method, `write`, `dry`, SHEIN code / msg /
-  `trace_id`, ms, by, job/item/spu. A read stores no body; a write stores request + answer. Pruned at 90
-  days (once per EST day, from the tick).
+  `trace_id`, ms, by, job/item/spu. A read stores no body; a write stores request + answer. Pruned at **7
+  days** (once per EST day, from the tick; `pruneSheinApiLog`). It was 90 until 2026-11-24, when the log
+  (~16 MB a day) and `shein_live_items` filled prod's 1 GB volume — see `deploy.md` "Disk space".
 - `shein_listing_products` (live) — one row per Shopify product (`shopify_product_id` = gid) or per
   SHEIN product none of whose sizes Shopify has (`shein:<spu>`). Roll-up `status`, `counts`
   `{ all, sizes (in stock), on_shein, shein_only, by }`, `blockers` (from the COUNTED sizes — see "The list API"),

@@ -155,6 +155,19 @@ sales panels go quiet rather than wrong. Also set `TRUST_PROXY_HOPS=1` and
   password. That is a deliberate call, not a default.
 - Delete the service when the branch merges, or it quietly bills and quietly rots.
 
+## Disk space (the Postgres volume)
+`railway volume list` shows used / size. On 2026-11-24 it read 950 MB of 1000 MB and prod started
+refusing queries (`No space left on device` on a sort's temp file). 530 MB of the 734 MB database
+was two SHEIN logs, `shein_live_items` and `shein_api_log`; both are now pruned at 7 days
+(`shein-live-fix.md`, `shein-listings.md`) and the database sits near 390 MB.
+- Biggest tables: `SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) FROM
+  pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC LIMIT 15`.
+- **A big `DELETE` does not give disk back** and writes a lot of WAL — on a nearly full disk it
+  can finish the job of filling it. What worked: `\copy` the rows to keep to a laptop, `TRUNCATE`
+  (frees the file at once), `\copy` them back. Keep any row the app must never miss in the same
+  transaction as the `TRUNCATE`.
+- A new high-volume log table needs its prune written the same day as the table.
+
 ## Notes
 - Railway CLI is not installed locally by default: `npm i -g @railway/cli`,
   `railway login`, `railway link`, then `railway ssh`.

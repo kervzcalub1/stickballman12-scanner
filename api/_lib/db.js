@@ -16395,8 +16395,10 @@ export async function listCrossAll() {
 // The pairs a run prices: no cost, a supplier parcel (not on a purchase order — those take
 // their cost from the order), and a tracking number to look up. Same exclusions as the
 // Costs list. `supplier` null = every supplier.
-export async function listCostEmailCandidates({ supplier = null, from = null, to = null, limit = 6000 } = {}) {
+export async function listCostEmailCandidates({ supplier = null, from = null, to = null, sku = null, limit = 6000 } = {}) {
   const sup = supplier == null || String(supplier).trim() === '' ? null : String(supplier).trim();
+  // A SKU narrows the run to one shoe (letters and digits only: "IG 6226" = "IG6226").
+  const code = String(sku || '').toUpperCase().replace(/[^A-Z0-9]/g, '') || null;
   return db()`
     SELECT i.id, i.vin, i.sku, i.size, i.name, b.batch_code, b.supplier_name,
            regexp_replace(upper(coalesce(nullif(btrim(bb.tracking_number), ''), b.tracking_number, '')), '[^A-Z0-9]', '', 'g') AS trk
@@ -16405,7 +16407,8 @@ export async function listCostEmailCandidates({ supplier = null, from = null, to
       LEFT JOIN batch_boxes bb ON bb.id = i.box_id
      WHERE i.cost IS NULL AND i.status NOT IN ('missing', 'issue')
        AND (b.kind IS NULL OR b.kind = 'receiving') AND b.po_id IS NULL
-       AND length(regexp_replace(upper(coalesce(nullif(btrim(bb.tracking_number), ''), b.tracking_number, '')), '[^A-Z0-9]', '', 'g')) >= 10
+       AND coalesce(btrim(i.sku), '') <> ''
+       AND (${code}::text IS NULL OR regexp_replace(upper(i.sku), '[^A-Z0-9]', '', 'g') = ${code}::text)
        AND (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
        AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
        AND (${sup}::text IS NULL OR lower(btrim(b.supplier_name)) = lower(${sup}::text))
@@ -16423,16 +16426,16 @@ export async function saveCostEmailLookup(key, data, emails) {
     ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, emails = EXCLUDED.emails, searched_at = now()`;
 }
 
-export async function createCostEmailRun({ supplier, from, to, by }) {
+export async function createCostEmailRun({ supplier, from, to, by, sku = null, order = null }) {
   const r = await db()`
-    INSERT INTO cost_email_runs (supplier, date_from, date_to, created_by)
-    VALUES (${supplier || null}, ${from || null}, ${to || null}, ${by || null}) RETURNING id`;
+    INSERT INTO cost_email_runs (supplier, date_from, date_to, created_by, sku, order_number)
+    VALUES (${supplier || null}, ${from || null}, ${to || null}, ${by || null}, ${sku || null}, ${order || null}) RETURNING id`;
   return Number(r[0].id);
 }
 // `rows` (the preview, one object per pair) only when asked: the page polls the progress.
 export async function getCostEmailRun(id = null, { rows = false } = {}) {
   const r = await db()`
-    SELECT id, supplier, date_from::text AS date_from, date_to::text AS date_to, status, parcels_total, parcels_done,
+    SELECT id, supplier, date_from::text AS date_from, date_to::text AS date_to, sku, order_number, status, parcels_total, parcels_done,
            summary, error, created_by, created_at, updated_at, finished_at, applied_at, applied_by, applied_pairs,
            (status = 'running' AND updated_at < now() - interval '3 minutes') AS stalled,
            CASE WHEN ${rows}::boolean THEN rows END AS rows

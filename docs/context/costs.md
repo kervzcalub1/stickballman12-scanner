@@ -274,3 +274,35 @@ no online order is created.
 - E2E: `e2e/costs-from-emails.spec.js` (the mailbox is handed in, `io.ask`; the suite has no hook URL,
   so Start answers 503 there).
 
+### By SKU and by order number (2026-11-25, same tab)
+Owner: pull prices per SKU and supplier; the order number and the tracking number are a bonus when
+we have them. Tested on the real mailbox first: **most stores never print the style code** (Shoe
+Palace, Foot Locker, Champs, JD: the shoe's name only), so a SKU search cannot be the main way in —
+but it is the ONLY way in for adidas, whose receipts print the article number and whose tracking
+numbers are in no email. So a run uses **the most exact route each pair has**:
+1. **Tracking number** (above). When the number is found in an email we cannot read but that names
+   the order (adidas customer-service threads), the order's emails are read and a pair is priced
+   only from a line that IS its SKU (`priceFromOrder`).
+2. **The order number someone types** (`cost_email_runs.order_number`): its confirmation's lines. A
+   line must print the SKU or be the name learned for it; when the run is also narrowed to a SKU the
+   person has said "these pairs are that order", so the size decides.
+3. **The SKU** (`readSkuLines` → `priceBySku`), one mailbox search per SKU still unpriced (≤ 200 a
+   run, `MAX_SKUS`; lookups `S:<sku>`): lines that print the code, from the pair's own store
+   (`sameStore`), in its size. **One price → filled. Two or more → "Bought at 3 prices ($30.00,
+   $40.00, $59.50) — pick one by hand"** and left blank: without the parcel or the order nothing says
+   which purchase a pair came from. Pairs with no tracking number are in the run for routes 2 and 3.
+- **Only this SKU** (`cost_email_runs.sku`) narrows any run to one shoe.
+- **The search leaves the newsletters out.** A style code is in dozens of GOAT / Alias account
+  emails and the scenario returns the OLDEST 60 (JH7834: 60 newsletters, 0 receipts). The scenario
+  searches `"<text>"`, so the SKU route sends `SKU" -from:goat.com "SKU` (`skuSearch`).
+- **adidas readers:** `readAdidasReceipt` ("Your adidas receipt": `NAME ,9-` / `Article No:` /
+  `Selling Price:` = paid, the discounts under it give the listed price; `9-` is 9.5; the text is
+  HTML with `<br>` and `&zwnj;`, cleaned by `emailLines`) and `readAdidasOrder` (order updates:
+  `$180.00 $45.00 x 4 $120.00` = $30 a pair). adidas.com's confirmation and shipping emails carry no
+  items in their text — not readable.
+- **Caveat, by design:** a SKU price is "every email that prints this SKU in this size agrees". A
+  purchase whose email we cannot read (an adidas.com order) is invisible to it, so a pair from such
+  an order takes the receipts' price. The preview says `matched by SKU and size`; check before Apply.
+- Measured on real data: adidas KI6956, **94 of 105 pairs** at $59.50; size 8 had three prices.
+- **Needs db:setup** (`cost_email_runs.sku`, `.order_number`).
+

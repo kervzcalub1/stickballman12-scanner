@@ -4201,6 +4201,9 @@ await sql(`
     applied_by    TEXT,
     applied_pairs INTEGER
   )`);
+// One shoe / one order (2026-11-25): a run can be narrowed to a SKU, and told the order number.
+await sql(`ALTER TABLE cost_email_runs ADD COLUMN IF NOT EXISTS sku TEXT`);
+await sql(`ALTER TABLE cost_email_runs ADD COLUMN IF NOT EXISTS order_number TEXT`);
 
 const LIVE_TABLES = [
   'shopify_listing_variants', 'listing_market_prices',

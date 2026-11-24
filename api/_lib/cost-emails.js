@@ -15,10 +15,12 @@ import {
   finishCostEmailRun, markCostEmailRunApplied, fillItemsCost,
 } from './db.js';
 import { splitOrderEmails } from './online-order-shipments.js';
-import { readParcel, readOrder, priceParcel, learnNames } from '../../src/lib/costEmails.js';
+import { readParcel, readOrder, priceParcel, learnNames, readSkuLines, priceBySku, priceFromOrder, bare } from '../../src/lib/costEmails.js';
 
-const TIMEOUT_MS = 60_000;
+const TIMEOUT_MS = 150_000;   // a SKU that is in forty long emails is a 300 KB answer
 export const MAX_PARCELS = 1500;
+// The SKU route asks the mailbox once per shoe still unpriced: at most this many a run.
+export const MAX_SKUS = 200;
 // A miss is asked again after a day (the email may not have arrived yet); a hit is kept.
 const MISS_HOURS = 24;
 
@@ -51,6 +53,12 @@ async function lookup(key, term, read, ask) {
   return data;
 }
 
+// A style code is also in dozens of GOAT / Alias account newsletters, and the search returns
+// the OLDEST 60 emails — the receipts never arrived (JH7834: 60 newsletters, 0 receipts). The
+// scenario searches for "<text>" in quotes, so closing and re-opening them slips in a Gmail
+// operator that leaves those senders out: "JH7834" -from:goat.com "JH7834".
+const skuSearch = (k) => `${k}" -from:goat.com "${k}`;
+
 const REASON_ORDER = 'The order’s confirmation email was not found';
 
 /** Work one run through. Resolves when it is done, stopped or failed; never throws. */
@@ -59,9 +67,15 @@ export async function runCostEmails(runId, { io = {} } = {}) {
   try {
     const run = await getCostEmailRun(runId);
     if (!run || run.status !== 'running') return;
-    const pairs = await listCostEmailCandidates({ supplier: run.supplier, from: run.date_from, to: run.date_to });
+    const pairs = await listCostEmailCandidates({ supplier: run.supplier, from: run.date_from, to: run.date_to, sku: run.sku });
+    // A tracking number is the exact way in. A pair without one (under 10 characters) is
+    // still in the run: the order number given, or its SKU, may price it below.
     const by = new Map();
-    for (const p of pairs) { if (!by.has(p.trk)) by.set(p.trk, []); by.get(p.trk).push(p); }
+    const loose = [];
+    for (const p of pairs) {
+      if (String(p.trk || '').length < 10) { loose.push(p); continue; }
+      if (!by.has(p.trk)) by.set(p.trk, []); by.get(p.trk).push(p);
+    }
     const parcels = [...by.entries()].slice(0, MAX_PARCELS);
     await touchCostEmailRun(runId, { total: parcels.length, done: 0 });
 
@@ -71,7 +85,10 @@ export async function runCostEmails(runId, { io = {} } = {}) {
       let parcel; let order = null;
       try {
         parcel = await lookup(`T:${trk}`, trk, (e) => readParcel(e, trk), ask);
-        if (parcel.state === 'ok' && !parcel.priced && parcel.order) order = await lookup(`O:${parcel.order}`, parcel.order, readOrder, ask);
+        // The order's own emails have the price when the parcel's does not — and are the only
+        // thing to read when the tracking number was found in an email we cannot read (adidas).
+        const needOrder = parcel.order && ((parcel.state === 'ok' && !parcel.priced) || parcel.state === 'unreadable');
+        if (needOrder) order = await lookup(`O:${parcel.order}`, parcel.order, readOrder, ask);
       } catch (e) {
         parcel = { state: 'error', error: e.message };
       }
@@ -86,16 +103,59 @@ export async function runCostEmails(runId, { io = {} } = {}) {
     const skuNames = new Map();
     for (const w of work) learnNames(skuNames, w.list, w.parcel);
 
-    const rows = [];
-    const summary = { pairs: 0, priced: 0, parcels: parcels.length, reasons: {}, stores: {}, capped: by.size > MAX_PARCELS };
+    if (loose.length) work.push({ trk: '', list: loose, parcel: { state: 'no_tracking' }, order: null });
+
+    // ── The other two ways in, for what the tracking number did not price ────────────────
+    // 1. the order number someone gave (its confirmation), 2. the SKU itself: the store
+    // emails that PRINT the code (adidas' receipts). Both are worked out per pair below.
+    const first = new Map();
     for (const w of work) {
       const res = w.parcel.state === 'error'
         ? w.list.map((p) => ({ id: p.id, reason: 'The mailbox search failed for this parcel — run it again' }))
-        : priceParcel(w.list, w.parcel, w.order, skuNames);
+        : w.parcel.state === 'no_tracking'
+          ? w.list.map((p) => ({ id: p.id, reason: 'No tracking number on the batch' }))
+          : w.parcel.state === 'unreadable' && w.order?.state === 'ok'
+            // The order is known, the parcel's contents are not: only a line that IS this shoe counts.
+            ? w.list.map((p) => { const r = priceFromOrder(p, w.order, { skuNames }); return r.each > 0 ? { id: p.id, ...r, note: 'from the order this tracking number belongs to' } : { id: p.id, reason: r.reason }; })
+            : priceParcel(w.list, w.parcel, w.order, skuNames);
+      for (const r of res) first.set(Number(r.id), r);
+    }
+    const open = () => pairs.filter((p) => !(first.get(Number(p.id))?.each > 0));
+    if (run.order_number && open().length) {
+      let named;
+      try { named = await lookup(`O:${run.order_number}`, run.order_number, readOrder, ask); } catch { named = { state: 'error' }; }
+      for (const p of open()) {
+        const r = priceFromOrder(p, named, { trustSize: !!run.sku, skuNames });
+        if (r.each > 0) first.set(Number(p.id), { id: p.id, ...r, store: named.store || null, order: run.order_number });
+        else if (!first.get(Number(p.id))?.store) first.set(Number(p.id), { id: p.id, reason: r.reason });
+      }
+    }
+    const skus = [...new Set(open().map((p) => bare(p.sku)).filter((k) => k.length >= 5))].slice(0, MAX_SKUS);
+    const skusLeft = new Set(open().map((p) => bare(p.sku))).size - skus.length;
+    if (skus.length) await touchCostEmailRun(runId, { total: parcels.length + skus.length });
+    for (const k of skus) {
+      let lines = [];
+      try { lines = (await lookup(`S:${k}`, skuSearch(k), (e) => { const found = readSkuLines(e, k); return { state: found.length ? 'ok' : 'none', lines: found }; }, ask)).lines || []; } catch { lines = null; }
+      for (const p of open().filter((x) => bare(x.sku) === k)) {
+        if (lines == null) { first.set(Number(p.id), { ...(first.get(Number(p.id)) || {}), id: p.id, reason: 'The mailbox search for this SKU failed — run it again' }); continue; }
+        const r = priceBySku({ ...p, supplier: p.supplier_name }, lines);
+        const was = first.get(Number(p.id)) || {};
+        if (r.each > 0) first.set(Number(p.id), { id: p.id, ...r });
+        // A pair the tracking route already explained keeps that reason unless the SKU found prices to choose from.
+        else if (/^Bought at/.test(r.reason) || /^No (email|tracking)/.test(was.reason || '')) first.set(Number(p.id), { ...was, id: p.id, reason: /^Bought at/.test(r.reason) ? r.reason : was.reason, store: was.store || r.store });
+      }
+      done += 1;
+      if ((await touchCostEmailRun(runId, { done })) !== 'running') return;
+    }
+
+    const rows = [];
+    const summary = { pairs: 0, priced: 0, parcels: parcels.length, skus: skus.length, reasons: {}, stores: {}, capped: by.size > MAX_PARCELS || skusLeft > 0 };
+    for (const w of work) {
+      const res = w.list.map((p) => first.get(Number(p.id)) || { id: p.id, reason: 'Not found' });
       const byId = new Map(res.map((r) => [Number(r.id), r]));
       for (const p of w.list) {
         const r = byId.get(Number(p.id)) || { reason: 'Not found' };
-        const store = w.parcel.store || p.supplier_name || '—';
+        const store = r.store || w.parcel.store || p.supplier_name || '—';
         summary.pairs += 1;
         summary.stores[store] ||= { pairs: 0, priced: 0 };
         summary.stores[store].pairs += 1;
@@ -103,7 +163,7 @@ export async function runCostEmails(runId, { io = {} } = {}) {
         else summary.reasons[r.reason || REASON_ORDER] = (summary.reasons[r.reason || REASON_ORDER] || 0) + 1;
         rows.push({
           id: Number(p.id), vin: p.vin, sku: p.sku, size: p.size, name: p.name, batch: p.batch_code, supplier: p.supplier_name,
-          trk: w.trk, store: w.parcel.store || null, order: w.parcel.order || null,
+          trk: w.trk, store: r.store || w.parcel.store || null, order: r.order || w.parcel.order || null,
           each: r.each != null && r.each > 0 ? r.each : null, full: r.full ?? null, how: r.how || null,
           email_name: r.name || null, note: r.note || null, reason: r.each != null && r.each > 0 ? null : (r.reason || REASON_ORDER),
         });

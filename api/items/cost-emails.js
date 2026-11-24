@@ -1,6 +1,7 @@
 // Costs from the stores' emails (docs/context/costs.md → "Fill from emails").
 //   GET  /api/items/cost-emails[?id=N][&rows=1]  -> { ok, configured, run }   (the latest run, or one)
-//   POST /api/items/cost-emails { action: 'start', supplier?, from?, to? }    -> { ok, id }
+//   POST /api/items/cost-emails { action: 'start', supplier?, from?, to?, sku?, order? } -> { ok, id }
+//     sku: only that shoe · order: the order number these pairs came from, when someone knows it
 //   POST … { action: 'continue', id }   a run cut off by a restart carries on
 //   POST … { action: 'stop', id }       stop a running run (nothing was written)
 //   POST … { action: 'apply', id }      fill the blank costs the run found -> { ok, filled }
@@ -36,7 +37,11 @@ export default async function handler(req, res) {
       const busy = await costEmailRunBusy();
       if (busy) return send(res, 409, { ok: false, error: 'A run is already reading the emails. Wait for it to finish, or stop it.' });
       const supplier = String(body.supplier ?? '').trim().slice(0, 200) || null;
-      const id = await createCostEmailRun({ supplier, from: ymd(body.from), to: ymd(body.to), by });
+      const sku = String(body.sku ?? '').trim().toUpperCase().slice(0, 40) || null;
+      const order = String(body.order ?? '').trim().toUpperCase().replace(/^#/, '').slice(0, 40) || null;
+      if (sku && sku.replace(/[^A-Z0-9]/g, '').length < 5) return send(res, 400, { ok: false, error: 'That SKU is too short to search for.' });
+      if (order && !/^[A-Z0-9-]{5,40}$/.test(order)) return send(res, 400, { ok: false, error: 'That does not look like an order number.' });
+      const id = await createCostEmailRun({ supplier, from: ymd(body.from), to: ymd(body.to), by, sku, order });
       runCostEmails(id);   // not awaited: it reports through the run's row
       return send(res, 200, { ok: true, id });
     }

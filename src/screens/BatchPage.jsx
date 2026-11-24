@@ -11,6 +11,7 @@ import { PreSellChip } from '../components/PreSellChip.jsx';
 import { SizeEditModal } from '../components/SizeEdit.jsx';
 import { DeliveryStatusLine } from '../components/DeliveryStatus.jsx';
 import { BatchLinkPoModal } from '../components/PoLinkBatch.jsx';
+import { BatchLinkOnlineModal } from '../components/OnlineOrderLinkBatch.jsx';
 import { batchMatchesSearch } from '../lib/postatus.js';
 import { estTime } from '../lib/format.js';
 import { issueTypeLabel } from '../lib/constants.js';
@@ -49,7 +50,7 @@ function AuditChip({ b }) {
 
 // `canLinkPo`: linking a shipment to its order is open to PH as well as the warehouse
 // (po/link-batch allows both), so it is NOT tied to `readOnly`.
-export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenPo = null, onHome, onSignOut, readOnly = false, canAudit = !readOnly, canLinkPo = true }) {
+export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenPo = null, onHome, onSignOut, readOnly = false, canAudit = !readOnly, canLinkPo = true, onlineOrderHref = (id) => `/online-orders?o=${id}` }) {
   const [open, setOpen] = useState(null);     // open batches
   const [recent, setRecent] = useState(null); // { batches, total, page, pageSize }
   // WHICH BATCH IS OPEN LIVES IN THE URL (?b=), and opening one PUSHES a history entry.
@@ -121,6 +122,10 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   // forgot to pick the order" (PO-100107). Loaded only for an unlinked batch.
   const [poMatches, setPoMatches] = useState([]);
   const [linking, setLinking] = useState(null);   // { initialPoId } while the link dialog is up
+  // The same for an ONLINE order — a parcel from a store is not a purchase order.
+  const [linkingOo, setLinkingOo] = useState(null);   // { initialOrderId }
+  const [ooUnlink, setOoUnlink] = useState(false);
+  const [ooNotice, setOoNotice] = useState('');
   const [found, setFound] = useState(null);    // server search results (null = not searching)
   const [searching, setSearching] = useState(false);
   const [openPageRaw, setOpenPageRaw] = useQueryParam('op');
@@ -232,7 +237,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   // audited or closed, a pair sold off it — the lists and the open batch re-read with the
   // page's current filters, swapping only what changed. The open box stays open (it is
   // keyed by id). Held while any dialog or write of this person's is up.
-  const dialogUp = busy || deleting || !!renumber || !!reopenBox || !!sizeEdit || !!expEdit || !!auditing || auditBusy || !!reopenId || !!linking;
+  const dialogUp = busy || deleting || !!renumber || !!reopenBox || !!sizeEdit || !!expEdit || !!auditing || auditBusy || !!reopenId || !!linking || !!linkingOo || ooUnlink;
   const BATCH_TABLES = ['batches', 'batch_boxes', 'items', 'shipment_issues', 'purchase_orders'];
   useLive(BATCH_TABLES, async () => {
     const seq = ++listSeq.current;
@@ -285,6 +290,19 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
       .catch(() => { /* no hint — the plain "Link to a purchase order" button still works */ });
     return () => { cancelled = true; };
   }, [detail?.batch?.id, detail?.batch?.po_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function removeOoLink() {
+    setBusy(true); setError('');
+    try {
+      await api.batchLinkOnlineOrder(selId, null);
+      setOoUnlink(false);
+      setOoNotice('The link to the online order was removed.');
+      await loadDetail(selId);
+    } catch (e) {
+      if (e.unauthorized) return onSignOut();
+      setOoUnlink(false); setError(e.message);
+    } finally { setBusy(false); }
+  }
 
   // Put the number on the row back in step with the label on the carton. Boxes that
   // arrive out of order get whatever "+ Add box" had left (max+1) — box 6 of 9 landing a
@@ -351,6 +369,8 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
   // ---- Batch detail view ----
   if (selId && detail) {
     const b = detail.batch;
+    // The online order this batch is: linked by hand, else matched by its tracking number.
+    const oo = detail.onlineOrder || null;
     const boxes = detail.boxes || [];
     // Group every unit under its box so each box row can drill into its shoes.
     const itemsByBox = new Map();
@@ -416,11 +436,32 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
                       ? <> · attached to the order afterwards{b.po_linked_by ? ` by ${b.po_linked_by}` : ''}</>
                       : b.po_link_source === 'receiving' ? <> · received straight against it</> : null}
                   </>
-                : <span className="prov-none">Not received against a purchase order</span>}
+                : oo?.source === 'linked'
+                  ? <>Online order <a href={onlineOrderHref(oo.id)}><b>{oo.code}</b></a> · {oo.store}{oo.order_number ? ` #${oo.order_number}` : ''}
+                      {' '}· linked{oo.linked_by ? ` by ${oo.linked_by}` : ''}
+                    </>
+                  : oo
+                    ? <>Online order <a href={onlineOrderHref(oo.id)}><b>{oo.code}</b></a> · {oo.store}{oo.order_number ? ` #${oo.order_number}` : ''}
+                        {' '}· matched by the tracking number{oo.also > 0 ? ` (${oo.also} more order${oo.also === 1 ? '' : 's'} on this number)` : ''}
+                      </>
+                    : <span className="prov-none">Not received against a purchase order or an online order</span>}
             </div>
             {/* The forgotten link, fixed where it's noticed. A tracking match names the
                 order outright; otherwise the button opens the list (same supplier). */}
-            {!b.po_id && canLinkPo && (
+            {!b.po_id && canLinkPo && oo && (
+              <div className="batch-po-link">
+                <div className="batch-po-link-btns">
+                  <button className="btn ghost sm" onClick={() => { setOoNotice(''); setLinkingOo({ initialOrderId: oo.id }); }}>
+                    {oo.source === 'linked' ? 'Change the online order…' : 'Wrong order? Link another…'}
+                  </button>
+                  {oo.source === 'linked' && (
+                    <button className="btn ghost sm" onClick={() => { setOoNotice(''); setOoUnlink(true); }}>Remove the link</button>
+                  )}
+                </div>
+              </div>
+            )}
+            {/* Nothing on a batch tied to an online order by hand: it is not a PO shipment. */}
+            {!b.po_id && canLinkPo && oo?.source !== 'linked' && (
               <div className="batch-po-link">
                 {poMatches.length > 0 && (
                   <p className="batch-po-hint sm">
@@ -438,6 +479,12 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
                   <button className={`btn ${poMatches.length === 1 ? 'ghost' : 'primary'} sm`} onClick={() => setLinking({ initialPoId: null })}>
                     {poMatches.length === 1 ? 'Another order…' : 'Link to a purchase order'}
                   </button>
+                  {/* A parcel bought online (Shoe Palace, JD Sports…) has no purchase order. */}
+                  {!oo && (
+                    <button className={`btn ${poMatches.length ? 'ghost' : 'primary'} sm`} onClick={() => { setOoNotice(''); setLinkingOo({ initialOrderId: null }); }}>
+                      Link to an online order
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -684,6 +731,7 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
         {error && <div className="error mt">{error}</div>}
         {sizeNotice && <div className="notice mt">{sizeNotice}</div>}
         {expNotice && <div className="notice mt">{expNotice}</div>}
+        {ooNotice && <div className="notice mt" role="status">{ooNotice}</div>}
         {expEdit && (
           <Modal type="warn" title={`${b.batch_code} — boxes expected`}
             message={`How many boxes (shipping labels) this shipment really has. ${received} received so far${boxes.length ? `, ${boxes.length} box row${boxes.length === 1 ? '' : 's'} on the batch` : ''}.`}
@@ -752,6 +800,27 @@ export function BatchPage({ initialBatchId = null, onAddBox, onOpenItem, onOpenP
             {reopenBox.err && <div className="error">{reopenBox.err}</div>}
             <button className="btn primary" disabled={busy} onClick={confirmReopenBox}>Reopen & edit</button>
             <button className="btn ghost" disabled={busy} onClick={() => setReopenBox(null)}>Cancel</button>
+          </Modal>
+        )}
+        {linkingOo && (
+          <BatchLinkOnlineModal batch={b} initialOrderId={linkingOo.initialOrderId}
+            onClose={() => setLinkingOo(null)} onSignOut={onSignOut}
+            onLinked={async (r) => {
+              setLinkingOo(null);
+              const n = r?.costs?.filled || 0;
+              setOoNotice(`${b.batch_code} is linked to online order ${r?.order?.code || ''}.`
+                + (n ? ` Cost filled on ${n} pair${n === 1 ? '' : 's'} from the order.` : ''));
+              await Promise.all([loadDetail(Number(b.id)), loadLists()]);
+            }} />
+        )}
+        {ooUnlink && (
+          <Modal type="warn" title={`Remove the link to ${oo?.code || 'the online order'}?`}
+            message={`${b.batch_code} will no longer be tied to this online order. The pairs and their costs stay as they are.`}
+            onClose={() => !busy && setOoUnlink(false)}>
+            <div className="modal-actions">
+              <button className="btn ghost" onClick={() => setOoUnlink(false)} disabled={busy}>Cancel</button>
+              <button className="btn primary" disabled={busy} onClick={removeOoLink}>{busy ? 'Removing…' : 'Remove the link'}</button>
+            </div>
           </Modal>
         )}
         {linking && (

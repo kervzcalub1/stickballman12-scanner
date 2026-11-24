@@ -4060,6 +4060,12 @@ button.box-existing-size:hover { border-color: var(--primary); }
 .po-link-batch.on { border-color: var(--primary); background: rgba(79,124,255,0.1); }
 .po-link-batch-code { font-weight: 700; }
 .po-link-already { color: #7bc99a; font-weight: 600; }
+/* Batch page → online order: search box over the list of candidate orders. */
+.oo-link-search { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.oo-link-search input { width: 100%; min-width: 0; box-sizing: border-box; }
+.po-link-batches.oo-link-list { max-height: 320px; }
+.oo-link-list .muted.xs { overflow-wrap: anywhere; }
+.modal.po-link .batch-po-hint { margin: 10px 0 0; }
 /* Batch page → order: the order that carries this shipment's tracking number. */
 .po-link-match { color: var(--accent, #7aa2ff); font-weight: 600; }
 .po-link-rows { display: flex; flex-direction: column; gap: 8px; }

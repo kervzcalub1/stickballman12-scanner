@@ -802,6 +802,10 @@ export const api = {
   poLinkBatch: (payload) => post('/api/po/link-batch', payload),
   // The same repair from the Batch page: which orders could this shipment belong to?
   batchPoCandidates: (batchId) => get(`/api/batches/po-candidates?batchId=${encodeURIComponent(batchId)}`),
+  // A parcel from an online store is not a purchase order: tie the batch to its online
+  // order instead (orderId null = remove the link).
+  batchOnlineCandidates: (batchId, q = '') => get(`/api/batches/online-candidates?batchId=${encodeURIComponent(batchId)}${q ? `&q=${encodeURIComponent(q)}` : ''}`),
+  batchLinkOnlineOrder: (batchId, orderId) => post('/api/batches/link-online-order', { batchId, orderId }),
   poUnlinkBatch: (poId, batchId) => post('/api/po/unlink-batch', { poId, batchId }),
   poDelete: (poId, confirm, reason) => post('/api/po/delete', { poId, confirm, reason }),
   poDeletedList: () => get('/api/po/deleted'),

@@ -612,6 +612,13 @@ against anything, so until a named person signs it off:
   `readOnly canAudit` — every other warehouse button stays hidden, but **Mark audited**
   shows, and `api/batches/audit.js` allows `warehouse` + `ph_team`. (They had been
   logging in on a warehouse account just to see this tile.)
+- **No tracking number + No manifest = NOT flagged (owner, 2026-11-24).** The audit checks the
+  contents against the tracking number's order; a parcel carried in by hand has neither, so
+  there is nothing to review it against. `manifestFlag(h)` stores **NULL** (not `false`) when
+  `h.noTracking` is true, so it is on no audit list, badge or chip — `no_tracking = true` on the
+  row says why. Step 1 says "no manifest review is asked for" and the commit confirm drops its
+  warn line. Same switch as the photo step (`receiving-evidence.md` "Carried in by hand").
+  Batches flagged before this stay flagged until signed off. E2E: `receiving-evidence.spec.js`.
 The commit confirm prints the flag before the person commits. Schema: four `ADD COLUMN IF
 NOT EXISTS` + a partial index — **run `db:setup` before deploying**. Guarded by
 `e2e/receiving-manifest-audit.spec.js`; every spec that walks Step 1 now answers the

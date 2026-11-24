@@ -100,6 +100,9 @@ test('carried in by hand ("No tracking number"): no photos are asked for, even w
   await page.locator('label:has-text("Supplier") select').selectOption({ index: 1 });
   await page.locator('.no-track-check input[type=checkbox]').check();
   await page.locator('.manifest-q').getByRole('button', { name: 'No' }).click();
+  // No tracking number AND no manifest: nothing to review it against, so no audit (2026-11-24).
+  await expect(page.locator('.manifest-q')).toContainText('no manifest review');
+  await expect(page.locator('.manifest-q')).not.toContainText('flagged for an audit');
   await page.getByRole('button', { name: 'Next →' }).click();
   await page.locator('.scanbar input').first().fill(sku);
   await page.locator('.scanbar').getByRole('button', { name: 'Add' }).click();
@@ -111,12 +114,17 @@ test('carried in by hand ("No tracking number"): no photos are asked for, even w
   await expect(page.locator('.oo-claim')).toHaveCount(0);
   await expect(page.locator('[data-claim-optional="label"]')).toHaveCount(0);
   await page.getByRole('button', { name: 'Finish batch' }).click();
+  await expect(page.locator('.confirm-summary')).toBeVisible();
+  await expect(page.locator('.confirm-summary')).not.toContainText('flagged for audit');
   await page.getByRole('button', { name: 'Yes, commit' }).click();
   await expect(page.getByText(/^Batch .* saved$/)).toBeVisible({ timeout: 15_000 });
 
   const [{ batch_id }] = await q('SELECT batch_id FROM items WHERE sku = $1 LIMIT 1', [sku]);
-  const [b] = await q('SELECT evidence, no_tracking FROM batches WHERE id = $1', [batch_id]);
-  expect(b).toMatchObject({ evidence: null, no_tracking: true });
+  const [b] = await q('SELECT evidence, no_tracking, manifest_received FROM batches WHERE id = $1', [batch_id]);
+  // manifest_received NULL = not flagged: it is on no audit list and carries no audit chip.
+  expect(b).toMatchObject({ evidence: null, no_tracking: true, manifest_received: null });
+  const pending = await (await page.request.get('/api/batches/list?kind=receiving&audit=pending', { headers: { Authorization: `Bearer ${signToken({ uid: 'e2e-ev', username: 'e2e_ev', name: 'E2E Evidence', role: 'warehouse' })}` } })).json();
+  expect(pending.batches.some((x) => Number(x.id) === Number(batch_id))).toBe(false);
   await q('DELETE FROM shipment_issues WHERE batch_id = $1', [batch_id]);
   await q('DELETE FROM items WHERE batch_id = $1', [batch_id]);
   await q('DELETE FROM batches WHERE id = $1', [batch_id]);

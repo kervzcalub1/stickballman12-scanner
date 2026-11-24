@@ -37,6 +37,11 @@ export function ItemCosts({ onHome, onSignOut }) {
   const fileRef = useRef(null);
   const [drafts, setDrafts] = useState({});      // `${groupKey}|${size}` -> typed string
   const [savingKey, setSavingKey] = useState(null);
+  // Bulk entry (2026-11-24): one amount typed once instead of once per size per shipment.
+  // `bulk` is the bar above the cards (every card on screen), `cardAmt` the "All sizes" box
+  // on one card. Both only FILL the boxes — nothing is saved until Save is pressed.
+  const [bulk, setBulk] = useState({ amt: '', blankOnly: false });
+  const [cardAmt, setCardAmt] = useState({});
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   // Month, not Day: this is a backlog. A Day filter would read "all clear" while the
@@ -90,7 +95,7 @@ export function ItemCosts({ onHome, onSignOut }) {
     setError(''); setNotice(''); setRows(null);
     try {
       const { rows: r } = await api.costsSearch(q);
-      setRows(r); setDrafts({}); setSearched(q);
+      setRows(r); setDrafts({}); setSearched(q); setBulk((b) => ({ ...b, amt: '' })); setCardAmt({});
       if (!r.length) setNotice(`Nothing found for “${q}”.`);
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
@@ -162,43 +167,92 @@ export function ItemCosts({ onHome, onSignOut }) {
   const setDraft = (g, s, v) => setDrafts((d) => ({ ...d, [draftKey(g, s)]: v }));
   const changedSizes = (g) => g.sizes.filter((s) => costChanged(draftFor(g, s), s.cost));
 
-  // Save every changed size on one card. Each size is its own request (one amount,
-  // one set of VINs) — they're applied one at a time so a rejected amount names the
-  // size it came from instead of failing the whole shoe.
-  async function saveGroup(g) {
-    const changed = changedSizes(g);
-    if (!changed.length) return;
-    setSavingKey(g.key); setError(''); setNotice('');
-    const saved = [];
-    try {
-      for (const s of changed) {
-        const raw = String(draftFor(g, s)).trim();
-        await api.setItemsCost(s.vins, raw === '' ? null : raw);
-        saved.push(s);
-        for (const v of s.vins) keptVins.current.add(v);
+  // One typed amount, as the server will store it — '' = cleared. Sizes that end up with
+  // the same amount can travel in one request.
+  const rawOf = (g, s) => String(draftFor(g, s)).trim();
+  const validAmt = (v) => { const t = String(v ?? '').trim(); return t !== '' && Number.isFinite(Number(t)) && Number(t) >= 0; };
+
+  // Fill the boxes of these cards with one amount. `blankOnly` leaves a size that already
+  // has a cost alone. Typed drafts only: Save still has to be pressed.
+  function fillSizes(gs, amt, blankOnly = false) {
+    if (!validAmt(amt)) return;
+    const v = String(amt).trim();
+    setDrafts((d) => {
+      const next = { ...d };
+      for (const g of gs) for (const s of g.sizes) {
+        if (blankOnly && s.cost != null) continue;
+        next[draftKey(g, s)] = v;
       }
-      const pairs = saved.reduce((n, s) => n + s.qty, 0);
-      setNotice(`Saved ${saved.length} size${saved.length === 1 ? '' : 's'} · ${pairs} pair${pairs === 1 ? '' : 's'} — ${g.name || g.sku}.`);
-      // Reflect the save in place rather than refetching: on the worklist a fully
-      // costed card would vanish mid-scroll, which loses your place and makes it
-      // impossible to check what you just typed.
-      setRows((rs) => (rs || []).map((r) => {
-        const hit = saved.find((s) => s.vins.includes(r.vin));
-        if (!hit) return r;
-        const raw = String(draftFor(g, hit)).trim();
-        return { ...r, cost: raw === '' ? null : Number(raw) };
-      }));
-      setDrafts((d) => {
-        const next = { ...d };
-        for (const s of saved) delete next[draftKey(g, s)];
-        return next;
-      });
+      return next;
+    });
+    setNotice(''); setError('');
+  }
+
+  // The one save path. `jobs` = [{ raw, vins, sizes: [{ g, s }] }]: one request each.
+  // Applied one at a time so a rejected amount names where it came from instead of
+  // failing everything; what was saved before it stays saved and is shown as saved.
+  async function runSave(busyKey, jobs, describe) {
+    setSavingKey(busyKey); setError(''); setNotice('');
+    const saved = [];   // { g, s, raw }
+    try {
+      for (const j of jobs) {
+        await api.setItemsCost(j.vins, j.raw === '' ? null : j.raw);
+        for (const x of j.sizes) { saved.push({ ...x, raw: j.raw }); for (const v of x.s.vins) keptVins.current.add(v); }
+      }
+      setNotice(describe(saved));
     } catch (err) {
       if (err.unauthorized) return onSignOut();
       setError(saved.length
         ? `${err.message} — ${saved.length} size${saved.length === 1 ? '' : 's'} saved before this, the rest are unchanged.`
         : err.message);
-    } finally { setSavingKey(null); }
+    } finally {
+      // Reflect the save in place rather than refetching: on the worklist a fully
+      // costed card would vanish mid-scroll, which loses your place and makes it
+      // impossible to check what you just typed.
+      if (saved.length) {
+        const byVin = new Map();
+        for (const x of saved) for (const v of x.s.vins) byVin.set(v, x.raw === '' ? null : Number(x.raw));
+        setRows((rs) => (rs || []).map((r) => (byVin.has(r.vin) ? { ...r, cost: byVin.get(r.vin) } : r)));
+        setDrafts((d) => {
+          const next = { ...d };
+          for (const x of saved) delete next[draftKey(x.g, x.s)];
+          return next;
+        });
+      }
+      setSavingKey(null);
+    }
+  }
+  const pairsOf = (saved) => saved.reduce((n, x) => n + x.s.qty, 0);
+
+  // Save every changed size on one card: each size is its own request (one amount, one
+  // set of VINs), so a rejected amount names the size it came from.
+  async function saveGroup(g) {
+    const changed = changedSizes(g);
+    if (!changed.length) return;
+    await runSave(g.key, changed.map((s) => ({ raw: rawOf(g, s), vins: s.vins, sizes: [{ g, s }] })),
+      (saved) => `Saved ${saved.length} size${saved.length === 1 ? '' : 's'} · ${pairsOf(saved)} pair${pairsOf(saved) === 1 ? '' : 's'} — ${g.name || g.sku}.`);
+  }
+
+  // Save every changed size on EVERY card shown. Sizes with the same amount go together
+  // (up to 400 pairs a request — the endpoint takes 500), so three shipments × ten sizes
+  // at one price is one request, not thirty.
+  const SAVE_ALL = '*all*';
+  const allChanged = (groups || []).flatMap((g) => changedSizes(g).map((s) => ({ g, s })));
+  async function saveAll() {
+    if (!allChanged.length) return;
+    const jobs = [];
+    const open = new Map();   // raw amount -> the job still taking pairs
+    for (const x of allChanged) {
+      const raw = rawOf(x.g, x.s);
+      const key = raw === '' ? '' : String(Math.round(Number(raw) * 100));
+      let j = open.get(key);
+      if (!j || j.vins.length + x.s.vins.length > 400) { j = { raw, vins: [], sizes: [] }; jobs.push(j); open.set(key, j); }
+      j.vins.push(...x.s.vins); j.sizes.push(x);
+    }
+    await runSave(SAVE_ALL, jobs, (saved) => {
+      const cards = new Set(saved.map((x) => x.g.key)).size;
+      return `Saved ${saved.length} size${saved.length === 1 ? '' : 's'} · ${pairsOf(saved)} pair${pairsOf(saved) === 1 ? '' : 's'} across ${cards} shipment${cards === 1 ? '' : 's'}.`;
+    });
   }
 
   // LIVE (docs/context/live-updates.md) — costs typed on another device, and new pairs
@@ -415,10 +469,43 @@ export function ItemCosts({ onHome, onSignOut }) {
                 : 'All clear — every pair in this range has a cost on file.'}
             </p>
           ) : (
+            <>
+            {/* One amount for everything on screen. Search only: a search is one shoe, the
+                backlog is hundreds of different ones — there each card has its own box. */}
+            {searched && (
+              <div className="cost-bulk" role="group" aria-label="Set one cost for every pair shown">
+                <span className="cost-bulk-lbl"><b>Same cost for all {groups.length} shipment{groups.length === 1 ? '' : 's'}</b>
+                  <span className="muted sm"> · {totalPairs} pair{totalPairs === 1 ? '' : 's'}, every size</span></span>
+                <PriceInput value={bulk.amt} aria-label="Cost for every pair shown" disabled={!!savingKey}
+                  onChange={(e) => setBulk((b) => ({ ...b, amt: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); fillSizes(groups, bulk.amt, bulk.blankOnly); } }} />
+                <button className="btn sm" type="button" disabled={!validAmt(bulk.amt) || !!savingKey}
+                  onClick={() => fillSizes(groups, bulk.amt, bulk.blankOnly)}>Fill all</button>
+                <label className="cost-bulk-opt sm">
+                  <input type="checkbox" checked={bulk.blankOnly} onChange={(e) => setBulk((b) => ({ ...b, blankOnly: e.target.checked }))} />
+                  Only sizes with no cost yet
+                </label>
+              </div>
+            )}
+            {(searched || allChanged.length > 0) && (
+              <div className="cost-bulk-save">
+                <span className="muted sm">
+                  {allChanged.length
+                    ? `${allChanged.length} size${allChanged.length === 1 ? '' : 's'} changed · ${allChanged.reduce((n, x) => n + x.s.qty, 0)} pair${allChanged.reduce((n, x) => n + x.s.qty, 0) === 1 ? '' : 's'} · not saved yet`
+                    : 'Fill the boxes, check them, then save everything in one go.'}
+                </span>
+                {allChanged.length > 0 && (
+                  <button className="btn sm ghost" type="button" disabled={!!savingKey} onClick={() => setDrafts({})}>Undo changes</button>
+                )}
+                <button className="btn sm primary" type="button" disabled={!allChanged.length || !!savingKey} onClick={saveAll}>
+                  {savingKey === SAVE_ALL ? 'Saving…' : `Save all${allChanged.length ? ` (${allChanged.length})` : ''}`}
+                </button>
+              </div>
+            )}
             <div className="cost-groups">
               {groups.map((g) => {
                 const changed = changedSizes(g);
-                const busy = savingKey === g.key;
+                const busy = savingKey === g.key || savingKey === SAVE_ALL;
                 return (
                   <div className={`cost-card ${g.missing || tab === 'zero' ? 'needs' : ''}`} key={g.key}>
                     <div className="cost-card-head">
@@ -436,9 +523,19 @@ export function ItemCosts({ onHome, onSignOut }) {
                       </div>
                     </div>
 
+                    {g.sizes.length > 1 && (
+                      <div className="cost-allsizes">
+                        <span className="cost-size-label">All sizes</span>
+                        <PriceInput value={cardAmt[g.key] ?? ''} aria-label={`Cost for all sizes of ${g.sku || g.name}${g.batch_code ? ` in ${g.batch_code}` : ''}`} disabled={busy}
+                          onChange={(e) => setCardAmt((c) => ({ ...c, [g.key]: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); fillSizes([g], cardAmt[g.key]); } }} />
+                        <button className="btn sm ghost" type="button" disabled={!validAmt(cardAmt[g.key]) || busy}
+                          onClick={() => fillSizes([g], cardAmt[g.key])}>Fill {g.sizes.length} sizes</button>
+                      </div>
+                    )}
                     <div className="cost-sizes">
                       {g.sizes.map((s) => (
-                        <label className={`cost-size ${s.cost == null ? 'blank' : ''}`} key={s.size}>
+                        <label className={`cost-size ${s.cost == null ? 'blank' : ''} ${costChanged(draftFor(g, s), s.cost) ? 'changed' : ''}`} key={s.size}>
                           <span className="cost-size-label">
                             US {sizeLabel(s.size, s.gender, g.name)}
                             <span className="muted"> ×{s.qty}</span>
@@ -471,6 +568,7 @@ export function ItemCosts({ onHome, onSignOut }) {
                 );
               })}
             </div>
+            </>
           )}
       </div>
     </div>

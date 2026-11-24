@@ -2723,7 +2723,10 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                         <button type="button" className={`seg-btn ${header.manifestReceived === false ? 'on no' : ''}`} aria-pressed={header.manifestReceived === false}
                           onClick={() => setH('manifestReceived', false)}>No</button>
                       </div>
-                      {header.manifestReceived === false && (
+                      {header.manifestReceived === false && header.noTracking && (
+                        <span className="manifest-q-note ok">No manifest and no tracking number — there is nothing to check it against, so <b>no manifest review</b> is asked for.</span>
+                      )}
+                      {header.manifestReceived === false && !header.noTracking && (
                         <span className="manifest-q-note">No manifest — this shipment will be <b>flagged for an audit</b>: somebody confirms against the tracking number's order (or with the supplier) that everything expected arrived.</span>
                       )}
                       {header.manifestReceived === true && receivingPo && (receivingPo.lines || []).length > 0 && (
@@ -3573,7 +3576,7 @@ export function Receiving({ mode = 'receiving', navBack, batchContext = null, on
                 : (<>
                     <div><b>{totalItems}</b> units ({items.length} shoe{items.length === 1 ? '' : 's'}) · total <b>${totalCost.toFixed(2)}</b></div>
                     {uncostedUnits > 0 && <div className="warn-line">{uncostedUnits} pair{uncostedUnits === 1 ? '' : 's'} with no cost — they’ll wait on the Costs page.</div>}
-                    {header.manifestReceived === false && <div className="warn-line">Received without a manifest — flagged for audit against {header.tracking?.trim() ? `tracking ${header.tracking.trim()}` : 'its tracking number'}.</div>}
+                    {header.manifestReceived === false && !header.noTracking && <div className="warn-line">Received without a manifest — flagged for audit against {header.tracking?.trim() ? `tracking ${header.tracking.trim()}` : 'its tracking number'}.</div>}
                     <div className="muted">Supplier: {header.supplier || '—'} · Buyer: {header.buyer || '—'}</div>
                     {isMultiBoxNew && activeSlot != null
                       ? <div className="muted">Box {Number(boxSlots[activeSlot]?.boxNumber) || activeSlot + 1} of {boxSlots.length} · Tracking: {boxSlots[activeSlot]?.tracking || '—'}{boxSlots[activeSlot]?.storeName ? ` · Store: ${boxSlots[activeSlot].storeName}` : ''}</div>

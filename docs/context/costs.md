@@ -143,6 +143,26 @@ rejected amount names the size it came from instead of failing the whole shoe. R
 update in place rather than refetching — on the backlog a fully-costed card would
 otherwise vanish mid-scroll, losing your place and any chance to check what you typed.
 
+## Bulk entry (2026-11-24)
+A SKU search returns one card per shipment with a box per size; three shipments × ten sizes
+was thirty boxes typed by hand. Two fills, both of which only TYPE into the boxes (drafts) —
+nothing is written until a Save:
+- **"Same cost for all N shipments"** bar (`.cost-bulk`, **search only** — a search is one shoe,
+  the backlog is hundreds of different ones): an amount + **Fill all** puts it in every box of
+  every card on screen. **"Only sizes with no cost yet"** leaves a cost already on file alone.
+- **"All sizes"** box on each card with 2+ sizes (`.cost-allsizes`, search AND backlog): fills
+  that one shipment.
+- **Save all (n)** (`.cost-bulk-save`, sticky; shown on a search, and on the backlog once
+  anything is typed) saves every changed size on every card; **Undo changes** drops the drafts.
+  A box changed by hand after a fill keeps its own amount. A changed size's label turns green.
+- Deliberately across batches: the "batch is part of the key" rule above still protects the
+  per-card Save; overwriting an older shipment's price is now a visible, chosen act (the boxes
+  show it before Save all), not a silent merge.
+- One save path, `runSave(busyKey, jobs)` in `ItemCosts.jsx`. The card's Save still sends one
+  request per size; Save all groups sizes **by amount** (≤ 400 pairs a request, the endpoint
+  takes 500) — same `POST /api/items/set-cost`, same per-pair history note, no new endpoint.
+- E2E: `e2e/costs-bulk.spec.js`.
+
 ## Gotchas
 - **Blank is not $0, and this was a real bug.** `toCost` (now exported from
   `api/_lib/intake.js`, previously copy-pasted into `commit.js` / `box-commit.js` /

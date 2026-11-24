@@ -988,7 +988,12 @@ export async function removeProductPhoto(sku, angle, source = 'warehouse') {
 
 // "Did this package come with a manifest?" as a tri-state: true / false / NULL (never
 // asked — rescale, in-store, existing, and everything from before the question).
-const manifestFlag = (h) => (h.manifestReceived === true ? true : h.manifestReceived === false ? false : null);
+// "No" on a shipment with NO TRACKING NUMBER is also stored as NULL (owner, 2026-11-24): the
+// audit checks the contents against the tracking number's order, and a hand-carried parcel has
+// neither a number nor a list — there is nothing to review it against, so it is never flagged.
+// `no_tracking = true` on the same row is the record of why.
+const manifestFlag = (h) => (h.manifestReceived === true ? true
+  : h.manifestReceived === false ? (h.noTracking === true ? null : false) : null);
 // 'all' | 'some', and NULL whenever the shipment isn't pre-sell at all. The scope is what
 // the BOX COMMIT reads to decide whether a later box may stamp pre_sell onto every pair
 // in it, so a missing value has to mean 'all' — that is what the old checkbox meant, and

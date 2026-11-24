@@ -11,7 +11,10 @@
 // whose emails are HTML only (no text reaches us), is reported as such — never guessed.
 
 const URL_RE = /\[?\(?\s*https?:\/\/\S+\s*\)?/g;
-export const emailLines = (text) => String(text || '').split(/\r?\n/).map((l) => l.replace(URL_RE, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
+// Some stores' "text" is their HTML with the tags half-stripped (adidas): <br> is a line,
+// &zwnj; / &nbsp; are padding.
+const untag = (text) => String(text || '').replace(/<br\s*\/?>/gi, '\n').replace(/&zwnj;|&nbsp;|\u200c/gi, ' ');
+export const emailLines = (text) => untag(text).split(/\r?\n/).map((l) => l.replace(URL_RE, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
 export const bare = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 // "08.0", "12.0 REG", "7.5W", "5Y" → the number. The letters are the box's sizing, not a
 // different pair (the same rule the online-order check uses).
@@ -207,6 +210,105 @@ export function readSupremeShipped(email) {
   return items.length ? { items, priced: true } : null;
 }
 
+// ── adidas: "Your adidas receipt" — the one store email that prints the article number ──
+//   RESPONSE CL CRYWHT/ ,9-   /   Article No: IG6226   /   Selling Price: $44.19   /
+//   60% OFF RED TAG - 77.98   /   IDme 15% Off - 7.80
+// "Selling Price" is already after the discounts under it (what was paid); "9-" is 9.5.
+export function readAdidasReceipt(email) {
+  const ls = emailLines(email?.text);
+  const out = [];
+  for (let i = 1; i < ls.length - 1; i += 1) {
+    const a = ls[i].match(/^article no:?\s*([A-Z0-9]{5,12})$/i);
+    const p = (ls[i + 1] || '').match(/^selling price:?\s*\$?\s*([\d,]+\.\d{2})$/i);
+    const n = (ls[i - 1] || '').match(/^(.*?)\s*,\s*(\d{1,2}(?:\.5)?)(-)?\s*$/);
+    if (!a || !p || !n) continue;
+    const each = Number(p[1].replace(/,/g, ''));
+    let off = 0;
+    for (let j = i + 2; j < ls.length; j += 1) {
+      const d = ls[j].match(/\s-\s*([\d,]+\.\d{2})$/);
+      if (!d) break;
+      off += Number(d[1].replace(/,/g, ''));
+    }
+    out.push({ sku: a[1].toUpperCase(), name: n[1].replace(/\/$/, '').trim(), size: n[3] ? String(Number(n[2]) + 0.5) : n[2], qty: 1, each: cents(each), full: cents(each + off) });
+  }
+  return out.length ? { lines: out } : null;
+}
+
+// adidas.com order emails (confirmation, "order update"): per shoe
+//   SAMBA OG SHOES / $180.00 $45.00 x 4 $120.00 / Color: … / Size: 8 / Quantity: 4 / Article No: KI6956
+// = listed $45 a pair, $120 paid for the four → $30 a pair.
+export function readAdidasOrder(email) {
+  const ls = emailLines(email?.text);
+  const out = [];
+  for (let i = 3; i < ls.length; i += 1) {
+    const a = ls[i].match(/^article no:?\s*([A-Z0-9]{5,12})$/i);
+    if (!a) continue;
+    const back = ls.slice(Math.max(0, i - 6), i);
+    const q = back.map((l) => l.match(/^quantity:\s*(\d{1,3})$/i)).find(Boolean);
+    const z = back.map((l) => l.match(/^size:\s*(.+)$/i)).find(Boolean);
+    const m = back.map((l) => l.match(/\$([\d,]+\.\d{2})\s*x\s*(\d{1,3})\s+\$([\d,]+\.\d{2})\s*$/i)).find(Boolean);
+    if (!q || !z || !m) continue;
+    const qty = Number(q[1]);
+    if (!qty || Number(m[2]) !== qty) continue;
+    const at = back.findIndex((l) => /\$[\d,]+\.\d{2}\s*x\s*\d/.test(l));
+    out.push({ sku: a[1].toUpperCase(), name: at > 0 ? back[at - 1] : '', size: z[1], qty, full: cents(Number(m[1].replace(/,/g, ''))), each: cents(Number(m[3].replace(/,/g, '')) / qty) });
+  }
+  return out.length ? { lines: out } : null;
+}
+
+/**
+ * The emails a SKU search returned → every priced line that PRINTS that SKU, with the store
+ * and the day. Most stores never print the style code (Shoe Palace, Foot Locker, JD: the
+ * name only), so this reaches the ones that do — adidas today.
+ */
+export function readSkuLines(emails, sku) {
+  const want = bare(sku);
+  const out = [];
+  for (const e of emails || []) {
+    const r = readAdidasReceipt(e) || readAdidasOrder(e);
+    if (!r) continue;
+    const store = storeOf(e);
+    for (const l of r.lines) if (bare(l.sku) === want) out.push({ ...l, store, order: orderNumberOf(e), date: e.date || null });
+  }
+  return out;
+}
+
+// "Adidas" on the batch and "adidas" in the email are one store; so are "Champs" and
+// "Champs Sports". No supplier on the batch = any store.
+export const sameStore = (supplier, store) => {
+  const a = bare(supplier); const b = bare(store);
+  return !a || !b || a.includes(b) || b.includes(a);
+};
+
+/**
+ * One pair priced by its SKU alone: the lines that print the SKU, from the pair's own store,
+ * in its size. One price → that price. Two prices → said, with both, and left for a person:
+ * without the parcel or the order, nothing says which purchase this pair came from.
+ */
+export function priceBySku(pair, lines) {
+  const mine = (lines || []).filter((l) => sameStore(pair.supplier, l.store) && sizeNum(l.size) === sizeNum(pair.size));
+  if (!mine.length) return { reason: (lines || []).length ? 'The emails with this SKU have no line in this size from this supplier' : 'No store email prints this SKU' };
+  const hit = onePrice(mine);
+  if (hit) return { each: hit.each, full: hit.full, how: 'sku', name: hit.name, store: hit.store, order: hit.order || null, note: 'matched by SKU and size' };
+  const prices = [...new Set(mine.map((l) => l.each))].sort((x, y) => x - y);
+  return { reason: `Bought at ${prices.length} prices (${prices.map((v) => `$${v.toFixed(2)}`).join(', ')}) — pick one by hand`, store: mine[0].store };
+}
+
+/**
+ * Pairs priced from ONE order someone named (its confirmation's lines). With a SKU named
+ * too, the person has said "these pairs are that order": the size decides. Otherwise the
+ * line must print the SKU, or be the name learned for it.
+ */
+export function priceFromOrder(pair, order, { trustSize = false, skuNames = new Map() } = {}) {
+  if (order?.state !== 'ok') return { reason: 'That order’s confirmation email was not found or cannot be read' };
+  const size = order.lines.filter((l) => l.each != null && sizeNum(l.size) === sizeNum(pair.size));
+  const names = skuNames.get(bare(pair.sku));
+  const fit = size.filter((l) => (l.sku && bare(l.sku) === bare(pair.sku)) || (names && names.has(nameKey(l.name))));
+  const hit = onePrice(fit.length ? fit : trustSize ? size : []);
+  if (hit) return { each: hit.each, full: hit.full, how: 'order', name: hit.name, note: 'from the order number given' };
+  return { reason: size.length ? 'The order has this size, but not clearly this shoe — give the SKU too' : 'The order has no line in this size' };
+}
+
 /**
  * The emails a tracking-number search returned → what that parcel is.
  * → { state: 'ok', store, order, items: [{ name, sku?, size, qty, each?, full? }], priced, note }
@@ -235,6 +337,16 @@ export function readOrder(emails) {
     const r = readShopifyConfirmation(e);
     if (r) return { state: 'ok', store: storeOf(e), lines: r.lines, totals: r.totals };
   }
+  // adidas says the shoes in every email about the order; the same line comes many times.
+  const seen = new Map();
+  let store = null;
+  for (const e of emails || []) {
+    const r = readAdidasOrder(e);
+    if (!r) continue;
+    store = store || storeOf(e);
+    for (const l of r.lines) seen.set(`${l.sku}|${sizeNum(l.size)}|${l.each}`, l);
+  }
+  if (seen.size) return { state: 'ok', store, lines: [...seen.values()], totals: {} };
   return { state: (emails || []).length ? 'unreadable' : 'no_email' };
 }
 

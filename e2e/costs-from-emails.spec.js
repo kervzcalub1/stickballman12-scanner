@@ -8,7 +8,7 @@ import pg from 'pg';
 import { signToken } from '../api/_lib/util.js';
 import { loginAs } from './helpers/auth.js';
 import { estToday } from '../src/lib/format.js';
-import { readParcel, readOrder, priceParcel, learnNames, orderNumberOf } from '../src/lib/costEmails.js';
+import { readParcel, readOrder, priceParcel, learnNames, orderNumberOf, readSkuLines, priceBySku, priceFromOrder } from '../src/lib/costEmails.js';
 import { runCostEmails, applyCostEmailRun } from '../api/_lib/cost-emails.js';
 import { createCostEmailRun, getCostEmailRun } from '../api/_lib/db.js';
 
@@ -96,6 +96,42 @@ test('two shoes of one size at two prices: left alone, until the store’s name 
   expect(res[1].reason).toBeTruthy();   // the Dunk's name was never learned
 });
 
+// adidas' receipt is its HTML with the tags half-stripped; "9-" is a 9.5; Selling Price is
+// already after the discounts listed under it.
+const adidasReceipt = (rows) => ({
+  subject: 'Your adidas receipt', from: 'adidas@us-info.adidas.com', date: '2026-09-05T18:30:14.000Z',
+  text: 'adidas<br> &zwnj; &zwnj;<br>' + rows.map(([name, size, sku, price, off]) => `<br><br>${name} &zwnj; ,${size}<br><br> Article No: ${sku}<br><br> &zwnj;Selling Price: $${price} <br><br> &zwnj;60% OFF RED TAG &zwnj; &zwnj; - ${off}<br>`).join(''),
+});
+const adidasUpdate = {
+  subject: 'Your adidas order update', from: 'adidas@us-info.adidas.com', date: '2026-10-02T10:00:00.000Z',
+  text: 'UPDATE TO YOUR ORDER ORDER NUMBER: AD9AA055496\nITEMS STILL TO BE SHIPPED\nCart Image\nSAMBA OG SHOES\n$180.00 $45.00 x 4 $120.00\nColor: Aurora Coffee / Off White / Gum\nSize: 8\nQuantity: 4\nArticle No: KI6956\nNEED HELP?',
+};
+
+test('by SKU: only emails that PRINT the code count, one price fills, two prices are shown and left', () => {
+  const emails = [
+    { subject: 'alias Account Management Check in', from: 'someone@goat.com', date: '2026-03-03', text: 'KI6956 is selling well this week, list more pairs.' },
+    adidasReceipt([['SAMBA OG W AUCO/OW', '9-', 'KI6956', '59.50', '60.50'], ['SAMBA OG W AUCO/OW', '8', 'KI6956', '59.50', '60.50'], ['CAMPUS 00s STBARK', '8', 'GY6433', '18.69', '36.28']]),
+    adidasUpdate,
+  ];
+  const lines = readSkuLines(emails, 'ki 6956');
+  expect(lines.map((l) => [l.size, l.each, l.full, l.store])).toEqual([['9.5', 59.5, 120, 'adidas'], ['8', 59.5, 120, 'adidas'], ['8', 30, 45, 'adidas']]);
+  expect(priceBySku({ sku: 'KI6956', size: '9.5W', supplier: 'Adidas' }, lines)).toMatchObject({ each: 59.5, full: 120, how: 'sku', store: 'adidas' });
+  expect(priceBySku({ sku: 'KI6956', size: '8', supplier: 'Adidas' }, lines).reason).toBe('Bought at 2 prices ($30.00, $59.50) — pick one by hand');
+  expect(priceBySku({ sku: 'KI6956', size: '13', supplier: 'Adidas' }, lines).reason).toMatch(/no line in this size/);
+  // Another supplier's pair is not priced off adidas' receipt.
+  expect(priceBySku({ sku: 'KI6956', size: '9.5', supplier: 'Foot Locker' }, lines).each).toBeUndefined();
+  expect(priceBySku({ sku: 'KI6956', size: '9.5', supplier: 'Adidas' }, []).reason).toBe('No store email prints this SKU');
+
+  // An order number someone gives: its lines print the SKU (adidas), or the size decides when the SKU was named too.
+  const ad = readOrder([adidasUpdate]);
+  expect(ad).toMatchObject({ state: 'ok', store: 'adidas' });
+  expect(priceFromOrder({ sku: 'KI6956', size: '8' }, ad)).toMatchObject({ each: 30, full: 45, how: 'order' });
+  const sp = readOrder([confirmation('SP99000222')]);
+  expect(priceFromOrder({ sku: 'FQ4296-101', size: '12' }, sp).reason).toMatch(/give the SKU too/);
+  expect(priceFromOrder({ sku: 'FQ4296-101', size: '12' }, sp, { trustSize: true })).toMatchObject({ each: 59.99 });
+  expect(priceFromOrder({ sku: 'FQ4296-101', size: '9' }, sp, { trustSize: true }).reason).toBeTruthy();   // two shoes in a 9, two prices
+});
+
 test.describe('a run, end to end', () => {
   const TRK = `1ZE2ECFE${String(Date.now()).slice(-10)}`;
   let batchId;
@@ -109,7 +145,7 @@ test.describe('a run, end to end', () => {
     await q('DELETE FROM items WHERE sku LIKE $1', ['E2ECFE-%']);
     await q('DELETE FROM batches WHERE supplier_name = $1', [SUPPLIER]);
     await q('DELETE FROM cost_email_runs WHERE supplier = $1', [SUPPLIER]);
-    await q('DELETE FROM cost_email_lookups WHERE key IN ($1, $2)', [`T:${TRK}`, 'O:SP99000111']);
+    await q('DELETE FROM cost_email_lookups WHERE key IN ($1, $2, $3, $4)', [`T:${TRK}`, 'O:SP99000111', 'O:SP99000333', 'S:E2ECFESTRAY']);
     await db.end();
   });
 
@@ -136,7 +172,8 @@ test.describe('a run, end to end', () => {
     } };
     const id = await createCostEmailRun({ supplier: SUPPLIER, from: null, to: null, by: 'E2E' });
     await runCostEmails(id, { io });
-    expect(asked).toEqual([TRK, 'SP99000111']);
+    // The parcel, its order, then the one pair still unpriced by its SKU (newsletters left out).
+    expect(asked).toEqual([TRK, 'SP99000111', 'E2ECFESTRAY" -from:goat.com "E2ECFESTRAY']);
 
     const run = await getCostEmailRun(id, { rows: true });
     expect(run.status).toBe('done');
@@ -169,12 +206,23 @@ test.describe('a run, end to end', () => {
     expect((await request.post('/api/items/cost-emails', { headers: WH, data: { action: 'apply', id } })).status()).toBe(409);
     expect(await applyCostEmailRun(987654321, 'x')).toMatchObject({ status: 404 });
 
-    // A second run asks the mailbox nothing: what it read is remembered.
+    // What it read is remembered (a miss for a day): the next run asks the mailbox nothing.
     asked.length = 0;
     const id2 = await createCostEmailRun({ supplier: SUPPLIER, from: null, to: null, by: 'E2E' });
     await runCostEmails(id2, { io });
     expect(asked).toEqual([]);
-    expect((await getCostEmailRun(id2)).summary).toMatchObject({ pairs: 1, priced: 0 });
+    expect((await getCostEmailRun(id2)).summary).toMatchObject({ pairs: 1, priced: 0, skus: 1 });
+
+    // Narrowed to the SKU and told the order: the size decides, the pair is priced from it.
+    asked.length = 0;
+    const conf = confirmation('SP99000333');
+    const io3 = { ask: async (term) => { asked.push(term); return term === 'SP99000333' ? [{ ...conf, text: conf.text.replace('× 3\n\n12\n', '× 3\n\n14\n') }] : []; } };
+    const id3 = await createCostEmailRun({ supplier: SUPPLIER, from: null, to: null, by: 'E2E', sku: 'E2ECFE-STRAY', order: 'SP99000333' });
+    await runCostEmails(id3, { io: io3 });
+    expect(asked).toEqual(['SP99000333']);
+    const r3 = await getCostEmailRun(id3, { rows: true });
+    expect(r3).toMatchObject({ sku: 'E2ECFE-STRAY', order_number: 'SP99000333' });
+    expect(r3.rows.map((x) => [x.sku, x.each, x.how, x.order])).toEqual([['E2ECFE-STRAY', 59.99, 'order', 'SP99000333']]);
   });
 
   test('who may, and a server without the mailbox search says so', async ({ request, page }) => {
@@ -190,5 +238,7 @@ test.describe('a run, end to end', () => {
     await expect(page.getByRole('tab', { name: 'From emails' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByText('The mailbox search is not set up on this server')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Read the emails' })).toBeDisabled();
+    await expect(page.getByLabel('Only this SKU')).toBeVisible();
+    await expect(page.getByLabel('Order number')).toBeVisible();
   });
 });

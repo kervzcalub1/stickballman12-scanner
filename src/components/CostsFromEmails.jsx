@@ -19,6 +19,8 @@ export function CostsFromEmails({ supplier = '', from = '', to = '', onSignOut, 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [sku, setSku] = useState('');
+  const [order, setOrder] = useState('');
   const sup = supplier && supplier !== NO_SUPPLIER ? supplier : '';
   const run = state?.run || null;
   const running = run?.status === 'running' && !run.stalled;
@@ -56,7 +58,7 @@ export function CostsFromEmails({ supplier = '', from = '', to = '', onSignOut, 
   const not = useMemo(() => (rows || []).filter((r) => r.each == null), [rows]);
   const list = show === 'priced' ? priced : not;
   const scope = `${sup || 'Every supplier'}${from || to ? ` · received ${from || '…'} to ${to || '…'}` : ' · any date'}`;
-  const runScope = run ? `${run.supplier || 'Every supplier'}${run.date_from || run.date_to ? ` · ${run.date_from || '…'} to ${run.date_to || '…'}` : ' · any date'}` : '';
+  const runScope = run ? `${run.supplier || 'Every supplier'}${run.date_from || run.date_to ? ` · ${run.date_from || '…'} to ${run.date_to || '…'}` : ' · any date'}${run.sku ? ` · SKU ${run.sku}` : ''}${run.order_number ? ` · order ${run.order_number}` : ''}` : '';
 
   function exportCsv() {
     const head = ['VIN', 'SKU', 'Size', 'Shoe', 'Batch', 'Supplier', 'Tracking', 'Store (email)', 'Order #', 'Name in the email', 'Listed', 'Paid', 'How', 'Note', 'Not priced because'];
@@ -81,9 +83,17 @@ export function CostsFromEmails({ supplier = '', from = '', to = '', onSignOut, 
         <div><span className="muted xs">This run will read</span><br /><b>{scope}</b>
           <span className="muted sm"> — change the supplier and dates on the “No cost on file” tab.</span></div>
         <button type="button" className="btn primary" disabled={busy || running || !state.configured}
-          onClick={() => act({ action: 'start', supplier: sup, from, to })}>
+          onClick={() => act({ action: 'start', supplier: sup, from, to, sku: sku.trim(), order: order.trim() })}>
           {running ? 'Reading the emails…' : 'Read the emails'}
         </button>
+      </div>
+      <div className="cfe-narrow">
+        <label><span className="muted xs">Only this SKU (optional)</span>
+          <input value={sku} onChange={(e) => setSku(e.target.value)} placeholder="IG6226" aria-label="Only this SKU" autoCapitalize="characters" /></label>
+        <label><span className="muted xs">Order number, if you know it (optional)</span>
+          <input value={order} onChange={(e) => setOrder(e.target.value)} placeholder="SP2520297" aria-label="Order number" autoCapitalize="characters" /></label>
+        <p className="muted sm">A pair is priced the most exact way available: its <b>tracking number</b> first, then the <b>order number</b> you give,
+          then its <b>SKU</b> (only stores whose emails print the code — adidas today). A SKU bought at two prices is shown with both and left blank.</p>
       </div>
       {error && <div className="error sm mt" role="alert">{error}</div>}
       {notice && <div className="notice mt" role="status">{notice}</div>}
@@ -96,7 +106,7 @@ export function CostsFromEmails({ supplier = '', from = '', to = '', onSignOut, 
               <div className="progress-bar"><span style={{ width: `${run.parcels_total ? Math.round((run.parcels_done / run.parcels_total) * 100) : 0}%` }} /></div>
               <p className="sm" role="status">
                 {run.stalled ? 'Stopped part-way (the server restarted). ' : 'Reading the mailbox: '}
-                <b>{run.parcels_done}</b> of <b>{run.parcels_total || '…'}</b> parcels. About 5 seconds a parcel — you can leave this page.
+                <b>{run.parcels_done}</b> of <b>{run.parcels_total || '…'}</b> searches (parcels, then SKUs). About 5 seconds a parcel — you can leave this page.
               </p>
               <div className="cfe-btns">
                 {run.stalled && <button type="button" className="btn primary sm" disabled={busy} onClick={() => act({ action: 'continue', id: run.id })}>Continue</button>}
@@ -114,7 +124,7 @@ export function CostsFromEmails({ supplier = '', from = '', to = '', onSignOut, 
                 <div><b>{s.parcels.toLocaleString('en-US')}</b><span className="muted sm"> parcels read</span></div>
                 {run.status === 'applied' && <div><b>{run.applied_pairs}</b><span className="muted sm"> costs saved {when(run.applied_at)}{run.applied_by ? ` by ${run.applied_by}` : ''}</span></div>}
               </div>
-              {s.capped && <p className="batch-po-hint sm">Only the first 1,500 parcels were read. Apply these, then run it again for the rest.</p>}
+              {s.capped && <p className="batch-po-hint sm">This run reached its limit (1,500 parcels, 200 SKUs). Apply these, then run it again for the rest.</p>}
               <table className="cfe-table cfe-stores">
                 <thead><tr><th>Store (from the email)</th><th>Pairs</th><th>Priced</th></tr></thead>
                 <tbody>{Object.entries(s.stores || {}).sort((a, b) => b[1].pairs - a[1].pairs).map(([k, v]) => (
@@ -151,7 +161,7 @@ export function CostsFromEmails({ supplier = '', from = '', to = '', onSignOut, 
                           <td>{r.batch}<div className="muted xs">{r.trk}</div></td>
                           <td>{r.store || '—'}{r.order ? <div className="muted xs">#{r.order}</div> : null}</td>
                           {show === 'priced'
-                            ? <><td className="muted">{r.full != null && r.full > r.each ? money(r.full) : ''}</td><td><b>{money(r.each)}</b></td><td className="muted sm">{r.how === 'order' ? 'the order' : 'the parcel’s email'}{r.note ? ` · ${r.note}` : ''}</td></>
+                            ? <><td className="muted">{r.full != null && r.full > r.each ? money(r.full) : ''}</td><td><b>{money(r.each)}</b></td><td className="muted sm">{r.how === 'order' ? 'the order' : r.how === 'sku' ? 'a receipt with this SKU' : 'the parcel’s email'}{r.note ? ` · ${r.note}` : ''}</td></>
                             : <td className="sm">{r.reason}</td>}
                         </tr>
                       ))}

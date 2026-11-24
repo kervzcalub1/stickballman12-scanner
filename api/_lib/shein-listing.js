@@ -34,7 +34,7 @@ import {
   createListingJob, getListingJob, activeListingJob, claimListingJob, touchListingJob, finishListingJob, markStaleListingJobs, resumeListingJob,
   latestListingJob, latestListingJobBy, addListingJobItems, pendingListingItems, markListingItems, listingItemCounts, listingItemSpus,
   getListingCache, listListingCache, setListingCache, pruneListingCache, loadListingPrev, saveListingProducts, deleteListingProductsExcept,
-  markListingProductDeleted, markListingSnapshotAt, listSizeMaps, listSheinLinks, sheinLastWalkStock, latestSheinLiveRun, markStaleSheinRuns, pruneSheinApiLog,
+  markListingProductDeleted, markListingSnapshotAt, listSizeMaps, listSheinLinks, sheinLastWalkStock, latestSheinLiveRun, markStaleSheinRuns, pruneSheinApiLog, pruneSheinLiveItems,
   countSheinApiLog, getSetting, setSetting,
   getListingProduct, listListingProducts, updateListingItem, markListingItemSending, dueRunItems, runJobsWithDueItems, requeueListingJob,
   setListingJobStatus, listingInflight, markVariantsPublished, setVariantsLastError, verifySizeMap, verifySizeMapById, getPlatformQuotes, listListingJobItems,
@@ -1561,7 +1561,8 @@ export async function listingTick({ now = new Date(), io = IO } = {}) {
   const pruned = await getSetting('shein_api_log_pruned').catch(() => null);
   const today = estDate(now);
   if (pruned !== today) {
-    await pruneSheinApiLog(90).catch(() => {});
+    await pruneSheinApiLog(7).catch((e) => console.error('[shein-listing] prune api log', e.message));   // 2026-11-24: prod's disk filled at 90 days
+    await pruneSheinLiveItems(7).catch((e) => console.error('[shein-listing] prune live items', e.message));
     await pruneSnapshotItems(7).catch((e) => console.error('[shein-listing] prune snapshot items', e.message));   // 2026-11-17: ~34k read items a day
     await setSetting('shein_api_log_pruned', today, 'shein-listing').catch(() => {});
   }

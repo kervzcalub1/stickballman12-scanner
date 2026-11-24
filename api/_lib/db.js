@@ -12485,8 +12485,19 @@ export async function listSheinApiLog({ job = null, spu = null, trace = null, wr
       AND (${trace}::text IS NULL OR trace_id = ${trace}::text) AND (${!!writesOnly} = false OR write)
     ORDER BY id DESC LIMIT ${limit}`;
 }
-export async function pruneSheinApiLog(days = 90) {
+// 2026-11-24: 7 days, not 90. The log grows ~16 MB a day, and prod's 1 GB volume filled up
+// before the 90-day prune ever removed a row.
+export async function pruneSheinApiLog(days = 7) {
   await db()`DELETE FROM shein_api_log WHERE at < now() - make_interval(days => ${days}::int)`;
+}
+// The sync history (~32k rows / 11 MB a day) had no prune at all. Keeps `days` of history PLUS
+// the newest walk/shoe row of every SHEIN SKU whatever its age: sheinLastWalkFacts and
+// sheinLastWalkStock read exactly those rows, so a size no walk has touched lately keeps its facts.
+export async function pruneSheinLiveItems(days = 7) {
+  await db()`DELETE FROM shein_live_items
+    WHERE at < now() - make_interval(days => ${days}::int)
+      AND id NOT IN (SELECT DISTINCT ON (shein_sku) id FROM shein_live_items
+                     WHERE source IN ('walk', 'shoe') AND shein_sku IS NOT NULL ORDER BY shein_sku, id DESC)`;
 }
 
 export async function getListingCache(kind, key) {

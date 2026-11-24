@@ -254,6 +254,13 @@ where the only button was the full dry run.
 `src/screens/SheinLivePanel.jsx`, shown above the export upload when SHEIN is connected.
 Live via `useLive` on `shein_live_runs`, `shein_live_items`, `shein_order_units`, `app_settings`.
 A run whose process died is marked `interrupted` (no update for 3 min).
+
+## History is kept 7 days (2026-11-24)
+`shein_live_items` grows ~32k rows / 11 MB a day and had no prune; with `shein_api_log` it filled
+prod's 1 GB volume. `pruneSheinLiveItems(7)` now runs once per EST day (the SHEIN Listings tick,
+beside the API-log prune). It deletes rows older than 7 days **except the newest walk/shoe row of
+each SHEIN SKU**, whatever its age — `sheinLastWalkFacts` / `sheinLastWalkStock` read exactly
+those. So the items of a run older than a week are gone (its `shein_live_runs` row stays).
 The page's live list carries the run's first 3,000 sizes (`itemsTotal` = the real count; the page
 says when it's showing fewer). **This run (CSV)** fetches EVERY row (`GET ?run=<id>&all=1`) — a full
 run is 4,000+ sizes, and the CSV used to stop at 3,000.

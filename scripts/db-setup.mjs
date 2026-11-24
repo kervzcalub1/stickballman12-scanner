@@ -4170,6 +4170,38 @@ await sql(`CREATE INDEX IF NOT EXISTS shopify_order_index_trackings ON shopify_o
 await sql(`CREATE INDEX IF NOT EXISTS shopify_order_index_canon ON shopify_order_index USING GIN (numbers_canon)`);
 await sql(`CREATE INDEX IF NOT EXISTS shopify_order_index_ordered ON shopify_order_index (ordered_at)`);
 
+// Costs from the stores' emails (docs/context/costs.md → "Fill from emails", 2026-11-25).
+// A run looks every parcel's tracking number up in the order mailbox, reads what each pair
+// was PAID, and waits as a preview until someone applies it. `cost_email_lookups` remembers
+// what a tracking number / order number read as, so a second run asks the mailbox nothing twice.
+await sql(`
+  CREATE TABLE IF NOT EXISTS cost_email_lookups (
+    key         TEXT PRIMARY KEY,
+    data        JSONB NOT NULL,
+    emails      INTEGER NOT NULL DEFAULT 0,
+    searched_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS cost_email_runs (
+    id            BIGSERIAL PRIMARY KEY,
+    supplier      TEXT,
+    date_from     DATE,
+    date_to       DATE,
+    status        TEXT NOT NULL DEFAULT 'running',
+    parcels_total INTEGER NOT NULL DEFAULT 0,
+    parcels_done  INTEGER NOT NULL DEFAULT 0,
+    rows          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    summary       JSONB,
+    error         TEXT,
+    created_by    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at   TIMESTAMPTZ,
+    applied_at    TIMESTAMPTZ,
+    applied_by    TEXT,
+    applied_pairs INTEGER
+  )`);
+
 const LIVE_TABLES = [
   'shopify_listing_variants', 'listing_market_prices',
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',

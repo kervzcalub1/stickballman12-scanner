@@ -12,6 +12,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api, getUser } from '../api.js';
 import { CostBackfill } from '../components/CostBackfill.jsx';
 import { CostLookup } from '../components/CostLookup.jsx';
+import { CostsFromEmails } from '../components/CostsFromEmails.jsx';
 import { TopBar, DateRangeBar, PriceInput } from '../components/common.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { usePendingCounts, useLive } from '../hooks.js';
@@ -59,7 +60,7 @@ export function ItemCosts({ onHome, onSignOut }) {
   const [tabRaw, setTab] = useQueryParam('tab', 'blank');
   // 'lookup' = the Cost lookup tab (src/components/CostLookup.jsx): every PO + online
   // order line for a SKU with what a pair cost — read-only, its own search (?lq=).
-  const tab = tabRaw === 'zero' ? 'zero' : tabRaw === 'lookup' ? 'lookup' : 'blank'; // the URL is a pointer, not a value to trust
+  const tab = tabRaw === 'zero' ? 'zero' : tabRaw === 'lookup' ? 'lookup' : tabRaw === 'emails' ? 'emails' : 'blank'; // the URL is a pointer, not a value to trust
   const counts = usePendingCounts();
   // The two filters on the backlog (2026-11-20), both in the URL and both carried into
   // the CSV: a supplier (?sup=), and a date range typed by hand (?cf= from, ?ct= to;
@@ -81,7 +82,7 @@ export function ItemCosts({ onHome, onSignOut }) {
     } catch (err) { if (err.unauthorized) return onSignOut(); setError(err.message); }
   }
   useEffect(() => {
-    if (tab === 'lookup') return;   // the lookup loads its own rows
+    if (tab === 'lookup' || tab === 'emails') return;   // these load their own rows
     // Arrived with ?q= (Inventory's "Edit cost", or a refresh mid-search): run it
     // instead of loading the backlog the person didn't ask for.
     if (!searched && query.trim() && rows === null) { runSearch(); return; }
@@ -280,7 +281,7 @@ export function ItemCosts({ onHome, onSignOut }) {
       const next = [...r, ...cur.filter((x) => !have.has(x.vin) && keptVins.current.has(x.vin))];
       return JSON.stringify(cur) === JSON.stringify(next) ? cur : next;
     });
-  }, { mount: false, paused: tab === 'lookup' || rows == null || !!savingKey || !!upload || Object.keys(drafts).length > 0 });
+  }, { mount: false, paused: tab === 'lookup' || tab === 'emails' || rows == null || !!savingKey || !!upload || Object.keys(drafts).length > 0 });
 
   const totalPairs = groups ? groups.reduce((n, g) => n + g.qty, 0) : 0;
   const totalMissing = groups ? groups.reduce((n, g) => n + g.missing, 0) : 0;
@@ -301,8 +302,25 @@ export function ItemCosts({ onHome, onSignOut }) {
         className={`seg-btn${tab === 'lookup' ? ' on' : ''}`} onClick={() => setTab('lookup')}>
         <Icon name="search" /> Cost lookup
       </button>
+      <button type="button" role="tab" aria-selected={tab === 'emails'}
+        className={`seg-btn${tab === 'emails' ? ' on' : ''}`} onClick={() => setTab('emails')}>
+        From emails
+      </button>
     </div>
   );
+
+  if (tab === 'emails') {
+    const [from, to] = range();
+    return (
+      <div className="app">
+        <TopBar title="Costs" onHome={onHome} onSignOut={onSignOut} />
+        <div className="card">
+          {tabs}
+          <CostsFromEmails supplier={sup || ''} from={from || ''} to={to || ''} onSignOut={onSignOut} />
+        </div>
+      </div>
+    );
+  }
 
   if (tab === 'lookup') {
     return (

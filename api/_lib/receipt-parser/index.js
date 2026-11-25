@@ -17,16 +17,26 @@ let fn = null;
 function load() {
   if (fn) return fn;
   const src = fs.readFileSync(new URL('./parser.make.js', import.meta.url), 'utf8');
+  // `fetch` is a parameter so a caller can switch the lookups off without touching the parser's
+  // text: inside the wrapper the name resolves to the argument, not the global.
   // eslint-disable-next-line no-new-func
-  fn = new Function('input', `return (async () => {\n${src}\n})();`);
+  fn = new Function('input', 'fetch', `return (async () => {\n${src}\n})();`);
   return fn;
 }
+
+const noLookups = async () => { throw new Error('lookups off'); };
 
 /**
  * One email in → `{ post, skip?, parsed? }`. `parsed` is the /api/receipts/ingest body
  * (message_key, store, store_location, order_number, totals, items, recipients, text …).
  * `post:false` = not a receipt (marketing, shipping notices).
+ *
+ * `lookups: false` parses without the style-code lookups (the Make name helper, the StockX UPC
+ * proxy, our own sku-lookup): every one fails at once, which the parser already survives with a
+ * warning. For the mailbox trial, which reads mail Make has also read — a second round of
+ * lookups would cost credits to learn nothing. The items then keep what the receipt itself
+ * printed (no resolved style code; a Nike size as printed).
  */
-export async function parseReceiptEmail(email) {
-  return load()({ mode: 'sweep', ...email });
+export async function parseReceiptEmail(email, { lookups = true } = {}) {
+  return load()({ mode: 'sweep', ...email }, lookups ? globalThis.fetch : noLookups);
 }

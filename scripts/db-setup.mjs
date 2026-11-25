@@ -2453,6 +2453,43 @@ await sql(`
     started_at  TIMESTAMPTZ
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS receipt_raw_queue_status_idx ON receipt_raw_queue (status, id)`);
+// Reading the mailboxes ourselves — the TRIAL (2026-11-25, docs/context/receipts.md → "Reading
+// the mailboxes ourselves"). Our server reads one mailbox over IMAP and records what it WOULD
+// file, next to what Make really files; nothing here reaches email_receipts. Throwaway tables:
+// they go once every mailbox is read directly.
+//   mail_trial_folders   where the reader is in each folder: IMAP numbers every message (UID),
+//                        so "everything after the last one read" needs no date window and no cap.
+//                        A folder that was rebuilt gets a new uidvalidity → start over.
+//   mail_trial_messages  one row per email read: receipt or not, and the receipt as parsed.
+await sql(`
+  CREATE TABLE IF NOT EXISTS mail_trial_folders (
+    mailbox     TEXT NOT NULL,
+    folder      TEXT NOT NULL,
+    uidvalidity BIGINT,
+    last_uid    BIGINT NOT NULL DEFAULT 0,
+    read_count  INT NOT NULL DEFAULT 0,
+    checked_at  TIMESTAMPTZ,
+    error       TEXT,
+    PRIMARY KEY (mailbox, folder)
+  )`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS mail_trial_messages (
+    id          BIGSERIAL PRIMARY KEY,
+    mailbox     TEXT NOT NULL,
+    folder      TEXT NOT NULL,
+    uid         BIGINT NOT NULL,
+    message_key TEXT,                 -- the key Make's copy is filed under: what the two are matched on
+    received_at TIMESTAMPTZ,
+    from_addr   TEXT,
+    subject     TEXT,
+    size_bytes  INT,
+    outcome     TEXT NOT NULL,        -- receipt | skipped:<why> | too_big | error
+    parsed      JSONB,                -- a receipt: what ingest would have been handed
+    error       TEXT,
+    read_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (mailbox, folder, uid)
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS mail_trial_messages_key_idx ON mail_trial_messages (message_key)`);
 
 // Pre-sell Listings (2026-10-07, docs/context/presell-listings.md): pairs listed on Alias
 // and/or StockX straight from a scan — never an inventory unit, never on Shopify.

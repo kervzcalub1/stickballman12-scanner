@@ -285,7 +285,9 @@ Checked against 411 real emails in `email_receipts` + the saved answers of runs 
 - **`READERS`** (`api/_lib/cost-emails.js`, now 2) is stamped on every lookup (`data.v`) and run
   (`summary.v`). A kept answer from an older reader is asked again for the stores the reader
   changed; **a `done` run from an older reader that priced one of those stores cannot be applied**
-  (`runIsStale` → 409, and the page says so instead of showing Apply). Bump it whenever a reader
+  (`runIsStale` → 409, and the page says so instead of showing Apply, with a **Read <its scope>
+  again** button that starts a run with the stale run's own supplier / dates / SKU / order — not the
+  filters above it). Bump it whenever a reader
   changes what it makes of the same email.
 - **An `unreadable` parcel keeps `subjects` + a `sample`** (90 lines of the email) in
   `cost_email_lookups.data` — write the next reader from that, not from a guess. Still unreadable

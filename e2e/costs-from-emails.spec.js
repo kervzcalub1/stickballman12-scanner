@@ -331,4 +331,20 @@ test.describe('a run, end to end', () => {
     await expect(page.getByLabel('Supplier to read')).toHaveValue('');
     await expect(page.getByLabel('Received from')).toHaveValue('');
   });
+
+  // A run from the old readers: no Apply, and ONE button that reads its own scope again —
+  // not whatever the filters above happen to say (2026-11-26: they said "Every supplier").
+  test('a stale run offers "Read … again" for its own supplier, and no Apply', async ({ page }) => {
+    const [row] = await q(`INSERT INTO cost_email_runs (supplier, status, created_by, summary, rows)
+      VALUES ('Foot Locker', 'done', 'E2E CFE', $1::jsonb, '[]'::jsonb) RETURNING id`,
+    [JSON.stringify({ pairs: 3, priced: 2, parcels: 1, skus: 0, reasons: {}, stores: { 'Foot Locker': { pairs: 3, priced: 2 } } })]);
+    try {
+      await loginAs(page, 'warehouse');
+      await page.goto('/costs?tab=emails');
+      await expect(page.getByText('Do not use these prices.')).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Read Foot Locker · any date again' })).toBeVisible();
+      await expect(page.getByRole('button', { name: /^Apply/ })).toHaveCount(0);
+      await expect(page.getByLabel('Supplier to read')).toHaveValue('');
+    } finally { await q('DELETE FROM cost_email_runs WHERE id = $1', [row.id]); }
+  });
 });

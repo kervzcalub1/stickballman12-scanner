@@ -214,7 +214,15 @@ export function CostsFromEmails({ onSignOut, onApplied }) {
               {run.stale && (
                 <div className="error sm" role="alert">
                   <b>Do not use these prices.</b> This run was read before a fix to the Foot Locker / Champs / JD Sports prices
-                  (a line of several pairs was read as one pair’s price, and store discounts were missed). Press <b>Read the emails</b> again for the same supplier — it cannot be applied.
+                  (a line of several pairs was read as one pair’s price, and store discounts were missed). It cannot be applied — read the same pairs again:
+                  <div className="cfe-btns">
+                    {/* The same scope as the stale run, whatever the filters above say now (2026-11-26:
+                        with "Every supplier" still picked, Read the emails would have read 1,424 parcels). */}
+                    <button type="button" className="btn primary sm" disabled={busy || !state.configured}
+                      onClick={() => act({ action: 'start', supplier: run.supplier || '', from: run.date_from || '', to: run.date_to || '', sku: run.sku || '', order: run.order_number || '' })}>
+                      {busy ? 'Starting…' : `Read ${runScope} again`}
+                    </button>
+                  </div>
                 </div>
               )}
               {confirming && run.status === 'done' && !run.stale && (

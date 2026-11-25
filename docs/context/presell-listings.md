@@ -376,6 +376,10 @@ accounts; two watchers would both act on a sale. Off by default (and in e2e).
 - every **12 s**: StockX listings still `pending` → poll the operation; done → read the
   listing back; failed → a create becomes `failed`, any other change keeps its state +
   the reason. Stuck > 10 min → read back anyway.
+- **A row already `sold` is skipped only when its sale is saved (`sold_at` set)** (2026-11-26).
+  A re-read (competition, the other copy coming down) flips a row to `sold` as soon as the
+  platform says so; skipping on status alone lost that order — 18 sales since 10-10 sat as
+  "Sold" on Listings with no row on Sales / Fulfill. Sold with `sold_at` NULL = sale not saved.
 - every **60 s** (only while anything is open): Alias orders + StockX active orders →
   match `listing_id` to ours → `handleSale` (record once → deduct → take down extras →
   Telegram). Cancelled Alias orders are ignored.

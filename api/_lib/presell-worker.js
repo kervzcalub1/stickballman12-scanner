@@ -116,7 +116,12 @@ async function checkSales() {
         ]);
         continue;
       }
-      if (l.status === 'sold') continue;
+      // Sold AND its sale saved (sold_at is only written with the sale row). A re-read of the
+      // listing — the price competition, the other copy coming down — can flip a row to
+      // 'sold' the second the platform says so, BEFORE this loop saw the order; skipping on
+      // status alone then lost the sale for good (2026-11-26: 18 sales since 10-10, two on
+      // IQ5365-400). handleSale dedupes on the order number, so trying again is safe.
+      if (l.status === 'sold' && l.sold_at) continue;
       await handleSale({
         listing: l, platform: 'alias', orderId: String(o.id), priceCents: Number(o.price_cents) || null,
         payoutCents: o.price_cents_after_take != null ? Number(o.price_cents_after_take) : null, soldAt: o.sold_at || new Date().toISOString(), raw: o,
@@ -141,7 +146,7 @@ async function checkSales() {
           ]);
           continue;
         }
-        if (l.status === 'sold') continue;
+        if (l.status === 'sold' && l.sold_at) continue;   // see the Alias loop
         const payout = o.payout?.totalPayout ?? null;
         await handleSale({
           listing: l, platform: 'stockx', orderId: String(o.orderNumber), priceCents: o.amount != null ? Math.round(Number(o.amount) * 100) : null,

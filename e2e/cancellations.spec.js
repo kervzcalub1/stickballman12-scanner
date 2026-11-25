@@ -597,7 +597,27 @@ test('the slips of each marketplace: Temu and StockX by their number, Stadium Go
   expect(canonKey('206557037')).toBe('206557037');                                        // digits are never folded onto each other
   expect(matchOurOrder('206557031', null, [k('206557037', 'alias')])).toBe(null);
   expect(rowStatus({ order_number: '1', flags: ['not_in_shopify'] })).toEqual({ tag: 'CHECK', why: 'not found in our orders' });
-  expect(rowStatus({ order_number: '1', flags: ['platform_guess'] })).toEqual({ tag: 'CHECK', why: 'platform read off the slip' });
+  // A slip that names its marketplace is that marketplace's: the flag is kept, the row is [OK].
+  expect(rowStatus({ order_number: '1', flags: ['platform_guess'] })).toEqual({ tag: 'OK', why: null });
+
+  // Live 2026-11-25: the rule for an Alias label's lone 9-10 digit line fired on Stadium Goods
+  // slips and recorded numbers that were no order's. Never on a slip that names another
+  // marketplace, that the sender named as another, or that is laid out with "BRAND:".
+  const sgDigits = 'STADIUM GOODS\nOrder Date: 11/20/2026\nFulfillment Number\nSONDSS_CKRS00003301\n219001 Air Jordan 4 026484 052 9.5 1 $180\nSKU: DZ5485 052\nSIZE: 9.5\nBRAND: JORDAN';
+  expect(nums(sgDigits.replace('026484 052 9.5 1 $180', '').concat('\n026484 052'))).toEqual([]);
+  expect(nums('1112002026\n4653440050\nFN8358 200\nSIZE: 10\nBRAND: NIKE', 'sg')).toEqual([]);      // the sender tapped Stadium Goods
+  expect(nums('1112002026\n4653440050\nFN8358 200\nSIZE: 10\nBRAND: NIKE')).toEqual([]);            // nobody said: "BRAND:" is not an Alias label
+  expect(nums('104092 791\nDZ5485 052', 'temu')).toEqual([]);
+  expect(nums('ORDER #\n316743576\nSKU\nDV3950 001\nSIZE\nUS M 7')).toEqual(['null:316743576']);    // an Alias label with no "alias" read: still read
+  expect(nums('GOAT\n746390732\nBRAND: NIKE')).toEqual(['null:746390732']);                           // it says GOAT: an Alias label whatever else it prints
+  // A Stadium Goods order number run together is not the shoe's style code.
+  expect(slipDetails('STADIUM GOODS\nFAR02077818\nSIZE: 8\nBRAND: NIKE')).toEqual({ sku: null, size: '8', product: null });
+  expect(slipDetails('FAR02077818\nSKU: IQ4092 001\nSIZE: 8.5')).toMatchObject({ sku: 'IQ4092-001' });
+  // The slip is known by what only it prints, when the wordmark doesn't read.
+  expect(platformFromText('Fulfillment Number\nSONDSS_CKRS00003248\nSIZE: 13C')).toBe('sg');
+  expect(platformFromText('Futhment Number\nSIZE: 13C')).toBe('sg');
+  // Temu's "PO" read as "P00" is the same order, once.
+  expect(nums('Purchase Order ID:\nP00-211-15728317205111706')).toEqual(['temu:PO-211-15728317205111706']);
 
   // The Shopify order index: where each channel keeps the marketplace's own number (the real shapes).
   const { orderIndexRow } = await import('../api/_lib/shopify-order-index.js');
@@ -641,13 +661,19 @@ test('a photo with NO platform is read first: one of our Shopify orders (or a Te
     await hook(request, photo(TG_WH, await picture(`cx-ix2-${s}`, read({ order_number: temu }))));
     expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`^\\[dev\\] Temu · 1 order recorded\\n\\[OK\\] #${temu}`));
 
-    // The index is complete and current: an Alias number in none of our orders is most likely misread.
+    // The index is complete and current: a Temu number in none of our orders is most likely misread.
+    // Not so an Alias one — some real Alias orders never reach Shopify (4 clean reads of 7, live
+    // 2026-11-25): a clean Alias read stays [OK].
     await q(`INSERT INTO app_settings (key, value, updated_by) VALUES ('shopify_order_index_sync', $1, 'e2e-cx')
              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = 'e2e-cx'`,
     [JSON.stringify({ state: 'done', firstDone: true, lastAt: new Date().toISOString(), cursor: new Date().toISOString() })]);
-    await hook(request, photo(TG_WH, await picture(`cx-ix3-${s}`, read({ order_number: stray })), '/alias'));
-    expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`\\[CHECK\\] #${stray} — no shoe details found \\(not found in our orders\\)`));
-    expect((await list(request)).rows.find((r) => r.order_number === stray).flags).toContain('not_in_shopify');
+    const strayTemu = `PO-211-9911${s}5555555`;
+    await hook(request, photo(TG_WH, await picture(`cx-ix3-${s}`, read({ order_number: strayTemu })), '/temu'));
+    expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`\\[CHECK\\] #${strayTemu} — no shoe details found \\(not found in our orders\\)`));
+    expect((await list(request)).rows.find((r) => r.order_number === strayTemu).flags).toContain('not_in_shopify');
+    await hook(request, photo(TG_WH, await picture(`cx-ix4-${s}`, read({ order_number: stray })), '/alias'));
+    expect(await lastSaid(TG_WH, 4)).toMatch(new RegExp(`Alias · 1 order recorded\\n\\[OK\\] #${stray} — no shoe details found$`));
+    expect((await list(request)).rows.find((r) => r.order_number === stray).flags).not.toContain('not_in_shopify');
   } finally {
     await q(`DELETE FROM app_settings WHERE key = 'shopify_order_index_sync' AND updated_by = 'e2e-cx'`);
     await q(`DELETE FROM shopify_order_index WHERE channel = 'e2e-cx'`);

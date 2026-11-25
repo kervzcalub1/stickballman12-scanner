@@ -165,8 +165,10 @@ this order of trust:
 4. **What the slip says** (`platformFromText`, words — never logos): "alias" / "GOAT" /
    "Sneakers.com" → Alias (read on 16 of 18 real labels), "STADIUM GOODS" → sg (3 of 3),
    StockX, eBay, Kicks Crew, Temu, TikTok, SHEIN by name. **Only when exactly one is named**
-   (a shoe called "Flight Club" names none). A row whose platform came from here carries the
-   flag `platform_guess` → **[CHECK] (platform read off the slip)**.
+   (a shoe called "Flight Club" names none). Stadium Goods is also known by what only its slip
+   prints — "Fulfillment Number" / `SONDSS_…` — since its wordmark did not read on 2 of 11
+   real slips. A row whose platform came from here carries the flag `platform_guess`, for the
+   record only: **it is not a [CHECK] since 2026-11-25** (a slip that says GOAT is Alias's).
 5. **Nothing says** → held, and the buttons ask (`fileCancellationPhoto` returns
    `{ needsPlatform: true }` under `requirePlatform`, nothing recorded; after the tap it is read
    again with the platform as the hint). While more of that person's photos are still being
@@ -174,9 +176,35 @@ this order of trust:
 
 **A number that matches none of our orders** when it should: flag `not_in_shopify` →
 **[CHECK] (not found in our orders)**. Only for the platforms the index covers whole (`INDEXED`:
-alias, stockx, temu, kc, ebay, shein — not sg, whose slip number isn't in Shopify, and not
-tiktok, seen on one order only), and only while the index is complete and current
+stockx, temu, kc, ebay, shein — not sg, whose slip number isn't in Shopify, not tiktok, seen
+on one order only, and **not alias**, below), and only while the index is complete and current
 (`shopifyIndexFresh`: first run finished, last run < 30 min ago — never on a dev machine).
+
+**Alias is NOT checked that way (2026-11-25).** Of the first 7 Alias photos read live with no
+command, 4 read cleanly — both reads agreed, the number right under "ORDER #", the label
+saying alias / GOAT — and matched nothing. A scan of Shopify back to 2026-07-28 (about 8,600
+GOAT orders) did not hold them either: **some real Alias orders never reach Shopify** (why is
+not known). So "not found" says nothing about an Alias read, and a clean one is [OK]; an
+Alias number that IS in the index is still confirmed and still gets its shoe from it.
+
+### What the first live batches showed (2026-11-25, 22 photos in 3 minutes)
+Temu 5 of 5 [OK] with no platform given. Alias 3 matched, 4 as above. Stadium Goods 9 slips:
+the barcode decoded on none (compressed photos, as measured before) and all were told to
+resend as a file — **and four rows were recorded with numbers that were no order's**, fixed:
+- The rule for an Alias label's lone 9–10 digit line (`packingLabel` in `ordersFromText`) fired
+  on Stadium Goods slips, because they carry a style code too: a misread of the slip's small
+  SKU column ("026484 052"), a date, a phone. It now applies only when nothing names another
+  marketplace (the sender's command or tap, or the slip's own words) and the slip is not laid
+  out with "BRAND:" (Stadium Goods and Temu print it; an Alias label doesn't) — unless the
+  label itself says alias / GOAT / Sneakers.com.
+- A Stadium Goods order number run together (`FAR02077818`) reads as a style code
+  (`FAR02077` + `818`): two slips were recorded with their own order number as the SKU.
+  `styleCodeIn` takes that run out of the text before looking for a style code.
+- Temu's "PO" read as "P00" (`P00-211-…`) is put back by the Temu rule and no longer taken a
+  second time by the "Order ID:" rule.
+Checked by replaying every stored read (45 photos, all time) through the new rules: the four
+wrong numbers and two wrong SKUs go, no matched number is lost. Reads are one at a time
+(~5 s each), so 22 photos took up to 2 minutes to answer.
 
 **When the two reads disagree**, the other reading is looked up too: whichever of the two is
 exactly one of our orders is the number (the real Temu slip 3: `…0560 0 904…` / `…0560 9 904…`
@@ -393,6 +421,9 @@ Stadium Goods platform + SKU + size and no number; the index sync read 150 live 
 kept 149. The samples carry customer addresses and are NOT in the repo.
 
 ## Not yet / can't be verified locally
+- **The text under a Stadium Goods barcode is not used.** tesseract reads it differently from
+  one read to the next (`ETHOU384818` / `ETHO0384918` / `ETH00384818` on one slip), and nothing
+  in our records can confirm it.
 - **Stadium Goods barcodes**: no full-size photo to test with (see above).
 - **StockX, Kicks Crew, TikTok, eBay slips**: no sample photos. Their numbers are in the index
   and the StockX shapes come from Shopify, but what their labels print was not seen.

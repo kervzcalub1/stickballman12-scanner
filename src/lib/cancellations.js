@@ -175,6 +175,12 @@ function fixDigits(tok) {
   return pre + t.slice(pre.length).replace(/[Oo]/g, '0').replace(/[Il|]/g, '1').replace(/S/g, '5').replace(/B/g, '8');
 }
 const STYLE_CODE = /\b([A-Z]{1,3}\d{3,5})[\s-]?(\d{3})\b/;
+// A Stadium Goods ORDER number is three letters and eight digits (FAR02077818, AMA00386134) —
+// which, run together, is also what a style code looks like ("FAR02077" + "818"). Live
+// 2026-11-25: two slips were recorded with their own order number as the shoe's SKU. So a
+// style code is one found in the text with that run taken out first.
+const SG_ORDER_RUN = /\b[A-Z]{3}\d{8}\b/g;
+const styleCodeIn = (upper) => STYLE_CODE.exec(String(upper || '').replace(SG_ORDER_RUN, ' '));
 const SIZE_RE = /\bUS\s*([MW])?\s*(\d{1,3}(?:[.,]5)?)\s*([MWY])?\b/i;
 // OCR drops the point in "9.5" often; no shoe is a size 95, so 95 → 9.5 and 105 → 10.5.
 const fixSize = (v) => {
@@ -188,7 +194,7 @@ const fixLine = (line) => line.split(' ').map(fixDigits).join(' ');
 const SHEIN_NO = /\bG[S5][A-Z0-9]{11,15}\b/g;
 const sheinLike = (t) => (t.match(/\d/g) || []).length >= 4 && (t.match(/[A-Z]/g) || []).length >= 3;
 // A Temu purchase order: "PO-211-00591237806711370" (the O may read as 0, the digits in pieces).
-const TEMU_NO = /(?<![A-Z0-9])P[O0]\s?-?\s?(\d{3})\s?-\s?((?:[0-9OILSB]\s?){15,20})(?![0-9])/g;
+const TEMU_NO = /(?<![A-Z0-9])P[O0]{1,2}\s?-?\s?(\d{3})\s?-\s?((?:[0-9OILSB]\s?){15,20})(?![0-9])/g;
 
 // ── What the slip itself says about the platform, and the shoe ───────────────────────
 // Measured on real slips (2026-11-21): an Alias packing label prints "alias", "GOAT" or
@@ -197,7 +203,9 @@ const TEMU_NO = /(?<![A-Z0-9])P[O0]\s?-?\s?(\d{3})\s?-\s?((?:[0-9OILSB]\s?){15,2
 // Only an unambiguous slip names a platform: two different marketplaces on one photo → null.
 const PLATFORM_WORDS = [
   ['alias', /\b(?:alias|goat)\b|sneakers\s*\.\s*com/i],
-  ['sg', /stadium\s*goods/i],
+  // The wordmark, or what only its slip prints: "Fulfillment Number" over "SONDSS_CKRS…" (two
+  // of eleven real slips came with no wordmark read and needed the buttons, 2026-11-25).
+  ['sg', /stadium\s*goods|\bSONDSS|\bfu[a-z]{2,7}ment\s+number\b/i],
   ['stockx', /\bstock\s?x\b/i],
   ['ebay', /\bebay\b/i],
   ['kc', /kicks\s*crew/i],
@@ -220,7 +228,7 @@ export function slipDetails(text) {
   const lines = String(text || '').split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
   const all = lines.join('\n'); const up = all.toUpperCase();
   const labelled = SKU_LINE.exec(up);
-  const s = labelled || STYLE_CODE.exec(up);
+  const s = labelled || styleCodeIn(up);
   const sku = s ? cleanSku(`${s[1]}-${s[2]}`) : null;
   const z = SIZE_RE.exec(all);
   const zl = z ? null : SIZE_LINE.exec(up);
@@ -321,9 +329,21 @@ export function ordersFromText(text, hint = null) {
     const n = fixDigits(tok).replace(/[^A-Za-z0-9-]/g, '');
     // Already found whole by its shape ("12345678-12345678" with a space in it): not a second order.
     const k = orderKey(n);
+    // A Temu "PO-211-…" after "Purchase Order ID:" was taken by its own rule above, O-for-zero
+    // misreads put right ("P00-211-…") — the raw token here is not a second order.
+    if (/^P[O0]{1,2}-?\d{3}-?\d{12,}/i.test(n)) return;
     if (k && ![...found.keys()].some((f) => f.includes(k))) add(n, null, 'order #');
   });
-  const packingLabel = hint === 'alias' || STYLE_CODE.test(all) || /\b(alias|goat)\b/i.test(all);
+  // …and ONLY there. Live 2026-11-25 this rule fired on Stadium Goods slips (they carry a style
+  // code too) and recorded four numbers that were no order's: a misread of the slip's small SKU
+  // column ("026484 052"), a date and a phone. So: never when the sender — or the slip itself —
+  // names another marketplace, and never on a slip laid out with "BRAND:" (Stadium Goods and
+  // Temu print it, an Alias label doesn't), unless the label says alias / GOAT / Sneakers.com.
+  const said = platformFromText(all);
+  const aliasWords = said === 'alias';
+  const otherPlatform = (hint && hint !== 'alias') || (said && said !== 'alias');
+  const otherLayout = /\bBRAND\s*[:;]/i.test(all);
+  const packingLabel = !otherPlatform && (hint === 'alias' || aliasWords || (!otherLayout && !!styleCodeIn(all.toUpperCase())));
   if (packingLabel) {
     for (const line of lines) {
       let t = fixDigits(line.replace(/[|.,;:'"`]+$/g, '').replace(/^[|.,;:'"`]+/g, '').trim()).replace(/\s/g, '');
@@ -479,7 +499,9 @@ const CHECK_WHY = [
   ['reads_disagree', 'reads disagreed'], ['unchecked', 'only one read worked'], ['tie_break', 'a third read decided'],
   ['unclear', 'hard to read'], ['low_confidence', 'the reader was not sure'],
   ['short_number', 'number looks too short'], ['format', "doesn't look like this platform's numbers"],
-  ['not_in_shopify', 'not found in our orders'], ['platform_guess', 'platform read off the slip'],
+  // 'platform_guess' is NOT here: a slip that says GOAT or STADIUM GOODS is that marketplace's
+  // (the flag stays on the row, for the record). Owner, 2026-11-25: a clean read is [OK].
+  ['not_in_shopify', 'not found in our orders'],
 ];
 /**
  * What a recorded row needs from a person → { tag: 'OK' | 'CHECK' | 'MISSED', why }.

@@ -62,6 +62,9 @@ holds back units of a shipment we own. Here a pair is **never an inventory unit*
   person's listings with no gap over 15 min = one entry, a size's pairs = the most listings it got
   on either platform. Tagged **rebuilt**; supplier / PO are as the row reads NOW, and an old
   re-list (List N / ↺ Restore) shows as its own entry. Nothing is backfilled.
+  **The first entry's own listings are left out of the rebuild** (2026-11-26): that row is written
+  when its run ends, so its listings are seconds older than the cutoff and were rebuilt as a second
+  entry — IQ5365-400 read 98 pairs for 90. Matched by the entry's `stock_id`s, 30 min back.
 - Read: `GET list?tab=history&from=&to=&sku=` → `rows` = runs (`listPresellHistory` +
   `presellHistory`, `src/lib/presellHistory.js`, pure). 500 newest entries (5,000 with a filter).
   `presell_entries` is in `LIVE_TABLES`. Tests: `e2e/presell-history.spec.js`.
@@ -207,7 +210,8 @@ the numbers). A re-list without a cost keeps the one already there.
   - **Stock** (day first listed; list filtered too): the pairs we have — pairs / sold / left, In
     transit / Arrived / Pre-sell, supplier, PO, tracking (all in CSV), shelf, preset, cost,
     left-at-cost; PDF has a bold subtotal per SKU.
-  - **Listings** (day the listing was created; the tab's platform + status filter apply, named on
+  - **Listings** (day the listing was created; the tab's platform + status filter **and its search
+    box** (2026-11-26 — a pasted SKU used to be ignored by the download) apply, named on
     the report): every listing — platform, status, price, est. payout (default fee), est. net (only
     with a cost), listing id, listed by, last problem.
   - **Sales** (day sold; list filtered too): price, payout (* est.), cost, net, supplier/PO, kind;

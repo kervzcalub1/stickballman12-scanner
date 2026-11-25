@@ -64,7 +64,7 @@ export default async function handler(req, res) {
     if (tab === 'pos') return send(res, 200, { ok: true, pos: await presellPoOptions() });
     const platform = ['alias', 'stockx'].includes(p.get('platform')) ? p.get('platform') : null;
     const stockId = Number(p.get('stock')) > 0 ? Number(p.get('stock')) : null;
-    const out = await listPresellListings({ view: VIEWS.has(p.get('view')) ? p.get('view') : 'all', platform, q, stockId, from, to, limit: from || to ? 5000 : 1000 });
+    const out = await listPresellListings({ view: VIEWS.has(p.get('view')) ? p.get('view') : 'all', platform, q, stockId, from, to, limit: from || to || q ? 5000 : 1000 });
     return send(res, 200, { ok: true, ...out });
   } catch (e) {
     console.error('[presell-listings/list]', e.message);

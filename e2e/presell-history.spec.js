@@ -38,6 +38,10 @@ test.beforeAll(async () => {
     VALUES ($1, $2, $3, 15000, 'live', 'Nikki E2E', $4::timestamptz)`, [ids.o, platform, `E2E-HO-${stamp}-${n}`, at]);
   await L('alias', '2025-01-05T15:00:00Z', 1); await L('alias', '2025-01-05T15:01:00Z', 2); await L('stockx', '2025-01-05T15:02:00Z', 3);
   await L('alias', '2025-01-05T17:30:00Z', 4);
+  // The first history row is written when its run ENDS: its own listings are seconds older
+  // than it, and must not come back a second time as a rebuilt entry (2026-11-26, 98 for 90).
+  await q(`INSERT INTO presell_listings (stock_id, platform, external_id, price_cents, status, created_by, created_at)
+    VALUES ($1, 'alias', $2, 18000, 'live', 'Alex E2E', '2026-02-01T14:59:55Z')`, [ids.a, `E2E-HI-${stamp}-own`]);
 });
 
 test.afterAll(async () => {

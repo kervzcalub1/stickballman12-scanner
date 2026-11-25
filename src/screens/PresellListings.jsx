@@ -1561,8 +1561,8 @@ function ListingsTab({ onSignOut }) {
           {recheck && !recheck.running && <span className="muted xs">Re-checked {recheck.done} — {recheck.fixed} settled{recheck.done < recheck.total ? ' (stopped)' : ''}.</span>}
         </div>
         <ReportBar kind="listings" from={from} to={to} setFrom={setFrom} setTo={setTo} onSignOut={onSignOut}
-          extra={{ view, platform }}
-          scope={[platform ? PLAT[platform] : 'Alias + StockX', { all: 'open', live: 'live', off: 'not live', pending: 'pending', sold: 'sold', deleted: 'deleted' }[view] || view].join(' · ')} />
+          extra={{ view, platform, q: q.trim() }}
+          scope={[platform ? PLAT[platform] : 'Alias + StockX', { all: 'open', live: 'live', off: 'not live', pending: 'pending', sold: 'sold', deleted: 'deleted' }[view] || view, q.trim() ? `search: ${q.trim()}` : ''].filter(Boolean).join(' · ')} />
       </div>
       {error && <div className="error mt">{error}</div>}
       <div className="card">

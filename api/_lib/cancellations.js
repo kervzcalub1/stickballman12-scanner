@@ -236,7 +236,11 @@ async function lookupKnown({ keys, tracks, canon = [] }) {
 // The platforms whose every order is in the Shopify order index, number and all — so a number
 // that matches none of them is most likely misread. Not Stadium Goods (the number its slip
 // prints is not in Shopify) and not TikTok (where its number sits was seen on one order only).
-const INDEXED = new Set(['alias', 'stockx', 'temu', 'kc', 'ebay', 'shein']);
+// NOT Alias either (2026-11-25): four Alias labels read cleanly — both reads agreed, the number
+// right under "ORDER #" — matched nothing, and a scan of Shopify back to July (8,600 GOAT orders)
+// did not hold them. Some real Alias orders never reach Shopify, so "not found" says nothing
+// about the read there; 4 of 7 Alias photos were tagged [CHECK] for it.
+const INDEXED = new Set(['stockx', 'temu', 'kc', 'ebay', 'shein']);
 /**
  * … `opts.guess` = the platform the slip itself names (platformFromText) or the AI reader's —
  * used only when nothing better says: the sender, our own order, the number's shape.

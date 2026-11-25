@@ -193,3 +193,40 @@ a fixed host list** (the caller cannot name a host). Answer: `{ ok, results: [{ 
 ok, ms, greeting, capabilities, error }] }`. All five answer from a laptop; the run that counts
 is the one on Railway. Outlook offers `AUTH=XOAUTH2` only (no password login), the others
 `AUTH=PLAIN` (app passwords).
+
+## Reading the mailboxes ourselves — Phase 1, the trial (2026-11-25)
+Phase 0 passed on production: Railway reaches Gmail, Yahoo, iCloud, AOL and Outlook on 993.
+Phase 1 reads **one** mailbox over IMAP from our server and records what it **would** file,
+next to what Make really files. **Nothing is filed**: every folder is opened read-only and the
+result goes to two throwaway tables. Make keeps doing the real work.
+
+- **`api/_lib/mail-fetch.js`** (`imapflow` + `mailparser`). Per folder it keeps a **position**
+  (`mail_trial_folders`: `uidvalidity`, `last_uid`) and asks for every message after it — no date
+  window, no cap, no overlap hour. First run of a folder: the last `MAIL_TRIAL_DAYS` (3) days. A
+  rebuilt folder (new `uidvalidity`) starts over. The list is fetched first, then each body
+  (IMAP cannot nest commands in a FETCH), at most 1,500 a folder a run; the position moves after
+  **every** message, so a restart reads none twice. Over 4 MB → `too_big`, not downloaded.
+- **Decoding** (`emailFromSource`): raw message → the same twelve fields Make posts
+  (`delivered_to` = Delivered-To / X-Delivered-To, `original_to` = X-Forwarded-To / X-Original-To
+  / Resent-To, else left empty so the parser reads the forwarded block). Then the same parser,
+  **with the lookups off** (`parseReceiptEmail(email, { lookups: false })`): Make has read this
+  mail too, and a second round of style-code lookups would cost credits to learn nothing. So
+  ours keeps the names / sizes / style codes the receipt printed — the comparison leaves those out.
+- **`mail_trial_messages`**: one row per email — `outcome` (`receipt` · `skipped:<why>` ·
+  `too_big` · `error`), `message_key` (the key Make's copy is filed under), and the receipt as
+  parsed.
+- **The mailbox is environment variables, never typed into the app**: `MAIL_TRIAL_USER`,
+  `MAIL_TRIAL_PASS` (an **app password**), `MAIL_TRIAL_PROVIDER` (yahoo default · gmail · icloud
+  · aol) or `MAIL_TRIAL_HOST`, `MAIL_TRIAL_MAILBOX` (the name Make sends as `mailbox`; default
+  the login — **it is part of the key, so it must match**), `MAIL_TRIAL_FOLDERS` (comma-separated,
+  default per provider: Yahoo = the nine folders Make searches), `MAIL_TRIAL_DAYS`. The password
+  is not stored in the database, logged (`logger: false`), or sent to a browser.
+- **`/api/receipts/mail-trial`** (admin): `POST {action:'run'}` reads now, in the background
+  (one run at a time); `POST {action:'reset'}` forgets positions + rows; `GET` returns the state,
+  the folders, counts per outcome, and the **comparison** by `message_key`: `match` · `differs`
+  (store, order #, totals, store #, zip, pairs, prices, UPCs, recipient addresses) · `only_ours`
+  (we call it a receipt, Make has not filed it) · `only_make` (Make filed it, we skipped it) ·
+  `missed` (Make filed it in the days we read and we never saw it). No page yet.
+- Needs `db:setup`. Measured while building: on production the last Make check handed over
+  **800 emails from Yahoo `Inbox` and 800 from `Footlocker`** — exactly the cap, so that run may
+  have stopped short. `only_ours` is where such a gap would show.

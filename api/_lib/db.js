@@ -16502,3 +16502,83 @@ export async function markCostEmailRunApplied(id, by, pairs) {
   await db()`UPDATE cost_email_runs SET status = 'applied', applied_at = now(), applied_by = ${by || null}, applied_pairs = ${pairs}, updated_at = now() WHERE id = ${id}`;
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Reading the mailboxes ourselves — the TRIAL (docs/context/receipts.md → "Reading the mailboxes
+// ourselves"). api/_lib/mail-fetch.js reads one mailbox over IMAP and records here what it WOULD
+// file. Nothing in these functions touches email_receipts except to read it for the comparison.
+// ---------------------------------------------------------------------------------------------
+export async function getMailTrialFolder(mailbox, folder) {
+  const rows = await db()`SELECT uidvalidity, last_uid, read_count FROM mail_trial_folders WHERE mailbox = ${mailbox} AND folder = ${folder}`;
+  return rows[0] ? { uidvalidity: Number(rows[0].uidvalidity), lastUid: Number(rows[0].last_uid), readCount: Number(rows[0].read_count) } : null;
+}
+
+// Where the reader is in a folder. `added` = emails read since the last call.
+export async function setMailTrialPosition({ mailbox, folder, uidvalidity, lastUid, added = 0 }) {
+  await db()`
+    INSERT INTO mail_trial_folders (mailbox, folder, uidvalidity, last_uid, read_count, checked_at, error)
+    VALUES (${mailbox}, ${folder}, ${uidvalidity}, ${lastUid}, ${added}, now(), NULL)
+    ON CONFLICT (mailbox, folder) DO UPDATE
+       SET uidvalidity = EXCLUDED.uidvalidity, last_uid = EXCLUDED.last_uid,
+           read_count = mail_trial_folders.read_count + EXCLUDED.read_count, checked_at = now(), error = NULL`;
+}
+
+// A folder that could not be opened or read: said on the folder, the position left alone.
+export async function noteMailTrialFolderError({ mailbox, folder, error }) {
+  await db()`
+    INSERT INTO mail_trial_folders (mailbox, folder, checked_at, error)
+    VALUES (${mailbox}, ${folder}, now(), ${String(error || '').slice(0, 300)})
+    ON CONFLICT (mailbox, folder) DO UPDATE SET checked_at = now(), error = EXCLUDED.error`;
+}
+
+export async function saveMailTrialMessage(m) {
+  const parsed = m.parsed ? JSON.stringify(m.parsed) : null;
+  await db()`
+    INSERT INTO mail_trial_messages (mailbox, folder, uid, message_key, received_at, from_addr, subject, size_bytes, outcome, parsed, error)
+    VALUES (${m.mailbox}, ${m.folder}, ${m.uid}, ${m.messageKey || null}, ${m.receivedAt || null}, ${m.from || null},
+            ${m.subject || null}, ${m.size ?? null}, ${m.outcome}, ${parsed}::jsonb, ${m.error || null})
+    ON CONFLICT (mailbox, folder, uid) DO UPDATE
+       SET message_key = EXCLUDED.message_key, received_at = EXCLUDED.received_at, from_addr = EXCLUDED.from_addr,
+           subject = EXCLUDED.subject, size_bytes = EXCLUDED.size_bytes, outcome = EXCLUDED.outcome,
+           parsed = EXCLUDED.parsed, error = EXCLUDED.error, read_at = now()`;
+}
+
+// Forget a mailbox's trial (positions and rows), so the next run starts from the look-back again.
+export async function resetMailTrial(mailbox) {
+  await db()`DELETE FROM mail_trial_messages WHERE mailbox = ${mailbox}`;
+  await db()`DELETE FROM mail_trial_folders WHERE mailbox = ${mailbox}`;
+}
+
+/**
+ * Everything the trial page needs for one mailbox:
+ *   folders   where the reader is, per folder
+ *   outcomes  how many emails, per folder and outcome
+ *   pairs     every email either side called a receipt — ours (parsed) next to Make's (filed)
+ *   missed    receipts Make filed, in the days we read, that we never saw at all
+ */
+export async function mailTrialReport(mailbox) {
+  const folders = await db()`
+    SELECT folder, uidvalidity, last_uid, read_count, checked_at, error
+      FROM mail_trial_folders WHERE mailbox = ${mailbox} ORDER BY folder`;
+  const outcomes = await db()`
+    SELECT folder, outcome, count(*)::int AS n, min(received_at) AS oldest, max(received_at) AS newest
+      FROM mail_trial_messages WHERE mailbox = ${mailbox} GROUP BY folder, outcome ORDER BY folder, outcome`;
+  const pairs = await db()`
+    SELECT t.folder, t.uid, t.message_key, t.outcome, t.subject, t.received_at, t.parsed, t.error,
+           r.id AS receipt_id, r.store, r.order_number, r.subtotal, r.tax, r.shipping, r.total,
+           r.items, r.recipient_addrs, r.store_number, r.zip
+      FROM mail_trial_messages t
+      LEFT JOIN email_receipts r ON r.message_key = t.message_key
+     WHERE t.mailbox = ${mailbox} AND (t.outcome = 'receipt' OR r.id IS NOT NULL)
+     ORDER BY t.received_at DESC NULLS LAST
+     LIMIT 2000`;
+  const missed = await db()`
+    SELECT r.id AS receipt_id, r.folder, r.subject, r.received_at, r.store, r.order_number
+      FROM email_receipts r
+     WHERE r.mailbox = ${mailbox}
+       AND r.received_at >= (SELECT min(t.received_at) FROM mail_trial_messages t WHERE t.mailbox = ${mailbox} AND t.folder = r.folder)
+       AND NOT EXISTS (SELECT 1 FROM mail_trial_messages t WHERE t.message_key = r.message_key)
+     ORDER BY r.received_at DESC
+     LIMIT 200`;
+  return { folders, outcomes, pairs, missed };
+}

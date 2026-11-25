@@ -1,5 +1,7 @@
 // Costs from the stores' emails (docs/context/costs.md → "Fill from emails").
 //   GET  /api/items/cost-emails[?id=N][&rows=1]  -> { ok, configured, run }   (the latest run, or one)
+//   GET  /api/items/cost-emails?scope=1[&supplier=][&from=][&to=][&sku=] -> { ok, scope }
+//     what a run with these filters would read: pairs, parcels, and the suppliers to pick from
 //   POST /api/items/cost-emails { action: 'start', supplier?, from?, to?, sku?, order? } -> { ok, id }
 //     sku: only that shoe · order: the order number these pairs came from, when someone knows it
 //   POST … { action: 'continue', id }   a run cut off by a restart carries on
@@ -8,7 +10,7 @@
 // The run itself is in api/_lib/cost-emails.js. Same people as the Costs page: admin +
 // warehouse + PH. A run only READS until 'apply'; apply fills blanks, never overwrites.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, getCostEmailRun, createCostEmailRun, costEmailRunBusy, setCostEmailRunStatus, touchCostEmailRun } from '../_lib/db.js';
+import { dbConfigured, costEmailScope, getCostEmailRun, createCostEmailRun, costEmailRunBusy, setCostEmailRunStatus, touchCostEmailRun } from '../_lib/db.js';
 import { runCostEmails, applyCostEmailRun, costEmailsConfigured } from '../_lib/cost-emails.js';
 
 const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
@@ -26,6 +28,10 @@ export default async function handler(req, res) {
   try {
     if (req.method === 'GET') {
       const q = new URL(req.url, 'http://x').searchParams;
+      if (q.get('scope') === '1') {
+        const scope = await costEmailScope({ supplier: String(q.get('supplier') || '').slice(0, 200), from: ymd(q.get('from')), to: ymd(q.get('to')), sku: String(q.get('sku') || '').slice(0, 40) });
+        return send(res, 200, { ok: true, scope });
+      }
       const run = await getCostEmailRun(idOf(q.get('id')), { rows: q.get('rows') === '1' });
       return send(res, 200, { ok: true, configured: costEmailsConfigured(), run });
     }

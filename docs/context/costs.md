@@ -306,3 +306,13 @@ numbers are in no email. So a run uses **the most exact route each pair has**:
 - Measured on real data: adidas KI6956, **94 of 105 pairs** at $59.50; size 8 had three prices.
 - **Needs db:setup** (`cost_email_runs.sku`, `.order_number`).
 
+### The tab's own filters (2026-11-25)
+Owner: "it's a bit confusing" — the run took its supplier and dates from the "No cost on file" tab,
+so nothing on the From emails tab said what was set. Now the tab has **its own** Supplier / Received
+from / to (`?esup=` `?ef=` `?et=`, independent of `?sup=` `?cf=` `?ct=`) next to Only this SKU and
+Order number, and it **says what they match before anything is read**: "1,194 pairs with no cost ·
+460 parcels to look up · about 69 min" (`costEmailScope`, `GET /api/items/cost-emails?scope=1`;
+~9 s a parcel, capped at 1,500). The supplier dropdown is counted within the dates but WITHOUT the
+supplier filter (picking one keeps the list). No pairs → Read the emails is disabled. Dates are the
+day the pair was received, EST. No db:setup.
+

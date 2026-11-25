@@ -241,4 +241,43 @@ test.describe('a run, end to end', () => {
     await expect(page.getByLabel('Only this SKU')).toBeVisible();
     await expect(page.getByLabel('Order number')).toBeVisible();
   });
+
+  test('the tab has its own filters, and says what they match before anything is read', async ({ request, page }) => {
+    const TRK2 = '1ZE2ECFE0000000002';
+    const r = await request.post('/api/batches/commit', {
+      headers: WH,
+      data: { batch: { buyer: 'stickballman12', supplier: SUPPLIER, tracking: TRK2, dateReceived: estToday() },
+        items: [
+          { name: 'E2E CFE Scope', sku: 'E2ECFE-SCOPE', size: '10', withBox: true },
+          { name: 'E2E CFE Scope', sku: 'E2ECFE-SCOPE', size: '11', withBox: true },
+          { name: 'E2E CFE Scope', sku: 'E2ECFE-SCOPE', size: '12', cost: 50, withBox: true },   // costed: not counted
+        ] },
+    });
+    expect(r.ok()).toBeTruthy();
+    // The server's count: this supplier's blank pairs for the SKU, one parcel; a past range has none.
+    const scope = async (qs) => (await (await request.get(`/api/items/cost-emails?scope=1&${qs}`, { headers: WH })).json()).scope;
+    const s1 = await scope(`supplier=${encodeURIComponent(SUPPLIER)}&sku=E2ECFE-SCOPE`);
+    expect(s1).toMatchObject({ pairs: 2, parcels: 1, noTracking: 0 });
+    expect(s1.suppliers).toEqual([{ value: SUPPLIER, pairs: 2 }]);
+    expect((await scope(`supplier=${encodeURIComponent(SUPPLIER)}&from=2020-01-01&to=2020-01-31`)).pairs).toBe(0);
+    // The supplier list is counted without the supplier filter: picking one keeps the others.
+    expect((await scope('supplier=Nobody%20At%20All&sku=E2ECFE-SCOPE')).suppliers).toEqual([{ value: SUPPLIER, pairs: 2 }]);
+
+    await loginAs(page, 'warehouse');
+    await page.goto(`/costs?tab=emails&esup=${encodeURIComponent(SUPPLIER)}`);
+    await expect(page.getByLabel('Supplier to read')).toHaveValue(SUPPLIER);
+    await page.getByLabel('Only this SKU').fill('E2ECFE-SCOPE');
+    await expect(page.getByText('2 pairs with no cost · 1 parcel to look up')).toBeVisible();
+    // A typed range is this tab's own (?ef= ?et=), kept on a refresh.
+    await page.getByLabel('Received from').fill('2020-01-01');
+    await page.getByLabel('Received to').fill('2020-01-31');
+    await expect(page.getByText('No pairs without a cost match these filters.')).toBeVisible();
+    await expect(page).toHaveURL(/ef=2020-01-01/);
+    await page.reload();
+    await expect(page.getByLabel('Received from')).toHaveValue('2020-01-01');
+    await expect(page.getByLabel('Received to')).toHaveValue('2020-01-31');
+    await page.getByRole('button', { name: 'Clear' }).click();
+    await expect(page.getByLabel('Supplier to read')).toHaveValue('');
+    await expect(page.getByLabel('Received from')).toHaveValue('');
+  });
 });

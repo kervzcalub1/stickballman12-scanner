@@ -8015,6 +8015,8 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
 .cfe-start { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 12px;
   padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
 .cfe-run { margin-top: 18px; }
+.cfe-h { margin-top: 14px; }
+.cfe-filters { margin-top: 6px; }
 .cfe-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
 .cfe-stats { display: flex; gap: 8px 28px; flex-wrap: wrap; margin: 10px 0; font-size: 18px; }
 .cfe-reasons { margin: 10px 0; padding-left: 18px; color: var(--muted); }

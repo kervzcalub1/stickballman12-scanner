@@ -310,13 +310,12 @@ export function ItemCosts({ onHome, onSignOut }) {
   );
 
   if (tab === 'emails') {
-    const [from, to] = range();
     return (
       <div className="app">
         <TopBar title="Costs" onHome={onHome} onSignOut={onSignOut} />
         <div className="card">
           {tabs}
-          <CostsFromEmails supplier={sup || ''} from={from || ''} to={to || ''} onSignOut={onSignOut} />
+          <CostsFromEmails onSignOut={onSignOut} />
         </div>
       </div>
     );

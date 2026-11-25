@@ -30,7 +30,7 @@ const COLS = [
 export function CostLookup({ onSignOut }) {
   const [query, setQuery] = useQueryParam('lq');
   const [srcRaw, setSrc] = useQueryParam('src', 'all');
-  const src = srcRaw === 'po' || srcRaw === 'online' ? srcRaw : 'all';
+  const src = ['po', 'online', 'pairs'].includes(srcRaw) ? srcRaw : 'all';
   const [searched, setSearched] = useState(null);   // the term loaded ('' = newest lines)
   const [rows, setRows] = useState(null);
   const [truncated, setTruncated] = useState(false);
@@ -74,7 +74,7 @@ export function CostLookup({ onSignOut }) {
   function clear() { setQuery(''); load(''); }
 
   const all = rows || [];
-  const counts = { all: all.length, po: all.filter((r) => r.source === 'po').length, online: all.filter((r) => r.source === 'online').length };
+  const counts = { all: all.length, po: all.filter((r) => r.source === 'po').length, online: all.filter((r) => r.source === 'online').length, pairs: all.filter((r) => r.source === 'pairs').length };
   const shown = sortCostRows(src === 'all' ? all : all.filter((r) => r.source === src), sort.key, sort.dir);
   const summary = searched ? sizeSummary(shown) : [];
   const manySkus = new Set(summary.map((s) => bareCode(s.sku))).size > 1;
@@ -103,6 +103,9 @@ export function CostLookup({ onSignOut }) {
             tip, shipping), the same maths receiving uses. No preset linked → no cost.</li>
           <li><b>Online order</b> — the price, less its share of the coupon, plus its share of tax and
             shipping, less the gift card % and cashback %.</li>
+          <li><b>Our pairs</b> — the cost saved on the pairs themselves (typed on the Costs page or at
+            receiving, or filled from the store’s emails), for a batch that has no purchase order and no
+            online order behind it. “Bought” is the day the batch was received.</li>
           <li>Cancelled and not-delivered pairs are left out. A blank means it can’t be known yet — not $0.
             Tap or hover a cost to see how it was worked out.</li>
         </ul>
@@ -121,7 +124,7 @@ export function CostLookup({ onSignOut }) {
 
       <div className="cl-bar">
         <div className="seg sm" role="tablist" aria-label="Where it was bought">
-          {[['all', 'All'], ['po', 'Supplier POs'], ['online', 'Online orders']].map(([k, label]) => (
+          {[['all', 'All'], ['po', 'Supplier POs'], ['online', 'Online orders'], ['pairs', 'Our pairs']].map(([k, label]) => (
             <button key={k} type="button" role="tab" aria-selected={src === k}
               className={`seg-btn${src === k ? ' on' : ''}`} onClick={() => setSrc(k)}>
               {label}{rows ? <span className="seg-n" aria-hidden="true">{counts[k]}</span> : null}
@@ -137,7 +140,7 @@ export function CostLookup({ onSignOut }) {
 
       {rows == null ? <p className="muted">Loading…</p> : !shown.length ? (
         <p className="muted">
-          {all.length ? `No ${src === 'po' ? 'supplier PO' : 'online order'} lines${searched ? ` for “${searched}”` : ''} — try All.`
+          {all.length ? `No ${src === 'po' ? 'supplier PO' : src === 'pairs' ? 'costed-pair' : 'online order'} lines${searched ? ` for “${searched}”` : ''} — try All.`
             : searched ? `Nothing bought matching “${searched}”.` : 'No purchases on file yet.'}
         </p>
       ) : (
@@ -168,7 +171,7 @@ export function CostLookup({ onSignOut }) {
                       <td data-label="Size">US {sizeLabel(s.size, s.gender, s.name)}</td>
                       <td data-label="Latest cost" className="num">
                         {s.latest == null ? <span className="muted">no cost</span>
-                          : <><b>{usd(s.latest)}</b> <span className="muted sm">{day(s.latestOn)} · {s.latestSource === 'po' ? 'PO' : 'online'}</span></>}
+                          : <><b>{usd(s.latest)}</b> <span className="muted sm">{day(s.latestOn)} · {s.latestSource === 'po' ? 'PO' : s.latestSource === 'pairs' ? 'our pairs' : 'online'}</span></>}
                       </td>
                       <td data-label="Lowest – highest" className="num">
                         {s.min == null ? '—' : s.min === s.max ? usd(s.min) : `${usd(s.min)} – ${usd(s.max)}`}

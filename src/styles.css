@@ -1188,6 +1188,7 @@ body {
 .cl-src { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11.5px; white-space: nowrap; border: 1px solid var(--border); }
 .cl-src.po { color: #8fb0ff; border-color: rgba(79,124,255,0.45); background: rgba(79,124,255,0.10); }
 .cl-src.online { color: #7bc99a; border-color: rgba(123,201,154,0.45); background: rgba(123,201,154,0.10); }
+.cl-src.pairs { color: #e0b96a; border-color: rgba(224,185,106,0.45); background: rgba(224,185,106,0.10); }
 .cl .sm { font-size: 13px; }
 .cl-intro { margin: 4px 0 6px; }
 .cl-how { color: var(--muted); margin: 0 0 4px; }

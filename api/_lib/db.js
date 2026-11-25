@@ -3541,6 +3541,35 @@ export async function listPoCostLines(q = '', limit = 500) {
      LIMIT ${limit}`;
 }
 
+// Cost lookup's third source (2026-11-26): the cost SAVED ON OUR OWN PAIRS, for stock whose
+// purchase is recorded nowhere else — a batch with no purchase order and no online order
+// (most "NA" supplier batches). Owner: "I just entered its cost on No cost on file, and Cost
+// lookup returns nothing." A batch that IS on a PO / online order is left out: its purchase
+// line is already in the sheet, and the same pairs twice would double the per-size figures.
+// One row per batch + SKU + size + cost.
+export async function listItemCostLines(q = '', limit = 500) {
+  const term = String(q || '').trim();
+  const bare = term.toUpperCase().replace(/[\s-]/g, '');
+  const skuLike = bare ? `%${bare}%` : null;
+  const nameLike = term ? `%${term.toUpperCase()}%` : null;
+  return db()`
+    SELECT b.batch_code, b.supplier_name, b.kind,
+           coalesce(b.date_received, (b.created_at AT TIME ZONE 'America/New_York')::date)::text AS bought_on,
+           max(i.sku) AS sku, max(i.name) AS name, i.size, max(i.gender) AS gender,
+           count(*)::int AS qty, i.cost, max(i.shelf_price) AS shelf_price
+      FROM items i
+      JOIN batches b ON b.id = i.batch_id
+     WHERE i.cost IS NOT NULL
+       AND b.po_id IS NULL AND b.online_order_id IS NULL
+       AND (${nameLike}::text IS NULL
+            OR (${skuLike}::text IS NOT NULL AND upper(replace(replace(coalesce(i.sku, ''), ' ', ''), '-', '')) LIKE ${skuLike})
+            OR upper(coalesce(i.name, '')) LIKE ${nameLike})
+     GROUP BY b.id, b.batch_code, b.supplier_name, b.kind, b.date_received, b.created_at,
+              upper(replace(replace(coalesce(i.sku, ''), ' ', ''), '-', '')), i.size, i.cost
+     ORDER BY bought_on DESC, b.id DESC, max(i.sku), i.size
+     LIMIT ${limit}`;
+}
+
 // Online orders that carry a matching line, WITH every line (the coupon, tax and shipping
 // are split across the whole order, so the cost of one pair needs all of them).
 export async function listOnlineOrdersForCost(q = '', limit = 300) {

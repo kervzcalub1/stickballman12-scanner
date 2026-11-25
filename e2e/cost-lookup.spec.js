@@ -88,6 +88,30 @@ test('a SKU search returns PO + online lines with the actual cost of a pair', as
   expect(mine[0].source).toBe('online');
 });
 
+// 2026-11-26, owner: "I just entered its cost on No cost on file, and Cost lookup returns
+// nothing" — a batch with no PO and no online order has no purchase line; its saved cost is one.
+test('a cost saved on pairs with no PO / online order behind them is found too', async ({ request }) => {
+  const PSKU = `E2E-CLP-${stamp}`;
+  const [b] = await q(`INSERT INTO batches (batch_code, supplier_name, status, kind, date_received) VALUES ($1, 'NA', 'committed', 'receiving', '2026-10-20') RETURNING id`, [`B-E2ECLP-${stamp}`]);
+  const [bpo] = await q(`INSERT INTO batches (batch_code, supplier_name, status, kind, date_received, po_id) VALUES ($1, $2, 'committed', 'receiving', '2026-10-21', $3) RETURNING id`, [`B-E2ECLQ-${stamp}`, SUPPLIER, poId]);
+  try {
+    await q(`INSERT INTO items (vin, batch_id, name, sku, size, cost, status) VALUES
+               ($1, $4, 'E2E CL Pairs', $6, '10.5', 24, 'needs_shelf'), ($2, $4, 'E2E CL Pairs', $6, '10.5', 24, 'needs_shelf'),
+               ($3, $4, 'E2E CL Pairs', $6, '11', NULL, 'needs_shelf'),
+               ($7, $5, 'E2E CL Pairs', $6, '12', 99, 'needs_shelf')`,
+    [`E2ECLP-${stamp}-1`, `E2ECLP-${stamp}-2`, `E2ECLP-${stamp}-3`, b.id, bpo.id, PSKU, `E2ECLP-${stamp}-4`]);
+    const r = await request.get(`/api/items/cost-lookup?q=${PSKU}`, { headers: auth('ph_team') });
+    expect(r.status()).toBe(200);
+    const { rows } = await r.json();
+    // Two costed pairs = one row; the blank pair and the pair on a PO's batch are not rows.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ source: 'pairs', ref: `B-E2ECLP-${stamp}`, party: 'NA', bought_on: '2026-10-20', sku: PSKU, size: '10.5', qty: 2, cost: 24, status: 'Received' });
+  } finally {
+    await q('DELETE FROM items WHERE batch_id = ANY($1)', [[b.id, bpo.id]]);
+    await q('DELETE FROM batches WHERE id = ANY($1)', [[b.id, bpo.id]]);
+  }
+});
+
 test('a supplier cannot read it', async ({ request }) => {
   const res = await request.get(`/api/items/cost-lookup?q=${SKU}`, { headers: auth('supplier') });
   expect(res.status()).toBe(403);

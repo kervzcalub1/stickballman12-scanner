@@ -6,12 +6,14 @@
 //     preset, with the SAME code receiving and "Fill costs from POs" use
 //     (presetForShipment + landedFromShelf). No preset → cost blank, never the shelf
 //     price (owner's rule, 2026-09-30 — costs.md);
+//   · our own pairs — the cost saved on pairs whose batch has no PO and no online order
+//     (listItemCostLines), so a cost typed on "No cost on file" is found here;
 //   · online order lines — the actual cost per pair (`orderCosts`: coupon, tax and
 //     shipping share, gift card %, cashback %). Cancelled / not-delivered pairs are left
 //     out: they cost nothing, and the order's money is already carried by the rest.
 // A blank `q` returns the newest lines. Read-only. Same roles as the rest of the page.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
-import { dbConfigured, listPoCostLines, listOnlineOrdersForCost, presetForShipment } from '../_lib/db.js';
+import { dbConfigured, listPoCostLines, listOnlineOrdersForCost, listItemCostLines, presetForShipment } from '../_lib/db.js';
 import { landedFromShelf, costOrNull } from '../../src/lib/costs.js';
 import { orderCosts, isCancelled, orderCode, orderStage, STAGE_LABEL } from '../../src/lib/onlineOrders.js';
 import { codeMatches } from '../../src/lib/costLookup.js';
@@ -32,9 +34,10 @@ export default async function handler(req, res) {
   // A search is narrow, so it can go deep; the unsearched view is "what we bought lately".
   const poLimit = q ? 1000 : 200;
   const ooLimit = q ? 400 : 100;
+  const pairLimit = q ? 1000 : 200;
 
   try {
-    const [poLines, orders] = await Promise.all([listPoCostLines(q, poLimit), listOnlineOrdersForCost(q, ooLimit)]);
+    const [poLines, orders, pairLines] = await Promise.all([listPoCostLines(q, poLimit), listOnlineOrdersForCost(q, ooLimit), listItemCostLines(q, pairLimit)]);
 
     // One preset per PO — the same (PO, supplier name) question receiving asks.
     const presets = new Map();
@@ -93,11 +96,28 @@ export default async function handler(req, res) {
       }
     }
 
+    // The cost saved on our own pairs, where no purchase order or online order says it.
+    const KIND = { receiving: 'Received', rescale: 'Rescale', instore: 'In-store', existing: 'Existing stock' };
+    for (const l of pairLines) {
+      rows.push({
+        source: 'pairs',
+        ref: l.batch_code,
+        party: l.supplier_name || '',
+        bought_on: l.bought_on,
+        sku: l.sku, name: l.name, size: l.size, gender: l.gender,
+        qty: Number(l.qty) || 0,
+        paid: costOrNull(l.shelf_price),
+        cost: costOrNull(l.cost),
+        status: KIND[l.kind] || l.kind || '',
+        note: 'Cost saved on the pairs — this batch has no purchase order or online order',
+      });
+    }
+
     rows.sort((a, b) => String(b.bought_on || '').localeCompare(String(a.bought_on || '')));
     return send(res, 200, {
       ok: true,
       rows,
-      truncated: poLines.length >= poLimit || orders.length >= ooLimit,
+      truncated: poLines.length >= poLimit || orders.length >= ooLimit || pairLines.length >= pairLimit,
     });
   } catch (e) {
     console.error('[items/cost-lookup]', e.message);

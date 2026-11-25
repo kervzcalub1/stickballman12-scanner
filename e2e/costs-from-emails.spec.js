@@ -9,7 +9,7 @@ import { signToken } from '../api/_lib/util.js';
 import { loginAs } from './helpers/auth.js';
 import { estToday } from '../src/lib/format.js';
 import { readParcel, readOrder, priceParcel, learnNames, orderNumberOf, readSkuLines, priceBySku, priceFromOrder } from '../src/lib/costEmails.js';
-import { runCostEmails, applyCostEmailRun } from '../api/_lib/cost-emails.js';
+import { runCostEmails, applyCostEmailRun, runIsStale, READERS } from '../api/_lib/cost-emails.js';
 import { createCostEmailRun, getCostEmailRun } from '../api/_lib/db.js';
 
 const WH = { Authorization: `Bearer ${signToken({ uid: 'e2e-cfe', username: 'e2e_cfe', name: 'E2E CFE', role: 'warehouse' })}` };
@@ -79,6 +79,57 @@ test('the readers: each store’s email gives the order, the pairs and the price
   expect(readParcel([{ subject: 'Your Nike gear has shipped', from: 'nike@ship.notifications.nike.com', text: '\n' }], 'X')).toMatchObject({ state: 'no_text', store: 'Nike' });
   expect(orderNumberOf({ subject: 'Order 5864970 Has Been Fulfilled' })).toBe('5864970');
   expect(orderNumberOf({ subject: 'Your order is out for delivery', text: 'Thanks for your order today' })).toBeNull();
+});
+
+// 2026-11-26, from the real emails: 94 pairs were saved at a whole LINE's amount (3 pairs at
+// $420 each) and the store's discount was never read. These are those emails, cut down.
+test('Foot Locker / Champs and JD: the amount is the line’s, the discount is in the summary', () => {
+  const FL = 'accountservices_at_em_footlocker_com_x@icloud.com';
+  const pkg = (trk, body) => ({ subject: 'Your order is ready to go', from: FL, text: `Order: P7506601398859993088\nFedex tracking: ${trk}\nIn this package\nSHIPPING TO:\nA B\n${body}` });
+  // Qty 3 / $420.00 = $140 a pair, and $105 after its share of DISCOUNTS.
+  const a = readParcel([pkg('384058607372', 'JRDN AJ1 MID SE-BK/PU/WH\nSize 12.0\nQty 3\n$420.00\n5-6 Business Days\nOrder summary\nSUBTOTAL\n(3 items)\n$420.00\nSHIPPING\nFREE\nDISCOUNTS\n-$105.00\nFLX CASH APPLIED\n$0.00\nTAX\n$0.00\nTOTAL\n$315.00\nPAYMENT\n')], '384058607372');
+  expect(a).toMatchObject({ state: 'ok', priced: true, note: 'store discount $105.00 spread by price' });
+  expect(a.unsure).toBeUndefined();
+  expect(a.items).toEqual([{ name: 'JRDN AJ1 MID SE-BK/PU/WH', size: '12.0', qty: 3, full: 140, each: 105 }]);
+  expect(priceParcel([{ id: 1, sku: 'DV1308-004', size: '12' }], a)).toMatchObject([{ id: 1, each: 105, full: 140 }]);
+  // On sale: "was now" for the line, on one line or two; then 20% off in the summary.
+  for (const amounts of ['$250.00 $179.98', '$250.00\n$179.98']) {
+    const r = readParcel([pkg('384058607373', `NIKE M AF1 LO BCA-BK/PK/BK\nSize 13.0\nQty 2\n${amounts}\nOrder summary\nSUBTOTAL\n(2 items)\n$179.98\nDISCOUNTS\n-$36.00\nTOTAL\nNone None None $143.98\n`)], '384058607373');
+    expect(r.items).toEqual([{ name: 'NIKE M AF1 LO BCA-BK/PK/BK', size: '13.0', qty: 2, full: 125, each: 71.99 }]);
+  }
+  // A blank summary ("$", TOTAL $0.00): nothing says whether a discount came off → unsure.
+  const blank = readParcel([pkg('384097823588', 'JRDN M AJ1 RET HI OG FC-BK/RD\nSize 09.0\nQty 2\n$370.00\nOrder summary\nSUBTOTAL\n(2 items)\n$\nSHIPPING\nFREE\nTAX\n$\nTOTAL\n$0.00\nPAYMENT\n')], '384097823588');
+  expect(blank).toMatchObject({ state: 'ok', priced: true, unsure: true });
+  expect(blank.items[0]).toMatchObject({ qty: 2, full: 185, each: 185 });
+  // …alone, the price stays and is marked to check; with the order's confirmation, the order wins.
+  expect(priceParcel([{ id: 1, sku: 'X', size: '9' }], blank)).toMatchObject([{ id: 1, each: 185, check: true }]);
+  const conf = readOrder([{ subject: 'Thank you for your order, Kevin', from: FL,
+    text: 'Order: P7506601398859993088\nWe’re working on your order now\nThank you for shopping with us\nSHIPPING TO:\nA B\nJRDN M AJ1 RET HI OG FC-BK/RD\nSize 09.0\nQty 2\n$370.00\nEstimated arrival by Fri, Oct 9.\nOrder summary\nSUBTOTAL\n(2 items)\n$370.00\nSHIPPING\nFREE\nDISCOUNTS\n-$210.02\nTAX\n$0.00\nTOTAL\nNone None None $159.98\nPAYMENT\nGift Card\n' }]);
+  expect(conf).toMatchObject({ state: 'ok', store: 'Foot Locker' });
+  expect(conf.lines).toEqual([{ name: 'JRDN M AJ1 RET HI OG FC-BK/RD', size: '09.0', qty: 2, full: 185, each: 79.99 }]);
+  const viaOrder = priceParcel([{ id: 1, sku: 'X', size: '9' }], blank, conf);
+  expect(viaOrder).toMatchObject([{ id: 1, each: 79.99, full: 185 }]);
+  expect(viaOrder[0].check).toBeUndefined();
+
+  // JD: "Shipping Tracking:" on one line, a summary of zeros → unsure; the confirmation has the coupon.
+  const JD = 'jdsports@notifications.jdsports.com';
+  const upd = readParcel([{ subject: 'Your order. We\'ve got the scoop on it.', from: JD,
+    text: 'ORDER UPDATE\nOrder Number: 60036952789\nShipping Tracking: 1Z036H8DYW00011845\nWomen\'s Nike V5 RNR\n$105.00\nSize: 9.0\nQuantity: 1\nORDER SUMMARY\nSubtotal ( item/s): $0.00\nShipping: 0.00\nTax: $0.00\nTotal: $0.00\nPayment\n' }], '1Z036H8DYW00011845');
+  expect(upd).toMatchObject({ state: 'ok', store: 'JD Sports', order: '60036952789', unsure: true });
+  expect(upd.items[0]).toMatchObject({ size: '9.0', qty: 1, each: 105 });
+  const jdConf = readOrder([{ subject: 'You\'ve got great taste, alexander', from: JD,
+    text: 'Order Number: 60036952789\nWomen\'s Nike V5 RNR\n$105.00\nSize: 9.0\nQuantity: 8\nWomen\'s Nike V5 RNR\n$105.00\nSize: 9.5\nQuantity: 6\nORDER SUMMARY\nSubtotal:\n$1470.00\nCoupon:\nSAVEMORE\n-$294.00\nShipping:\n$0.00\nTax:\n$0.00\nTotal:\n$1176.00\nBILLING ADDRESS\n' }]);
+  expect(jdConf.lines.map((l) => [l.size, l.qty, l.full, l.each])).toEqual([['9.0', 8, 105, 84], ['9.5', 6, 105, 84]]);
+  expect(priceParcel([{ id: 2, sku: 'IZ2563-133', size: '9W' }], upd, jdConf)).toMatchObject([{ id: 2, each: 84, full: 105 }]);
+
+  // An email we cannot read keeps what it looked like, for whoever writes its reader.
+  const un = readParcel([{ subject: 'Your order has shipped', from: FL, text: 'Order: P7506601398859993088\nTracking 384058829670 is on its way to you, nothing else is printed here at all.' }], '384058829670');
+  expect(un).toMatchObject({ state: 'unreadable', store: 'Foot Locker', sample: { subject: 'Your order has shipped' } });
+
+  // A preview from the old readers that priced one of these stores cannot be applied.
+  expect(runIsStale({ summary: { stores: { 'Foot Locker': { pairs: 3, priced: 2 } } } })).toBe(true);
+  expect(runIsStale({ summary: { stores: { 'Shoe Palace': { pairs: 3, priced: 3 } } } })).toBe(false);
+  expect(runIsStale({ summary: { v: READERS, stores: { 'Foot Locker': { pairs: 3, priced: 2 } } } })).toBe(false);
 });
 
 test('two shoes of one size at two prices: left alone, until the store’s name for the SKU is known', () => {

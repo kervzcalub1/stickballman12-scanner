@@ -40,15 +40,22 @@ async function askMailbox(term) {
 
 // What a tracking number ('T:') or an order number ('O:') reads as — from memory when it
 // was asked before, else from the mailbox (two tries: Make drops the odd request).
+// READERS: bump when a reader changes what it makes of the SAME email, so what was read the
+// old way is asked again instead of trusted for good. 2 (2026-11-26) = Foot Locker / Champs
+// lines are for the whole line (÷ pairs) and carry the summary's discount; JD's confirmation.
+// An answer from before the number existed is re-read only for the stores it changed.
+export const READERS = 2;
+const REREAD_V1 = /^(foot locker|champs sports|kids foot locker|jd sports)$/i;
+const current = (data) => Number(data?.v || 1) >= READERS || !REREAD_V1.test(String(data?.store || ''));
 async function lookup(key, term, read, ask) {
   const had = await getCostEmailLookup(key);
-  if (had) {
+  if (had && current(had.data)) {
     const fresh = had.data?.state === 'ok' || Date.now() - new Date(had.searched_at).getTime() < MISS_HOURS * 3600_000;
     if (fresh) return had.data;
   }
   let emails;
   try { emails = await ask(term); } catch { emails = await ask(term); }
-  const data = read(emails);
+  const data = { ...read(emails), v: READERS };
   await saveCostEmailLookup(key, data, emails.length);
   return data;
 }
@@ -87,7 +94,9 @@ export async function runCostEmails(runId, { io = {} } = {}) {
         parcel = await lookup(`T:${trk}`, trk, (e) => readParcel(e, trk), ask);
         // The order's own emails have the price when the parcel's does not — and are the only
         // thing to read when the tracking number was found in an email we cannot read (adidas).
-        const needOrder = parcel.order && ((parcel.state === 'ok' && !parcel.priced) || parcel.state === 'unreadable');
+        // …and when the parcel's email prints a price but not the order's total (`unsure`): the
+        // confirmation says whether a discount came off.
+        const needOrder = parcel.order && ((parcel.state === 'ok' && (!parcel.priced || parcel.unsure)) || parcel.state === 'unreadable');
         if (needOrder) order = await lookup(`O:${parcel.order}`, parcel.order, readOrder, ask);
       } catch (e) {
         parcel = { state: 'error', error: e.message };
@@ -149,7 +158,7 @@ export async function runCostEmails(runId, { io = {} } = {}) {
     }
 
     const rows = [];
-    const summary = { pairs: 0, priced: 0, parcels: parcels.length, skus: skus.length, reasons: {}, stores: {}, capped: by.size > MAX_PARCELS || skusLeft > 0 };
+    const summary = { v: READERS, pairs: 0, priced: 0, parcels: parcels.length, skus: skus.length, reasons: {}, stores: {}, capped: by.size > MAX_PARCELS || skusLeft > 0 };
     for (const w of work) {
       const res = w.list.map((p) => first.get(Number(p.id)) || { id: p.id, reason: 'Not found' });
       const byId = new Map(res.map((r) => [Number(r.id), r]));
@@ -165,7 +174,7 @@ export async function runCostEmails(runId, { io = {} } = {}) {
           id: Number(p.id), vin: p.vin, sku: p.sku, size: p.size, name: p.name, batch: p.batch_code, supplier: p.supplier_name,
           trk: w.trk, store: r.store || w.parcel.store || null, order: r.order || w.parcel.order || null,
           each: r.each != null && r.each > 0 ? r.each : null, full: r.full ?? null, how: r.how || null,
-          email_name: r.name || null, note: r.note || null, reason: r.each != null && r.each > 0 ? null : (r.reason || REASON_ORDER),
+          email_name: r.name || null, note: r.note || null, check: r.check === true, reason: r.each != null && r.each > 0 ? null : (r.reason || REASON_ORDER),
         });
       }
     }
@@ -176,6 +185,10 @@ export async function runCostEmails(runId, { io = {} } = {}) {
   }
 }
 
+/** A finished run whose preview came from older readers AND holds a price from a store they changed. */
+export const runIsStale = (run) => Number(run?.summary?.v || 1) < READERS
+  && Object.entries(run?.summary?.stores || {}).some(([k, v]) => REREAD_V1.test(k) && v?.priced > 0);
+
 /**
  * Write a finished run's prices. Only a pair that STILL has no cost is filled (a cost typed
  * since the preview wins), each with a line in its history naming the store and the order.
@@ -184,6 +197,9 @@ export async function applyCostEmailRun(runId, by) {
   const run = await getCostEmailRun(runId, { rows: true });
   if (!run) return { error: 'That run no longer exists.', status: 404 };
   if (run.status !== 'done') return { error: run.status === 'applied' ? 'These prices were already applied.' : 'This run has not finished.' };
+  // A preview worked out by older readers must not be saved: 2026-11-26, Foot Locker / Champs
+  // lines were read as one pair's price (3 pairs at $420 each) and discounts were missed.
+  if (runIsStale(run)) return { error: 'This run was read before a fix to the Foot Locker / Champs / JD Sports prices. Read the emails again, then apply.' };
   const groups = new Map();
   for (const r of run.rows || []) {
     if (!(r.each > 0)) continue;

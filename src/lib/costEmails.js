@@ -130,67 +130,141 @@ export function readDtlrFulfilled(email, tracking) {
   return items.length ? { items } : null;
 }
 
-// ── Foot Locker / Champs / Kids Foot Locker: "Your order is ready to go" ─────────────────
-// One email per package, with the pairs and the price of each:  name / "Size 08.0" /
-// "Qty 1" / "$105.00".
+// ── Foot Locker / Champs / Kids Foot Locker ──────────────────────────────────────────────
+// "Your order is ready to go" (one email per package) and "Thank you for your order" (the
+// confirmation) print each line the same way:
+//   name / "Size 08.0" / "Qty 3" / "$420.00"            ← the amount is for the WHOLE line
+//   name / "Size 13.0" / "Qty 2" / "$250.00 $179.98"    ← on sale: was, now (both for the line)
+// and the store's discount is NOT on the line: it is in the summary under them —
+//   SUBTOTAL / (4 items) / $740.00 / … / DISCOUNTS / -$420.04 / … / TOTAL / $319.96
+// so a pair's price PAID = line ÷ pairs, less its share of DISCOUNTS (spread by price).
+// (2026-11-26: the line was taken as one pair's price — 3 pairs at $420 each — and the
+// discount was not read at all.) Some emails leave the summary blank ("$", TOTAL $0.00):
+// then nothing says whether there was a discount → `unsure`, and the order is asked.
+const MONEY_ALL = /\$\s?([\d,]+\.\d{2})/g;
+const moneyAll = (l) => [...String(l || '').matchAll(MONEY_ALL)].map((m) => Number(m[1].replace(/,/g, '')));
+function footLockerLines(ls, from) {
+  const end = ls.findIndex((l, i) => i > from && /^order summary$/i.test(l));
+  const stop = end < 0 ? ls.length : end;
+  const items = [];
+  for (let i = from + 1; i < stop - 1; i += 1) {
+    const s = ls[i].match(/^size\s+(.+)$/i);
+    const q = (ls[i + 1] || '').match(/^qty\s+(\d{1,3})$/i);
+    if (!s || !q) continue;
+    // The line's amounts: one line or two ("$250.00" / "$179.98"), the last is what it sold at.
+    let money = []; let j = i + 2;
+    while (j < stop && j <= i + 3) { const m = moneyAll(ls[j]); if (!m.length || !/^[\s$\d,.]+$/.test(ls[j])) break; money = money.concat(m); j += 1; }
+    const qty = Number(q[1]);
+    if (!money.length || !qty) continue;
+    let name = ls[i - 1] || '';
+    const half = name.slice(0, Math.floor(name.length / 2)).trim();   // the name is printed twice on one line
+    if (half && name === `${half} ${half}`) name = half;
+    items.push({ name, size: s[1], qty, full: cents(money[0] / qty), each: cents(money[money.length - 1] / qty) });
+    i = j - 1;
+  }
+  if (!items.length) return null;
+  // The summary: the first amount under each label ("(4 items)" sits between), "$" = blank.
+  const under = (label) => {
+    if (end < 0) return null;
+    const at = ls.findIndex((l, i) => i > end && label.test(l));
+    if (at < 0) return null;
+    for (let k = at + 1; k <= at + 2 && k < ls.length; k += 1) { const m = moneyAll(ls[k]); if (m.length) return m[m.length - 1]; if (/^(shipping|discounts?|tax|total|payment|flx)/i.test(ls[k])) break; }
+    return null;
+  };
+  const sub = under(/^subtotal$/i); const off = under(/^discounts?$/i);
+  let note = null; let unsure = false;
+  if (!(sub > 0)) { unsure = true; note = 'this email shows no order total, so a store discount could not be checked'; }
+  else if (off > 0.005 && off < sub) {
+    for (const it of items) it.each = cents(it.each * (1 - off / sub));
+    note = `store discount $${off.toFixed(2)} spread by price`;
+  }
+  return { items, note, unsure };
+}
 export function readFootLockerPackage(email) {
   const ls = emailLines(email?.text);
   const start = ls.findIndex((l) => /^in this package$/i.test(l));
   if (start < 0) return null;
-  const items = [];
-  for (let i = start + 1; i < ls.length - 2; i += 1) {
-    if (/^order summary$/i.test(ls[i])) break;
-    const s = ls[i].match(/^size\s+(.+)$/i);
-    const q = (ls[i + 1] || '').match(/^qty\s+(\d{1,3})$/i);
-    const p = moneyOf(ls[i + 2]);
-    if (!s || !q || p == null) continue;
-    let name = ls[i - 1] || '';
-    const half = name.slice(0, Math.floor(name.length / 2)).trim();   // the name is printed twice on one line
-    if (half && name === `${half} ${half}`) name = half;
-    items.push({ name, size: s[1], qty: Number(q[1]), each: cents(p), full: cents(p) });
-    i += 2;
-  }
-  return items.length ? { items, priced: true } : null;
+  const r = footLockerLines(ls, start);
+  return r ? { items: r.items, priced: true, note: r.note, unsure: r.unsure } : null;
+}
+// The confirmation ("Thank you for your order, …" / "We’re working on your order now").
+export function readFootLockerConfirmation(email) {
+  const ls = emailLines(email?.text);
+  if (ls.some((l) => /^in this package$/i.test(l)) || !ls.some((l) => /^order summary$/i.test(l))) return null;
+  if (!/footlocker|champssports/i.test(String(email?.from || '')) && !ls.some((l) => /working on your order|thank you for shopping with us/i.test(l))) return null;
+  const r = footLockerLines(ls, -1);
+  return r && !r.unsure ? { lines: r.items, note: r.note } : null;
 }
 
-// ── JD Sports: "ORDER UPDATE" lists each parcel under "Tracking: …" with its pairs ───────
-// The discount is on the ORDER (Total < Subtotal + shipping + tax), so it is spread over the
-// pairs by price — said in the note, because it is worked out rather than printed per pair.
-export function readJdUpdate(email, tracking) {
-  const ls = emailLines(email?.text);
-  if (!ls.some((l) => /^order number:/i.test(l))) return null;
-  const want = bare(tracking);
+// ── JD Sports ────────────────────────────────────────────────────────────────────────────
+// "ORDER UPDATE" lists each parcel under "Tracking: …" (also written "Shipping Tracking: …")
+// with its pairs:  name / $80.00 (ONE pair) / Size: 12.0 REG / Quantity: 1.  The confirmation
+// ("You've got great taste") lists the order the same way, with no tracking number.
+// The discount is on the ORDER — "Coupon: / SAVEMORE / -$294.00", or just Total < Subtotal —
+// so it is spread over the pairs by price, and said in the note. An update whose summary is
+// all $0.00 says nothing about a discount → `unsure`, and the order's confirmation is asked.
+function jdSummary(ls) {
+  const val = (label) => {
+    const at = ls.findIndex((l) => label.test(l));
+    if (at < 0) return null;
+    const same = ls[at].slice(ls[at].indexOf(':') + 1).replace(/[$,\s]/g, '');
+    if (/^-?\d+(\.\d+)?$/.test(same)) return Math.abs(Number(same));
+    for (let k = at + 1; k <= at + 2 && k < ls.length; k += 1) {
+      const v = String(ls[k]).replace(/[$,\s]/g, '');
+      if (/^-?\d+(\.\d+)?$/.test(v)) return Math.abs(Number(v));
+      if (/:/.test(ls[k])) break;                                   // the next label
+    }
+    return null;
+  };
+  const sub = val(/^subtotal\b.*:/i); const total = val(/^total:/i);
+  const ship = val(/^shipping:/i) || 0; const tax = val(/^tax:/i) || 0;
+  const coupon = val(/^coupon:/i);
+  if (!(sub > 0)) return { known: false, off: 0, sub: 0 };
+  const off = total != null ? cents(sub + ship + tax - total) : cents(coupon || 0);
+  return { known: true, off: off > 0.005 && off < sub ? off : 0, sub };
+}
+function jdItems(ls, tracking) {
+  const want = tracking ? bare(tracking) : null;
   const items = [];
   let cur = null;
   for (let i = 0; i < ls.length; i += 1) {
-    const t = ls[i].match(/^tracking:\s*([A-Z0-9]{8,34})/i);
+    const t = ls[i].match(/^(?:shipping\s+)?tracking:\s*([A-Z0-9]{8,34})/i);
     if (t) { cur = bare(t[1]); continue; }
     if (/^(processing|order summary|cancell?ed)$/i.test(ls[i])) { cur = null; continue; }
     const s = ls[i].match(/^size:\s*(.+)$/i);
-    if (!s || cur !== want) continue;
+    if (!s || (want && cur !== want)) continue;
     const price = moneyOf(ls[i - 1]);
     const q = (ls[i + 1] || '').match(/^quantity:\s*(\d{1,3})$/i);
     if (price == null || !q) continue;
     items.push({ name: ls[i - 2] || '', size: s[1], qty: Number(q[1]), full: cents(price), each: cents(price) });
   }
+  return items;
+}
+export function readJdUpdate(email, tracking) {
+  const ls = emailLines(email?.text);
+  if (!ls.some((l) => /^order number:/i.test(l))) return null;
+  const items = jdItems(ls, tracking);
   if (!items.length) return null;
-  const val = (label) => {
-    const at = ls.findIndex((l) => label.test(l));
-    if (at < 0) return null;
-    const v = String(ls[at + 1] || '').replace(/^\$/, '').replace(/,/g, '');
-    return /^\d+(\.\d+)?$/.test(v) ? Number(v) : null;
-  };
-  const sub = val(/^subtotal\b/i); const total = val(/^total:?$/i);
-  const ship = val(/^shipping:$/i) || 0; const tax = val(/^tax:$/i) || 0;
+  const sum = jdSummary(ls);
   let note = null;
-  if (sub > 0 && total != null) {
-    const off = cents(sub + ship + tax - total);
-    if (off > 0.005 && off < sub) {
-      for (const it of items) it.each = cents(it.full * (1 - off / sub));
-      note = `order discount $${off.toFixed(2)} spread by price`;
-    }
+  if (!sum.known) note = 'this email shows no order total, so a store discount could not be checked';
+  else if (sum.off) {
+    for (const it of items) it.each = cents(it.full * (1 - sum.off / sum.sub));
+    note = `order discount $${sum.off.toFixed(2)} spread by price`;
   }
-  return { items, priced: true, note };
+  return { items, priced: true, note, unsure: !sum.known };
+}
+// Any JD email that lists the whole order WITH its totals (the confirmation, a full update).
+export function readJdOrder(email) {
+  if (!/jdsports/i.test(String(email?.from || ''))) return null;
+  const ls = emailLines(email?.text);
+  if (!ls.some((l) => /^order number:/i.test(l))) return null;
+  const sum = jdSummary(ls);
+  if (!sum.known) return null;
+  const items = jdItems(ls, null);
+  if (!items.length) return null;
+  if (sum.off) for (const it of items) it.each = cents(it.full * (1 - sum.off / sum.sub));
+  return { lines: items, note: sum.off ? `order discount $${sum.off.toFixed(2)} spread by price` : null };
 }
 
 // ── Supreme: "online shop order has been shipped" — Style / Size / Quantity / Price ─────
@@ -326,9 +400,13 @@ export function readParcel(emails, tracking) {
   // The newest email that names the parcel says the most (a later update lists more pairs).
   for (const e of [...mine].reverse()) {
     const r = readFootLockerPackage(e) || readJdUpdate(e, tracking) || readSupremeShipped(e) || readDtlrFulfilled(e, tracking) || readShopifyShipment(e);
-    if (r) return { state: 'ok', store: storeOf(e) || store, order: orderNumberOf(e) || order, items: r.items, priced: r.priced === true, note: r.note || null };
+    if (r) return { state: 'ok', store: storeOf(e) || store, order: orderNumberOf(e) || order, items: r.items, priced: r.priced === true, note: r.note || null, ...(r.unsure ? { unsure: true } : {}) };
   }
-  return { state: 'unreadable', store, order };
+  // Kept with the answer, so the next reader is written from what the store really sent
+  // (2026-11-26: 57 JD parcels and 43 Foot Locker ones were "unreadable" with nothing to look at).
+  const seen = [...(mine.length ? mine : withText)].reverse()[0];
+  const sample = seen ? { subject: String(seen.subject || '').slice(0, 200), from: String(seen.from || '').slice(0, 120), lines: emailLines(seen.text).slice(0, 90).map((l) => l.slice(0, 160)) } : null;
+  return { state: 'unreadable', store, order, subjects: [...new Set(all.map((e) => String(e.subject || '').slice(0, 80)))].slice(0, 12), sample };
 }
 
 /** The emails an order-number search returned → its priced lines (the confirmation). */
@@ -336,6 +414,10 @@ export function readOrder(emails) {
   for (const e of emails || []) {
     const r = readShopifyConfirmation(e);
     if (r) return { state: 'ok', store: storeOf(e), lines: r.lines, totals: r.totals };
+  }
+  for (const e of emails || []) {
+    const r = readFootLockerConfirmation(e) || readJdOrder(e);
+    if (r) return { state: 'ok', store: storeOf(e), lines: r.lines, totals: {}, note: r.note || null };
   }
   // adidas says the shoes in every email about the order; the same line comes many times.
   const seen = new Map();
@@ -378,13 +460,15 @@ export function priceParcel(pairs, parcel, order = null, skuNames = new Map()) {
   }
   const lines = order?.state === 'ok' ? order.lines : [];
   // The parcel's pairs with a price each: printed in the email, or taken from the order.
+  // `unsure` = the parcel's email prints a price but not the order's total (no way to see a
+  // discount): the order's own lines win when we have them, else the price stays, with the note.
   const priced = parcel.items.map((it) => {
-    if (it.each != null) return it;
+    if (it.each != null && !(parcel.unsure && lines.length)) return it;
     const same = lines.filter((l) => sizeNum(l.size) === sizeNum(it.size) || (Number.isNaN(sizeNum(l.size)) && Number.isNaN(sizeNum(it.size))));
     const byName = it.name ? same.filter((l) => nameKey(l.name) === nameKey(it.name)) : [];
     const known = it.sku && skuNames.get(bare(it.sku)) ? same.filter((l) => skuNames.get(bare(it.sku)).has(nameKey(l.name))) : [];
     const hit = onePrice(byName.length ? byName : known.length ? known : same);
-    return hit ? { ...it, each: hit.each, full: hit.full, lineName: hit.name } : it;
+    return hit ? { ...it, each: hit.each, full: hit.full, lineName: hit.name, note: parcel.unsure ? (order.note ? `${order.note} (from the order’s confirmation)` : 'price from the order’s confirmation') : undefined } : it;
   });
   const pick = (list, p) => {
     let size = list.filter((x) => x.each != null && sizeNum(x.size) === sizeNum(p.size));
@@ -399,7 +483,7 @@ export function priceParcel(pairs, parcel, order = null, skuNames = new Map()) {
   };
   return pairs.map((p) => {
     const inParcel = pick(priced, p);
-    if (inParcel) return { id: p.id, each: inParcel.each, full: inParcel.full ?? inParcel.each, how: 'parcel', name: inParcel.name || inParcel.lineName || null, note: parcel.note || null };
+    if (inParcel) return { id: p.id, each: inParcel.each, full: inParcel.full ?? inParcel.each, how: 'parcel', name: inParcel.name || inParcel.lineName || null, note: inParcel.note || parcel.note || null, ...(parcel.unsure && !inParcel.note ? { check: true } : {}) };
     const inOrder = lines.length ? pick(lines, p) : null;
     if (inOrder && skuNames.get(bare(p.sku))) return { id: p.id, each: inOrder.each, full: inOrder.full, how: 'order', name: inOrder.name, note: 'not listed in this parcel’s email; priced from the order by shoe and size' };
     const sizes = priced.filter((x) => sizeNum(x.size) === sizeNum(p.size) || womensOf(x.size, p.size));

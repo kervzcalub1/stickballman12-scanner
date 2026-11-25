@@ -28,6 +28,7 @@ export function CostsFromEmails({ onSignOut, onApplied }) {
   const [rows, setRows] = useState(null);       // the preview, loaded once the run is done
   const [show, setShow] = useState('priced');   // priced | not
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);   // Apply asks once before it saves
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [sku, setSku] = useState('');
@@ -77,15 +78,30 @@ export function CostsFromEmails({ onSignOut, onApplied }) {
   const s = run?.summary || null;
   const priced = useMemo(() => (rows || []).filter((r) => r.each != null), [rows]);
   const not = useMemo(() => (rows || []).filter((r) => r.each == null), [rows]);
-  const list = show === 'priced' ? priced : not;
+  // Prices to look at before saving: the email showed no order total (`check`), or the price is
+  // well above what the same shoe cost on the other pairs of this run (2026-11-26: a line of
+  // three pairs was read as one pair's price and nothing on the page said so).
+  const flags = useMemo(() => {
+    const bySku = new Map();
+    for (const r of priced) { if (!bySku.has(r.sku)) bySku.set(r.sku, []); bySku.get(r.sku).push(Number(r.each)); }
+    const out = new Map();
+    for (const r of priced) {
+      const v = [...bySku.get(r.sku)].sort((x, y) => x - y);
+      const mid = v[Math.floor((v.length - 1) / 2)];
+      if (v.length >= 3 && Number(r.each) > mid * 1.5) out.set(r.id, `well above the other pairs of this shoe (${money(mid)})`);
+      else if (r.check) out.set(r.id, 'the email shows no order total — a discount could not be checked');
+    }
+    return out;
+  }, [priced]);
+  const list = show === 'priced' ? [...priced].sort((x, y) => Number(flags.has(y.id)) - Number(flags.has(x.id))) : not;
   const scopeLine = `${sup || 'Every supplier'}${from || to ? ` · received ${from || 'the start'} to ${to || 'today'}` : ' · any date'}${skuKey ? ` · SKU ${skuKey.toUpperCase()}` : ''}`;
   const mins = scope?.parcels ? Math.max(1, Math.round((Math.min(scope.parcels, 1500) * 9) / 60)) : 0;
   const supplierOptions = scope?.suppliers || [];
   const runScope = run ? `${run.supplier || 'Every supplier'}${run.date_from || run.date_to ? ` · ${run.date_from || '…'} to ${run.date_to || '…'}` : ' · any date'}${run.sku ? ` · SKU ${run.sku}` : ''}${run.order_number ? ` · order ${run.order_number}` : ''}` : '';
 
   function exportCsv() {
-    const head = ['VIN', 'SKU', 'Size', 'Shoe', 'Batch', 'Supplier', 'Tracking', 'Store (email)', 'Order #', 'Name in the email', 'Listed', 'Paid', 'How', 'Note', 'Not priced because'];
-    const body = (rows || []).map((r) => [r.vin, r.sku, r.size, r.name, r.batch, r.supplier, r.trk, r.store, r.order, r.email_name, r.full, r.each, r.how, r.note, r.reason]);
+    const head = ['VIN', 'SKU', 'Size', 'Shoe', 'Batch', 'Supplier', 'Tracking', 'Store (email)', 'Order #', 'Name in the email', 'Listed', 'Paid', 'How', 'Note', 'Check', 'Not priced because'];
+    const body = (rows || []).map((r) => [r.vin, r.sku, r.size, r.name, r.batch, r.supplier, r.trk, r.store, r.order, r.email_name, r.full, r.each, r.how, r.note, flags.get(r.id) || '', r.reason]);
     const esc = (v) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
     downloadCSV(`costs-from-emails-run-${run.id}.csv`, [head, ...body].map((r) => r.map(esc).join(',')).join('\n'));
   }
@@ -187,14 +203,38 @@ export function CostsFromEmails({ onSignOut, onApplied }) {
                 </ul>
               )}
               <div className="cfe-btns">
-                {run.status === 'done' && s.priced > 0 && (
-                  <button type="button" className="btn primary" disabled={busy}
-                    onClick={() => act({ action: 'apply', id: run.id }, (r) => { setNotice(`Cost saved on ${r.filled} pair${r.filled === 1 ? '' : 's'}.`); onApplied?.(); })}>
-                    {busy ? 'Saving…' : `Apply — save the cost on ${s.priced.toLocaleString('en-US')} pairs`}
+                {run.status === 'done' && s.priced > 0 && !run.stale && !confirming && (
+                  <button type="button" className="btn primary" disabled={busy || rows == null} onClick={() => setConfirming(true)}>
+                    {`Apply — save the cost on ${s.priced.toLocaleString('en-US')} pairs`}
                   </button>
                 )}
                 {rows && <button type="button" className="btn ghost sm" onClick={exportCsv}>Download the whole preview (CSV)</button>}
               </div>
+
+              {run.stale && (
+                <div className="error sm" role="alert">
+                  <b>Do not use these prices.</b> This run was read before a fix to the Foot Locker / Champs / JD Sports prices
+                  (a line of several pairs was read as one pair’s price, and store discounts were missed). Press <b>Read the emails</b> again for the same supplier — it cannot be applied.
+                </div>
+              )}
+              {confirming && run.status === 'done' && !run.stale && (
+                <div className="cfe-confirm" role="alertdialog" aria-label="Save these costs">
+                  <p className="sm">
+                    Save the cost on <b>{s.priced.toLocaleString('en-US')}</b> pairs? Only pairs that still have no cost are filled.
+                    {flags.size > 0 && <> <b>{flags.size}</b> of these prices are marked <span className="cfe-flag">check</span> — they are listed first below.</>}
+                  </p>
+                  <div className="cfe-btns">
+                    <button type="button" className="btn primary sm" disabled={busy}
+                      onClick={() => act({ action: 'apply', id: run.id }, (r) => { setConfirming(false); setNotice(`Cost saved on ${r.filled} pair${r.filled === 1 ? '' : 's'}.`); onApplied?.(); })}>
+                      {busy ? 'Saving…' : `Yes, save ${s.priced.toLocaleString('en-US')} costs`}
+                    </button>
+                    <button type="button" className="btn ghost sm" disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
+                  </div>
+                </div>
+              )}
+              {run.status === 'done' && !run.stale && !confirming && flags.size > 0 && (
+                <p className="batch-po-hint sm"><b>{flags.size}</b> price{flags.size === 1 ? '' : 's'} to check before saving — marked <span className="cfe-flag">check</span>, listed first.</p>
+              )}
 
               <div className="seg cfe-seg" role="tablist">
                 <button type="button" role="tab" aria-selected={show === 'priced'} className={`seg-btn${show === 'priced' ? ' on' : ''}`} onClick={() => setShow('priced')}>Priced ({priced.length})</button>
@@ -209,10 +249,11 @@ export function CostsFromEmails({ onSignOut, onApplied }) {
                         <tr key={r.id}>
                           <td><b>{r.sku}</b> <span className="muted sm">{r.name}</span>{r.email_name ? <div className="muted xs">email: {r.email_name}</div> : null}</td>
                           <td>{r.size}</td>
-                          <td>{r.batch}<div className="muted xs">{r.trk}</div></td>
-                          <td>{r.store || '—'}{r.order ? <div className="muted xs">#{r.order}</div> : null}</td>
+                          <td>{r.batch}<div className="muted xs cfe-ord">{r.trk}</div></td>
+                          <td>{r.store || '—'}{r.order ? <div className="muted xs cfe-ord">#{r.order}</div> : null}</td>
                           {show === 'priced'
-                            ? <><td className="muted">{r.full != null && r.full > r.each ? money(r.full) : ''}</td><td><b>{money(r.each)}</b></td><td className="muted sm">{r.how === 'order' ? 'the order' : r.how === 'sku' ? 'a receipt with this SKU' : 'the parcel’s email'}{r.note ? ` · ${r.note}` : ''}</td></>
+                            ? <><td className="muted">{r.full != null && r.full > r.each ? money(r.full) : ''}</td>
+                              <td><b>{money(r.each)}</b>{flags.has(r.id) ? <div className="xs"><span className="cfe-flag" title={flags.get(r.id)}>check</span> <span className="muted">{flags.get(r.id)}</span></div> : null}</td><td className="muted sm">{r.how === 'order' ? 'the order' : r.how === 'sku' ? 'a receipt with this SKU' : 'the parcel’s email'}{r.note ? ` · ${r.note}` : ''}</td></>
                             : <td className="sm">{r.reason}</td>}
                         </tr>
                       ))}

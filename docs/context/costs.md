@@ -244,8 +244,8 @@ no online order is created.
 |---|---|---|
 | Shoe Palace, any Shopify store | "A shipment from order #… is on the way": name, `1 of 10`, size | the confirmation ("Order summary": discount code, listed, paid) |
 | DTLR | "Order N Has Been Fulfilled": `SKU Color=…;Size=… … tracking` | its Shopify confirmation |
-| Foot Locker / Champs / Kids FL | "Your order is ready to go": name, `Size 08.0`, `Qty`, `$` | that email (the price shown) |
-| JD Sports | "ORDER UPDATE": pairs under each `Tracking:` | that email; an ORDER-level discount is spread by price and said in the note |
+| Foot Locker / Champs / Kids FL | "Your order is ready to go": name, `Size 08.0`, `Qty 3`, `$420.00` — **the amount is the LINE's** (÷ pairs); on sale `$250.00 $179.98` = was, now | that email: line ÷ pairs, less its share of the summary's `DISCOUNTS` (spread by price). Summary blank (`$`, TOTAL $0.00) → `unsure` → the confirmation ("Thank you for your order", `readFootLockerConfirmation`) |
+| JD Sports | "ORDER UPDATE": pairs under each `Tracking:` / `Shipping Tracking:` (the amount is ONE pair's) | that email; an ORDER-level discount (`Coupon:` or Total < Subtotal) is spread by price and said in the note. Summary all $0.00 → `unsure` → the confirmation ("You've got great taste", `readJdOrder`) |
 | Supreme | "online shop order has been shipped": Style / Size / Quantity / Price | that email |
 
 **Not readable, and reported as such, never guessed** (the run's "not priced" reasons):
@@ -273,6 +273,29 @@ no online order is created.
 - Measured on real data: Shoe Palace Nov 2–3, **152 of 160 pairs** priced (37 parcels).
 - E2E: `e2e/costs-from-emails.spec.js` (the mailbox is handed in, `io.ask`; the suite has no hook URL,
   so Start answers 503 there).
+
+### Reader fixes (2026-11-26) — the line is not the pair, and the discount is in the summary
+Checked against 411 real emails in `email_receipts` + the saved answers of runs #1–#11:
+- **Foot Locker / Champs read a line of N pairs as one pair's price** (AF1 $125 → $375 at Qty 3).
+  94 pairs were saved that way by run #2; run #11 held 99 more. And `DISCOUNTS` was never read
+  ($185 listed, $79.99 paid). Both fixed in `footLockerLines`.
+- **`unsure`**: a parcel email that prints a price but no order total. The run asks the order
+  (`needOrder`); the order's line wins in `priceParcel`; without it the price stays with the note
+  and `check: true` on the row.
+- **`READERS`** (`api/_lib/cost-emails.js`, now 2) is stamped on every lookup (`data.v`) and run
+  (`summary.v`). A kept answer from an older reader is asked again for the stores the reader
+  changed; **a `done` run from an older reader that priced one of those stores cannot be applied**
+  (`runIsStale` → 409, and the page says so instead of showing Apply). Bump it whenever a reader
+  changes what it makes of the same email.
+- **An `unreadable` parcel keeps `subjects` + a `sample`** (90 lines of the email) in
+  `cost_email_lookups.data` — write the next reader from that, not from a guess. Still unreadable
+  after this: look there first (the mailbox search cannot be called from a laptop).
+- The page: Apply asks once (`Yes, save N costs`); rows are marked **check** (no order total, or
+  > 1.5 × the middle price of the same SKU in the run, 3+ pairs) and listed first; sticky header,
+  order / tracking numbers on one line; CSV has a Check column.
+- **Not done:** Nike. The cost run's mailbox search returns no text for Nike, but `email_receipts`
+  holds readable Nike emails (store receipts: UPC + `Final Price` per pair, already in `.items`;
+  nike.com orders: `Qty: 10` / `$884.80` for the line). A route from `email_receipts` by UPC is the way in.
 
 ### By SKU and by order number (2026-11-25, same tab)
 Owner: pull prices per SKU and supplier; the order number and the tracking number are a bonus when

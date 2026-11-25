@@ -8021,7 +8021,12 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
 .cfe-stats { display: flex; gap: 8px 28px; flex-wrap: wrap; margin: 10px 0; font-size: 18px; }
 .cfe-reasons { margin: 10px 0; padding-left: 18px; color: var(--muted); }
 .cfe-seg { margin: 14px 0 8px; }
-.cfe-scroll { overflow-x: auto; }
+.cfe-scroll { overflow: auto; max-height: 72vh; }
+.cfe-scroll thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.cfe-table .muted.xs.cfe-ord { overflow-wrap: normal; white-space: nowrap; }
+.cfe-flag { display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 700; color: #1a1300; background: #f5c542; }
+.cfe-confirm { margin: 10px 0; padding: 10px 12px; border: 1px solid #f5c542; border-radius: 10px; }
+.cfe-confirm p { margin: 0; }
 .cfe-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .cfe-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 6px 10px 6px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .cfe-table td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--border); vertical-align: top; }

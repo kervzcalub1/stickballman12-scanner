@@ -11,7 +11,7 @@
 // warehouse + PH. A run only READS until 'apply'; apply fills blanks, never overwrites.
 import { getJsonBody, send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { dbConfigured, costEmailScope, getCostEmailRun, createCostEmailRun, costEmailRunBusy, setCostEmailRunStatus, touchCostEmailRun } from '../_lib/db.js';
-import { runCostEmails, applyCostEmailRun, costEmailsConfigured } from '../_lib/cost-emails.js';
+import { runCostEmails, applyCostEmailRun, costEmailsConfigured, runIsStale } from '../_lib/cost-emails.js';
 
 const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
 const idOf = (v) => { const n = Number(v); return Number.isSafeInteger(n) && n > 0 ? n : null; };
@@ -33,7 +33,7 @@ export default async function handler(req, res) {
         return send(res, 200, { ok: true, scope });
       }
       const run = await getCostEmailRun(idOf(q.get('id')), { rows: q.get('rows') === '1' });
-      return send(res, 200, { ok: true, configured: costEmailsConfigured(), run });
+      return send(res, 200, { ok: true, configured: costEmailsConfigured(), run: run ? { ...run, stale: run.status === 'done' && runIsStale(run) } : run });
     }
     const body = await getJsonBody(req);
     const action = String(body.action || '');

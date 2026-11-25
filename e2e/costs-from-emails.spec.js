@@ -9,7 +9,7 @@ import { signToken } from '../api/_lib/util.js';
 import { loginAs } from './helpers/auth.js';
 import { estToday } from '../src/lib/format.js';
 import { readParcel, readOrder, priceParcel, learnNames, orderNumberOf, readSkuLines, priceBySku, priceFromOrder } from '../src/lib/costEmails.js';
-import { runCostEmails, applyCostEmailRun, runIsStale, READERS } from '../api/_lib/cost-emails.js';
+import { runCostEmails, applyCostEmailRun, runIsStale, lookupIsCurrent, READERS } from '../api/_lib/cost-emails.js';
 import { createCostEmailRun, getCostEmailRun } from '../api/_lib/db.js';
 
 const WH = { Authorization: `Bearer ${signToken({ uid: 'e2e-cfe', username: 'e2e_cfe', name: 'E2E CFE', role: 'warehouse' })}` };
@@ -130,6 +130,15 @@ test('Foot Locker / Champs and JD: the amount is the line’s, the discount is i
   // An email we cannot read keeps what it looked like, for whoever writes its reader.
   const un = readParcel([{ subject: 'Your order has shipped', from: FL, text: 'Order: P7506601398859993088\nTracking 384058829670 is on its way to you, nothing else is printed here at all.' }], '384058829670');
   expect(un).toMatchObject({ state: 'unreadable', store: 'Foot Locker', sample: { subject: 'Your order has shipped' } });
+
+  // What an older reader made of an email: a hit for a store whose reader did not change is
+  // kept; a hit for one that did, and ANY miss, is asked again (an old "unreadable" is what the
+  // new reader is for — JD's confirmations were served from memory for a day).
+  expect(lookupIsCurrent({ state: 'ok', store: 'Shoe Palace' })).toBe(true);
+  expect(lookupIsCurrent({ state: 'ok', store: 'JD Sports' })).toBe(false);
+  expect(lookupIsCurrent({ state: 'unreadable' })).toBe(false);
+  expect(lookupIsCurrent({ state: 'no_email' })).toBe(false);
+  expect(lookupIsCurrent({ state: 'unreadable', v: READERS })).toBe(true);
 
   // A preview from the old readers that priced one of these stores cannot be applied.
   expect(runIsStale({ summary: { stores: { 'Foot Locker': { pairs: 3, priced: 2 } } } })).toBe(true);

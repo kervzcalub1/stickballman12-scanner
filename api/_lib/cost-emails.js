@@ -47,10 +47,13 @@ async function askMailbox(term) {
 // 3 (2026-11-26) = JD's "Shipping | Tracking:" line.
 export const READERS = 3;
 const REREAD_V1 = /^(foot locker|champs sports|kids foot locker|jd sports)$/i;
-const current = (data) => Number(data?.v || 1) >= READERS || !REREAD_V1.test(String(data?.store || ''));
+// A MISS from an older reader is never trusted either: "unreadable" is exactly what a newer
+// reader is for (2026-11-26: JD confirmations read as unreadable the day before were served
+// from memory for 24 h, so 138 pairs came out at the listed price instead of the paid one).
+export const lookupIsCurrent = (data) => Number(data?.v || 1) >= READERS || (data?.state === 'ok' && !REREAD_V1.test(String(data?.store || '')));
 async function lookup(key, term, read, ask) {
   const had = await getCostEmailLookup(key);
-  if (had && current(had.data)) {
+  if (had && lookupIsCurrent(had.data)) {
     const fresh = had.data?.state === 'ok' || Date.now() - new Date(had.searched_at).getTime() < MISS_HOURS * 3600_000;
     if (fresh) return had.data;
   }

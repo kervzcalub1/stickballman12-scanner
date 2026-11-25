@@ -303,6 +303,9 @@ Checked against 411 real emails in `email_receipts` + the saved answers of runs 
   order / tracking numbers on one line; CSV has a Check column.
 - **The sample paid off the same day:** JD's update in the mailbox's text reads `Shipping | Tracking:
   1Z…` (a pipe) with no summary at all — `READERS` 3. Its price comes from the confirmation.
+- **An old MISS is asked again too** (`lookupIsCurrent`): `unreadable` / `no_email` from an older
+  reader is never served from memory — run #17 priced 138 JD pairs at the listed price because
+  yesterday's unreadable confirmations were still "fresh" for 24 h.
 - **Not done:** Nike. The cost run's mailbox search returns no text for Nike, but `email_receipts`
   holds readable Nike emails (store receipts: UPC + `Final Price` per pair, already in `.items`;
   nike.com orders: `Qty: 10` / `$884.80` for the line). A route from `email_receipts` by UPC is the way in.

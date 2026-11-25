@@ -117,6 +117,11 @@ test('Foot Locker / Champs and JD: the amount is the line’s, the discount is i
     text: 'ORDER UPDATE\nOrder Number: 60036952789\nShipping Tracking: 1Z036H8DYW00011845\nWomen\'s Nike V5 RNR\n$105.00\nSize: 9.0\nQuantity: 1\nORDER SUMMARY\nSubtotal ( item/s): $0.00\nShipping: 0.00\nTax: $0.00\nTotal: $0.00\nPayment\n' }], '1Z036H8DYW00011845');
   expect(upd).toMatchObject({ state: 'ok', store: 'JD Sports', order: '60036952789', unsure: true });
   expect(upd.items[0]).toMatchObject({ size: '9.0', qty: 1, each: 105 });
+  // The mailbox's own text writes it with a pipe, a leftover of the link on the next line, and no summary at all.
+  const piped = readParcel([{ subject: 'Your order. We\'ve got the scoop on it.', from: JD,
+    text: 'ORDER UPDATE\n************\nOrder Number: 60036950981\nOrder Date: 11/16/2026 09:32:24\nShipping | Tracking: 1ZXX1623YW20214206\n09:32:24&PROMISE_DATE=&utm_campaign=NarvarTracking? )\nWomen\'s Nike V5 RNR Casual Shoes\n$105.00\nSize: 6.0 REG\nQuantity: 1\nShipping | Tracking: 1Z165E98YW20200589\n09:32:24&PROMISE_DATE=&utm_campaign=NarvarTracking? )\nWomen\'s Nike V5 RNR Casual Shoes\n$105.00\nSize: 6.5 REG\nQuantity: 1\n************\nSHIPPING TO:\n' }], '1Z165E98YW20200589');
+  expect(piped).toMatchObject({ state: 'ok', order: '60036950981', unsure: true });
+  expect(piped.items).toEqual([{ name: 'Women\'s Nike V5 RNR Casual Shoes', size: '6.5 REG', qty: 1, full: 105, each: 105 }]);
   const jdConf = readOrder([{ subject: 'You\'ve got great taste, alexander', from: JD,
     text: 'Order Number: 60036952789\nWomen\'s Nike V5 RNR\n$105.00\nSize: 9.0\nQuantity: 8\nWomen\'s Nike V5 RNR\n$105.00\nSize: 9.5\nQuantity: 6\nORDER SUMMARY\nSubtotal:\n$1470.00\nCoupon:\nSAVEMORE\n-$294.00\nShipping:\n$0.00\nTax:\n$0.00\nTotal:\n$1176.00\nBILLING ADDRESS\n' }]);
   expect(jdConf.lines.map((l) => [l.size, l.qty, l.full, l.each])).toEqual([['9.0', 8, 105, 84], ['9.5', 6, 105, 84]]);

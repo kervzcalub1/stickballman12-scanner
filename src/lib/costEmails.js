@@ -197,7 +197,8 @@ export function readFootLockerConfirmation(email) {
 }
 
 // ── JD Sports ────────────────────────────────────────────────────────────────────────────
-// "ORDER UPDATE" lists each parcel under "Tracking: …" (also written "Shipping Tracking: …")
+// "ORDER UPDATE" lists each parcel under "Tracking: …" (also "Shipping Tracking: …" and
+// "Shipping | Tracking: …")
 // with its pairs:  name / $80.00 (ONE pair) / Size: 12.0 REG / Quantity: 1.  The confirmation
 // ("You've got great taste") lists the order the same way, with no tracking number.
 // The discount is on the ORDER — "Coupon: / SAVEMORE / -$294.00", or just Total < Subtotal —
@@ -228,7 +229,9 @@ function jdItems(ls, tracking) {
   const items = [];
   let cur = null;
   for (let i = 0; i < ls.length; i += 1) {
-    const t = ls[i].match(/^(?:shipping\s+)?tracking:\s*([A-Z0-9]{8,34})/i);
+    // "Tracking: 1Z…", "Shipping Tracking: 1Z…" and, in the mailbox's own text, "Shipping | Tracking: 1Z…"
+    // (2026-11-26: the kept sample of 57 unreadable JD parcels showed the pipe).
+    const t = ls[i].match(/^(?:shipping\b[\s|:–-]*)?tracking:\s*([A-Z0-9]{8,34})/i);
     if (t) { cur = bare(t[1]); continue; }
     if (/^(processing|order summary|cancell?ed)$/i.test(ls[i])) { cur = null; continue; }
     const s = ls[i].match(/^size:\s*(.+)$/i);
@@ -429,7 +432,12 @@ export function readOrder(emails) {
     for (const l of r.lines) seen.set(`${l.sku}|${sizeNum(l.size)}|${l.each}`, l);
   }
   if (seen.size) return { state: 'ok', store, lines: [...seen.values()], totals: {} };
-  return { state: (emails || []).length ? 'unreadable' : 'no_email' };
+  if (!(emails || []).length) return { state: 'no_email' };
+  // Kept like an unreadable parcel's: the subjects, and the text of the email most likely to be
+  // the confirmation (the first one — the search returns the oldest first).
+  const first = (emails || []).find((e) => String(e?.text || '').trim().length > 40);
+  return { state: 'unreadable', subjects: [...new Set(emails.map((e) => String(e?.subject || '').slice(0, 80)))].slice(0, 12),
+    sample: first ? { subject: String(first.subject || '').slice(0, 200), from: String(first.from || '').slice(0, 120), lines: emailLines(first.text).slice(0, 90).map((l) => l.slice(0, 160)) } : null };
 }
 
 const womensOf = (emailSize, boxSize) => /\dW$/i.test(String(boxSize || '').trim()) && !/W$/i.test(String(emailSize || '').trim())

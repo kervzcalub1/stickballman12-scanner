@@ -44,7 +44,8 @@ async function askMailbox(term) {
 // old way is asked again instead of trusted for good. 2 (2026-11-26) = Foot Locker / Champs
 // lines are for the whole line (÷ pairs) and carry the summary's discount; JD's confirmation.
 // An answer from before the number existed is re-read only for the stores it changed.
-export const READERS = 2;
+// 3 (2026-11-26) = JD's "Shipping | Tracking:" line.
+export const READERS = 3;
 const REREAD_V1 = /^(foot locker|champs sports|kids foot locker|jd sports)$/i;
 const current = (data) => Number(data?.v || 1) >= READERS || !REREAD_V1.test(String(data?.store || ''));
 async function lookup(key, term, read, ask) {

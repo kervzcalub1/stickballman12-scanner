@@ -301,6 +301,8 @@ Checked against 411 real emails in `email_receipts` + the saved answers of runs 
 - The page: Apply asks once (`Yes, save N costs`); rows are marked **check** (no order total, or
   > 1.5 × the middle price of the same SKU in the run, 3+ pairs) and listed first; sticky header,
   order / tracking numbers on one line; CSV has a Check column.
+- **The sample paid off the same day:** JD's update in the mailbox's text reads `Shipping | Tracking:
+  1Z…` (a pipe) with no summary at all — `READERS` 3. Its price comes from the confirmation.
 - **Not done:** Nike. The cost run's mailbox search returns no text for Nike, but `email_receipts`
   holds readable Nike emails (store receipts: UPC + `Final Price` per pair, already in `.items`;
   nike.com orders: `Qty: 10` / `$884.80` for the line). A route from `email_receipts` by UPC is the way in.

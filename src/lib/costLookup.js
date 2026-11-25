@@ -7,7 +7,9 @@
 //                           code receiving and "Fill costs from POs" use);
 //   · online order lines  — the actual cost per pair `orderCosts` works out (coupon, tax,
 //                           shipping share, gift card %, cashback %).
-// Row: { source: 'po'|'online', ref, party, bought_on ('YYYY-MM-DD', EST), sku, name,
+//   · our own pairs       — the cost saved on pairs whose batch is on neither (typed on
+//                           the Costs page, receiving, or filled from the emails).
+// Row: { source: 'po'|'online'|'pairs', ref, party, bought_on ('YYYY-MM-DD', EST), sku, name,
 //        size, gender, qty, paid, cost, note, status }
 // `paid` is the price on the order (shelf / unit price); `cost` is what one pair cost us,
 // or null when it can't be known (no price on the PO, or no preset for the supplier) —
@@ -30,7 +32,7 @@ export function codeMatches(q, sku, name) {
   return String(name || '').toUpperCase().includes(term.toUpperCase());
 }
 
-export const SOURCE_LABEL = { po: 'Supplier PO', online: 'Online order' };
+export const SOURCE_LABEL = { po: 'Supplier PO', online: 'Online order', pairs: 'Our pairs' };
 
 const num = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 

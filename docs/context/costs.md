@@ -76,6 +76,12 @@ every PURCHASE line for a SKU, from both ways we buy:
   `orderCosts` (coupon / tax / shipping / gift card % / cashback %), computed over ALL the
   order's lines and then filtered to the matching ones (the split needs the whole order).
   Cancelled and not-delivered lines are left out.
+- **Our pairs** (`listItemCostLines`, source `pairs`, 2026-11-26) — the cost saved on the pairs
+  themselves, one row per batch + SKU + size + cost, **only for a batch with no `po_id` and no
+  `online_order_id`** (its purchase is recorded nowhere else; a batch that is on one is already
+  in the sheet, and the same pairs twice would double the per-size figures). Owner: "I just
+  entered its cost on No cost on file, and Cost lookup returns nothing" (487754-012, 21 pairs,
+  supplier NA). "Bought" = the day the batch was received; Price paid = `shelf_price`.
 - Match: SKU contains the search with spaces/dashes ignored (`codeMatches`, also in SQL), or
   the name contains it. Blank search = the newest 200 PO lines + 100 online orders; a search
   goes to 1000 / 400 and says "more matches than shown" past that.

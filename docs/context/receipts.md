@@ -181,3 +181,15 @@ links to the online order(s) with that number (`online_order_ids`). Details: `on
 - A supplier's view of their own filed receipts.
 - Auto-attaching a filed receipt to its buying request (today it links; the request's own
   receipt step is unchanged).
+
+## Reading the mailboxes ourselves — Phase 0, the connection probe (2026-11-25)
+The plan is to fetch mail over IMAP from our own server and drop Make's fetch step (per-folder
+UID positions, the same queue as `ingest-raw`; one mailbox at a time, Make left on for the rest).
+Nothing of that is built. Phase 0 only answers whether the production host lets IMAP out:
+
+`GET /api/receipts/mail-probe` (admin) opens a TLS connection on port 993 to Gmail, Yahoo, iCloud,
+AOL and Outlook, reads the greeting, asks `CAPABILITY`, and logs out. **No login, no credentials,
+a fixed host list** (the caller cannot name a host). Answer: `{ ok, results: [{ provider, host,
+ok, ms, greeting, capabilities, error }] }`. All five answer from a laptop; the run that counts
+is the one on Railway. Outlook offers `AUTH=XOAUTH2` only (no password login), the others
+`AUTH=PLAIN` (app passwords).

@@ -16416,6 +16416,37 @@ export async function listCostEmailCandidates({ supplier = null, from = null, to
      LIMIT ${limit}`;
 }
 
+// What a run with these filters would read, for the "From emails" tab's own filters: the
+// pairs, their parcels, and every supplier that has such pairs in the dates (the dropdown —
+// counted WITHOUT the supplier filter, so picking one does not empty the list).
+export async function costEmailScope({ supplier = null, from = null, to = null, sku = null } = {}) {
+  const sup = supplier == null || String(supplier).trim() === '' ? null : String(supplier).trim();
+  const code = String(sku || '').toUpperCase().replace(/[^A-Z0-9]/g, '') || null;
+  const rows = await db()`
+    WITH c AS (
+      SELECT btrim(b.supplier_name) AS sup,
+             regexp_replace(upper(coalesce(nullif(btrim(bb.tracking_number), ''), b.tracking_number, '')), '[^A-Z0-9]', '', 'g') AS trk
+        FROM items i
+        JOIN batches b ON b.id = i.batch_id
+        LEFT JOIN batch_boxes bb ON bb.id = i.box_id
+       WHERE i.cost IS NULL AND i.status NOT IN ('missing', 'issue')
+         AND (b.kind IS NULL OR b.kind = 'receiving') AND b.po_id IS NULL
+         AND coalesce(btrim(i.sku), '') <> ''
+         AND (${code}::text IS NULL OR regexp_replace(upper(i.sku), '[^A-Z0-9]', '', 'g') = ${code}::text)
+         AND (${from}::date IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
+         AND (${to}::date   IS NULL OR (i.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
+    )
+    SELECT min(sup) AS supplier, count(*)::int AS pairs,
+           count(DISTINCT nullif(trk, ''))::int AS parcels, count(*) FILTER (WHERE trk = '')::int AS no_tracking
+      FROM c GROUP BY lower(coalesce(sup, '')) ORDER BY 2 DESC`;
+  const mine = sup == null ? rows : rows.filter((r) => String(r.supplier || '').toLowerCase() === sup.toLowerCase());
+  const sum = (k) => mine.reduce((n, r) => n + Number(r[k] || 0), 0);
+  return {
+    pairs: sum('pairs'), parcels: sum('parcels'), noTracking: sum('no_tracking'),
+    suppliers: rows.filter((r) => r.supplier).map((r) => ({ value: r.supplier, pairs: Number(r.pairs) })),
+  };
+}
+
 export async function getCostEmailLookup(key) {
   const r = await db()`SELECT data, emails, searched_at FROM cost_email_lookups WHERE key = ${key}`;
   return r[0] || null;

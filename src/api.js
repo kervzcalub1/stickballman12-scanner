@@ -371,6 +371,7 @@ export const api = {
   costImport: (body) => post('/api/items/cost-import', body),
   // Costs read out of the stores' emails: the latest run (or one), and start / stop / apply.
   costEmails: (id, rows) => get(`/api/items/cost-emails?${new URLSearchParams({ ...(id ? { id } : {}), ...(rows ? { rows: '1' } : {}) }).toString()}`),
+  costEmailsScope: (f) => get(`/api/items/cost-emails?${new URLSearchParams({ scope: '1', ...(f.supplier ? { supplier: f.supplier } : {}), ...(f.from ? { from: f.from } : {}), ...(f.to ? { to: f.to } : {}), ...(f.sku ? { sku: f.sku } : {}) }).toString()}`),
   costEmailsAct: (body) => post('/api/items/cost-emails', body),
   costsSearch: (q) => get(`/api/items/costs?q=${encodeURIComponent(q)}`),
   costLookup: (q) => get(`/api/items/cost-lookup${q ? `?q=${encodeURIComponent(q)}` : ''}`),

@@ -6,13 +6,24 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { downloadCSV } from '../lib/csv.js';
-import { PH_DATETIME } from '../lib/format.js';
+import { PH_DATETIME, estToday } from '../lib/format.js';
+import { useQueryParam } from '../lib/urlstate.js';
 
 const money = (n) => (n == null ? '—' : `$${Number(n).toFixed(2)}`);
 const when = (ts) => (ts ? `${PH_DATETIME.format(new Date(ts))} EST` : '');
-const NO_SUPPLIER = '__none__';
+const isYmd = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+const nf = (n) => Number(n || 0).toLocaleString('en-US');
 
-export function CostsFromEmails({ supplier = '', from = '', to = '', onSignOut, onApplied }) {
+export function CostsFromEmails({ onSignOut, onApplied }) {
+  // The run's own filters, on this tab and in the URL (?esup= ?ef= ?et=). They are NOT the
+  // "No cost on file" tab's: what is set here is exactly what Read the emails will read.
+  const [sup, setSup] = useQueryParam('esup');
+  const [fromRaw, setFrom] = useQueryParam('ef');
+  const [toRaw, setTo] = useQueryParam('et');
+  const from = isYmd(fromRaw) ? fromRaw : '';
+  const to = isYmd(toRaw) && (!from || toRaw >= from) ? toRaw : '';
+  const [scope, setScope] = useState(null);     // { pairs, parcels, noTracking, suppliers } for the filters
+
   const [state, setState] = useState(null);     // { configured, run, needsSetup }
   const [rows, setRows] = useState(null);       // the preview, loaded once the run is done
   const [show, setShow] = useState('priced');   // priced | not
@@ -21,7 +32,6 @@ export function CostsFromEmails({ supplier = '', from = '', to = '', onSignOut, 
   const [notice, setNotice] = useState('');
   const [sku, setSku] = useState('');
   const [order, setOrder] = useState('');
-  const sup = supplier && supplier !== NO_SUPPLIER ? supplier : '';
   const run = state?.run || null;
   const running = run?.status === 'running' && !run.stalled;
 
@@ -30,6 +40,17 @@ export function CostsFromEmails({ supplier = '', from = '', to = '', onSignOut, 
     catch (e) { if (e.unauthorized) return onSignOut?.(); setError(e.message); }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // What the filters match, counted on the server; again after a run is applied.
+  const skuKey = sku.trim().length >= 5 ? sku.trim() : '';
+  useEffect(() => {
+    let off = false;
+    setScope(null);
+    const t = setTimeout(() => {
+      api.costEmailsScope({ supplier: sup, from, to, sku: skuKey }).then((r) => { if (!off) setScope(r.scope); })
+        .catch((e) => { if (e.unauthorized) return onSignOut?.(); if (!off) setScope({ failed: true, suppliers: [] }); });
+    }, 250);
+    return () => { off = true; clearTimeout(t); };
+  }, [sup, from, to, skuKey, state?.run?.applied_at]); // eslint-disable-line react-hooks/exhaustive-deps
   // Progress: look again every 3 s while the server is reading the mailbox.
   useEffect(() => {
     if (!running) return undefined;
@@ -57,7 +78,9 @@ export function CostsFromEmails({ supplier = '', from = '', to = '', onSignOut, 
   const priced = useMemo(() => (rows || []).filter((r) => r.each != null), [rows]);
   const not = useMemo(() => (rows || []).filter((r) => r.each == null), [rows]);
   const list = show === 'priced' ? priced : not;
-  const scope = `${sup || 'Every supplier'}${from || to ? ` · received ${from || '…'} to ${to || '…'}` : ' · any date'}`;
+  const scopeLine = `${sup || 'Every supplier'}${from || to ? ` · received ${from || 'the start'} to ${to || 'today'}` : ' · any date'}${skuKey ? ` · SKU ${skuKey.toUpperCase()}` : ''}`;
+  const mins = scope?.parcels ? Math.max(1, Math.round((Math.min(scope.parcels, 1500) * 9) / 60)) : 0;
+  const supplierOptions = scope?.suppliers || [];
   const runScope = run ? `${run.supplier || 'Every supplier'}${run.date_from || run.date_to ? ` · ${run.date_from || '…'} to ${run.date_to || '…'}` : ' · any date'}${run.sku ? ` · SKU ${run.sku}` : ''}${run.order_number ? ` · order ${run.order_number}` : ''}` : '';
 
   function exportCsv() {
@@ -79,14 +102,27 @@ export function CostsFromEmails({ supplier = '', from = '', to = '', onSignOut, 
       {state.needsSetup && <div className="error sm">This server has not been set up for it yet (db:setup).</div>}
       {!state.configured && <div className="error sm">The mailbox search is not set up on this server, so a run cannot start here.</div>}
 
-      <div className="cfe-start">
-        <div><span className="muted xs">This run will read</span><br /><b>{scope}</b>
-          <span className="muted sm"> — change the supplier and dates on the “No cost on file” tab.</span></div>
-        <button type="button" className="btn primary" disabled={busy || running || !state.configured}
-          onClick={() => act({ action: 'start', supplier: sup, from, to, sku: sku.trim(), order: order.trim() })}>
-          {running ? 'Reading the emails…' : 'Read the emails'}
-        </button>
+      <h3 className="rows-title cfe-h">What to read</h3>
+      <div className="cost-filters cfe-filters">
+        <label className="cost-filter">
+          <span>Supplier</span>
+          <select value={sup} onChange={(e) => setSup(e.target.value)} aria-label="Supplier to read">
+            <option value="">Every supplier</option>
+            {sup && !supplierOptions.some((o) => o.value.toLowerCase() === sup.toLowerCase()) && <option value={sup}>{sup} (0)</option>}
+            {supplierOptions.map((o) => <option key={o.value} value={o.value}>{o.value} ({nf(o.pairs)})</option>)}
+          </select>
+        </label>
+        <label className="cost-filter">
+          <span>Received from</span>
+          <input type="date" value={from} max={estToday()} aria-label="Received from" onChange={(e) => setFrom(e.target.value)} />
+        </label>
+        <label className="cost-filter">
+          <span>to</span>
+          <input type="date" value={to} min={from || undefined} max={estToday()} aria-label="Received to" onChange={(e) => setTo(e.target.value)} />
+        </label>
+        {(sup || from || to) && <button type="button" className="btn ghost sm" onClick={() => { setSup(''); setFrom(''); setTo(''); }}>Clear</button>}
       </div>
+      <p className="muted xs">Dates are the day the pair was received (EST). Empty dates = any date. The counts beside each supplier are pairs with no cost in these dates.</p>
       <div className="cfe-narrow">
         <label><span className="muted xs">Only this SKU (optional)</span>
           <input value={sku} onChange={(e) => setSku(e.target.value)} placeholder="IG6226" aria-label="Only this SKU" autoCapitalize="characters" /></label>
@@ -94,6 +130,21 @@ export function CostsFromEmails({ supplier = '', from = '', to = '', onSignOut, 
           <input value={order} onChange={(e) => setOrder(e.target.value)} placeholder="SP2520297" aria-label="Order number" autoCapitalize="characters" /></label>
         <p className="muted sm">A pair is priced the most exact way available: its <b>tracking number</b> first, then the <b>order number</b> you give,
           then its <b>SKU</b> (only stores whose emails print the code — adidas today). A SKU bought at two prices is shown with both and left blank.</p>
+      </div>
+      <div className="cfe-start">
+        <div role="status"><span className="muted xs">This run will read</span><br /><b>{scopeLine}</b>
+          <div className="sm">
+            {scope == null ? <span className="muted">Counting…</span>
+              : scope.failed ? <span className="muted">Could not count the pairs.</span>
+              : scope.pairs === 0 ? <span>No pairs without a cost match these filters.</span>
+              : <><b>{nf(scope.pairs)}</b> pair{scope.pairs === 1 ? '' : 's'} with no cost · <b>{nf(scope.parcels)}</b> parcel{scope.parcels === 1 ? '' : 's'} to look up{mins ? ` · about ${mins} min` : ''}
+                {scope.noTracking > 0 && <span className="muted"> · {nf(scope.noTracking)} with no tracking number (SKU or order number only)</span>}
+                {scope.parcels > 1500 && <span className="muted"> · 1,500 parcels a run, so run it again for the rest</span>}</>}
+          </div></div>
+        <button type="button" className="btn primary" disabled={busy || running || !state.configured || scope?.pairs === 0}
+          onClick={() => act({ action: 'start', supplier: sup, from, to, sku: sku.trim(), order: order.trim() })}>
+          {running ? 'Reading the emails…' : 'Read the emails'}
+        </button>
       </div>
       {error && <div className="error sm mt" role="alert">{error}</div>}
       {notice && <div className="notice mt" role="status">{notice}</div>}

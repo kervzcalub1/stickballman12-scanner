@@ -62,6 +62,9 @@ holds back units of a shipment we own. Here a pair is **never an inventory unit*
   person's listings with no gap over 15 min = one entry, a size's pairs = the most listings it got
   on either platform. Tagged **rebuilt**; supplier / PO are as the row reads NOW, and an old
   re-list (List N / ↺ Restore) shows as its own entry. Nothing is backfilled.
+  **The first entry's own listings are left out of the rebuild** (2026-11-26): that row is written
+  when its run ends, so its listings are seconds older than the cutoff and were rebuilt as a second
+  entry — IQ5365-400 read 98 pairs for 90. Matched by the entry's `stock_id`s, 30 min back.
 - Read: `GET list?tab=history&from=&to=&sku=` → `rows` = runs (`listPresellHistory` +
   `presellHistory`, `src/lib/presellHistory.js`, pure). 500 newest entries (5,000 with a filter).
   `presell_entries` is in `LIVE_TABLES`. Tests: `e2e/presell-history.spec.js`.
@@ -207,7 +210,8 @@ the numbers). A re-list without a cost keeps the one already there.
   - **Stock** (day first listed; list filtered too): the pairs we have — pairs / sold / left, In
     transit / Arrived / Pre-sell, supplier, PO, tracking (all in CSV), shelf, preset, cost,
     left-at-cost; PDF has a bold subtotal per SKU.
-  - **Listings** (day the listing was created; the tab's platform + status filter apply, named on
+  - **Listings** (day the listing was created; the tab's platform + status filter **and its search
+    box** (2026-11-26 — a pasted SKU used to be ignored by the download) apply, named on
     the report): every listing — platform, status, price, est. payout (default fee), est. net (only
     with a cost), listing id, listed by, last problem.
   - **Sales** (day sold; list filtered too): price, payout (* est.), cost, net, supplier/PO, kind;
@@ -372,6 +376,10 @@ accounts; two watchers would both act on a sale. Off by default (and in e2e).
 - every **12 s**: StockX listings still `pending` → poll the operation; done → read the
   listing back; failed → a create becomes `failed`, any other change keeps its state +
   the reason. Stuck > 10 min → read back anyway.
+- **A row already `sold` is skipped only when its sale is saved (`sold_at` set)** (2026-11-26).
+  A re-read (competition, the other copy coming down) flips a row to `sold` as soon as the
+  platform says so; skipping on status alone lost that order — 18 sales since 10-10 sat as
+  "Sold" on Listings with no row on Sales / Fulfill. Sold with `sold_at` NULL = sale not saved.
 - every **60 s** (only while anything is open): Alias orders + StockX active orders →
   match `listing_id` to ours → `handleSale` (record once → deduct → take down extras →
   Telegram). Cancelled Alias orders are ignored.

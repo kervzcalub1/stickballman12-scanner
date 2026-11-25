@@ -11710,8 +11710,12 @@ export async function listPresellHistory({ from = null, to = null, sku = null, l
        AND (${to}::date IS NULL OR (e.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
        AND (${like}::text IS NULL OR EXISTS (SELECT 1 FROM jsonb_array_elements(e.lines) x WHERE x->>'sku' ILIKE ${like}))
      ORDER BY e.created_at DESC LIMIT ${limit}`;
-  const first = await db()`SELECT min(created_at) AS at FROM presell_entries`;
+  // The FIRST history row is written when its run ENDS, so that run's own listings are a few
+  // seconds OLDER than the cutoff — left in, they were rebuilt as a second run and counted
+  // twice (2026-11-26: IQ5365-400 showed 98 pairs for 90). Its rows are named by stock id.
+  const first = await db()`SELECT created_at AS at, lines FROM presell_entries ORDER BY created_at ASC, id ASC LIMIT 1`;
   const cutoff = first[0]?.at || null;
+  const firstStock = (Array.isArray(first[0]?.lines) ? first[0].lines : []).map((x) => Number(x?.stock_id)).filter((n) => n > 0);
   const listings = await db()`
     SELECT l.id, l.stock_id, l.platform, l.price_cents, l.created_by, l.created_at,
            s.sku, s.name, s.image, s.size, s.shelf_price, s.in_transit, s.transit_note,
@@ -11719,6 +11723,7 @@ export async function listPresellHistory({ from = null, to = null, sku = null, l
       FROM presell_listings l JOIN presell_stock s ON s.id = l.stock_id
       LEFT JOIN purchase_orders po ON po.id = s.po_id
      WHERE (${cutoff}::timestamptz IS NULL OR l.created_at < ${cutoff}::timestamptz)
+       AND (${cutoff}::timestamptz IS NULL OR NOT (l.created_at >= ${cutoff}::timestamptz - interval '30 minutes' AND l.stock_id = ANY(${firstStock}::bigint[])))
        AND (${from}::date IS NULL OR (l.created_at AT TIME ZONE 'America/New_York')::date >= ${from}::date)
        AND (${to}::date IS NULL OR (l.created_at AT TIME ZONE 'America/New_York')::date <= ${to}::date)
        AND (${like}::text IS NULL OR s.sku ILIKE ${like})

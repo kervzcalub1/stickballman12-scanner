@@ -5,7 +5,7 @@ import { CARD_WORDS } from './sheinWords.js';
 
 // Top-level pages are reflected in the URL path so a refresh restores the page
 // (and pages are linkable). Sub-state (open item, wizard step) stays in memory.
-export const ROUTES = ['receiving', 'inbound', 'expected', 'presell', 'alias-cross', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'poizon', 'shein', 'cancellations', 'inbound-issues', 'manifest-reports', 'stock-check', 'my-scans', 'lost-packages'];
+export const ROUTES = ['receiving', 'inbound', 'expected', 'presell', 'alias-cross', 'rescale', 'instore', 'instore-listing', 'existing-stock', 'batches', 'inventory', 'report', 'access', 'settings', 'nobox', 'box-labels', 'box-stock', 'costs', 'payout', 'buy-carts', 'sold', 'shipped', 'rescalereq', 'shelve', 'locations', 'reconcile', 'sop', 'deleted', 'vin-stock', 'merge', 'online-orders', 'buy-log', 'undelivered', 'dup-tracking', 'receipts', 'presell-listings', 'ebay', 'stockx-listings', 'poizon', 'shein', 'cancellations', 'inbound-issues', 'manifest-reports', 'stock-check', 'my-scans', 'lost-packages'];
 // No Box lives at /no-box (and /no-box/box-swap, /no-box/print-box-labels — no-box.md);
 // the old /nobox still opens it.
 const PATH_ALIAS = { nobox: 'no-box' };
@@ -204,6 +204,7 @@ export const HOME_SECTIONS = [
     // here is buying a gift card. A buyer asks to purchase stock, we approve it, the
     // desk funds them with cards to spend, they ship, we receive and reconcile.
     { key: 'buy-carts', icon: '🛒', title: 'Buying Requests', sub: 'Buyers ask, you approve, the desk funds the cards — then receipt, audit and reconcile', priv: true },
+    { key: 'buy-log', icon: '🧾', title: 'Buy Log', sub: 'What a supplier bought from a store with no receipt — shoes, cost, payments, and what has arrived' },
     { key: 'receipts', icon: '🧾', title: 'Receipts', sub: 'Store receipts found in our order mailboxes — where each pair was bought, and by whom' },
     { key: 'presell-listings', icon: '⚡', title: 'Pre-sell Listings', sub: 'Scan or type a SKU and list pairs straight to Alias + StockX — own stock, sales deduct, Telegram on every sale' },
     { key: 'alias-cross', icon: '🔀', title: 'Alias Cross-Listing', sub: 'One pair on Alias under several SKUs of the same shoe — a sale on one takes it down on the others' },
@@ -258,6 +259,8 @@ export const PRIVILEGES = [
   // The BUYER's side, and the only privilege a supplier can hold. Most suppliers only
   // ship us boxes; the ones who buy for the company are switched on one by one.
   { key: 'request_buying', label: 'Raise buying requests', hint: 'Buy stock for the company: list what to buy, get funded, send the receipt back', buyer: true },
+  // The supplier's own Buy Log: what they bought from a store that gives no receipt (buy-log.md).
+  { key: 'log_buys', label: 'Keep a buy log', hint: 'Declare what they bought for us from a store with no receipt: SKU, cost, pairs — compared with what we receive', buyer: true },
   // Store orders: mark an order bought from several stores audited (received vs declared vs card).
   { key: 'audit_po', label: 'Audit store orders', hint: 'Check a store order’s pairs, receipts and card charges, then mark it audited', notBuying: true },
   // ADMIN TOOLS on top of a job (2026-10-27): the role — and so the dashboard — stays theirs.

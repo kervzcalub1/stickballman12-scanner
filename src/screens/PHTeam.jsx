@@ -54,6 +54,7 @@ import { PoizonOrders } from './PoizonOrders.jsx';
 import { Shein } from './Shein.jsx';
 import { ShopifyListings } from './ShopifyListings.jsx';
 import { BuyCarts } from './BuyCarts.jsx';
+import { BuyLog } from './BuyLog.jsx';
 import { CreatePO } from './CreatePO.jsx';
 import { PoOverview } from './PoOverview.jsx';
 import { Reconciliation } from './Reconciliation.jsx';
@@ -125,6 +126,7 @@ export function PHTeamApp({ user, onSignOut, onExit }) {
     // never touches the staff router, so without a route here a PH team member who was
     // ticked for gift cards had nowhere to go — which is the exact case the privilege model
     // exists to support.
+    if (page === 'buylog') return <BuyLog user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'buycarts') return <BuyCarts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'po') return <CreatePO onHome={() => goPage(null)} onSignOut={onSignOut} />;
     if (page === 'postatus') return <PoOverview onHome={() => goPage(null)} onSignOut={onSignOut} />;

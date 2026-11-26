@@ -48,6 +48,7 @@ import { Reconciliation } from './screens/Reconciliation.jsx';
 import { Sop } from './screens/Sop.jsx';
 import { DeletedItems } from './screens/DeletedItems.jsx';
 import { OnlineOrders } from './screens/OnlineOrders.jsx';
+import { BuyLog } from './screens/BuyLog.jsx';
 import { Expected } from './screens/Expected.jsx';
 import { TrackingDuplicates } from './screens/TrackingDuplicates.jsx';
 import { Undelivered } from './screens/Undelivered.jsx';
@@ -239,6 +240,8 @@ export default function App() {
   if (view === 'report') return withAdvisor(<PHGrid user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'deleted') return withAdvisor(<DeletedItems onHome={() => go('home')} onSignOut={signOut} />);
   // PH records online orders; the warehouse reads what is on its way and counts it in.
+  // The Buy Log: a supplier's declared buys from a store with no receipt (PH records the payments).
+  if (view === 'buy-log') return withAdvisor(<BuyLog user={user} onHome={() => go('home')} onSignOut={signOut} />);
   if (view === 'online-orders') return withAdvisor(<OnlineOrders user={user} onHome={() => go('home')} onSignOut={signOut} />);
   // The duplicate tracking number log — warehouse reads, admin closes entries.
   if (view === 'undelivered') return withAdvisor(<Undelivered onHome={() => go('home')} onSignOut={signOut} />);

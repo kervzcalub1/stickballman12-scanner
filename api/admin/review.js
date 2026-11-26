@@ -53,7 +53,7 @@ export default async function handler(req, res) {
       // strips them, so say so rather than letting the checkboxes silently spring back.
       // (`request_buying` is theirs to hold; it is the only one that survives.)
       if (updated.role === 'supplier' && clean.some((k) => !BUYER_PRIVILEGE_KEYS.includes(k)))
-        return send(res, 200, { ok: true, user: updated, note: 'Buyers can only hold “Raise buying requests” — the other duties would have them approving their own requests.' });
+        return send(res, 200, { ok: true, user: updated, note: 'Buyers can only hold “Raise buying requests” and “Keep a buy log” — the other duties would have them approving their own requests.' });
       return send(res, 200, { ok: true, user: updated });
     }
     // Linking a Telegram account, so a button tap in the approval group can be recorded

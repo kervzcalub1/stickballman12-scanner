@@ -102,14 +102,14 @@ test.describe('POIZON reprice rules', () => {
     const sheet = readSheetRows(bytes, 'Template');
     expect(sheet[1].slice(0, 9)).toEqual(['SPU ID', 'SKU ID', 'Expected Price (Tax-Exclusive)', 'Expected Price (Tax-Inclusive)', 'Retail Price (Tax-Exclusive)',
       'Retail Price (Tax-Inclusive)', 'Discount', 'Inventory', 'Price Update Method']);
-    // A, B, C and I only: the other prices, Discount and Inventory stay empty.
-    expect(sheet.slice(2).map((row) => Array.from({ length: 9 }, (_, i) => row[i] || ''))).toEqual(CUTS.map(([spu, sku, price]) => [spu, sku, price, '', '', '', '', '', 'Manual update']));
+    // A, B, C, G and I: the other prices and Inventory stay empty; Discount is always 0 (POIZON refuses a blank).
+    expect(sheet.slice(2).map((row) => Array.from({ length: 9 }, (_, i) => row[i] || ''))).toEqual(CUTS.map(([spu, sku, price]) => [spu, sku, price, '', '', '', '0', '', 'Manual update']));
     expect(readSheetRows(bytes, 'Data Definition')).toEqual(readSheetRows(TEMPLATE, 'Data Definition'));
-    // Filling a filled file replaces its rows; the Discount switch writes 0 and still verifies.
-    const again = P.fillTemplate(bytes, r.upload.slice(0, 1), { discountZero: true });
+    // Filling a filled file replaces its rows.
+    const again = P.fillTemplate(bytes, r.upload.slice(0, 1));
     expect(readSheetRows(again, 'Template').slice(2)).toHaveLength(1);
     expect(readSheetRows(again, 'Template')[2][6]).toBe('0');
-    expect(P.verifyOutput(TEMPLATE, again, r.upload.slice(0, 1), rows, { discountZero: true }).ok).toBe(true);
+    expect(P.verifyOutput(TEMPLATE, again, r.upload.slice(0, 1), rows).ok).toBe(true);
     // The gate catches a raise, a wrong SPU and a row that is not ours.
     const bad = (upload) => P.verifyOutput(TEMPLATE, P.fillTemplate(TEMPLATE, upload), upload, rows).ok;
     expect(bad([{ spu: '9001', sku: '49714395807935', price: '81' }])).toBe(false);   // 81 > today's 75

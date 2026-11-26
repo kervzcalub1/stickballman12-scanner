@@ -13998,6 +13998,29 @@ export async function expireHeldCancellationPhotos(afterSec = 600) {
   return rows.map((r) => Number(r.id));
 }
 
+// ── A photo no number was read off is SENT BACK; a reply to that copy carries the number ──
+// The copy's message id is kept in the photo's result JSON (ask_message_id) — no column of its
+// own, so this needs no migration. Few rows a day: the lookup needs no index.
+export async function setCancellationAskMessage(photoId, messageId) {
+  if (!photoId || !messageId) return;
+  await db()`UPDATE cancellation_photos SET result = coalesce(result, '{}'::jsonb) || jsonb_build_object('ask_message_id', ${Number(messageId)}::bigint)
+              WHERE id = ${photoId}`;
+}
+/** The photo a "reply with the order number" copy was sent for, or null. */
+export async function cancellationPhotoByAskMessage(chatId, messageId) {
+  const rows = await db()`SELECT id, platform, sent_by_user_id, sent_by FROM cancellation_photos
+                            WHERE tg_chat_id = ${chatId} AND result->>'ask_message_id' = ${String(messageId)}
+                            ORDER BY id DESC LIMIT 1`;
+  return rows[0] ? { ...rows[0], id: Number(rows[0].id) } : null;
+}
+/** That photo's live rows: the one still without a number (to fill), and any that has one. */
+export async function cancellationRowsOfPhoto(photoId) {
+  const rows = await db()`SELECT id, platform, order_number, order_key FROM cancellations
+                            WHERE photo_id = ${photoId} AND status <> 'rejected' ORDER BY id`;
+  const all = rows.map((r) => ({ ...r, id: Number(r.id) }));
+  return { open: all.find((r) => !r.order_key) || null, filled: all.find((r) => r.order_key) || null };
+}
+
 // ── The summary message, and voiding the batch it lists ──
 export async function setCancellationReplyMessage(ids, messageId) {
   if (!ids?.length || !messageId) return;
@@ -14050,7 +14073,7 @@ export async function releaseCancellationPhotoReplies(ids) {
 export async function cancellationPhotosForReply(ids) {
   if (!ids?.length) return [];
   const rows = await db()`SELECT id, tg_chat_id, tg_message_id, sent_by_user_id, sent_by, read_status, read_error, result, created_at,
-                                 prompt_message_id
+                                 prompt_message_id, tg_file_id, as_file
                             FROM cancellation_photos WHERE id = ANY(${ids.map(Number)}::bigint[])
                            ORDER BY tg_message_id NULLS LAST, id`;
   return rows.map((r) => ({ ...r, id: Number(r.id), tg_chat_id: r.tg_chat_id == null ? null : Number(r.tg_chat_id),

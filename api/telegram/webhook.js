@@ -24,12 +24,12 @@
 // passes a dev card's taps on to TELEGRAM_DEV_FORWARD_URL (the dev tunnel) untouched, so a
 // test card is recorded in the dev database and never in the real one.
 import { send, applySecurity, getJsonBody } from '../_lib/util.js';
-import { dbConfigured, buyerChatIds, recordReplyMiss, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, useCancellationCtx, createCancellationPhoto, setCancellationPhotoPlatform, holdCancellationPhoto, heldCancellationPhotosByPrompt, releaseHeldCancellationPhotosByPrompt, releaseHeldCancellationPhotosOf, cancellationBatchByReply, voidCancellationBatch } from '../_lib/db.js';
+import { dbConfigured, buyerChatIds, recordReplyMiss, askTelegramQty, takeTelegramQty, getTelegramGroupCard, claimTelegramGroupReply, getBuyCartLine, redeemTelegramLinkToken, userNameByTelegramId, telegramSender, setCancellationCtx, useCancellationCtx, createCancellationPhoto, setCancellationPhotoPlatform, holdCancellationPhoto, heldCancellationPhotosByPrompt, releaseHeldCancellationPhotosByPrompt, releaseHeldCancellationPhotosOf, cancellationBatchByReply, voidCancellationBatch, cancellationPhotoByAskMessage } from '../_lib/db.js';
 import { telegramConfigured, telegramChatId, cancelChatId, tg, enqueue } from '../_lib/telegram.js';
 import { decideFromTelegram, decideTipFromTelegram } from '../_lib/telegramDecide.js';
 import { notifyEnv } from '../_lib/notify.js';
 import { alertCancellationsLogged } from '../_lib/alerts.js';
-import { fileTypedCancellation, typedReplyText, sayTo, HOW_TO, dayFrom, msgPicker, msgFor, msgAll, sendDayReport, cancelBatchStart, cancelBatchDone, cancelBatchDrop, readTelegramPhoto, askPlatformSoon, readReleasedPhotos, cancelReading } from '../_lib/cancellations.js';
+import { fileTypedCancellation, typedReplyText, sayTo, HOW_TO, dayFrom, msgPicker, msgFor, msgAll, sendDayReport, cancelBatchStart, cancelBatchDone, cancelBatchDrop, readTelegramPhoto, askPlatformSoon, readReleasedPhotos, cancelReading, fileMissedReply } from '../_lib/cancellations.js';
 import { platformLabel, PLATFORMS, splitCommand, extractImageFile } from '../../src/lib/cancellations.js';
 import { parseApprovalReply, splitTipReply, sizeKey } from '../../src/lib/buyPaste.js';
 const PLATFORM_KEYS = new Set(PLATFORMS.map((p) => p.key));
@@ -546,12 +546,23 @@ async function fileFromChat(msg, { group = false } = {}) {
   const image = file?.fileId || null;
   const words = splitCommand(image ? msg.caption : msg.text);
   if (!image && !words.cmd && !words.rest) return null;
-  if (group && !image && !words.cmd) return null;
+  // A text that REPLIES to a message may be the order number for a photo the bot sent back
+  // ("Reply to this message with the order number") — in the group too, where other typed
+  // text is chatter.
+  const replyTo = !image && msg.reply_to_message?.message_id ? msg.reply_to_message.message_id : null;
+  if (group && !image && !words.cmd && !replyTo) return null;
+  // …but only a reply to one of THOSE copies: people reply to each other and to the bot's
+  // summaries all day, and none of that may be answered (or told to "connect this chat").
+  if (group && replyTo && !words.cmd && !(await cancellationPhotoByAskMessage(chatId, replyTo))) return null;
   const tag = notifyEnv() === 'dev' ? '[dev] ' : '';
   const say = (text, reply = true) => sayTo(chatId, `${tag}${text}`, reply ? msg.message_id : null);
   const who = await telegramSender(msg.from?.id);
   if (!who) return say('To send orders to cancel, connect this chat first: open Stickballman12 Inventory, tap 🔔 Alerts, then Connect Telegram.', false);
   if (!CAN_FILE.includes(who.role)) return say("Your account can't log cancellations.", false);
+  if (replyTo) {
+    const answer = await fileMissedReply({ chatId, replyTo, text: msg.text, who: { id: who.id, name: who.name }, tgMessageId: msg.message_id });
+    if (answer) return say(answer);
+  }
   if (words.cmd === '/help') return say(HOW_TO, false);
   // End of shift — the day's messages and report (EST). "/msg-all" can't be a Telegram
   // command (no dashes), so it arrives as /msg + "-all"; /msgall is the menu's spelling.

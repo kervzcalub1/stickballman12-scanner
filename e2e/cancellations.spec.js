@@ -40,6 +40,7 @@ let pool; let tgFake; let aiFake;
 const sent = [];          // sendMessage bodies
 const docs = [];          // sendDocument multipart bodies
 const edits = [];         // editMessageText bodies
+const copies = [];        // sendPhoto / sendDocument bodies that send a picture back by its file id
 const answers = [];       // answerCallbackQuery bodies
 let botMsgId = 800_000;   // the fake's message ids
 let nextRead = null;      // what the fake reader answers when no per-picture answer is set
@@ -83,7 +84,9 @@ test.beforeAll(async () => {
       const raw = Buffer.concat(chunks).toString();
       let body = {};
       try { body = JSON.parse(raw || '{}'); } catch { body = { raw }; }   // sendDocument is multipart
-      if (method === 'sendDocument') docs.push(raw);
+      // A CSV report is a multipart upload; a picture sent back by its file id is plain JSON.
+      if (method === 'sendDocument' && body.raw !== undefined) docs.push(raw);
+      if ((method === 'sendPhoto' || method === 'sendDocument') && body.raw === undefined) { body.message_id = ++botMsgId; copies.push(body); }
       res.setHeader('content-type', 'application/json');
       if (method === 'getFile') return res.end(JSON.stringify({ ok: true, result: { file_id: body.file_id, file_path: `photos/${body.file_id}.jpg`, file_size: 1000 } }));
       // Every message the bot sends gets its own id (a tap and "Void Batch" find their photos
@@ -239,7 +242,7 @@ test('the batch reply: one list per platform, then what needs a person', () => {
     "[OK] #206557037 — Nike Free Run 5.0 'Phantom Sail' · CZ1884-010 · size 8.5",
     '[CHECK] #176889923 — DQ4071-001 · size 9.5 (read as 176889923)',
     '',
-    "[MISSED] Photo 3: no order number found — re-snap it, or type it: /alias 123456789 (it fills that photo's row)",
+    '[MISSED] Photo 3: no order number found — reply with the number to the copy of this photo below, or re-snap it',
     '[MISSED] Photo 5: not saved (could not download the picture (HTTP 500)) — send it again.',
     '↩️ #300000001 is already logged as #12 by Karon — not added again',
     '',
@@ -297,7 +300,7 @@ test('separate photos sent together → ONE reply, under the first photo, listin
     `[OK] #${a} — Nike Dunk Low 'Panda' · DD1391-100 · size 9.5`,
     `[OK] #${b} — no shoe details found`,
     '',
-    "[MISSED] Photo 3: no order number found (the reader did not answer (HTTP 500)) — re-snap it, or type it: /alias 123456789 (it fills that photo's row)",
+    '[MISSED] Photo 3: no order number found (the reader did not answer (HTTP 500)) — reply with the number to the copy of this photo below, or re-snap it',
   ].join('\n'));
   expect(said).toMatch(/\n\nCheck them, or \+ Add by hand/);
   // The summary carries the way out for a batch sent on the wrong platform.
@@ -679,6 +682,50 @@ test('a photo with NO platform is read first: one of our Shopify orders (or a Te
     await q(`DELETE FROM shopify_order_index WHERE channel = 'e2e-cx'`);
     await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
   }
+});
+
+// ── A photo no number was read off is sent back; a reply to it carries the number (2026-11-26) ──
+test('a photo with no number read is sent back, and a reply to THAT copy with the number fills that photo\'s row', async ({ request }) => {
+  await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
+  await q(`UPDATE cancellations SET status = 'rejected' WHERE sent_by = $1 AND order_key IS NULL AND status <> 'rejected'`, [WH.name]);
+  sent.length = 0; copies.length = 0;
+  const s = String(Date.now()).slice(-6);
+  const n2 = `9911${s}32`;
+  const f1 = await picture(`cx-mr1-${s}`, 'fail');
+  const f2 = await picture(`cx-mr2-${s}`, 'fail');
+  const p1 = await hook(request, photo(TG_WH, f1, '/sg'));
+  const p2 = await hook(request, photo(TG_WH, f2));                              // Stadium Goods is on
+  const said = await lastSaid(TG_WH);
+  expect(said).toMatch(/\[MISSED\] Photo 1: no order number found[^\n]*— reply with the number to the copy of this photo below, or re-snap it/);
+  expect(said).toMatch(/\[MISSED\] Photo 2: no order number found/);
+  // Both photos come back, each on its own, as a reply to the photo it is a copy of — the
+  // same Telegram file, nothing uploaded again.
+  await expect.poll(() => copies.length, { timeout: 20_000 }).toBe(2);
+  expect(copies.map((c) => c.photo)).toEqual([f1, f2]);
+  expect(copies.map((c) => c.reply_parameters.message_id)).toEqual([p1, p2]);
+  expect(copies[1].caption).toMatch(/^\[dev\] \[MISSED\] Photo 2: no order number read \(Stadium Goods\)\.\nReply to this message with the order number\.$/);
+  const rowOf = async (messageId) => (await q(`SELECT c.id, c.order_number, c.platform FROM cancellations c JOIN cancellation_photos p ON p.id = c.photo_id
+     WHERE p.tg_chat_id = $1 AND p.tg_message_id = $2 AND c.status <> 'rejected'`, [TG_WH, messageId]))[0];
+
+  // The number, replied onto the SECOND copy: it is the second photo's — not the oldest open row's.
+  await hook(request, { from: TG_WH, body: { text: n2, reply_to_message: { message_id: copies[1].message_id } } });
+  expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`Stadium Goods · 1 order recorded\\n\\[OK\\] #${n2}[\\s\\S]*Filled the photo row #\\d+ that had no order number`));
+  expect(await rowOf(p2)).toMatchObject({ order_number: n2, platform: 'sg' });
+  expect((await rowOf(p1)).order_number).toBe(null);
+
+  // A second reply to the same copy changes nothing and says so; words with no number are asked again.
+  await hook(request, { from: TG_WH, body: { text: `9911${s}39`, reply_to_message: { message_id: copies[1].message_id } } });
+  expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`That photo already has its order number: #${n2}`));
+  expect((await rowOf(p2)).order_number).toBe(n2);
+  await hook(request, { from: TG_WH, body: { text: 'not sure', reply_to_message: { message_id: copies[0].message_id } } });
+  expect(await lastSaid(TG_WH, 4)).toMatch(/couldn't find an order number in that/);
+
+  // In the group, a reply to anything that is not one of those copies is chatter: nothing is said.
+  const before = saidTo(GROUP).length;
+  await hook(request, { from: TG_STRANGER, chat: GROUP, body: { text: '123456789', reply_to_message: { message_id: 424242 } } });
+  await new Promise((r) => setTimeout(r, 800));
+  expect(saidTo(GROUP)).toHaveLength(before);
+  await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
 });
 
 // ── The forgiving flows (2026-11-20) ────────────────────────────────────────────────

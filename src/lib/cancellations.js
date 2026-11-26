@@ -490,7 +490,7 @@ export const detailsFromLabel = (v) => String(v || '').split(',').map((k) => DET
 //   [OK] #206557037 — Nike Free Run 5.0 'Phantom Sail' · CZ1884-010 · size 8.5
 //   [CHECK] #176889923 — DQ4071-001 · size 9.5 (reads disagreed)
 //
-//   [MISSED] Photo 3: no order number found — re-snap it, or type it: /alias 123456789 (it fills that photo's row)
+//   [MISSED] Photo 3: no order number found — reply with the number to the copy of this photo below, or re-snap it
 //   ↩️ #206557037 is already logged as #12 by Karon — not added again
 //
 //   Check them: https://…/cancellations
@@ -522,7 +522,6 @@ export function orderLine(r) {
   const how = r.by_tracking ? ' (found by its tracking number)' : '';
   return `[${s.tag}] #${String(r.order_number).replace(/^#+/, '')} — ${what || 'no shoe details found'}${why}${how}`;
 }
-const cmdOf = (k) => `/${BY_KEY[k]?.cmd || 'alias'}`;
 /**
  * `photos` = [{ n, rows, dupes:[{ order_number, existing:{ id, sent_by } }], error, why }] in the
  * order they were sent (n = 1-based position; null for a typed number). Rows with an order
@@ -540,7 +539,7 @@ export function batchReplyText(photos, { link = null } = {}) {
     if (p.error) { warn.push(`[MISSED] ${where}: not saved (${p.error}) — send it again.`); continue; }
     for (const r of p.rows || []) {
       if (r.order_number) listed.push(r);
-      else warn.push(`[MISSED] ${where}: no order number found${p.why ? ` (${p.why})` : ''} — re-snap it, or type it: ${cmdOf(r.platform)} 123456789 (it fills that photo's row)`);
+      else warn.push(`[MISSED] ${where}: no order number found${p.why ? ` (${p.why})` : ''} — reply with the number to the copy of this photo below, or re-snap it`);
     }
     for (const d of p.dupes || []) {
       dup.push(`↩️ #${d.order_number} is already logged as #${d.existing?.id}${d.existing?.sent_by ? ` by ${d.existing.sent_by}` : ''} — not added again`);

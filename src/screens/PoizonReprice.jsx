@@ -14,7 +14,7 @@ import { estToday } from '../lib/format.js';
 import { readInventoryFile, parseMarkup, multiplierLabel } from '../lib/ebayReprice.js';
 import {
   readExportFile, readTemplateFile, resolveStyles, skipReason, jobsFor, poizonRepriceDollars, applyReprice,
-  fillTemplate, verifyOutput, outputName, reportText, METHOD,
+  fillTemplate, verifyOutput, outputName, reportText,
 } from '../lib/poizonReprice.js';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
@@ -137,7 +137,7 @@ export function PoizonReprice({ onSignOut }) {
             </div>
           </>
         )}
-        <p className="muted xs">Your files are only read. The download is POIZON’s own template with the SPU ID, SKU ID, new price, Discount 0 and “{METHOD}” filled in, checked before you can download it. Only price cuts go in it; stock is not touched.</p>
+        <p className="muted xs">Your files are only read. The download is POIZON’s own template with the SPU ID, SKU ID, new price and Discount 0 filled in (Price Update Method left blank), checked before you can download it. Only price cuts go in it; stock is not touched.</p>
         {rows && (
           <>
             <div className="er-stats mt">
@@ -162,7 +162,7 @@ export function PoizonReprice({ onSignOut }) {
       {canPrice && (
         <div className="card er-step">
           <h3 className="er-step-title"><span className="er-num">3</span> Build the price file</h3>
-          <p className="muted sm">Every listing priced <b>above</b> market + markup is cut to it, <b>rounded up</b> to a whole dollar. Nothing is ever raised. Only the cuts go in the file, each marked <b>{METHOD}</b> — from then on POIZON keeps the price you upload for those listings instead of the one sent by the API.</p>
+          <p className="muted sm">Every listing priced <b>above</b> market + markup is cut to it, <b>rounded up</b> to a whole dollar. Nothing is ever raised. Only the cuts go in the file. <b>Price Update Method is left blank</b>: POIZON’s template says a blank method means manual, so POIZON keeps the price you upload for those listings instead of the one sent by the API.</p>
           <div className="er-controls">
             <label className="er-markup">
               <span className="muted xs">Markup over market</span>

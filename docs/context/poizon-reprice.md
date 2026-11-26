@@ -55,22 +55,24 @@ tabs is `PoizonOrders` in `src/screens/PoizonOrders.jsx`; the home card is "POIZ
   that still sits above it is counted on the page and noted in the report.
 - **Only the cuts go in the upload**, one row per SKU ID from row 3 of `Template`:
   A SPU ID · B SKU ID (text cells, as in the export — 14 digits must never become
-  4.97E+13) · C Expected Price (Tax-Exclusive) (a number) · I `Update Manually`. D–F and H
-  (Inventory) stay **blank** — the walkthrough fills only C and I, and stock must not move.
+  4.97E+13) · C Expected Price (Tax-Exclusive) (a number). D–F, H (Inventory) and I (Price Update
+  Method) stay **blank** — stock must not move, and a blank method is POIZON's manual default.
   G (Discount) is **always 0** (2026-11-26): the template's Data Definition calls it Required
   (0 = no discount), and POIZON refused a 1,351-row import with it blank, "Invalid discount"
   on every row. The old More-options switch is gone.
-- **The method text is `Update Manually`, exactly** (2026-11-26): the template's Data Definition
-  says "Manual update", but the importer refused 1,344 rows with it: "Please enter "Update
-  Manually" or "Update via API" only".
-- **`Update Manually` is the point**: listings are normally `Update via API` (the Shopify
-  app pushes prices). POIZON: "in this way the price will only follow the one you upload
-  manually". So a listing we cut stops following the API price from then on.
+- **Price Update Method (I) is left blank** (2026-11-26). The importer refused "Manual update"
+  (the Data Definition's wording) and then "Update Manually" (the wording of its own error
+  message) on every row. The Data Definition says a blank method defaults to manual; the
+  owner's import with the column blank went through. Do not write a method again.
+- **Manual is the point**: listings are normally `Update via API` (the Shopify app pushes
+  prices). POIZON: "in this way the price will only follow the one you upload manually".
+  **Not checked:** that a listing imported with a blank method really shows as manual on
+  POIZON afterwards (next export's Price Update Method column will tell).
 - Every other part of the zip (Data Definition tab, styles) is copied **byte for byte**.
 - **Verify gate** (download disabled unless all pass): other parts identical; rows 1–2
   identical; one row per cut; each row is a SPU + SKU pair from the export, once, with a
   whole-dollar price below today's, D–F and H blank, G = 0,
-  I = `Update Manually`.
+  I blank.
 
 ## Not known yet (first real upload will tell)
 - Whether POIZON accepts an empty Discount, and whether a blank Inventory truly leaves

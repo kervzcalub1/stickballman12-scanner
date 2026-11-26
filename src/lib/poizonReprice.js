@@ -4,7 +4,7 @@
 //   in   Seller Dashboard → Listing → Smart Listing → Export All ("Export Smart Listing….xlsx")
 //        + the store inventory report CSV (its SKU is the export's Barcode → Style ID)
 //   out  POIZON's own "Price & Inventory Template": sheet "Template" filled from row 3 —
-//        A SPU ID · B SKU ID · C Expected Price (Tax-Exclusive) · I "Update Manually".
+//        A SPU ID · B SKU ID · C Expected Price (Tax-Exclusive) · G Discount 0 · I left blank.
 //        Uploaded by hand: Batch Import → Import Updated Price & Inventory.
 // The spec is POIZON's own walkthrough (their account manager, 2026-11-20) + the owner's
 // "same as we did for eBay, SHEIN and Temu".
@@ -20,9 +20,9 @@ const escXml = (s) => String(s)
 
 export const SHEET = 'Template';
 export const FIRST_ROW = 3;                 // row 1 = Required / Choose one, row 2 = the column names
-// POIZON's importer takes exactly "Update Manually" or "Update via API". Its Data Definition tab
-// says "Manual update", and an import with that was refused on every row (2026-11-26).
-export const METHOD = 'Update Manually';
+// Price Update Method (column I) is left BLANK. POIZON's Data Definition tab: with no method
+// set, the default is manual. Both spellings we tried were refused on every row ("Manual update",
+// then "Update Manually", 2026-11-26); the owner's import with the column blank went through.
 // Listings POIZON has not matched to its own catalogue yet: there is nothing to price.
 export const NOT_ON_POIZON = new Set(['Unmatched', 'Matching in Progress']);
 export const SOLD_OUT = 'Sold Out';
@@ -184,7 +184,7 @@ export function applyReprice(rows, cache, pctH, opts) {
     const notes = [];
     // POIZON names its own ceiling on some listings; a cut that still sits above it will not list.
     if (x.limitCents != null && cents > x.limitCents) { n.overLimit++; notes.push(`Still above POIZON’s limit of $${(x.limitCents / 100).toFixed(2)} — it may stay unlisted`); }
-    if (!/manual/i.test(x.method)) { n.toManual++; notes.push('Price update method becomes Update Manually'); }
+    if (!/manual/i.test(x.method)) { n.toManual++; notes.push('Price update method becomes manual (POIZON’s default when the column is blank)'); }
     upload.push({ spu: x.spu, sku: x.sku, price: String(dollars) });
     report.push({ ...row, action: 'lowered', note: notes.join(' · ') });
   }
@@ -211,8 +211,8 @@ export function readTemplateFile(bytes) {
 // The filled template: every entry of the zip byte-for-byte as it came EXCEPT the Template
 // sheet, where rows from 3 down are ours. IDs go in as text (as they are in the export — a
 // 14-digit number must never turn into 4.97E+13), the price as a number (what typing it in
-// Excel makes), "Update Manually" in I. D–F and H (the other three prices, Inventory) stay
-// blank: POIZON's walkthrough fills only C and I, and a blank Inventory leaves stock alone.
+// Excel makes). D–F, H and I (the other three prices, Inventory, Price Update Method) stay
+// blank: a blank Inventory leaves stock alone, a blank method is POIZON's manual default.
 // G (Discount) is always 0: the template's Data Definition calls it Required ("0 when there
 // is no discount"), and POIZON refused a whole import with it blank — "Invalid discount" on
 // every row (2026-11-26).
@@ -225,7 +225,7 @@ export function fillTemplate(templateBytes, upload) {
   const num = (ref, v) => `<c r="${ref}"><v>${escXml(v)}</v></c>`;
   const rowsXml = upload.map((u, i) => {
     const r = FIRST_ROW + i;
-    return `<row r="${r}">${text(`A${r}`, u.spu)}${text(`B${r}`, u.sku)}${num(`C${r}`, u.price)}${num(`G${r}`, '0')}${text(`I${r}`, METHOD)}</row>`;
+    return `<row r="${r}">${text(`A${r}`, u.spu)}${text(`B${r}`, u.sku)}${num(`C${r}`, u.price)}${num(`G${r}`, '0')}</row>`;
   }).join('');
   xml = xml.replace(/<\/sheetData>/, `${rowsXml}</sheetData>`);
   xml = xml.replace(/<dimension ref="[^"]*"\s*\/>/, `<dimension ref="A1:I${FIRST_ROW - 1 + upload.length}"/>`);
@@ -259,11 +259,11 @@ export function verifyOutput(templateBytes, outBytes, upload, exportRows) {
     const src = bySku.get(v(1));
     const price = priceCents(v(2));
     const fine = src && !seen.has(v(1)) && src.spu === v(0) && price != null && price > 0 && price % 100 === 0 && price < src.priceCents
-      && !v(3) && !v(4) && !v(5) && v(6) === '0' && !v(7) && v(8) === METHOD && r.length <= 9;
+      && !v(3) && !v(4) && !v(5) && v(6) === '0' && !v(7) && !v(8) && r.length <= 9;
     seen.add(v(1));
     if (!fine) { bad++; if (badIds.length < 5) badIds.push(v(1) || '(blank)'); }
   }
-  checks.push({ label: `Every row: a SPU ID + SKU ID pair from the export, once · a whole-dollar price below today’s · Inventory blank · “${METHOD}”`, ok: bad === 0,
+  checks.push({ label: `Every row: a SPU ID + SKU ID pair from the export, once · a whole-dollar price below today’s · Discount 0 · Inventory and Price Update Method blank`, ok: bad === 0,
     detail: bad ? `${bad} bad (${badIds.join(', ')})` : `${data.length} rows OK` });
   return { ok: checks.every((c) => c.ok), checks };
 }

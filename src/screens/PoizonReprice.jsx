@@ -57,7 +57,6 @@ export function PoizonReprice({ onSignOut }) {
   const [tpl, setTpl] = useState(null);
   const [markup, setMarkup] = useState('15');     // never remembered: every fresh run starts at 15 %
   const [soldOut, setSoldOut] = useState(true);
-  const [discountZero, setDiscountZero] = useState(false);
   const [more, setMore] = useState(false);
   const [result, setResult] = useState(null);
 
@@ -110,8 +109,8 @@ export function PoizonReprice({ onSignOut }) {
   function run() {
     if (pctH == null || !tpl?.ok) return;
     const out = applyReprice(rows, mp.cacheRef.current, pctH, opts);
-    const bytes = out.upload.length ? fillTemplate(tpl.bytes, out.upload, { discountZero }) : null;
-    const verify = bytes ? verifyOutput(tpl.bytes, bytes, out.upload, rows, { discountZero }) : null;
+    const bytes = out.upload.length ? fillTemplate(tpl.bytes, out.upload) : null;
+    const verify = bytes ? verifyOutput(tpl.bytes, bytes, out.upload, rows) : null;
     setResult({ ...out, bytes, verify, pctH, name: outputName(exportFile?.name, estToday()) });
   }
 
@@ -136,13 +135,9 @@ export function PoizonReprice({ onSignOut }) {
               <FileField id="pz-template" label="Price & Inventory Template (optional)" file={tplFile} result={tpl} onFile={pickTemplate} accept={XLSX_ACCEPT}
                 hint="Built in — only drop a file here if POIZON changes their template (Batch Import → Price & Inventory Template)." />
             </div>
-            <label className="er-check">
-              <input type="checkbox" checked={discountZero} onChange={(e) => { setDiscountZero(e.target.checked); setResult(null); }} />
-              <span>Put <b>0</b> in the Discount column <span className="muted xs">— only if POIZON refuses the file for an empty Discount</span></span>
-            </label>
           </>
         )}
-        <p className="muted xs">Your files are only read. The download is POIZON’s own template with the SPU ID, SKU ID, new price and “{METHOD}” filled in, checked before you can download it. Only price cuts go in it; stock is not touched.</p>
+        <p className="muted xs">Your files are only read. The download is POIZON’s own template with the SPU ID, SKU ID, new price, Discount 0 and “{METHOD}” filled in, checked before you can download it. Only price cuts go in it; stock is not touched.</p>
         {rows && (
           <>
             <div className="er-stats mt">

@@ -477,7 +477,15 @@ export async function fileTypedCancellation(text, { who, platform: given = null,
   const open = fillRowId ? { id: fillRowId } : await openUnreadCancellation(who.id, platform);
   if (open) {
     const cur = await getCancellation(open.id);
-    const out = await updateCancellationFields(open.id, { ...f, platform: f.platform || cur.platform, reason: t.reason || cur.reason, note: cur.note,
+    // The row keeps the shoe it already has. Live 2026-11-25: seven Stadium Goods rows carried
+    // the SKU and size read off their slips; the number replied onto each (a bare number, no
+    // shoe in it — and one in none of our orders) blanked both. What the typed text or our own
+    // order says still wins; only a field they leave empty falls back to the row's.
+    const kept = ['sku', 'size', 'product'].filter((k) => !f[k] && cur[k]);
+    const shoe = Object.fromEntries(kept.map((k) => [k, cur[k]]));
+    const from = [...new Set([...String(f.details_from || '').split(','), ...(kept.length ? String(cur.details_from || 'label').split(',') : [])]
+      .map((x) => x.trim()).filter(Boolean))].join(',') || null;
+    const out = await updateCancellationFields(open.id, { ...f, ...shoe, details_from: from, platform: f.platform || cur.platform, reason: t.reason || cur.reason, note: cur.note,
       changed: `order number typed to the bot: ${o.order_number}` }, who.name);
     if (out.duplicate) return { rows: [], dupes: [{ order_number, existing: out.duplicate }] };
     return { rows: [{ ...out.row, filled: true }], dupes: [] };

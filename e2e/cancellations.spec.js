@@ -728,6 +728,14 @@ test('a photo with no number read is sent back, and a reply to THAT copy with th
   await new Promise((r) => setTimeout(r, 500));
   expect(reactions).toHaveLength(2);                                             // a refused reply gets no 👍
 
+  // The number replied onto a photo keeps the shoe already read off its slip (live 2026-11-25:
+  // seven Stadium Goods rows lost their SKU and size to the reply that gave them their number).
+  const first = await rowOf(p1);
+  await q(`UPDATE cancellations SET sku = 'DM4044-001', size = '12', details_from = 'label' WHERE id = $1`, [first.id]);
+  await hook(request, { from: TG_WH, body: { text: `9911${s}31`, reply_to_message: { message_id: copies[0].message_id } } });
+  expect(await lastSaid(TG_WH, 5)).toMatch(new RegExp(`\\[OK\\] #9911${s}31 — DM4044-001 · size 12`));
+  expect((await list(request)).rows.find((r) => r.id === Number(first.id))).toMatchObject({ order_number: `9911${s}31`, sku: 'DM4044-001', size: '12', details_from: 'label' });
+
   // In the group, a reply to anything that is not one of those copies is chatter: nothing is said.
   const before = saidTo(GROUP).length;
   await hook(request, { from: TG_STRANGER, chat: GROUP, body: { text: '123456789', reply_to_message: { message_id: 424242 } } });

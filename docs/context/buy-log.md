@@ -17,7 +17,7 @@ with what the warehouse received. Decisions taken with the owner the same day:
 ## Who
 | | Sees | May |
 |---|---|---|
-| **Supplier with `log_buys`** (`/buy-log` in the supplier portal) | only their own orders | create / edit their orders and lines, link / unlink their own POs, delete an order with no payment and no PO on it |
+| **Supplier with `log_buys`** (`/buy-log` in the supplier portal) | only their own orders | create / edit their orders and lines, **record a payment they sent (screenshot required)**, add screenshots, link / unlink their own POs, delete an order with no payment and no PO on it |
 | **PH team, admin** (`/ph/buy-log`, `/buy-log`) | every supplier's | all of that for any supplier, enter an order **for** a supplier, **record and remove payments**, delete any order |
 | **Warehouse** (`/buy-log`) | every supplier's | read only |
 
@@ -26,7 +26,8 @@ with what the warehouse received. Decisions taken with the owner the same day:
   `setUserPrivileges`, and the strip in `db-setup`). Ticked on Check Access, read fresh from the
   database on every call (`buyLogUser`, `api/buy-log/_shared.js`). Without it the portal has no
   Buy Log card and every `api/buy-log/*` call answers 403.
-- **The supplier never records a payment** — they do not sign for money that was sent to them.
+- **Payments** (changed 2026-11-26, see "Payment screenshots"): the supplier may record a payment
+  they sent **only with its screenshot**; only PH / admin remove one.
 - Another supplier's order answers **404**, not 403 (it does not exist for them).
 
 ## Data (`scripts/db-setup.mjs`, all four in `LIVE_TABLES`)
@@ -78,8 +79,21 @@ Order: the declaration, then Payments, then Shipped and received (link POs, the 
   column; the search matches them too. `buy_logs.tracking_numbers` stays (unused by the form; a
   save that does not send it leaves it alone).
 
+## Payment screenshots (2026-11-26, owner: "upload the screenshot of the payment he sent to them, for cross checking")
+- `buy_log_payments.proof TEXT[]` (≤ 6 a payment) — R2 public URLs under `buy-log/order-<id>/`.
+  **Needs `db:setup`.**
+- `POST /api/buy-log/proof-sign { id, contentType }` → a presigned PUT (the supplier for their own
+  order, PH / admin for any); the screen uploads with the shared `DefectPhotos` component.
+- `action:'pay'` takes `proof:[url]`; **a supplier's payment is refused without one**, staff's may
+  have none (the row then shows a "no screenshot" chip). `action:'proof'` adds more to a recorded
+  payment. A URL counts only when it is on our R2 host AND under this order's own path
+  (`isAllowedPhotoUrl` + `/buy-log/order-<id>/`) — never an arbitrary link, nor another order's file.
+- `can` from `list`: `pay` (record: supplier + staff), `unpay` (remove: staff), `proofNeeded` (supplier).
+- The download has a "Payment screenshots" column ("2 of 3 payments").
+- The files are readable by anyone holding the URL (unguessable name), like inbound-issue photos —
+  not behind a sign-in like gift-card files.
+
 ## Not built (said to the owner)
-- Proof photo on a payment.
 - Filling the cost of received pairs from the order's lines (Joey had 1,865 pairs with no cost on
   2026-11-26 — the declared cost per SKU is exactly what would fill them).
 - Telegram alerts, an order's history of edits.

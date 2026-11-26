@@ -16,7 +16,8 @@ export default async function handler(req, res) {
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
   const p = new URL(req.url, 'http://x').searchParams;
   const scope = isSupplier(user) ? Number(user.uid) : null;
-  const can = { edit: isSupplier(user) || canManage(user), pay: canManage(user), all: !isSupplier(user) };
+  // pay = record a payment (the supplier too, with its screenshot); unpay = remove one (staff).
+  const can = { edit: isSupplier(user) || canManage(user), pay: isSupplier(user) || canManage(user), unpay: canManage(user), proofNeeded: isSupplier(user), all: !isSupplier(user) };
   try {
     const id = idOf(p.get('id'));
     if (p.has('id')) {

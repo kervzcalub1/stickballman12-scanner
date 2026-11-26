@@ -6,13 +6,15 @@
 // ONE screen for the supplier (their own orders) and for PH / admin (every supplier's),
 // like Buying Requests: the two are looking at the same record. What it holds per order:
 //   · the declaration — order date + number, SKU, pairs, cost; a size when it is known
-//   · the payments — one row each (date, amount, method, who sent it), entered by staff
+//   · the payments — one row each (date, amount, method, who sent it, its SCREENSHOT);
+//     the supplier records one only with a screenshot, staff remove
 //   · the purchase orders it ships on → ordered vs shipped vs received, per SKU
 // and the whole log downloads as Excel / CSV, one row per line.
 // `?id=` is the open order and `?new=1` the blank form, so a refresh stays where you were.
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { TopBar } from '../components/common.jsx';
+import { TopBar, PhotoLightbox } from '../components/common.jsx';
+import { DefectPhotos } from '../components/DefectPhotos.jsx';
 import { Icon } from '../components/NavIcons.jsx';
 import { isUpcCode } from '../lib/codes.js';
 import { useLive } from '../hooks.js';
@@ -77,7 +79,7 @@ export function BuyLog({ user, onHome, onSignOut }) {
         <div className="card">
           <p className="muted sm">
             What was bought from a store that gives no receipt: the shoes, what they cost, what was paid and when, and what has
-            arrived. {can.all ? 'A supplier enters their own orders; you can enter one for them, and you record the payments.' : 'Enter each order here as you place it. Sizes are optional — leave them blank when the store picks them.'}
+            arrived. {can.all ? 'A supplier enters their own orders and the payments they sent (with a screenshot); you can enter either for them.' : 'Enter each order here as you place it. Sizes are optional — leave them blank when the store picks them.'}
           </p>
           <div className="bl-toolbar">
             <input type="search" className="oo-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="SKU, order # or store…" aria-label="Search the buy log" />
@@ -141,6 +143,9 @@ function BuyOrder({ id, suppliers, canAll, onClose, onSaved, onSignOut }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [pay, setPay] = useState({ paid_on: estToday(), amount: '', method: 'Zelle', paid_by: '', note: '' });
+  const [proof, setProof] = useState([]);              // screenshots for the payment being recorded
+  const [addTo, setAddTo] = useState(null);            // { id, photos } — more screenshots on a recorded payment
+  const [viewing, setViewing] = useState(null);        // screenshots open in the lightbox
   const [poPick, setPoPick] = useState('');
 
   const fill = (b) => {
@@ -323,17 +328,36 @@ function BuyOrder({ id, suppliers, canAll, onClose, onSaved, onSignOut }) {
             {!buy.payments.length ? <p className="muted sm">No payment recorded yet.</p> : (
               <div className="bl-scroll">
                 <table className="bl-table">
-                  <thead><tr><th>Paid on</th><th className="num">Amount</th><th>How</th><th>Sent by</th><th>Note</th><th>Recorded</th><th /></tr></thead>
+                  <thead><tr><th>Paid on</th><th className="num">Amount</th><th>How</th><th>Sent by</th><th>Note</th><th>Screenshot</th><th>Recorded</th><th /></tr></thead>
                   <tbody>{buy.payments.map((p) => (
                     <tr key={p.id}>
                       <td>{p.paid_on}</td><td className="num"><b>{usd(p.amount)}</b></td><td>{p.method || '—'}</td><td>{p.paid_by || '—'}</td><td className="sm">{p.note || ''}</td>
+                      <td>
+                        {p.proof.length ? (
+                          <button type="button" className="bl-proof" onClick={() => setViewing(p.proof)} aria-label={`View the screenshot${p.proof.length === 1 ? '' : 's'} of the ${usd(p.amount)} payment`}>
+                            <img src={p.proof[0]} alt="" />{p.proof.length > 1 ? <span>+{p.proof.length - 1}</span> : null}
+                          </button>
+                        ) : <Chip tone="warn">no screenshot</Chip>}
+                        {can.pay && p.proof.length < 6 && <button type="button" className="btn ghost sm" disabled={busy} onClick={() => setAddTo({ id: p.id, photos: [] })}>＋ Add</button>}
+                      </td>
                       <td className="muted xs">{p.created_by} {when(p.created_at)}</td>
-                      <td>{can.pay && <button type="button" className="btn ghost sm" disabled={busy} onClick={() => { if (window.confirm(`Remove the ${usd(p.amount)} payment of ${p.paid_on}?`)) act({ action: 'unpay', payment_id: p.id }); }}>Remove</button>}</td>
+                      <td>{can.unpay && <button type="button" className="btn ghost sm" disabled={busy} onClick={() => { if (window.confirm(`Remove the ${usd(p.amount)} payment of ${p.paid_on}?`)) act({ action: 'unpay', payment_id: p.id }); }}>Remove</button>}</td>
                     </tr>))}
                   </tbody>
                 </table>
               </div>
             )}
+            {addTo && (
+              <div className="bl-addproof">
+                <span className="sm">Add the screenshot{addTo.photos.length === 1 ? '' : 's'} for this payment:</span>
+                <DefectPhotos photos={addTo.photos} max={6} onChange={(photos) => setAddTo({ ...addTo, photos })} onSignOut={onSignOut} sign={(t) => api.buyLogProofSign(id, t)} />
+                <div className="bl-foot">
+                  <button type="button" className="btn primary sm" disabled={busy || !addTo.photos.length} onClick={() => act({ action: 'proof', payment_id: addTo.id, proof: addTo.photos }, () => setAddTo(null))}>Save screenshot{addTo.photos.length === 1 ? '' : 's'}</button>
+                  <button type="button" className="btn ghost sm" disabled={busy} onClick={() => setAddTo(null)}>Cancel</button>
+                </div>
+              </div>
+            )}
+            {viewing && <PhotoLightbox photos={viewing} onClose={() => setViewing(null)} />}
             {can.pay ? (
               <div className="bl-form bl-pay">
                 <label><span className="muted xs">Paid on (EST)</span><input className="input" type="date" value={pay.paid_on} max={estToday()} onChange={(e) => setPay({ ...pay, paid_on: e.target.value })} aria-label="Paid on" /></label>
@@ -341,10 +365,15 @@ function BuyOrder({ id, suppliers, canAll, onClose, onSaved, onSignOut }) {
                 <label><span className="muted xs">How</span><select className="input" value={pay.method} onChange={(e) => setPay({ ...pay, method: e.target.value })} aria-label="Payment method">{METHODS.map((m) => <option key={m}>{m}</option>)}</select></label>
                 <label><span className="muted xs">Sent by</span><input className="input" value={pay.paid_by} maxLength={80} placeholder="Alex" onChange={(e) => setPay({ ...pay, paid_by: e.target.value })} aria-label="Sent by" /></label>
                 <label className="bl-wide"><span className="muted xs">Note (reference #, who received it)</span><input className="input" value={pay.note} maxLength={300} onChange={(e) => setPay({ ...pay, note: e.target.value })} aria-label="Payment note" /></label>
-                <button type="button" className="btn primary sm" disabled={busy || !(Number(pay.amount) > 0) || !pay.paid_on}
-                  onClick={() => act({ action: 'pay', ...pay, amount: Number(pay.amount) }, () => setPay({ ...pay, amount: '', note: '' }))}>Record payment</button>
+                <div className="bl-wide">
+                  <span className="muted xs">Screenshot of the payment{can.proofNeeded ? ' (needed)' : ' (for cross-checking)'}</span>
+                  <DefectPhotos photos={proof} max={6} onChange={setProof} onSignOut={onSignOut} sign={(t) => api.buyLogProofSign(id, t)} />
+                </div>
+                <button type="button" className="btn primary sm" disabled={busy || !(Number(pay.amount) > 0) || !pay.paid_on || (can.proofNeeded && !proof.length)}
+                  onClick={() => act({ action: 'pay', ...pay, amount: Number(pay.amount), proof }, () => { setPay({ ...pay, amount: '', note: '' }); setProof([]); })}>Record payment</button>
+                {can.proofNeeded && !proof.length && <span className="muted xs">Add the screenshot to record the payment.</span>}
               </div>
-            ) : <p className="muted xs">Payments are recorded by the Stickballman12 team.</p>}
+            ) : <p className="muted xs">Payments are recorded by the Stickballman12 team or the supplier.</p>}
           </div>
 
           <div className="card">

@@ -87,7 +87,7 @@ export function buyCompare(lines = [], shipped = [], received = [], { linked = t
 export function shapeBuy(b) {
   if (!b) return null;
   const lines = (b.lines || []).map((l) => ({ ...l, id: Number(l.id), qty: Number(l.qty), unit_cost: Number(l.unit_cost), size: l.size || '' }));
-  const payments = (b.payments || []).map((p) => ({ ...p, id: Number(p.id), amount: Number(p.amount) }));
+  const payments = (b.payments || []).map((p) => ({ ...p, id: Number(p.id), amount: Number(p.amount), proof: p.proof || [] }));
   const pos = (b.pos || []).map((p) => ({ ...p, po_id: Number(p.po_id), tracking: p.tracking || [] }));
   const cmp = buyCompare(lines, b.shipped || [], b.received || [], { linked: pos.length > 0 });
   return {
@@ -106,7 +106,7 @@ export function shapeBuy(b) {
 export const BUY_COLS = [
   ['code', 'Buy #'], ['ordered_on', 'Order date (EST)'], ['supplier', 'Bought by'], ['store', 'Store'], ['order_number', 'Order #'],
   ['sku', 'SKU'], ['name', 'Shoe'], ['size', 'Size'], ['qty', 'Pairs'], ['unit_cost', 'Cost per pair'], ['line_total', 'Line total'],
-  ['order_total', 'Order total'], ['paid', 'Paid so far'], ['balance', 'Balance'], ['payment', 'Payment status'],
+  ['order_total', 'Order total'], ['paid', 'Paid so far'], ['balance', 'Balance'], ['payment', 'Payment status'], ['proofs', 'Payment screenshots'],
   ['tracking', 'Tracking #'], ['pos', 'Purchase orders'], ['sku_shipped', 'SKU shipped'], ['sku_received', 'SKU received'], ['receiving', 'Receiving status'], ['note', 'Note'],
 ];
 export function buyRows(buys = []) {
@@ -118,7 +118,7 @@ export function buyRows(buys = []) {
       out.push({
         code: b.code, ordered_on: b.ordered_on, supplier: b.supplier_name, store: b.store, order_number: b.order_number,
         sku: l.sku, name: l.name || '', size: l.size || '', qty: l.qty, unit_cost: l.unit_cost, line_total: r2(l.qty * l.unit_cost),
-        order_total: b.money.total, paid: b.money.paid, balance: b.money.balance, payment: PAY_LABEL[b.money.state],
+        order_total: b.money.total, paid: b.money.paid, balance: b.money.balance, payment: PAY_LABEL[b.money.state], proofs: `${b.payments.filter((p) => (p.proof || []).length).length} of ${b.payments.length} payments`,
         tracking: [...new Set([...(b.pos || []).flatMap((p) => p.tracking || []), ...(b.tracking_numbers || [])])].join(' '), pos: (b.pos || []).map((p) => p.po_code).join(' '),
         sku_shipped: c ? c.shipped : 0, sku_received: c ? c.received : 0, receiving: RECV_LABEL[b.receiving], note: b.note || '',
       });

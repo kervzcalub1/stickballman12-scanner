@@ -418,7 +418,7 @@ test('our own eBay / SHEIN / pre-sell orders give the shoe by number; one letter
 
   const fE = await picture(`cx-e-${s}`, read({ order_number: ebayNo }));
   await hook(request, photo(TG_WH, fE, '/ebay'));
-  expect(await lastSaid(TG_WH)).toContain(`#${ebayNo} — Nike Dunk Low Retro 'Panda' · DD1391-100 · size 9.5`);
+  expect(await lastSaid(TG_WH)).toContain(`<code>${ebayNo}</code> · DD1391-100 · 9.5 · Nike Dunk Low Retro 'Panda'`);
   const fS = await picture(`cx-s-${s}`, read({ order_number: `GS0N${s}K00E2E` }));
   await hook(request, photo(TG_WH, fS, '/shein'));
   expect(await lastSaid(TG_WH, 2)).toContain(`<code>${shein}</code> · SHEIN · SHEIN Jordan title · read as GS0N${s}K00E2E`);
@@ -427,7 +427,7 @@ test('our own eBay / SHEIN / pre-sell orders give the shoe by number; one letter
   expect(await lastSaid(TG_WH, 3)).toContain(`<code>GS1N${s}K00E2E</code> · no shoe details`);
   const fP = await picture(`cx-p-${s}`, read({ order_number: pre }));
   await hook(request, photo(TG_WH, fP, '/alias'));
-  expect(await lastSaid(TG_WH, 4)).toContain(`#${pre} — E2E Cx Presell Shoe · CX${s}-001 · size 10`);
+  expect(await lastSaid(TG_WH, 4)).toContain(`<code>${pre}</code> · CX${s}-001 · 10 · E2E Cx Presell Shoe`);
 
   const rows = (await list(request)).rows;
   expect(rows.find((r) => r.order_number === ebayNo)).toMatchObject({ platform: 'ebay', order_match: 'ebay', details_from: 'ebay', sku: 'DD1391-100', size: '9.5' });

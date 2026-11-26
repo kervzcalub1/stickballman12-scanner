@@ -16654,7 +16654,7 @@ export async function listBuyLogs({ supplierUserId = null, id = null, q = '', fr
            b.tracking_numbers, b.note, b.created_by, b.created_at, b.updated_by, b.updated_at,
            coalesce((SELECT json_agg(json_build_object('id', l.id, 'sku', l.sku, 'name', l.name, 'size', l.size, 'qty', l.qty, 'unit_cost', l.unit_cost, 'entered_by', l.entered_by) ORDER BY l.id)
                        FROM buy_log_lines l WHERE l.buy_id = b.id), '[]'::json) AS lines,
-           coalesce((SELECT json_agg(json_build_object('id', p.id, 'paid_on', to_char(p.paid_on, 'YYYY-MM-DD'), 'amount', p.amount, 'method', p.method, 'paid_by', p.paid_by, 'note', p.note, 'created_by', p.created_by, 'created_at', p.created_at) ORDER BY p.paid_on, p.id)
+           coalesce((SELECT json_agg(json_build_object('id', p.id, 'paid_on', to_char(p.paid_on, 'YYYY-MM-DD'), 'amount', p.amount, 'method', p.method, 'paid_by', p.paid_by, 'note', p.note, 'proof', p.proof, 'created_by', p.created_by, 'created_at', p.created_at) ORDER BY p.paid_on, p.id)
                        FROM buy_log_payments p WHERE p.buy_id = b.id), '[]'::json) AS payments,
            coalesce((SELECT json_agg(json_build_object('po_id', o.id, 'po_code', o.po_code, 'status', o.status, 'tag_code', o.tag_code,
                                  'tracking', coalesce((SELECT json_agg(x2.tracking_number ORDER BY x2.box_number) FROM po_boxes x2 WHERE x2.po_id = o.id AND coalesce(x2.tracking_number, '') <> ''), '[]'::json)) ORDER BY o.id)
@@ -16729,12 +16729,22 @@ export async function deleteBuyLog(id) {
   const r = await db()`DELETE FROM buy_logs WHERE id = ${id} RETURNING id`;
   return r.length > 0;
 }
-export async function addBuyLogPayment(buyId, { paidOn, amount, method, paidBy, note }, actor) {
+export async function addBuyLogPayment(buyId, { paidOn, amount, method, paidBy, note, proof = [] }, actor) {
   const sql = db();
-  const r = await sql`INSERT INTO buy_log_payments (buy_id, paid_on, amount, method, paid_by, note, created_by)
-                      VALUES (${buyId}, ${paidOn}::date, ${amount}, ${method || null}, ${paidBy || null}, ${note || null}, ${actor}) RETURNING id`;
+  const r = await sql`INSERT INTO buy_log_payments (buy_id, paid_on, amount, method, paid_by, note, proof, created_by)
+                      VALUES (${buyId}, ${paidOn}::date, ${amount}, ${method || null}, ${paidBy || null}, ${note || null}, ${proof}::text[], ${actor}) RETURNING id`;
   await sql`UPDATE buy_logs SET updated_by = ${actor}, updated_at = now() WHERE id = ${buyId}`;
   return Number(r[0].id);
+}
+// More screenshots on a payment already recorded (at most 6 a payment, no duplicates).
+export async function addBuyLogPaymentProof(buyId, paymentId, urls, actor) {
+  const sql = db();
+  const r = await sql`
+    UPDATE buy_log_payments p
+       SET proof = (SELECT coalesce(array_agg(u), '{}') FROM (SELECT DISTINCT u FROM unnest(p.proof || ${urls}::text[]) u LIMIT 6) x)
+     WHERE p.id = ${paymentId} AND p.buy_id = ${buyId} RETURNING id`;
+  if (r.length) await sql`UPDATE buy_logs SET updated_by = ${actor}, updated_at = now() WHERE id = ${buyId}`;
+  return r.length > 0;
 }
 export async function deleteBuyLogPayment(buyId, paymentId, actor) {
   const sql = db();

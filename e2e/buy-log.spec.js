@@ -20,6 +20,7 @@ const people = {};
 let poId; let batchId; let buyId;
 const tok = (u) => ({ Authorization: `Bearer ${signToken({ uid: u.uid, username: u.username, name: u.name, role: u.role })}` });
 const PH = { Authorization: `Bearer ${signToken({ uid: 'e2e-ph', username: 'e2e_ph', name: 'E2E PH', role: 'ph_team' })}` };
+const BASE = (() => { const b = String(process.env.R2_PUBLIC_BASE_URL || '').trim().replace(/\/+$/, ''); return b ? (b.includes('://') ? b : `https://${b}`) : ''; })();
 const WH = { Authorization: `Bearer ${signToken({ uid: 'e2e-wh', username: 'e2e_wh', name: 'E2E Warehouse', role: 'warehouse' })}` };
 
 test.describe.configure({ mode: 'serial' });
@@ -102,7 +103,7 @@ test('who may: switched on per supplier, own orders only, and only staff record 
   buyId = (await save.json()).id;
 
   const mine = (await (await request.get('/api/buy-log/list', { headers: tok(people.joey) })).json());
-  expect(mine.can).toEqual({ edit: true, pay: false, all: false });
+  expect(mine.can).toEqual({ edit: true, pay: true, unpay: false, proofNeeded: true, all: false });
   expect(mine.buys).toHaveLength(1);
   expect(mine.buys[0]).toMatchObject({ code: `BL-${buyId}`, supplier_name: people.joey.name, store: 'Nike Store E2E', ordered_on: '2026-11-20',
     tracking_numbers: [`1ZE2EBL${stamp}00`], receiving: 'no_po', money: { pairs: 4, total: 240, paid: 0, balance: 240, state: 'unpaid' } });
@@ -114,9 +115,27 @@ test('who may: switched on per supplier, own orders only, and only staff record 
   expect((await request.post('/api/buy-log/action', { headers: tok(people.other), data: { action: 'delete', id: buyId } })).status()).toBe(404);
   expect((await request.post('/api/buy-log/save', { headers: tok(people.other), data: { id: buyId, lines: [{ sku: SKU, qty: 1, unit_cost: 1 }] } })).status()).toBe(404);
 
-  // The supplier does not sign for money sent to them.
-  const selfPay = await request.post('/api/buy-log/action', { headers: tok(people.joey), data: { action: 'pay', id: buyId, paid_on: '2026-11-20', amount: 240 } });
-  expect(selfPay.status()).toBe(403);
+  // The supplier records a payment they sent ONLY with its screenshot — and a screenshot is a
+  // file this order's own upload path produced, not any URL (nor another order's).
+  const pay = (data) => request.post('/api/buy-log/action', { headers: tok(people.joey), data: { action: 'pay', id: buyId, paid_on: '2026-11-19', amount: 10, ...data } });
+  const none = await pay({});
+  expect([none.status(), (await none.json()).error]).toEqual([400, expect.stringMatching(/screenshot/i)]);
+  expect((await pay({ proof: ['https://evil.example/x.png', `${BASE}/buy-log/order-999999/x.png`] })).status()).toBe(400);
+  expect((await request.post('/api/buy-log/proof-sign', { headers: tok(people.other), data: { id: buyId, contentType: 'image/png' } })).status()).toBe(404);
+  test.skip(!BASE, 'R2_PUBLIC_BASE_URL is not set here');
+  const shot = `${BASE}/buy-log/order-${buyId}/e2e-${stamp}.png`;
+  const ok = await pay({ proof: [shot, shot], method: 'Zelle' });
+  expect(ok.ok(), await ok.text()).toBeTruthy();
+  const after = (await (await request.get(`/api/buy-log/list?id=${buyId}`, { headers: tok(people.joey) })).json()).buy;
+  expect(after.payments).toHaveLength(1);
+  expect(after.payments[0]).toMatchObject({ amount: 10, proof: [shot], paid_by: people.joey.name, created_by: people.joey.name });
+  // More screenshots later; only staff remove a payment.
+  const pid = after.payments[0].id;
+  const act = (headers, data) => request.post('/api/buy-log/action', { headers, data: { id: buyId, payment_id: pid, ...data } });
+  expect((await act(tok(people.joey), { action: 'proof', proof: [`${BASE}/buy-log/order-${buyId}/e2e-${stamp}-2.png`] })).ok()).toBeTruthy();
+  expect((await act(tok(people.joey), { action: 'proof', proof: [] })).status()).toBe(400);
+  expect((await act(tok(people.joey), { action: 'unpay' })).status()).toBe(403);
+  expect((await act(PH, { action: 'unpay' })).ok()).toBeTruthy();
 });
 
 test('staff record payments; the order links to its PO and is compared with what was received', async ({ request }) => {
@@ -196,8 +215,11 @@ test('the supplier’s portal: the card and the page only with the privilege, an
   await joey.page.getByRole('button', { name: /Buy Log/ }).click();
   await expect(joey.page).toHaveURL(/\/buy-log/);
   await joey.page.locator('.bl-row').filter({ hasText: `BL-${buyId}` }).click();
-  await expect(joey.page.getByText('Payments are recorded by the Stickballman12 team.')).toBeVisible();
-  await expect(joey.page.getByRole('button', { name: 'Record payment' })).toHaveCount(0);
+  // The supplier may record a payment they sent — but not without its screenshot.
+  await joey.page.getByLabel('Amount paid').fill('25');
+  await expect(joey.page.getByText('Add the screenshot to record the payment.')).toBeVisible();
+  await expect(joey.page.getByRole('button', { name: 'Record payment' })).toBeDisabled();
+  await expect(joey.page.getByRole('button', { name: 'Remove', exact: true })).toHaveCount(0);
   if (process.env.BL_SHOTS) { await joey.page.setViewportSize({ width: 1300, height: 1500 }); await joey.page.screenshot({ path: `${process.env.BL_SHOTS}/supplier-order.png`, fullPage: true }); }
   // A new order. The product lookup is the app's own (sku-search / upc-search) — stubbed here,
   // so no marketplace is called: a typed SKU brings its name, a scanned box barcode brings

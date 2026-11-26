@@ -8086,3 +8086,7 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
 .bl-scan-note { margin: 0 0 8px; }
 .bl-scan-note.ok { color: #7bc99a; }
 .bl-scan-note.bad { color: #e08f8f; }
+.bl-proof { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: none; cursor: pointer; overflow: hidden; vertical-align: middle; margin-right: 6px; color: var(--muted); font-size: 12px; }
+.bl-proof img { width: 44px; height: 44px; object-fit: cover; display: block; }
+.bl-proof span { padding-right: 8px; }
+.bl-addproof { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }

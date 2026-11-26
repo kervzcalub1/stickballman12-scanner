@@ -1,12 +1,14 @@
 // POST /api/buy-log/action
-//   { action:'pay', id, paid_on, amount, method?, paid_by?, note? }   PH / admin only
+//   { action:'pay', id, paid_on, amount, method?, paid_by?, note?, proof?:[url] }  PH / admin; the supplier only WITH a screenshot
+//   { action:'proof', id, payment_id, proof:[url] }                     add screenshots to a recorded payment
 //   { action:'unpay', id, payment_id }                                  PH / admin only
 //   { action:'link', id, po_id } · { action:'unlink', id, po_id }       the supplier (own) or PH / admin
 //   { action:'delete', id }       a supplier: only while nothing is paid or linked; PH / admin: any
-// The Buy Log (docs/context/buy-log.md). Payments are recorded by STAFF: the supplier does not
-// sign for money that was sent to them.
+// The Buy Log (docs/context/buy-log.md). A payment the supplier records must carry its
+// screenshot; only staff remove one.
 import { getJsonBody, send, applySecurity, rateLimit } from '../_lib/util.js';
-import { dbConfigured, getBuyLogOwner, addBuyLogPayment, deleteBuyLogPayment, linkBuyLogPo, unlinkBuyLogPo, deleteBuyLog, listPosForBuyLog } from '../_lib/db.js';
+import { isAllowedPhotoUrl } from '../_lib/r2.js';
+import { dbConfigured, getBuyLogOwner, addBuyLogPayment, addBuyLogPaymentProof, deleteBuyLogPayment, linkBuyLogPo, unlinkBuyLogPo, deleteBuyLog, listPosForBuyLog } from '../_lib/db.js';
 import { buyLogUser, isSupplier, canManage, ownsBuy, actorOf, idOf, realDate, MAX_MONEY } from './_shared.js';
 
 const text = (v, n) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
@@ -28,8 +30,24 @@ export default async function handler(req, res) {
     const own = await getBuyLogOwner(id);
     if (!ownsBuy(res, user, own)) return;
 
+    // Screenshots of the payment: only files this order's own upload path produced.
+    const proofOf = (list) => [...new Set((Array.isArray(list) ? list : []).map(String)
+      .filter((u) => isAllowedPhotoUrl(u) && u.includes(`/buy-log/order-${id}/`)))].slice(0, 6);
+
+    if (action === 'proof') {
+      if (!isSupplier(user) && !canManage(user)) return send(res, 403, { ok: false, error: 'You can read the buy log, not change it.' });
+      const pid = idOf(b.payment_id); const proof = proofOf(b.proof);
+      if (!pid) return send(res, 400, { ok: false, error: 'Which payment?' });
+      if (!proof.length) return send(res, 400, { ok: false, error: 'Add the screenshot first.' });
+      return (await addBuyLogPaymentProof(id, pid, proof, actor)) ? send(res, 200, { ok: true }) : send(res, 409, { ok: false, error: 'That payment was removed.' });
+    }
+
     if (action === 'pay' || action === 'unpay') {
-      if (!canManage(user)) return send(res, 403, { ok: false, error: 'Payments are recorded by the PH team or an admin.' });
+      // Removing a payment stays with staff. RECORDING one: staff, or the supplier who sent
+      // it — but then the screenshot is not optional (owner, 2026-11-26: "upload the
+      // screenshot of the payment he sent to them, for cross checking").
+      if (action === 'unpay' && !canManage(user)) return send(res, 403, { ok: false, error: 'Payments are removed by the PH team or an admin.' });
+      if (!isSupplier(user) && !canManage(user)) return send(res, 403, { ok: false, error: 'You can read the buy log, not change it.' });
       if (action === 'unpay') {
         const pid = idOf(b.payment_id);
         if (!pid) return send(res, 400, { ok: false, error: 'Which payment?' });
@@ -39,7 +57,9 @@ export default async function handler(req, res) {
       const amount = Number(b.amount);
       if (!paidOn) return send(res, 400, { ok: false, error: 'When was it paid? Pick the date.' });
       if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_MONEY) return send(res, 400, { ok: false, error: 'How much was paid? Enter an amount above $0.' });
-      const pid = await addBuyLogPayment(id, { paidOn, amount: Math.round(amount * 100) / 100, method: text(b.method, 60), paidBy: text(b.paid_by, 80), note: text(b.note, 300) }, actor);
+      const proof = proofOf(b.proof);
+      if (isSupplier(user) && !proof.length) return send(res, 400, { ok: false, error: 'Add the screenshot of the payment — it is how the payment is checked.' });
+      const pid = await addBuyLogPayment(id, { paidOn, amount: Math.round(amount * 100) / 100, method: text(b.method, 60), paidBy: text(b.paid_by, 80) || (isSupplier(user) ? actor : ''), note: text(b.note, 300), proof }, actor);
       return send(res, 200, { ok: true, payment_id: pid });
     }
 

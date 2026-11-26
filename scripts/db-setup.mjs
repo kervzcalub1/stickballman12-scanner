@@ -4293,6 +4293,8 @@ await sql(`
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
 await sql(`CREATE INDEX IF NOT EXISTS buy_log_payments_buy_idx ON buy_log_payments (buy_id)`);
+// The screenshot(s) of the payment (owner, 2026-11-26: "for cross checking") — R2 public URLs.
+await sql(`ALTER TABLE buy_log_payments ADD COLUMN IF NOT EXISTS proof TEXT[] NOT NULL DEFAULT '{}'`);
 await sql(`
   CREATE TABLE IF NOT EXISTS buy_log_pos (
     buy_id    BIGINT NOT NULL REFERENCES buy_logs(id) ON DELETE CASCADE,

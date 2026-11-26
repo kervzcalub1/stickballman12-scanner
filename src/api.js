@@ -431,6 +431,7 @@ export const api = {
   buyLog: (id) => get(`/api/buy-log/list?id=${encodeURIComponent(id)}`),
   buyLogSave: (body) => post('/api/buy-log/save', body),
   buyLogAct: (body) => post('/api/buy-log/action', body),
+  buyLogProofSign: (id, contentType) => post('/api/buy-log/proof-sign', { id, contentType }),
   onlineOrders: ({ q = '', view = 'all' } = {}) => get(`/api/online-orders/list?view=${encodeURIComponent(view)}${q ? `&q=${encodeURIComponent(q)}` : ''}`),
   onlineOrder: (id) => get(`/api/online-orders/get?id=${encodeURIComponent(id)}`),
   onlineOrderFindReceipt: (id) => post('/api/online-orders/receipt', { id }),

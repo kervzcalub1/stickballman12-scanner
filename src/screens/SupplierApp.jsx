@@ -16,6 +16,7 @@ import { TopBar, TrackingTimeline } from '../components/common.jsx';
 import { NavIcon } from '../components/NavIcons.jsx';
 import { PayoutCalculator } from './PayoutCalculator.jsx';
 import { BuyCarts } from './BuyCarts.jsx';
+import { BuyLog } from './BuyLog.jsx';
 import { Sop } from './Sop.jsx';
 import { carrierName } from '../lib/carriers.js';
 import { readParam, writeParam } from '../lib/urlstate.js';
@@ -97,7 +98,7 @@ function ShipToCard({ shipTo }) {
 // field: a scanned line's size/qty inputs re-seed from the server value, so a re-read
 // landing mid-keystroke would put the old number back under the supplier's cursor.
 
-const SUP_PATHS = { orders: '/orders', payout: '/payout', buying: '/buying' };
+const SUP_PATHS = { orders: '/orders', payout: '/payout', buying: '/buying', buylog: '/buy-log' };
 const supPathForPage = (p) => SUP_PATHS[p] || '/';
 const supPageForPath = (p) => {
   const path = String(p || '/').replace(/\/+$/, '') || '/';
@@ -134,6 +135,15 @@ function SupplierHome({ user, onPick, onSignOut, onHelp }) {
               <span className="home-card-icon"><NavIcon name="buy-carts" /></span>
               <span className="home-card-title">Buying Requests</span>
               <span className="home-card-sub">Ask for gift cards: list what you want to buy, get it approved, then send the receipt back.</span>
+            </button>
+          )}
+          {/* The supplier's own record of a buy from a store that gives no receipt (buy-log.md).
+              Switched on per account (`log_buys`), like the card above. */}
+          {hasPriv(user, 'log_buys') && (
+            <button className="home-card" onClick={() => onPick('buylog')}>
+              <span className="home-card-icon"><NavIcon name="receipts" /></span>
+              <span className="home-card-title">Buy Log</span>
+              <span className="home-card-sub">Enter what you bought for us: SKU, pairs and cost — then link the order you ship it on.</span>
             </button>
           )}
         </div>
@@ -336,6 +346,11 @@ export function SupplierApp({ user, onSignOut }) {
     // server would answer 403 to every call on the screen anyway.
     if (!hasPriv(user, 'request_buying')) return <SupplierHome user={user} onPick={goPage} onSignOut={onSignOut} onHelp={() => setHelp(true)} />;
     return <BuyCarts user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
+  }
+
+  if (page === 'buylog') {
+    if (!hasPriv(user, 'log_buys')) return <SupplierHome user={user} onPick={goPage} onSignOut={onSignOut} onHelp={() => setHelp(true)} />;
+    return <BuyLog user={user} onHome={() => goPage(null)} onSignOut={onSignOut} />;
   }
 
   // Raise your own shipment. The workflow inverted: we want the manifest BEFORE we buy

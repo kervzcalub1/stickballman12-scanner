@@ -242,8 +242,9 @@ await sql(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('wa
 // fund their own request, which is the one thing this whole process exists to prevent.
 // The one privilege a supplier CAN hold is `request_buying` — the buyer's own gate, set
 // per account because most suppliers only ship boxes and never buy for the company.
-await sql(`UPDATE users SET privileges = ARRAY(SELECT p FROM unnest(privileges) p WHERE p = 'request_buying')
-            WHERE role = 'supplier' AND EXISTS (SELECT 1 FROM unnest(privileges) p WHERE p <> 'request_buying')`);
+// `log_buys` (2026-11-26) is the second: the supplier's own Buy Log (docs/context/buy-log.md).
+await sql(`UPDATE users SET privileges = ARRAY(SELECT p FROM unnest(privileges) p WHERE p IN ('request_buying', 'log_buys'))
+            WHERE role = 'supplier' AND EXISTS (SELECT 1 FROM unnest(privileges) p WHERE p NOT IN ('request_buying', 'log_buys'))`);
 await sql(`CREATE INDEX IF NOT EXISTS users_privileges_idx ON users USING GIN (privileges)`);
 
 // Password reset: a user asks for a reset from the sign-in screen (reset_requested_at
@@ -4242,6 +4243,65 @@ await sql(`
 await sql(`ALTER TABLE cost_email_runs ADD COLUMN IF NOT EXISTS sku TEXT`);
 await sql(`ALTER TABLE cost_email_runs ADD COLUMN IF NOT EXISTS order_number TEXT`);
 
+// ── Buy Log (docs/context/buy-log.md, 2026-11-26) ───────────────────────────────────────
+// A supplier's own record of what they bought for us from a store that gives no receipt
+// (Joey: a Nike store that pulls stock from Nike's warehouse and wants paying up front).
+// No approval, no gift cards — a DECLARATION (SKU, cost, pairs; sizes when known), the
+// payments made against it, and the purchase orders it ships on, so it can be compared with
+// what the warehouse received. Every CHECK is defined once, here.
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_logs (
+    id               BIGSERIAL PRIMARY KEY,
+    supplier_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    supplier_name    TEXT NOT NULL,
+    store            TEXT,
+    order_number     TEXT,
+    ordered_on       DATE,
+    tracking_numbers TEXT[] NOT NULL DEFAULT '{}',
+    note             TEXT,
+    created_by       TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by       TEXT,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_logs_supplier_idx ON buy_logs (supplier_user_id)`);
+// size NULL = "sizes not known" (the store picks them): the line is compared by SKU alone.
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_log_lines (
+    id         BIGSERIAL PRIMARY KEY,
+    buy_id     BIGINT NOT NULL REFERENCES buy_logs(id) ON DELETE CASCADE,
+    sku        TEXT NOT NULL,
+    name       TEXT,
+    size       TEXT,
+    qty        INTEGER NOT NULL CHECK (qty > 0),
+    unit_cost  NUMERIC(12,2) NOT NULL CHECK (unit_cost >= 0),
+    entered_by TEXT
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_log_lines_buy_idx ON buy_log_lines (buy_id)`);
+// One row per payment — never a single "paid" flag: the store is paid up front, sometimes in
+// parts, and every dollar has to have a date, a method and a name against it.
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_log_payments (
+    id         BIGSERIAL PRIMARY KEY,
+    buy_id     BIGINT NOT NULL REFERENCES buy_logs(id) ON DELETE CASCADE,
+    paid_on    DATE NOT NULL,
+    amount     NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+    method     TEXT,
+    paid_by    TEXT,
+    note       TEXT,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+await sql(`CREATE INDEX IF NOT EXISTS buy_log_payments_buy_idx ON buy_log_payments (buy_id)`);
+await sql(`
+  CREATE TABLE IF NOT EXISTS buy_log_pos (
+    buy_id    BIGINT NOT NULL REFERENCES buy_logs(id) ON DELETE CASCADE,
+    po_id     BIGINT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    linked_by TEXT,
+    linked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (buy_id, po_id)
+  )`);
+
 const LIVE_TABLES = [
   'shopify_listing_variants', 'listing_market_prices',
   'items', 'item_events', 'batches', 'batch_boxes', 'deleted_items', 'deleted_batches',
@@ -4255,6 +4315,7 @@ const LIVE_TABLES = [
   'buy_carts', 'buy_cart_lines', 'buy_cart_events', 'buy_cart_files', 'buy_cart_card_reads', 'buy_cart_gift_cards',
   'buy_cart_receipt_lines', 'buy_cart_tasks', 'deleted_buy_carts',
   'online_orders', 'online_order_lines', 'online_order_events',
+  'buy_logs', 'buy_log_lines', 'buy_log_payments', 'buy_log_pos',
   'tracking_duplicates',
   // Lost Package Tracker: the run row moves on every order checked, so its progress streams.
   'lost_pkg_runs',

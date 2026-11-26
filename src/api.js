@@ -426,6 +426,11 @@ export const api = {
   purchaseEmails: (all = false) => get(`/api/purchase-emails${all ? '?all=1' : ''}`),
   addPurchaseEmail: (email, userId = null) => post('/api/purchase-emails', { action: 'add', email, ...(userId ? { userId } : {}) }),
   removePurchaseEmail: (id) => post('/api/purchase-emails', { action: 'remove', id }),
+  // Buy Log (docs/context/buy-log.md)
+  buyLogs: ({ q = '', from = '', to = '' } = {}) => get(`/api/buy-log/list?${new URLSearchParams(Object.fromEntries(Object.entries({ q, from, to }).filter(([, v]) => v)))}`),
+  buyLog: (id) => get(`/api/buy-log/list?id=${encodeURIComponent(id)}`),
+  buyLogSave: (body) => post('/api/buy-log/save', body),
+  buyLogAct: (body) => post('/api/buy-log/action', body),
   onlineOrders: ({ q = '', view = 'all' } = {}) => get(`/api/online-orders/list?view=${encodeURIComponent(view)}${q ? `&q=${encodeURIComponent(q)}` : ''}`),
   onlineOrder: (id) => get(`/api/online-orders/get?id=${encodeURIComponent(id)}`),
   onlineOrderFindReceipt: (id) => post('/api/online-orders/receipt', { id }),

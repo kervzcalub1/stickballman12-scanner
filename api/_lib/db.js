@@ -8351,7 +8351,7 @@ export async function listUserPrivileges(uid) {
 export async function setUserPrivileges(uid, privileges) {
   const rows = await db()`
     UPDATE users SET privileges = CASE WHEN role = 'supplier'
-        THEN ARRAY(SELECT p FROM unnest(${privileges}::text[]) p WHERE p = 'request_buying')
+        THEN ARRAY(SELECT p FROM unnest(${privileges}::text[]) p WHERE p IN ('request_buying', 'log_buys'))
         ELSE ${privileges}::text[] END
      WHERE id = ${uid}
      RETURNING id, username, name, role, privileges`;
@@ -16638,4 +16638,133 @@ export async function mailTrialReport(mailbox) {
      ORDER BY r.received_at DESC
      LIMIT 200`;
   return { folders, outcomes, pairs, missed };
+}
+
+// ── Buy Log (docs/context/buy-log.md) ────────────────────────────────────────────────────
+// A supplier's own record of what they bought from a store that gives no receipt. One read
+// for the list and the single order: the lines, the payments, the linked POs, and — across
+// those POs — what the manifests say was SHIPPED and what the warehouse RECEIVED.
+// supplierUserId scopes it to one supplier (their own portal); id narrows to one order.
+export async function listBuyLogs({ supplierUserId = null, id = null, q = '', from = null, to = null, limit = 500 } = {}) {
+  const term = String(q || '').trim();
+  const like = term ? `%${term.toUpperCase()}%` : null;
+  const bare = term ? `%${term.toUpperCase().replace(/[^A-Z0-9]/g, '')}%` : null;
+  return await db()`
+    SELECT b.id, b.supplier_user_id, b.supplier_name, b.store, b.order_number, to_char(b.ordered_on, 'YYYY-MM-DD') AS ordered_on,
+           b.tracking_numbers, b.note, b.created_by, b.created_at, b.updated_by, b.updated_at,
+           coalesce((SELECT json_agg(json_build_object('id', l.id, 'sku', l.sku, 'name', l.name, 'size', l.size, 'qty', l.qty, 'unit_cost', l.unit_cost, 'entered_by', l.entered_by) ORDER BY l.id)
+                       FROM buy_log_lines l WHERE l.buy_id = b.id), '[]'::json) AS lines,
+           coalesce((SELECT json_agg(json_build_object('id', p.id, 'paid_on', to_char(p.paid_on, 'YYYY-MM-DD'), 'amount', p.amount, 'method', p.method, 'paid_by', p.paid_by, 'note', p.note, 'created_by', p.created_by, 'created_at', p.created_at) ORDER BY p.paid_on, p.id)
+                       FROM buy_log_payments p WHERE p.buy_id = b.id), '[]'::json) AS payments,
+           coalesce((SELECT json_agg(json_build_object('po_id', o.id, 'po_code', o.po_code, 'status', o.status, 'tag_code', o.tag_code) ORDER BY o.id)
+                       FROM buy_log_pos x JOIN purchase_orders o ON o.id = x.po_id WHERE x.buy_id = b.id), '[]'::json) AS pos,
+           coalesce((SELECT json_agg(json_build_object('sku', s.sku, 'size', s.size, 'qty', s.qty, 'name', s.name))
+                       FROM (SELECT l.sku, l.size, max(l.name) AS name, sum(coalesce(l.qty_expected, 0))::int AS qty
+                               FROM po_lines l JOIN buy_log_pos x ON x.po_id = l.po_id
+                              WHERE x.buy_id = b.id AND coalesce(l.qty_expected, 0) > 0 GROUP BY l.sku, l.size) s), '[]'::json) AS shipped,
+           coalesce((SELECT json_agg(json_build_object('sku', r.sku, 'size', r.size, 'qty', r.qty, 'name', r.name))
+                       FROM (SELECT i.sku, i.size, max(i.name) AS name, count(*)::int AS qty
+                               FROM items i JOIN batches bt ON bt.id = i.batch_id JOIN buy_log_pos x ON x.po_id = bt.po_id
+                              WHERE x.buy_id = b.id GROUP BY i.sku, i.size) r), '[]'::json) AS received
+      FROM buy_logs b
+     WHERE (${supplierUserId}::bigint IS NULL OR b.supplier_user_id = ${supplierUserId}::bigint)
+       AND (${id}::bigint IS NULL OR b.id = ${id}::bigint)
+       AND (${from}::date IS NULL OR coalesce(b.ordered_on, (b.created_at AT TIME ZONE 'America/New_York')::date) >= ${from}::date)
+       AND (${to}::date IS NULL OR coalesce(b.ordered_on, (b.created_at AT TIME ZONE 'America/New_York')::date) <= ${to}::date)
+       AND (${like}::text IS NULL
+            OR upper(coalesce(b.order_number, '')) LIKE ${like} OR upper(coalesce(b.store, '')) LIKE ${like}
+            OR upper(b.supplier_name) LIKE ${like} OR ('BL-' || b.id) = ${term.toUpperCase()}
+            OR EXISTS (SELECT 1 FROM unnest(b.tracking_numbers) t WHERE upper(t) LIKE ${like})
+            OR EXISTS (SELECT 1 FROM buy_log_lines l WHERE l.buy_id = b.id
+                        AND (upper(coalesce(l.name, '')) LIKE ${like}
+                             OR (${bare}::text <> '%%' AND upper(regexp_replace(l.sku, '[^A-Za-z0-9]', '', 'g')) LIKE ${bare}))))
+     ORDER BY coalesce(b.ordered_on, (b.created_at AT TIME ZONE 'America/New_York')::date) DESC, b.id DESC
+     LIMIT ${limit}`;
+}
+
+// Create or update the order and its lines. A line keeps WHO typed it unless its SKU, size,
+// pairs or cost changed — then it is the person who changed it.
+export async function saveBuyLog({ id = null, supplierUserId, supplierName, store, orderNumber, orderedOn, tracking = [], note, lines = [] }, actor) {
+  const sql = db();
+  let buyId = id;
+  if (!buyId) {
+    const r = await sql`
+      INSERT INTO buy_logs (supplier_user_id, supplier_name, store, order_number, ordered_on, tracking_numbers, note, created_by, updated_by)
+      VALUES (${supplierUserId}, ${supplierName}, ${store || null}, ${orderNumber || null}, ${orderedOn || null}::date, ${tracking}::text[], ${note || null}, ${actor}, ${actor})
+      RETURNING id`;
+    buyId = Number(r[0].id);
+  } else {
+    const r = await sql`
+      UPDATE buy_logs SET store = ${store || null}, order_number = ${orderNumber || null}, ordered_on = ${orderedOn || null}::date,
+             tracking_numbers = ${tracking}::text[], note = ${note || null}, updated_by = ${actor}, updated_at = now()
+       WHERE id = ${buyId} RETURNING id`;
+    if (!r[0]) return null;
+  }
+  const json = JSON.stringify(lines.map((l) => ({ id: l.id || null, sku: l.sku, name: l.name || null, size: l.size || null, qty: l.qty, unit_cost: l.unit_cost })));
+  const keep = lines.map((l) => Number(l.id)).filter((n) => n > 0);
+  await sql.transaction([
+    sql`DELETE FROM buy_log_lines WHERE buy_id = ${buyId} AND NOT (id = ANY(${keep}::bigint[]))`,
+    sql`UPDATE buy_log_lines l
+           SET entered_by = CASE WHEN (l.sku, coalesce(l.size, ''), l.qty, l.unit_cost) IS DISTINCT FROM (x.sku, coalesce(x.size, ''), x.qty, x.unit_cost) THEN ${actor} ELSE l.entered_by END,
+               sku = x.sku, name = coalesce(x.name, l.name), size = x.size, qty = x.qty, unit_cost = x.unit_cost
+          FROM jsonb_to_recordset(${json}::jsonb) AS x(id bigint, sku text, name text, size text, qty int, unit_cost numeric)
+         WHERE l.id = x.id AND l.buy_id = ${buyId}`,
+    sql`INSERT INTO buy_log_lines (buy_id, sku, name, size, qty, unit_cost, entered_by)
+        SELECT ${buyId}, x.sku, x.name, x.size, x.qty, x.unit_cost, ${actor}
+          FROM jsonb_to_recordset(${json}::jsonb) AS x(id bigint, sku text, name text, size text, qty int, unit_cost numeric)
+         WHERE x.id IS NULL`,
+  ]);
+  return buyId;
+}
+export async function getBuyLogOwner(id) {
+  const r = await db()`SELECT b.id, b.supplier_user_id, b.supplier_name,
+                              (SELECT count(*) FROM buy_log_payments p WHERE p.buy_id = b.id)::int AS payments,
+                              (SELECT count(*) FROM buy_log_pos x WHERE x.buy_id = b.id)::int AS pos
+                         FROM buy_logs b WHERE b.id = ${id}`;
+  return r[0] ? { ...r[0], id: Number(r[0].id), supplier_user_id: r[0].supplier_user_id == null ? null : Number(r[0].supplier_user_id) } : null;
+}
+export async function deleteBuyLog(id) {
+  const r = await db()`DELETE FROM buy_logs WHERE id = ${id} RETURNING id`;
+  return r.length > 0;
+}
+export async function addBuyLogPayment(buyId, { paidOn, amount, method, paidBy, note }, actor) {
+  const sql = db();
+  const r = await sql`INSERT INTO buy_log_payments (buy_id, paid_on, amount, method, paid_by, note, created_by)
+                      VALUES (${buyId}, ${paidOn}::date, ${amount}, ${method || null}, ${paidBy || null}, ${note || null}, ${actor}) RETURNING id`;
+  await sql`UPDATE buy_logs SET updated_by = ${actor}, updated_at = now() WHERE id = ${buyId}`;
+  return Number(r[0].id);
+}
+export async function deleteBuyLogPayment(buyId, paymentId, actor) {
+  const sql = db();
+  const r = await sql`DELETE FROM buy_log_payments WHERE id = ${paymentId} AND buy_id = ${buyId} RETURNING id`;
+  if (r.length) await sql`UPDATE buy_logs SET updated_by = ${actor}, updated_at = now() WHERE id = ${buyId}`;
+  return r.length > 0;
+}
+// The supplier's own purchase orders — what an order can be linked to. Matched by the
+// account, or by the name on the PO when it was opened for them by staff.
+export async function listPosForBuyLog({ supplierUserId = null, supplierName = '' }) {
+  return await db()`
+    SELECT o.id AS po_id, o.po_code, o.status, o.tag_code, to_char(coalesce(o.date_of_purchase, (o.created_at AT TIME ZONE 'America/New_York')::date), 'YYYY-MM-DD') AS day,
+           (SELECT coalesce(sum(l.qty_expected), 0) FROM po_lines l WHERE l.po_id = o.id)::int AS pairs
+      FROM purchase_orders o
+     WHERE o.order_kind = 'shoes'
+       AND ((${supplierUserId}::bigint IS NOT NULL AND o.supplier_user_id = ${supplierUserId}::bigint)
+            OR lower(o.supplier_name) = lower(${supplierName}))
+     ORDER BY o.id DESC LIMIT 200`;
+}
+export async function linkBuyLogPo(buyId, poId, actor) {
+  const sql = db();
+  await sql`INSERT INTO buy_log_pos (buy_id, po_id, linked_by) VALUES (${buyId}, ${poId}, ${actor}) ON CONFLICT DO NOTHING`;
+  await sql`UPDATE buy_logs SET updated_by = ${actor}, updated_at = now() WHERE id = ${buyId}`;
+}
+export async function unlinkBuyLogPo(buyId, poId, actor) {
+  const sql = db();
+  const r = await sql`DELETE FROM buy_log_pos WHERE buy_id = ${buyId} AND po_id = ${poId} RETURNING po_id`;
+  if (r.length) await sql`UPDATE buy_logs SET updated_by = ${actor}, updated_at = now() WHERE id = ${buyId}`;
+  return r.length > 0;
+}
+// Who a staff member can open an order for: suppliers switched on for the Buy Log.
+export async function listBuyLogSuppliers() {
+  return await db()`SELECT id, coalesce(nullif(name, ''), username) AS name FROM users
+                     WHERE role = 'supplier' AND 'log_buys' = ANY(privileges) ORDER BY 2`;
 }

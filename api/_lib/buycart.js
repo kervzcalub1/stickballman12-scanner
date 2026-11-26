@@ -44,6 +44,9 @@ export const PRIVILEGES = [
   { key: 'issue_gift_cards', label: 'Issue gift cards' },
   { key: 'audit_buying', label: 'Audit + close transactions' },
   { key: 'request_buying', label: 'Raise buying requests' },
+  // The supplier's own Buy Log (docs/context/buy-log.md, 2026-11-26): declare what they bought
+  // from a store that gives no receipt. No funds move through it, so it is theirs to hold.
+  { key: 'log_buys', label: 'Keep a buy log' },
   // Store orders (docs/store-orders-plan.md §4.6): Kevin is ph_team and does this on top.
   // Not a buying-request duty — just the same "permission on top of a job" model.
   { key: 'audit_po', label: 'Audit store orders' },
@@ -60,7 +63,7 @@ export const PRIVILEGES = [
 export const ADMIN_LEVEL_PRIVILEGES = ['manage_access', 'connect_integrations'];
 export const PRIVILEGE_KEYS = PRIVILEGES.map((p) => p.key);
 // What a supplier may hold — everything else is stripped (setUserPrivileges, db:setup).
-export const BUYER_PRIVILEGE_KEYS = ['request_buying'];
+export const BUYER_PRIVILEGE_KEYS = ['request_buying', 'log_buys'];
 
 /**
  * Does this account hold a privilege, RIGHT NOW?

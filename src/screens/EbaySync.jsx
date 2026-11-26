@@ -41,7 +41,7 @@ const LIVE_EFFECT = {
   price: 'We will send prices to eBay (listings with a price lock or one of our own reprices keep their price).',
   content: 'We will change titles, descriptions, photos and sizes on live eBay listings.',
   create: 'We will put new Shopify shoes on eBay as real listings.',
-  end: 'We will end eBay listings when the shoe is gone from Shopify.',
+  end: 'We will end eBay listings when the shoe is gone from Shopify. A duplicate listing (same SKU as another listing) that has to be held at 0 on every size will also end.',
 };
 
 const useNarrow = () => {
@@ -175,7 +175,35 @@ const sizesText = (s) => (Array.isArray(s) ? s.join(', ') : s == null ? '' : Str
 // ---------- Overview ----------
 const COUNT_WORDS = { no_shopify: 'Not in Shopify', linked: 'Sizes linked', queue: 'Waiting to send' };
 
-function Overview({ st, canEdit, onRun, busy }) {
+// "eBay has more than Shopify": the oversell risk in one line, with what the sync is doing about duplicates.
+const OVER_WORDS = [['stock', 'eBay is simply higher'], ['duplicate', 'Same SKU on more than one listing'], ['no_shopify', 'SKU not in Shopify'], ['no_sku', 'No Custom label']];
+function OversellCard({ o, stockMode, onSee }) {
+  if (!o) return null;
+  const over = o.sizes > 0;
+  const need = o.dup_need_person || [];
+  return (
+    <div className={`card esy-over${over ? ' on' : ''}`} data-oversell={over ? 'over' : 'ok'}>
+      <div className="esy-head">
+        <h3 className="er-step-title">eBay has more than Shopify?</h3>
+        {over && <button type="button" className="btn ghost sm" onClick={onSee}>See the sizes</button>}
+      </div>
+      {over ? (
+        <>
+          <p className="esy-over-line" role="status"><b>{fmt(o.pairs)}</b> pair{o.pairs === 1 ? '' : 's'} more on eBay than in Shopify <span className="muted">· {fmt(o.sizes)} size{o.sizes === 1 ? '' : 's'} on {fmt(o.listings)} listing{o.listings === 1 ? '' : 's'}</span></p>
+          <ul className="esy-list esy-over-why">
+            {OVER_WORDS.filter(([k]) => o.by?.[k] > 0).map(([k, label]) => <li key={k} data-over-why={k}><b>{fmt(o.by[k])}</b> {label}</li>)}
+          </ul>
+        </>
+      ) : <p className="esy-over-line" role="status"><span className="ebl-ok">✓ No.</span> No size on eBay offers more pairs than Shopify holds.</p>}
+      {o.dup_shared > 0 && <p className="muted sm" data-dup-shared>{fmt(o.dup_shared)} SKU{o.dup_shared === 1 ? ' is' : 's are'} on more than one listing. {stockMode === 'live' ? 'They share Shopify’s number: one listing keeps it, the others are held at 0.' : 'Once Stock is Live they share Shopify’s number: one listing keeps it, the others are held at 0.'}</p>}
+      {need.length > 0 && <p className="warn-text sm" data-dup-person>Needs a person: {need.map((id) => `#${id}`).join(', ')}. Holding {need.length === 1 ? 'this duplicate listing' : 'these duplicate listings'} at 0 would end {need.length === 1 ? 'it' : 'them'}, and End listings is not Live. End the extra listing by hand (Shopify Products → Needs Attention).</p>}
+      {o.no_sku_sizes > 0 && <p className="muted sm" data-no-sku>{fmt(o.no_sku_sizes)} eBay size{o.no_sku_sizes === 1 ? ' has' : 's have'} no Custom label, so {o.no_sku_sizes === 1 ? 'it' : 'they'} cannot be matched to Shopify.</p>}
+      <p className="muted xs">Counted from the last full check{o.checkedAt ? ` (${when(o.checkedAt)})` : ''} and every stock change since.</p>
+    </div>
+  );
+}
+
+function Overview({ st, canEdit, onRun, busy, onSeeOver }) {
   const sw = st.settings?.switches || {};
   const passes = st.passes || {};
   const handover = st.handover || [];
@@ -184,6 +212,7 @@ function Overview({ st, canEdit, onRun, busy }) {
   const b = st.budget;
   return (
     <>
+      <OversellCard o={st.oversell} stockMode={sw.stock} onSee={onSeeOver} />
       <div className="card">
         <h3 className="er-step-title">Who is writing what today</h3>
         <p className="muted sm">Two systems writing the same thing fight each other, so each part has its own switch. DPL keeps running until a part is proven.</p>
@@ -598,17 +627,18 @@ function ListingsTab({ narrow, onSignOut, onTab }) {
         <div className="muted xs ebl-meta">{r.view_url ? <a className="ebl-link" href={r.view_url} target="_blank" rel="noreferrer">#{r.item_id} ↗</a> : <span>#{r.item_id}</span>}</div></div>) },
     { h: 'SKU', cell: (r) => <span className="ebl-sku">{r.sku || '—'}</span> },
     { h: 'Size', cell: (r) => r.size || '' },
-    { h: 'Qty eBay / Shopify', cell: (r) => <span className={r.ebay_qty !== r.shopify_qty ? 'warn-text' : ''}>{r.ebay_qty ?? '—'} / {r.shopify_qty ?? '—'}</span> },
+    { h: 'Qty eBay / Shopify', cell: (r) => <span className={r.ebay_qty !== r.shopify_qty ? 'warn-text' : ''}>{r.ebay_qty ?? '—'} / {r.shopify_qty ?? '—'}{r.over && <span className="esy-over-tag" data-over>eBay has more</span>}</span> },
     { h: 'Price eBay / Shopify', cell: (r) => <span className={Number(r.ebay_price) !== Number(r.shopify_price) ? 'warn-text' : ''}>{money(r.ebay_price)} / {money(r.shopify_price)}</span> },
     { h: 'Price rule', cell: (r) => ruleWords(r.price_rule) },
-    { h: 'State', cell: (r) => (r.state ? <span>{human(r.state)}{r.drift_since ? <span className="muted xs"> · since {when(r.drift_since)}</span> : ''}</span> : '') },
+    { h: 'State', cell: (r) => (r.state ? <span>{r.state === 'duplicate' ? 'Duplicate: SKU on more than one listing' : r.state === 'no_shopify' && !r.sku ? 'No Custom label' : human(r.state)}{r.drift_since ? <span className="muted xs"> · since {when(r.drift_since)}</span> : ''}</span> : '') },
   ];
   return (
     <div className="card">
       <div className="esy-filters">
-        <SubTabs items={[['all', 'All'], ['qty_drift', 'Stock differs'], ['price_kept', 'Price kept'], ['price_drift', 'Price differs'], ['no_shopify', 'Not in Shopify']]} value={f} onChange={setF} counts={tabs} />
+        <SubTabs items={[['all', 'All'], ['over', 'More than Shopify'], ['qty_drift', 'Stock differs'], ['price_kept', 'Price kept'], ['price_drift', 'Price differs'], ['no_shopify', 'Not in Shopify']]} value={f} onChange={setF} counts={tabs} />
         <SearchBox value={q} onChange={setQ} placeholder="Search title, SKU or item #" />
       </div>
+      {f === 'over' && <p className="sm" data-link-note="over">These sizes offer more pairs on eBay than Shopify holds, so a pair could be sold twice. A SKU on two listings is counted across both; a SKU that is not in Shopify, or a size with no Custom label, counts as 0 in Shopify.</p>}
       {f === 'no_shopify' && <p className="sm" data-link-note="end">Ending these is done in the <a className="ebl-link" href={`${ebayPage}?tab=orphans`} onClick={jump('orphans')}>Not in Shopify — end</a> tab.</p>}
       {f === 'price_kept' && <p className="sm" data-link-note="reprice">Repricing is done in the <a className="ebl-link" href={`${ebayPage}?tab=reprice`} onClick={jump('reprice')}>Reprice</a> tab.</p>}
       <p className="muted sm">Each row is one size. “Kept” means a lock, a reprice or a price set on eBay holds it; “Follows Shopify” means the Shopify price goes to eBay once Price is live.</p>
@@ -884,7 +914,7 @@ export function EbaySync({ user, onTab, onSignOut }) {
       </div>
 
       {!st && !err && <p className="muted mt">Loading…</p>}
-      {st && tab === 'overview' && <Overview st={st} canEdit={canEdit} onRun={run} busy={busy} />}
+      {st && tab === 'overview' && <Overview st={st} canEdit={canEdit} onRun={run} busy={busy} onSeeOver={() => { writeParam('sf', 'over'); setTab('listings'); }} />}
       {st && tab === 'products' && <ProductsTab st={st} canEdit={canEdit} narrow={narrow} onSignOut={onSignOut} />}
       {st && tab === 'listings' && <ListingsTab narrow={narrow} onSignOut={onSignOut} onTab={onTab} />}
       {st && tab === 'inventory' && <InventoryTab narrow={narrow} onSignOut={onSignOut} />}

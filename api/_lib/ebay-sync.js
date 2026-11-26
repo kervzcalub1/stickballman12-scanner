@@ -19,7 +19,7 @@ import {
   ebaySyncProductsToVerify, ebaySyncProductsToAdd, ebaySyncProductsToCheck, ebaySyncProductTabs, ebaySyncListingTabs, ebaySyncFacts, ebaySyncLinkCount,
   ebayLockedItemIds, logEbayEnd, dbConfigured, ebaySyncCreatedItemIds,
   ebaySyncOverridesOf, ebaySyncOverridesAll, ebaySyncOverrideSave, ebaySyncOverrideDelete, ebaySyncProductForceRecheck, ebaySyncDupListings, ebaySyncDropLinks,
-  productPhotosForSku,
+  productPhotosForSku, ebaySyncLinksBySkuAll, ebaySyncOversell,
 } from './db.js';
 import {
   ebayConfigured, ebayStatus, fetchActiveListings, fetchEbayItemContent, verifyAddFixedPriceItem, addFixedPriceItem, reviseFixedPriceItem,
@@ -33,7 +33,7 @@ import { styleFromTitle } from '../../src/lib/ebayReprice.js';
 import {
   SWITCHES, normalizeSettings, canWrite, writesAllowed, buildLinks, decideLink, driftSince, driftPersists, blastCheck, readGuard, buildListing, precheck,
   translateEbayErrors, contentDiff, productKey, handoverChecklist, endsByZero, manualWriteBlock, normalizeOverride, validateOverride, overrideKey,
-  shorterTitle, defaultEbayDescription, TITLE_MAX,
+  shorterTitle, defaultEbayDescription, TITLE_MAX, planDuplicates, dupTargets, applyDupPlan, oversellOf, overSummary, oversellWords, hashOf,
 } from '../../src/lib/ebaySync.js';
 
 export const SETTINGS_KEY = 'ebay_sync';
@@ -68,7 +68,7 @@ export const IO = {
   db: {
     logAdd: ebaySyncLogAdd, loggedRecently: ebaySyncLoggedRecently, liveToday: ebaySyncLiveToday, liveCount: ebaySyncLiveCount, listingCount: ebaySyncListingCount,
     claimQueue: ebaySyncClaimQueue, queueDone: ebaySyncQueueDone,
-    linkPrev: ebaySyncLinkPrev, replaceLinks: ebaySyncReplaceLinks, linksBySku: ebaySyncLinksBySku, setLinkQty: ebaySyncSetLinkQty, linksByItem: ebaySyncLinksByItem,
+    linkPrev: ebaySyncLinkPrev, replaceLinks: ebaySyncReplaceLinks, linksBySku: ebaySyncLinksBySku, linksBySkuAll: ebaySyncLinksBySkuAll, setLinkQty: ebaySyncSetLinkQty, linksByItem: ebaySyncLinksByItem,
     itemsOfProducts: ebaySyncItemsOfProducts, ebaySkus: ebaySyncEbaySkus, productPrev: ebaySyncProductPrev, upsertProducts: ebaySyncUpsertProducts,
     patchProduct: ebaySyncPatchProduct, linkCount: ebaySyncLinkCount, createdItemIds: ebaySyncCreatedItemIds, productTabs: ebaySyncProductTabs, endedByApp: ebaySyncEndedByApp,
     toVerify: ebaySyncProductsToVerify, toAdd: ebaySyncProductsToAdd, toCheck: ebaySyncProductsToCheck, prune: ebaySyncLogPrune, moveItemId: ebaySyncMoveItemId,
@@ -193,9 +193,12 @@ async function createdLiveSet(ctx) {
   return new Set(ctx.io.db.createdItemIds ? await ctx.io.db.createdItemIds() : []);
 }
 // changes: [{ link, qty }]. Sliding-window blast check, a shadow row or the live writes in chunks.
+// A change marked `dup` is one listing's share of a SKU that is on several listings ({ link, qty, dup, shopQty }).
 async function pushStock(ctx, changes, total, listingTotal, createdOnly = false) {
   const { io } = ctx;
   if (!changes.length || ctx.settings.switches.stock === 'off') return { sent: 0 };
+  // Lowering goes out before raising, so a SKU shared by two listings is never above Shopify in between.
+  if (changes.some((c) => c.dup)) changes = [...changes].sort((a, b) => (a.qty - (Number(a.link.ebay_qty) || 0)) - (b.qty - (Number(b.link.ebay_qty) || 0)));
   if (!createdOnly && !(await liveNow(ctx, 'stock'))) {
     const mine = await createdLiveSet(ctx);
     const ours = changes.filter((c) => mine.has(c.link.item_id));
@@ -207,8 +210,24 @@ async function pushStock(ctx, changes, total, listingTotal, createdOnly = false)
   }
   const byItem = new Map();
   for (const itemId of new Set(changes.map((c) => c.link.item_id))) byItem.set(itemId, await io.db.linksByItem(itemId));
-  const ends = endsByZero(changes, (id) => byItem.get(id));
+  let ends = endsByZero(changes, (id) => byItem.get(id));
   const live = createdOnly || await liveNow(ctx, 'stock');
+  // Holding a duplicate at 0 while Shopify still has the pairs can END that listing (nothing left to sell on it).
+  // That is an end WE chose, not an empty shelf, so it needs the End switch live. Otherwise those sizes are left
+  // as they are, the intent is logged once a day, and the listing is reported as needing a person.
+  let dupEnds = ends.filter((id) => changes.some((c) => c.link.item_id === id && c.dup && c.shopQty > 0));
+  const held = [];
+  if (live && dupEnds.length && !(await liveNow(ctx, 'end'))) {
+    for (const itemId of dupEnds) {
+      await shadowOrDo(ctx, 'end', { action: 'end_duplicate_by_zero', itemId, once: true, before: { title: byItem.get(itemId)[0]?.title },
+        after: { why: 'this duplicate listing would be held at 0 on every size, which ends it on eBay; End listings is not Live, so it was left as it is', skus: changes.filter((c) => c.link.item_id === itemId && c.dup).map((c) => c.link.sku) } });
+      held.push(itemId);
+    }
+    changes = changes.filter((c) => !(c.dup && held.includes(c.link.item_id)));
+    ends = endsByZero(changes, (id) => byItem.get(id));
+    dupEnds = [];
+    if (!changes.length) return { sent: 0, held, done: new Map() };
+  }
   if (!live) {
     const blast = blastCheck({ changes: changes.length, total, blastPct: ctx.settings.blastPct });
     await shadowOrDo(ctx, 'stock', { action: 'set_qty', after: { count: changes.length, blast, sample: changes.slice(0, 10).map((c) => ({ item: c.link.item_id, sku: c.link.sku, from: c.link.ebay_qty, to: c.qty })) } });
@@ -220,11 +239,12 @@ async function pushStock(ctx, changes, total, listingTotal, createdOnly = false)
   if (blast.stop || endBlast?.stop) {
     const b = blast.stop ? blast : endBlast;
     await blockWith(ctx, blast.stop ? 'stock' : 'end', b, 'eBay Sync stopped: stock', `Stock would change on ${changes.length} sizes${ends.length ? ` and end ${ends.length} listings` : ''} (${b.pct}% of ${b.total} in the last hour; the limit is ${b.blastPct}%). Nothing was sent.`);
-    return { sent: 0, blocked: b };
+    return { sent: 0, blocked: b, held };
   }
   await ensureBudget(io, 'write');
   const by = new Map(changes.map((c) => [c.link.link_key, c]));
   const ok = new Set();
+  const failed = [];
   let sent = 0;
   for (let i = 0; i < changes.length; i += CHUNK) {
     if (createdOnly ? !(await createdLiveSet(ctx)).size : !(await liveNow(ctx, 'stock'))) break;   // the kill switch was pressed while this pass was running
@@ -234,14 +254,26 @@ async function pushStock(ctx, changes, total, listingTotal, createdOnly = false)
       if (r.ok) { sent++; ok.add(r.key); await io.db.setLinkQty(c.link.link_key, c.qty).catch(() => {}); }
       await io.db.logAdd({ domain: 'stock', action: 'set_qty', mode: 'live', itemId: c.link.item_id, sku: c.link.sku, before: { qty: c.link.ebay_qty }, after: { qty: c.qty }, ok: !!r.ok, error: r.error || null, by: ctx.by });
       if (r.auth) await io.alert(`auth:${dayKey(io.now())}`, 'eBay Sync lost its eBay connection', 'eBay refused a stock change as not authorised. An admin presses Connect eBay again.');
+      else if (!r.ok) failed.push({ c, error: r.error || 'eBay refused it' });
     }
+  }
+  // A stock change eBay refused: someone is told (one message an hour at most), because a refused LOWERING leaves
+  // eBay offering pairs Shopify no longer has.
+  if (failed.length) {
+    const lower = failed.filter((f) => f.c.qty < (Number(f.c.link.ebay_qty) || 0));
+    const line = (f) => `#${f.c.link.item_id} SKU ${f.c.link.sku || '?'} (eBay ${f.c.link.ebay_qty ?? '?'}, should be ${f.c.qty}): ${String(f.error).slice(0, 140)}`;
+    await io.alert(`stockfail:${new Date(io.now()).toISOString().slice(0, 13)}`, 'eBay Sync: a stock change failed',
+      `${failed.length} stock change${failed.length === 1 ? '' : 's'} to eBay did not go through${lower.length ? `; ${lower.length} of them ${lower.length === 1 ? 'was' : 'were'} lowering a quantity, so eBay may be offering pairs Shopify does not have` : ''}. ${(lower.length ? lower : failed).slice(0, 5).map(line).join(' · ')}. The next check tries again; if it keeps failing, lower it on eBay by hand.`);
   }
   // A push that took the last size of a listing to 0 ended it (out-of-stock control is off): same effect as an end.
   for (const itemId of ends) {
     if (byItem.get(itemId).some((l) => by.has(l.link_key) && !ok.has(l.link_key))) continue;
-    await io.db.logAdd({ domain: 'end', action: 'end_listing', mode: 'live', itemId, before: { title: byItem.get(itemId)[0]?.title }, after: { via: 'stock set to 0 on every size; eBay ends the listing' }, by: ctx.by });
+    const dupEnd = dupEnds.includes(itemId);
+    await io.db.logAdd({ domain: 'end', action: 'end_listing', mode: 'live', itemId, before: { title: byItem.get(itemId)[0]?.title }, after: { via: dupEnd ? 'duplicate listing held at 0 on every size (another listing keeps the stock); eBay ends the listing' : 'stock set to 0 on every size; eBay ends the listing' }, by: ctx.by });
+    // An end we chose goes in the ends log too, so the create pass never relists the duplicate.
+    if (dupEnd) await io.write.logEbayEnd({ itemId, title: byItem.get(itemId)[0]?.title, skus: byItem.get(itemId).map((l) => l.sku).filter(Boolean).join(' '), reason: 'Duplicate: another listing keeps the stock, this one was held at 0 and eBay ended it', ok: true, error: null, by: 'eBay Sync' });
   }
-  return { sent, endedByZero: ends.length };
+  return { sent, endedByZero: ends.length, held, done: new Map([...ok].map((k) => [k, by.get(k).qty])) };
 }
 
 async function pushPrice(ctx, changes, total) {
@@ -368,13 +400,20 @@ export async function reconcilePass(ctx) {
   const [locked, edited, prev] = await Promise.all([io.lockedItemIds(itemIds), io.repricedKeys(), io.db.linkPrev()]);
   const prevBy = new Map(prev.map((p) => [p.link_key, p]));
   const decided = raw.map((l) => decideLink(l, { shopifyComplete: true, lockedItems: locked, editedKeys: edited, uplift: profile.uplift || 0, prev: prevBy.get(l.link_key) || null }));
-  const links = decided.map((d) => {
+  // One SKU on several listings: they share Shopify's quantity (one keeps it, the others are held), never each the full number.
+  const dupPlan = planDuplicates(decided);
+  const planned = applyDupPlan(decided, dupPlan);
+  const overNow = new Set(oversellOf(planned).rows.map((r) => r.link_key));
+  const links = planned.map((d) => {
     const p = prevBy.get(d.link_key);
-    return { ...d, qty_drift_since: driftSince(p?.qty_drift_since, d.stock?.action === 'set', now), price_drift_since: driftSince(p?.price_drift_since, d.price?.action === 'set', now) };
+    return { ...d, qty_drift_since: driftSince(p?.qty_drift_since, d.stock?.action === 'set' || overNow.has(d.link_key), now), price_drift_since: driftSince(p?.price_drift_since, d.price?.action === 'set', now) };
   });
 
-  // What to send: only drift seen on an earlier pass too (DPL usually fixes within minutes).
-  let stockChanges = links.filter((l) => l.stock?.action === 'set' && driftPersists(l.qty_drift_since, now, SETTLE_MIN)).map((l) => ({ link: l, qty: l.stock.target }));
+  // What to send. LOWERING a quantity goes at once (eBay offering a pair Shopify no longer has is the oversell);
+  // RAISING one waits until the difference was seen on an earlier pass too (an eBay sale lowers eBay minutes
+  // before its order reaches Shopify, and DPL usually fixes the rest within minutes).
+  let stockChanges = links.filter((l) => l.stock?.action === 'set' && (l.stock.target < (Number(l.ebay_qty) || 0) || driftPersists(l.qty_drift_since, now, SETTLE_MIN)))
+    .map((l) => ({ link: l, qty: l.stock.target, ...(l.stock.dup ? { dup: true, shopQty: Math.max(0, Number(l.shopify_qty) || 0) } : {}) }));
   // Only a size that really follows Shopify is ever repriced; lock / repriced / manual sizes have price.action 'none' or a kept rule.
   const priceChanges = links.filter((l) => l.price?.action === 'set' && l.price_rule === 'follows_shopify' && driftPersists(l.price_drift_since, now, SETTLE_MIN)).map((l) => ({ link: l, price: l.price.target }));
   const onEbay = links.filter((l) => l.item_id).length;
@@ -423,18 +462,35 @@ export async function reconcilePass(ctx) {
   if (stockAll || mineSet.size) {
     const verified = [];
     const dry = stockAll ? [] : stockChanges.filter((c) => !mineSet.has(c.link.item_id));   // DPL's: untouched, shadow-logged
+    const liveBySku = new Map();
     for (const c of (stockAll ? stockChanges : stockChanges.filter((c) => mineSet.has(c.link.item_id))).slice(0, MAX_LIVE_STOCK_READS)) {
-      const q = await liveQty(io, c.link.sku);
+      if (!liveBySku.has(c.link.sku)) liveBySku.set(c.link.sku, await liveQty(io, c.link.sku));
+      const q = liveBySku.get(c.link.sku);
       if (q == null) continue;                     // no levels / untracked / unreadable: never send 0 from that
-      if (q !== c.link.ebay_qty) verified.push({ link: c.link, qty: q });
+      const to = c.dup ? dupTargets(dupPlan[c.link.sku], q).get(String(c.link.item_id)) : q;   // a shared SKU: this listing's share of the live number
+      if (to != null && to !== c.link.ebay_qty) verified.push({ ...c, qty: to, ...(c.dup ? { shopQty: q } : {}) });
     }
     stockChanges = [...verified, ...dry];
   }
   const stock = await pushStock(ctx, stockChanges, Math.max(1, onEbay), Math.max(1, itemIds.length));
   const price = await pushPrice(ctx, priceChanges, Math.max(1, onEbay));
+  // Still more on eBay than in Shopify after this pass's own corrections, and for longer than the settle time:
+  // someone is told (once a day per distinct set of sizes). In Test mode, or when a write failed, or for a
+  // duplicate / a SKU not in Shopify that the sync may not fix by itself, this is the only thing that says so.
+  const done = stock.done || new Map();
+  const over = oversellOf(links.map((l) => (done.has(l.link_key) ? { ...l, ebay_qty: done.get(l.link_key) } : l)));
+  const stuck = over.rows.filter((r) => driftPersists(r.qty_drift_since, now, SETTLE_MIN));
+  if (stuck.length) {
+    const WHY = { stock: 'eBay is higher', duplicate: 'on more than one listing', no_shopify: 'SKU not in Shopify', no_sku: 'no Custom label' };
+    const s = overSummary(stuck);
+    await io.alert(`over:${dayKey(now)}:${hashOf(stuck.map((r) => r.link_key).sort())}`, 'eBay has more than Shopify',
+      `${oversellWords(s)} It has been so for over ${SETTLE_MIN} minutes. ${stuck.slice(0, 6).map((r) => `#${r.item_id} ${r.sku ? `SKU ${r.sku}` : `size ${r.size || '?'}`}: eBay ${r.offered}, Shopify ${r.have} (${WHY[r.why]})`).join(' · ')}${stuck.length > 6 ? ` · and ${stuck.length - 6} more` : ''}. See eBay Products → More than Shopify.`);
+  }
   await patchState(io, 'reconcile', {
     lastShopifyCount: shop.variants.length, lastEbayRows: ebay.rows.length, lastProductCount: light.products.length, firstAt: st.firstAt || now.toISOString(),
     dupSkus: [...new Set([...dupShopify, ...dupEbay])].slice(0, 500), aborted: null,
+    // The queue pass shares a duplicate SKU's quantity the same way between full checks.
+    dupPlan: Object.fromEntries(Object.entries(dupPlan).slice(0, 500)), dupHeld: (stock.held || []).slice(0, 100),
   });
   io.db.prune?.().catch?.(() => {});
   await io.flushBudget?.();
@@ -458,13 +514,26 @@ export async function queuePass(ctx) {
   const failed = new Set();
   const changes = [];
   if (stockLive) {
+    const dupPlan = (await readState('reconcile', io)).dupPlan || {};
     for (const sku of [...new Set(rows.filter((r) => r.kind === 'sku').map((r) => r.key))]) {
       try {
-        const links = await io.db.linksBySku(sku);
+        // A SKU on several listings: every listing of it, each sent its SHARE of the live number (never the full number to each).
+        const entry = io.db.linksBySkuAll ? dupPlan[sku] : null;
+        const links = entry ? (await io.db.linksBySkuAll(sku)).filter((l) => l.duplicate) : await io.db.linksBySku(sku);
         if (!links.length) continue;
         const qty = await liveQty(io, sku);
         if (qty == null) continue;                  // Shopify can't say: nothing is sent, and nothing is zeroed
-        for (const link of links) if (link.ebay_qty !== qty && (stockAll || mineSet.has(link.item_id))) changes.push({ link, qty });
+        if (entry) {
+          // The plan is from the last full check. If a person ended one of the listings since (fewer than two left, or
+          // the keeper gone), nothing is shared from an old plan: the next full check reads eBay and plans again.
+          if (links.length < 2 || !links.some((l) => String(l.item_id) === String(entry.keep))) continue;
+          const share = dupTargets(entry, qty);
+          for (const link of links) { const to = share.get(String(link.item_id)); if (to != null && link.ebay_qty !== to && (stockAll || mineSet.has(link.item_id))) changes.push({ link, qty: to, dup: true, shopQty: qty }); }
+          continue;
+        }
+        // A size that was already differing at the last full check is sent again even when our stored eBay number
+        // happens to equal Shopify's new one: the stored number may be stale (DPL or a sale moved eBay since).
+        for (const link of links) if ((link.ebay_qty !== qty || link.qty_drift_since) && (stockAll || mineSet.has(link.item_id))) changes.push({ link, qty });
       } catch (e) { failed.add(sku); console.error(`[ebay-sync] queue SKU ${sku}: ${e.message}`); }   // only this SKU's rows stay
     }
     if (changes.length) await pushStock(ctx, changes, total, listingTotal);
@@ -685,10 +754,11 @@ export async function buildStatus(io = IO) {
   const passes = {};
   for (const p of PASSES) { const s = await readState(p, io); passes[p] = { at: s.at || null, ok: s.ok ?? null, note: s.note || '', running: running.has(p), ...(p === 'reconcile' ? { aborted: s.aborted || null } : {}) }; }
   const rec = await readState('reconcile', io);
-  const [products, listings, facts, queue, contentLive, createLive, budget] = await Promise.all([
+  const [products, listings, facts, queue, contentLive, createLive, budget, over] = await Promise.all([
     ebaySyncProductTabs(), ebaySyncListingTabs(), ebaySyncFacts(), ebaySyncQueueCount(),
-    ebaySyncLiveDone('content', 'revise'), ebaySyncLiveDone('create', 'add'), tradingUsage(),
+    ebaySyncLiveDone('content', 'revise'), ebaySyncLiveDone('create', 'add'), tradingUsage(), ebaySyncOversell(),
   ]);
+  const by = { stock: over.stock, duplicate: over.duplicate, no_shopify: over.no_shopify, no_sku: over.no_sku };
   const ctxCreated = settings.kill || settings.switches.stock === 'off' || !writesAllowed() ? 0 : (await ebaySyncCreatedItemIds().catch(() => [])).length;
   const ebay = await ebayStatus().catch(() => ({}));
   const observedDays = rec.firstAt ? Math.floor((io.now().getTime() - new Date(rec.firstAt).getTime()) / 86400_000) : 0;
@@ -697,6 +767,9 @@ export async function buildStatus(io = IO) {
     writes_enabled: writesAllowed(),
     counts: { created_stock_live: ctxCreated, products, listings, queue, linked: facts.linked, duplicates: facts.duplicates, no_shopify: facts.no_shopify, needs_attention: facts.needs_attention },
     ebay: { connected: !!ebay.connected, user: ebay.user || null },
+    // "eBay has more than Shopify" (docs/context/ebay-sync.md "Oversell guard"): one count, said in words, and what the guard is doing about duplicates.
+    oversell: { sizes: over.sizes, listings: over.listings, pairs: over.pairs, by, words: oversellWords({ ...over, by }), checkedAt: passes.reconcile?.at || null,
+      no_sku_sizes: over.no_sku_all, dup_shared: Object.keys(rec.dupPlan || {}).length, dup_need_person: rec.dupHeld || [] },
     facts: { ...facts, contentLive, createLive, observedDays },
     handover: handoverChecklist({ observedDays, qtyDrift: facts.qty_drift, priceDrift: facts.price_drift, contentLive, createLive }),
   };

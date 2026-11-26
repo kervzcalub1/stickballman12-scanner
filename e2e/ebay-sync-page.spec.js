@@ -96,6 +96,36 @@ test.describe('eBay Sync page', () => {
     await expect(page.getByText('Title is 87 characters, eBay allows 80.')).toBeVisible();
   });
 
+  test('Overview: "eBay has more than Shopify?" says No in green, or the pairs, why, and who must act; See the sizes opens the filter', async ({ page }) => {
+    const clean = baseStatus();
+    clean.oversell = { sizes: 0, listings: 0, pairs: 0, by: { stock: 0, duplicate: 0, no_shopify: 0, no_sku: 0 }, words: null, checkedAt: '2026-11-08T14:30:00Z', no_sku_sizes: 0, dup_shared: 0, dup_need_person: [] };
+    await mock(page, { status: clean });
+    await loginAs(page, 'ph_team');
+    await page.goto('/ph/ebay-listings?tab=sync');
+    await expect(page.locator('[data-oversell="ok"]')).toContainText('No size on eBay offers more pairs than Shopify holds.');
+    await expect(page.getByRole('button', { name: 'See the sizes' })).toHaveCount(0);
+
+    const risky = baseStatus();
+    risky.settings.switches.stock = 'live';
+    risky.oversell = { sizes: 4, listings: 3, pairs: 5, by: { stock: 1, duplicate: 2, no_shopify: 1, no_sku: 0 }, words: 'x', checkedAt: '2026-11-08T14:30:00Z', no_sku_sizes: 2, dup_shared: 13, dup_need_person: ['327456395357'] };
+    await mock(page, { status: risky });
+    await page.reload();
+    const card = page.locator('[data-oversell="over"]');
+    await expect(card).toContainText('5 pairs more on eBay than in Shopify');
+    await expect(card).toContainText('4 sizes on 3 listings');
+    await expect(card.locator('[data-over-why="duplicate"]')).toContainText('2 Same SKU on more than one listing');
+    await expect(card.locator('[data-over-why="no_sku"]')).toHaveCount(0);
+    await expect(card.locator('[data-dup-shared]')).toContainText('13 SKUs are on more than one listing. They share Shopify’s number');
+    await expect(card.locator('[data-dup-person]')).toContainText('#327456395357');
+    await expect(card.locator('[data-no-sku]')).toContainText('2 eBay sizes have no Custom label');
+    await expect(card).toContainText('EST');
+    await card.getByRole('button', { name: 'See the sizes' }).click();
+    await expect(page).toHaveURL(/sync=listings/);
+    await expect(page).toHaveURL(/sf=over/);
+    await expect(page.locator('[data-link-note="over"]')).toContainText('a pair could be sold twice');
+    await expect(page.getByRole('button', { name: /More than Shopify/ })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   test('other tabs load with their words', async ({ page }) => {
     await mock(page);
     await loginAs(page, 'ph_team');

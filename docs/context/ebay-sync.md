@@ -14,7 +14,7 @@ listings, ending**. **Orders are NOT part of it: DPL keeps handling eBay orders.
   stock / price / end), `content` 30 min (40 `GetItem` rolling), `create` 30 min (precheck + `VerifyAddFixedPriceItem`, live add
   capped 25 a day; a product must be missing from eBay for 60 min first so DPL's own upload wins).
 - **Safety**: the reconcile aborts (alert, nothing touched) if the Shopify read errors / is truncated / shrank >10 %, or the eBay read
-  shrank >10 %. Drift counts only after it persisted 10 min (across passes). Blast limit stops a live stock / price / end / content batch
+  shrank >10 %. Drift counts only after it persisted 10 min (across passes); since 2026-11-26 that wait is for RAISING only, a lowering goes at once (see "Oversell guard"). Blast limit stops a live stock / price / end / content batch
   and alerts (`ebay_sync` event). Trading budget per eBay day (08:00 UTC): sync reads stop at 3,000, writes at 4,500; other tools are
   counted but never blocked.
 - **Price**: a size with an `ebay_price_locks` lock or a successful `ebay_price_edits` row is kept (`price_rule` `kept_lock` /
@@ -24,6 +24,48 @@ listings, ending**. **Orders are NOT part of it: DPL keeps handling eBay orders.
 - **Tables**: `ebay_sync_profiles` (seeded `STICKBALLMAN12`), `_products`, `_links`, `_log` (60 d, shadow 14 d), `_queue`.
 - **Endpoints** `api/ebay-sync/{status,settings,run,products,listings,inventory,profiles,log,edit,duplicates}.js`; writes need admin or `connect_integrations`.
 - **Quantity (eBay's docs, read 2026-11-08):** `ReviseInventoryStatus` and `ReviseFixedPriceItem` both take the quantity AVAILABLE; eBay adds what sold itself. `GetItem` returns the total including sold, so it is never sent back: a revise only carries new sizes. A 0 on an unsold size may drop it, and with out-of-stock control off (this account) the last size at 0 ends the listing. Still to prove live: the first change of each kind, read back on eBay.
+
+## Oversell guard (2026-11-26): eBay may never offer more pairs than Shopify holds
+Owner's rule: **Shopify is the verified stock.** Findings + numbers: `docs/ebay-oversell-findings.md`. All of it is part of
+the Stock path (same switch, kill switch, blast limit, `ebay_sync_log`); no new write path, **no schema change**.
+- **One SKU on several listings shares Shopify's number** (`planDuplicates` / `dupTargets` / `applyDupPlan` in
+  `src/lib/ebaySync.js`). Before this the sync sent NOTHING to a duplicate (reconcile: `stock.action 'none'`; queue:
+  `linksBySku ... AND NOT duplicate`), so DPL's full number sat on every listing. Now: one listing **keeps** the quantity
+  (most sizes, then the older `start_time`, then the lower item number), the others are **held at 0** for that size. A held
+  listing that would be left with nothing to sell keeps **one pair** of its best-stocked shared size while Shopify has 2 or
+  more of it (`alive`; the keeper shows one less), because eBay ends a listing at 0. The total is never above Shopify.
+  Only a SKU on ONE Shopify variant is planned (`dup_kind 'ebay'`); a SKU on two Shopify variants, or twice on the same
+  listing, stays flagged for a person. The plan is saved in `ebay_sync_state_reconcile.dupPlan`, and the queue pass uses it
+  (`linksBySkuAll`) so a webhook sends each listing its share, never the full number to each. A stale plan (a listing
+  ended by hand since) shares nothing until the next full check.
+- **Holding a duplicate at 0 that would END its listing** (every size held, Shopify has under 2 of each) is an end WE
+  chose: it needs **End listings = Live**. Otherwise those sizes are left as they are, `end / end_duplicate_by_zero` is
+  logged in shadow (once a day), the item id goes to `dupHeld` (Overview: "Needs a person") and the alert below fires.
+  With End live the zeros go out, the end is logged (`end / end_listing`, via "duplicate listing held at 0") and written to
+  `ebay_listing_ends` so the create pass never relists it. A person can still end either listing by hand at any time
+  ("End the extra listing"); that remains the real fix, the guard is the safety net.
+- **Lowering goes at once, raising still waits.** A size where eBay is ABOVE Shopify is sent on the pass that first sees
+  it (after the live Shopify re-read). Raising keeps the 10-minute settle: an eBay sale lowers eBay minutes before its
+  order reaches Shopify, and raising in that gap would itself oversell. Lowers go out before raises in one batch.
+- **Queue**: a size already differing at the last full check is sent again even when the stored eBay number equals
+  Shopify's new one (the stored number can be stale).
+- **Negative Shopify = 0 on every path** (checked 2026-11-26, pinned in `e2e/ebay-sync-oversell.spec.js`):
+  `stockDecision`, `liveQty` (sum of the locations, then max 0), `dupTargets`, `reviseEbayQuantities`, `buildListing`
+  (create / relist: only sizes above 0).
+- **Not in Shopify / no Custom label**: still never zeroed automatically (a mistyped label would empty and end a healthy
+  listing); they are counted as "eBay has more" (Shopify = 0 for them) and alert once they last past the settle time.
+  Ending stays with the "Not in Shopify" tab.
+- **Alerts** (`ebay_sync` event, now titled "eBay Sync needs a look"): `eBay Sync: a stock change failed` (a refused
+  `ReviseInventoryStatus`, one message an hour at most, says which were lowerings) and `eBay has more than Shopify`
+  (after a full check's own corrections, any size still above Shopify for over 10 minutes; once a day per distinct set).
+  In Test mode the second one is the only thing that says so.
+- **Seen on the Sync tab** (no new page or card on Home): Overview's first card **"eBay has more than Shopify?"** (✓ No, or
+  pairs / sizes / listings, why, and who must act), and eBay Products -> **More than Shopify** (`filter=over`). One rule in
+  two places: `oversellOf` (pure) and `ebaySyncOversell` (SQL): what eBay offers for the SKU, summed over its listings when
+  it is on several, against max(0, Shopify); pairs are counted once per duplicate SKU. Status: `oversell { sizes, listings,
+  pairs, by, no_sku_sizes, dup_shared, dup_need_person }`.
+- **DPL still writes stock too.** If DPL pushes Shopify's full number to both duplicate listings again, the next queue /
+  full check lowers the extra again (at most 30 min). Not measured how often DPL does that.
 
 ## Review fixes (D1 to D18)
 - **State**: pass state + the Trading counter live in `ebay_sync_state` (NOT a live table; counter flushed at most once a minute; an idle queue pass writes nothing). Settings stay in `app_settings` and are merged atomically (`ebaySyncPatchSettings`).
@@ -80,6 +122,7 @@ For shoes eBay refuses as they are in Shopify (prod 11-14: 11 `title_long` 81-97
 One **Sync** tab on the eBay page (`?tab=sync`, sections `?sync=`), `src/screens/EbaySync.jsx`. Owner: no new pages or dashboard cards. Reprice and Not in Shopify stay as they are; Sync links to them.
 
 ## Stock is live for the listings we created (per-item rule)
+**Since 2026-11-26 11:20 AM EST the global Stock switch is Live on production**, so every listing gets stock writes; the rule below is what applies whenever Stock is back on Test.
 DPL owns stock for the other listings, so the global **Stock** switch stays Test. But a listing OUR sync created
 (DPL is not linked to it) would get no stock updates at all, so **stock writes go live per item for those only**:
 `pushStock` splits each batch; items in the created set go through the normal live path (live re-read of Shopify,

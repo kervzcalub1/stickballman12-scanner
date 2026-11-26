@@ -101,7 +101,8 @@ test.describe.serial('eBay Sync: the real SQL', () => {
     expect(links.find((l) => l.sku === 'SQ-B').price_rule).toBe('kept_manual');   // no history for a price that differs
     const prod = await q(`SELECT shopify_product_id, status, eligible, item_id FROM ebay_sync_products ORDER BY shopify_product_id`);
     expect(prod).toEqual([{ shopify_product_id: T(1), status: 'uploaded', eligible: true, item_id: '9990111' }, { shopify_product_id: T(3), status: 'not_uploaded', eligible: true, item_id: null }]);
-    expect((await q(`SELECT mode, action FROM ebay_sync_log WHERE by = $1 AND domain = 'stock'`, [BY])).length).toBe(0);   // drift is first seen: nothing due yet
+    // SQ-A is LOWER in Shopify (eBay 1, Shopify 0): a lowering is due at first sight, and in Test mode that is one shadow row.
+    expect(await q(`SELECT mode, action FROM ebay_sync_log WHERE by = $1 AND domain = 'stock'`, [BY])).toEqual([{ mode: 'shadow', action: 'set_qty' }]);
     const state = JSON.parse((await q(`SELECT value FROM ebay_sync_state WHERE key = 'ebay_sync_state_reconcile'`))[0].value);
     expect(state).toMatchObject({ lastShopifyCount: 3, lastProductCount: 2, aborted: null });
     expect((await q(`SELECT 1 FROM app_settings WHERE key = 'ebay_sync_state_reconcile'`)).length).toBe(0);   // D1: not a live table
@@ -116,6 +117,27 @@ test.describe.serial('eBay Sync: the real SQL', () => {
     expect((await db.ebaySyncProducts({ tab: 'uploaded' })).total).toBe(1);
     expect(await db.ebaySyncProductTabs()).toMatchObject({ uploaded: 1, not_uploaded: 1 });
     expect((await db.ebaySyncLogList({ domain: 'settings' })).total).toBeGreaterThan(0);
+  });
+
+  test('"eBay has more than Shopify": the SQL counts what the rule counts (higher, duplicates once, not in Shopify, no Custom label)', async () => {
+    expect(await db.ebaySyncOversell()).toMatchObject({ sizes: 1, listings: 1, pairs: 1, stock: 1, duplicate: 0 });   // SQ-A: eBay 1, Shopify 0
+    await pool.query(`INSERT INTO ebay_sync_links (link_key, sku, item_id, variation_key, shopify_variant_id, ebay_qty, shopify_qty, state, duplicate) VALUES
+      ('9990201|OV-D', 'OV-D', '9990201', 'OV-D', 'v1', 2, 3, 'duplicate', true), ('9990202|OV-D', 'OV-D', '9990202', 'OV-D', 'v1', 2, 3, 'duplicate', true),
+      ('9990203|OV-H', 'OV-H', '9990203', 'OV-H', 'v2', 3, 3, 'duplicate', true), ('9990204|OV-H', 'OV-H', '9990204', 'OV-H', 'v2', 0, 3, 'duplicate', true),
+      ('9990205|OV-X', 'OV-X', '9990205', 'OV-X', NULL, 4, NULL, 'no_shopify', false), ('9990206|', NULL, '9990206', 'Size=9', NULL, 1, NULL, 'no_shopify', false),
+      ('9990207|OV-N', 'OV-N', '9990207', 'OV-N', 'v3', 0, -4, 'ok', false), ('9990208|OV-M', 'OV-M', '9990208', 'OV-M', 'v4', 2, -1, 'qty_drift', false)`);
+    try {
+      // + OV-D on two listings (4 offered, 3 held: 1 pair, 2 sizes) + OV-X 4 + no label 1 + OV-M 2 (negative Shopify = 0). OV-H is held right; OV-N shows 0.
+      expect(await db.ebaySyncOversell()).toEqual({ sizes: 6, listings: 6, pairs: 1 + 1 + 4 + 1 + 2, stock: 2, duplicate: 2, no_shopify: 1, no_sku: 1, no_sku_all: 1 });
+      const over = await db.ebaySyncListings({ filter: 'over' });
+      expect(over.rows.map((r) => r.item_id).sort()).toEqual(['9990111', '9990201', '9990202', '9990205', '9990206', '9990208']);
+      expect(over.rows.every((r) => r.over === true)).toBe(true);
+      expect((await db.ebaySyncListings({ filter: 'all' })).rows.find((r) => r.item_id === '9990203').over).toBe(false);
+      expect((await db.ebaySyncListingTabs()).over).toBe(6);
+      expect((await db.ebaySyncLinksBySkuAll('OV-D')).length).toBe(2);
+      expect((await db.ebaySyncLinksBySku('OV-D')).length).toBe(0);
+      expect((await buildStatus(io)).oversell).toMatchObject({ sizes: 6, pairs: 9, by: { stock: 2, duplicate: 2, no_shopify: 1, no_sku: 1 }, no_sku_sizes: 1 });
+    } finally { await pool.query(`DELETE FROM ebay_sync_links WHERE item_id LIKE '99902%'`); }
   });
 
   test('reconcile (live): drift that persisted is sent, logged live, and the link row follows', async () => {

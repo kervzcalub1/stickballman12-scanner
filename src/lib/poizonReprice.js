@@ -4,7 +4,7 @@
 //   in   Seller Dashboard → Listing → Smart Listing → Export All ("Export Smart Listing….xlsx")
 //        + the store inventory report CSV (its SKU is the export's Barcode → Style ID)
 //   out  POIZON's own "Price & Inventory Template": sheet "Template" filled from row 3 —
-//        A SPU ID · B SKU ID · C Expected Price (Tax-Exclusive) · I "Manual update".
+//        A SPU ID · B SKU ID · C Expected Price (Tax-Exclusive) · I "Update Manually".
 //        Uploaded by hand: Batch Import → Import Updated Price & Inventory.
 // The spec is POIZON's own walkthrough (their account manager, 2026-11-20) + the owner's
 // "same as we did for eBay, SHEIN and Temu".
@@ -20,7 +20,9 @@ const escXml = (s) => String(s)
 
 export const SHEET = 'Template';
 export const FIRST_ROW = 3;                 // row 1 = Required / Choose one, row 2 = the column names
-export const METHOD = 'Manual update';      // POIZON: only "Manual update" or "API update"
+// POIZON's importer takes exactly "Update Manually" or "Update via API". Its Data Definition tab
+// says "Manual update", and an import with that was refused on every row (2026-11-26).
+export const METHOD = 'Update Manually';
 // Listings POIZON has not matched to its own catalogue yet: there is nothing to price.
 export const NOT_ON_POIZON = new Set(['Unmatched', 'Matching in Progress']);
 export const SOLD_OUT = 'Sold Out';
@@ -182,7 +184,7 @@ export function applyReprice(rows, cache, pctH, opts) {
     const notes = [];
     // POIZON names its own ceiling on some listings; a cut that still sits above it will not list.
     if (x.limitCents != null && cents > x.limitCents) { n.overLimit++; notes.push(`Still above POIZON’s limit of $${(x.limitCents / 100).toFixed(2)} — it may stay unlisted`); }
-    if (!/manual/i.test(x.method)) { n.toManual++; notes.push('Price update method becomes Manual update'); }
+    if (!/manual/i.test(x.method)) { n.toManual++; notes.push('Price update method becomes Update Manually'); }
     upload.push({ spu: x.spu, sku: x.sku, price: String(dollars) });
     report.push({ ...row, action: 'lowered', note: notes.join(' · ') });
   }
@@ -209,11 +211,11 @@ export function readTemplateFile(bytes) {
 // The filled template: every entry of the zip byte-for-byte as it came EXCEPT the Template
 // sheet, where rows from 3 down are ours. IDs go in as text (as they are in the export — a
 // 14-digit number must never turn into 4.97E+13), the price as a number (what typing it in
-// Excel makes), "Manual update" in I. D–F and H (the other three prices, Inventory) stay
+// Excel makes), "Update Manually" in I. D–F and H (the other three prices, Inventory) stay
 // blank: POIZON's walkthrough fills only C and I, and a blank Inventory leaves stock alone.
 // G (Discount) is always 0: the template's Data Definition calls it Required ("0 when there
 // is no discount"), and POIZON refused a whole import with it blank — "Invalid discount" on
-// every row (2026-11-27).
+// every row (2026-11-26).
 export function fillTemplate(templateBytes, upload) {
   const book = openWorkbook(templateBytes);
   const sheet = book.sheets.find((s) => s.name.trim().toLowerCase() === SHEET.toLowerCase());

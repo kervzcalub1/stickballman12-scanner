@@ -480,21 +480,32 @@ export const DETAILS_FROM = {
 export const detailsFromLabel = (v) => String(v || '').split(',').map((k) => DETAILS_FROM[k.trim()] || k.trim()).filter(Boolean).join(' + ');
 
 // ── The bot's answer: ONE message per batch of photos, as a reply to the first ─────────
-// Every line starts with what a person has to do about it (2026-11-20):
-//   [OK]      nothing — both reads agreed, or it is one of OUR orders
-//   [CHECK]   compare with the photo — the reads disagreed, a third read decided, only one read
-//             worked, a character was put right, or the number doesn't look like the platform's
-//   [MISSED]  no order number came off that photo (or the photo wasn't saved)
-// e.g.
-//   Alias · 2 orders recorded
-//   [OK] #206557037 — Nike Free Run 5.0 'Phantom Sail' · CZ1884-010 · size 8.5
-//   [CHECK] #176889923 — DQ4071-001 · size 9.5 (reads disagreed)
+// What each row needs from a person (2026-11-20), and how the summary is LAID OUT (2026-11-26):
+//   OK      nothing — both reads agreed, or it is one of OUR orders
+//   CHECK   compare with the photo — the reads disagreed, a third read decided, only one read
+//           worked, a character was put right, or the number doesn't look like the platform's
+//   MISSED  no order number came off that photo (or the photo wasn't saved)
+// The first live batch (22 photos, 2026-11-25) came back as a wall: the same two-line
+// explanation on each of seven missed photos, the rows that needed a person at the bottom,
+// and no totals. So now: the totals first, then what needs someone (❌ missed — ONE block per
+// reason, listing its photos — then ⚠️ check), then what is fine (✅ per platform). Every
+// order number comes first on its line, in <code> (one tap copies it in Telegram — it is
+// pasted into a marketplace next), then SKU · size · the name cut short. It is HTML:
+// everything that came off a label is escaped (`esc`), and every sender sets parse_mode.
+//   18 photos · 9 recorded · 2 to check · 7 need a number
 //
-//   [MISSED] Photo 3: no order number found — reply with the number to the copy of this photo below, or re-snap it
-//   ↩️ #206557037 is already logged as #12 by Karon — not added again
+//   ❌ <b>No order number · Stadium Goods · 7 photos</b>
+//   Photos 1, 2, 3, 4, 5, 7, 9
+//   The order number is the barcode, and it can't be read at this size. …
+//   Each is sent back below: reply to it with the number.
 //
-//   Check them: https://…/cancellations
-const sizeWord = (v) => (v ? `size ${shortSize(v)}` : null);
+//   ⚠️ <b>Check 2</b>
+//   <code>176889923</code> · Alias · DQ4071-001 · 9.5 · reads disagreed
+//
+//   ✅ <b>Alias · 7</b>
+//   <code>732100455</code> · HQ7901-602 · 9.5W · Nike V5 RNR Burgundy Crush…
+//
+//   Fix on the page: https://…/cancellations
 const CHECK_WHY = [
   ['reads_disagree', 'reads disagreed'], ['unchecked', 'only one read worked'], ['tie_break', 'a third read decided'],
   ['unclear', 'hard to read'], ['low_confidence', 'the reader was not sure'],
@@ -515,52 +526,102 @@ export function rowStatus(r) {
   const hit = CHECK_WHY.find(([k]) => flags.includes(k));
   return hit ? { tag: 'CHECK', why: hit[1] } : { tag: 'OK', why: null };
 }
-export function orderLine(r) {
-  const what = [r.product, r.sku, sizeWord(r.size)].filter(Boolean).join(' · ');
+/** The same message with its tags taken out — what is sent if Telegram ever refuses the HTML. */
+export const plainFromHtml = (html) => String(html ?? '').replace(/<\/?(?:b|code)>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+/** Text off a label, a name, a note → safe inside Telegram HTML. */
+export const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const NAME_MAX = 28;
+const shortName = (v) => { const t = String(v || '').trim(); return t.length > NAME_MAX ? `${t.slice(0, NAME_MAX - 1).trimEnd()}…` : t; };
+/** One recorded order: the number (tap to copy), then SKU · size · name. `platform` = say whose it is (the ⚠️ block mixes them). */
+export function orderLine(r, { platform = false } = {}) {
   const s = rowStatus(r);
-  const why = s.why ? ` (${s.why})` : '';
-  const how = r.by_tracking ? ' (found by its tracking number)' : '';
-  return `[${s.tag}] #${String(r.order_number).replace(/^#+/, '')} — ${what || 'no shoe details found'}${why}${how}`;
+  const shoe = [r.sku, r.size ? shortSize(r.size) : null, r.product ? shortName(r.product) : null].filter(Boolean);
+  const bits = [
+    `<code>${esc(String(r.order_number).replace(/^#+/, ''))}</code>`,
+    platform ? (platformLabel(r.platform) || 'No platform') : null,
+    ...(shoe.length ? shoe : ['no shoe details']),
+    r.by_tracking ? 'found by its tracking number' : null,
+    s.why,
+  ];
+  return bits.filter(Boolean).map((x, i) => (i === 0 ? x : esc(x))).join(' · ');
 }
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const sentence = (v) => { const t = String(v || '').trim(); return t ? `${t[0].toUpperCase()}${t.slice(1)}${/[.!?]$/.test(t) ? '' : '.'}` : ''; };
 /**
- * `photos` = [{ n, rows, dupes:[{ order_number, existing:{ id, sent_by } }], error, why }] in the
- * order they were sent (n = 1-based position; null for a typed number). Rows with an order
- * number are listed per platform; a row without one is that photo's [MISSED] line.
- * `link` = where the Cancellations page is; it is added only when something is [CHECK] or
- * [MISSED]. → the text; `batchReplyNeedsLook(photos)` says whether anything needs a person.
+ * `photos` = [{ n, rows, dupes:[{ order_number, existing:{ id, sent_by } }], error, why, sentBack }]
+ * in the order they were sent (n = 1-based position; null for a typed number; sentBack = the
+ * photo is sent back for a reply). `link` = where the Cancellations page is; it is added only
+ * when something needs a person. → Telegram HTML. `batchReplyNeedsLook(photos)` says whether
+ * anything does.
  */
 export function batchReplyNeedsLook(photos) {
   return (photos || []).some((p) => p.error || (p.rows || []).some((r) => rowStatus(r).tag !== 'OK'));
 }
 export function batchReplyText(photos, { link = null } = {}) {
-  const listed = []; const warn = []; const dup = [];
-  for (const p of photos || []) {
-    const where = p.n ? `Photo ${p.n}` : 'This photo';
-    if (p.error) { warn.push(`[MISSED] ${where}: not saved (${p.error}) — send it again.`); continue; }
+  const list = photos || [];
+  const ok = []; const check = []; const dup = []; const errors = [];
+  const missed = new Map();   // "platform|why" → { platform, why, photos: [n], back }
+  for (const p of list) {
+    const where = p.n ? String(p.n) : null;
+    if (p.error) { errors.push({ where, error: p.error }); continue; }
     for (const r of p.rows || []) {
-      if (r.order_number) listed.push(r);
-      else warn.push(`[MISSED] ${where}: no order number found${p.why ? ` (${p.why})` : ''} — reply with the number to the copy of this photo below, or re-snap it`);
+      if (r.order_number) (rowStatus(r).tag === 'OK' ? ok : check).push(r);
+      else {
+        const k = `${r.platform || ''}|${p.why || ''}`;
+        if (!missed.has(k)) missed.set(k, { platform: r.platform || null, why: p.why || null, photos: [], count: 0, back: false });
+        const g = missed.get(k);
+        g.count += 1; if (where) g.photos.push(where); if (p.sentBack) g.back = true;
+      }
     }
-    for (const d of p.dupes || []) {
-      dup.push(`↩️ #${d.order_number} is already logged as #${d.existing?.id}${d.existing?.sent_by ? ` by ${d.existing.sent_by}` : ''} — not added again`);
+    for (const d of p.dupes || []) dup.push(d);
+  }
+  const nMissed = [...missed.values()].reduce((n, g) => n + g.count, 0);
+  const build = (maxOk) => {
+    const out = [];
+    const block = (lines) => { if (out.length) out.push(''); out.push(...lines); };
+    // The totals — once there is more than one photo to total.
+    if (list.length > 1) {
+      block([[plural(list.length, 'photo'), `${ok.length + check.length} recorded`, check.length ? `${check.length} to check` : null,
+        nMissed ? `${nMissed} need${nMissed === 1 ? 's' : ''} a number` : null, errors.length ? `${errors.length} not saved` : null,
+        dup.length ? `${dup.length} already logged` : null].filter(Boolean).join(' · ')]);
     }
+    for (const g of missed.values()) {
+      const lines = [`❌ <b>${esc(['No order number', isPlatform(g.platform) ? platformLabel(g.platform) : null, plural(g.count, 'photo')].filter(Boolean).join(' · '))}</b>`];
+      if (g.photos.length) lines.push(`${g.photos.length === 1 ? 'Photo' : 'Photos'} ${g.photos.join(', ')}`);
+      if (g.why) lines.push(esc(sentence(g.why)));
+      lines.push(g.back ? (g.count === 1 ? 'It is sent back below: reply to it with the number.' : 'Each is sent back below: reply to it with the number.')
+        : 'Type the number on the Cancellations page, or send the photo again.');
+      block(lines);
+    }
+    for (const e of errors) block([`❌ <b>Not saved${e.where ? ` · Photo ${e.where}` : ''}</b>`, `${esc(sentence(e.error))} Send it again.`]);
+    if (check.length) block([`⚠️ <b>Check ${check.length}</b>`, ...check.map((r) => orderLine(r, { platform: true }))]);
+    for (const k of [...PLATFORMS.map((x) => x.key), null]) {
+      const mine = ok.filter((r) => (k == null ? !isPlatform(r.platform) : r.platform === k));
+      if (!mine.length) continue;
+      const shown = mine.slice(0, maxOk);
+      block([`✅ <b>${esc(k ? platformLabel(k) : 'No platform')} · ${mine.length}</b>`, ...shown.map((r) => orderLine(r)),
+        ...(mine.length > shown.length ? [`…and ${mine.length - shown.length} more, on the page`] : [])]);
+    }
+    if (!ok.length && !check.length && !nMissed && !errors.length) block([dup.length ? 'Nothing new recorded.' : 'No orders recorded yet.']);
+    if (dup.length) {
+      block(dup.map((d) => `↩️ <code>${esc(d.order_number)}</code> already logged as #${esc(d.existing?.id)}${d.existing?.sent_by ? ` by ${esc(d.existing.sent_by)}` : ''}`));
+    }
+    if ([...ok, ...check].some((r) => !isPlatform(r.platform))) block(['Tip: send the platform first — e.g. /alias, then the photos.']);
+    if (batchReplyNeedsLook(list)) block([link ? `Fix on the page: ${esc(link)}` : 'Fix on the Cancellations page.']);
+    return out.join('\n');
+  };
+  // Telegram takes 4,096 characters: what is fine is what gets cut short, never what needs someone.
+  for (const maxOk of [Infinity, 25, 12, 5, 0]) {
+    const text = build(maxOk);
+    if (text.length <= 3900) return text;
+    if (maxOk !== 0) continue;
+    // Still too long with every ✅ row folded away (a hundred rows to check): cut at a LINE —
+    // each line closes its own tags, so what is sent is still valid HTML.
+    const kept = []; let len = 0;
+    for (const line of text.split('\n')) { if (len + line.length + 1 > 3800) break; kept.push(line); len += line.length + 1; }
+    return `${kept.join('\n')}\n…the rest is on the page`;
   }
-  const out = [];
-  for (const k of [...PLATFORMS.map((p) => p.key), null]) {
-    const mine = listed.filter((r) => (k == null ? !isPlatform(r.platform) : r.platform === k));
-    if (!mine.length) continue;
-    if (out.length) out.push('');
-    out.push(`${k ? platformLabel(k) : 'No platform'} · ${mine.length} order${mine.length === 1 ? '' : 's'} recorded`);
-    mine.forEach((r) => out.push(orderLine(r)));
-  }
-  if (!listed.length) out.push(dup.length && !warn.length ? 'Nothing new recorded.' : 'No orders recorded yet.');
-  if (warn.length || dup.length) out.push('', ...warn, ...dup);
-  if (listed.some((r) => !isPlatform(r.platform))) out.push('', 'Tip: send the platform first — e.g. /alias, then the photos.');
-  if (batchReplyNeedsLook(photos)) {
-    out.push('', link ? `Check them, or + Add by hand: ${link}` : 'Check them, or + Add by hand, on the Cancellations page.');
-  }
-  const text = out.join('\n');
-  return text.length > 4000 ? `${text.slice(0, 3990)}\n…` : text;
+  return '';
 }
 
 // ── The page: EST days ───────────────────────────────────────────────────────────────

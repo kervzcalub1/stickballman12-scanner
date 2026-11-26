@@ -556,6 +556,8 @@ async function fileFromChat(msg, { group = false } = {}) {
   if (group && replyTo && !words.cmd && !(await cancellationPhotoByAskMessage(chatId, replyTo))) return null;
   const tag = notifyEnv() === 'dev' ? '[dev] ' : '';
   const say = (text, reply = true) => sayTo(chatId, `${tag}${text}`, reply ? msg.message_id : null);
+  // A summary of recorded orders is Telegram HTML (tap-to-copy numbers); what a person typed never is.
+  const sayHtml = (text) => sayTo(chatId, `${tag}${text}`, msg.message_id, { html: true });
   const who = await telegramSender(msg.from?.id);
   if (!who) return say('To send orders to cancel, connect this chat first: open Stickballman12 Inventory, tap 🔔 Alerts, then Connect Telegram.', false);
   if (!CAN_FILE.includes(who.role)) return say("Your account can't log cancellations.", false);
@@ -572,7 +574,7 @@ async function fileFromChat(msg, { group = false } = {}) {
             .catch((e) => console.warn('[telegram/webhook] reaction on a filled photo:', e.message));
         }
       }
-      return say(answer.text);
+      return answer.html ? sayHtml(answer.text) : say(answer.text);
     }
   }
   if (words.cmd === '/help') return say(HOW_TO, false);
@@ -616,7 +618,7 @@ async function fileFromChat(msg, { group = false } = {}) {
       if (typed) {
         await setCancellationCtx(mine, words.platform, null);
         if (typed.rows.length) alertCancellationsLogged(typed.rows, who);
-        return say(typedReplyText(typed));
+        return sayHtml(typedReplyText(typed));
       }
       const note = words.rest ? words.rest.slice(0, 300) : null;
       await setCancellationCtx(mine, words.platform, note);
@@ -630,7 +632,7 @@ async function fileFromChat(msg, { group = false } = {}) {
     const out = await fileTypedCancellation(words.rest, { ...ctx, platform: on?.platform || null });
     if (!out) return say(HOW_TO, false);
     if (out.rows.length) alertCancellationsLogged(out.rows, who);
-    return say(typedReplyText(out));
+    return sayHtml(typedReplyText(out));
   }
 
   // ── A picture ──

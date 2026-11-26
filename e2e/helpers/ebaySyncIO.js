@@ -81,6 +81,7 @@ export function mkIO(over = {}) {
       ],
       replaceLinks: async (rows) => { saved.links = rows; },
       linksBySku: async (sku) => (over.linksBySku ? over.linksBySku(sku) : []),
+      linksBySkuAll: async (sku) => (over.linksBySkuAll ? over.linksBySkuAll(sku) : []),
       setLinkQty: async () => {}, linksByItem: async (id) => (saved.links || over.links || []).filter((l) => l.item_id === id),
       itemsOfProducts: async () => over.itemsOfProducts || [], ebaySkus: async () => new Set(over.ebaySkus || []), productPrev: async () => over.productPrev || [],
       endedByApp: async () => new Set(over.endedByApp || []),
@@ -101,7 +102,7 @@ export function mkIO(over = {}) {
     },
     imageFinderPhotos: async (style) => (over.imageFinder?.[style] || []),
     write: {
-      reviseEbayQuantities: over.live ? allow('reviseEbayQuantities', (c) => { over.onQty?.(c); return c.map((x) => ({ key: x.key, ok: true })); }) : forbid('reviseEbayQuantities'),
+      reviseEbayQuantities: over.live ? allow('reviseEbayQuantities', (c) => { over.onQty?.(c); return over.qtyResult ? over.qtyResult(c) : c.map((x) => ({ key: x.key, ok: true })); }) : forbid('reviseEbayQuantities'),
       reviseEbayPrices: over.live ? allow('reviseEbayPrices', (c) => c.map((x) => ({ key: x.key, ok: true }))) : forbid('reviseEbayPrices'),
       addFixedPriceItem: over.live ? allow('addFixedPriceItem', over.addResult || { ok: true, itemId: '999' }) : forbid('addFixedPriceItem'),
       reviseFixedPriceItem: over.live ? allow('reviseFixedPriceItem', { ok: true }) : forbid('reviseFixedPriceItem'),

@@ -1,4 +1,4 @@
-// GET /api/ebay-sync/listings?filter=all|qty_drift|price_kept|price_drift|no_shopify&q=&offset= -> { ok, rows, total, tabs }
+// GET /api/ebay-sync/listings?filter=all|over|qty_drift|price_kept|price_drift|no_shopify&q=&offset= -> { ok, rows, total, tabs }
 // price_rule is one of kept_lock | kept_repriced | kept_manual | follows_shopify.
 import { send, applySecurity, rateLimit, requireRole } from '../_lib/util.js';
 import { dbConfigured, ebaySyncListings, ebaySyncListingTabs } from '../_lib/db.js';
@@ -13,7 +13,7 @@ export default async function handler(req, res) {
   if (!user) return;
   if (!rateLimit(req, { windowMs: 60_000, max: 120 })) return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
-  const filter = ['all', 'qty_drift', 'price_kept', 'price_drift', 'no_shopify'].includes(qs.get('filter')) ? qs.get('filter') : 'all';
+  const filter = ['all', 'over', 'qty_drift', 'price_kept', 'price_drift', 'no_shopify'].includes(qs.get('filter')) ? qs.get('filter') : 'all';
   const offset = pageOffset(qs.get('offset'));
   if (offset == null) return send(res, 400, { ok: false, error: 'The offset must be a whole number, 0 or more.' });
   const { rows, total } = await ebaySyncListings({ filter, q: String(qs.get('q') || '').slice(0, 80), offset });

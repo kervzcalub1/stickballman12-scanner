@@ -249,8 +249,13 @@ test.describe('eBay Sync: live writes', () => {
     expect(t.saved.links.find((l) => l.sku === 'B')).toMatchObject({ price_rule: 'kept_repriced', state: 'price_kept' });
     expect(t.saved.links.find((l) => l.sku === 'L')).toMatchObject({ price_rule: 'kept_lock', state: 'price_kept' });
   });
-  test('drift seen for the first time is recorded but not sent', async () => {
-    const t = mkIO({ live: true, prev: [], locked: ['222'] });
+  test('a RAISE seen for the first time is recorded but not sent (a lowering goes at once: e2e/ebay-sync-oversell.spec.js)', async () => {
+    const variants = [
+      { variantId: 'v-A', productId: 'P1', sku: 'A', size: '8', price: '100.00', qty: 4, status: 'ACTIVE', productTitle: TITLE },   // eBay has 1: a raise
+      { variantId: 'v-B', productId: 'P1', sku: 'B', size: '9', price: '110.00', qty: 2, status: 'ACTIVE', productTitle: TITLE },
+      { variantId: 'v-L', productId: 'P2', sku: 'L', size: '10', price: '90.00', qty: 1, status: 'ACTIVE', productTitle: 'Locked Shoe (HQ1234-001)' },
+    ];
+    const t = mkIO({ live: true, prev: [], locked: ['222'], variants });
     await reconcilePass(await ctxOf(t, ALL_LIVE));
     expect(t.calls).toEqual([]);
     expect(t.saved.links.find((l) => l.sku === 'A').qty_drift_since).toBeTruthy();

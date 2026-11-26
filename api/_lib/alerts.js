@@ -230,8 +230,8 @@ export const ALERT_EVENTS = [
   },
   {
     key: 'ebay_sync', group: 'eBay Sync', emoji: '🛑', required: false,
-    title: 'eBay Sync stopped itself',
-    when: 'eBay Sync stops a pass (too many changes at once, or a bad read) or loses its eBay connection',
+    title: 'eBay Sync needs a look',
+    when: 'eBay Sync stops a pass (too many changes at once, or a bad read), loses its eBay connection, a stock change to eBay fails, or eBay keeps offering more pairs than Shopify holds',
     who: (u) => u.role === 'ph_team' || isAdminRole(u.role),
   },
   {

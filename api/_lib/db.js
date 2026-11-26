@@ -15348,6 +15348,30 @@ export async function ebaySyncReplaceLinks(rows, passAt) {
 export async function ebaySyncLinksBySku(sku) {
   return await db()`SELECT * FROM ebay_sync_links WHERE sku = ${sku} AND item_id <> '' AND NOT duplicate`;
 }
+// Every live listing of a SKU, the duplicates included (the queue pass shares a duplicate SKU's quantity between them).
+export async function ebaySyncLinksBySkuAll(sku) {
+  return await db()`SELECT * FROM ebay_sync_links WHERE sku = ${sku} AND item_id <> ''`;
+}
+// "eBay has more than Shopify": the same rule as oversellOf (src/lib/ebaySync.js). What eBay offers for the SKU
+// (summed over its listings when the SKU is on several) against max(0, Shopify); a SKU Shopify does not have, or a
+// size with no Custom label, counts as 0 in Shopify. Pairs over are counted once per duplicate SKU.
+export async function ebaySyncOversell() {
+  const [r] = await db()`
+    WITH l AS (
+      SELECT sku, item_id, duplicate, shopify_variant_id, greatest(coalesce(ebay_qty, 0), 0) AS mine, greatest(coalesce(shopify_qty, 0), 0) AS have,
+             CASE WHEN duplicate THEN sum(greatest(coalesce(ebay_qty, 0), 0)) OVER (PARTITION BY sku) ELSE greatest(coalesce(ebay_qty, 0), 0) END AS offered
+        FROM ebay_sync_links WHERE item_id <> ''
+    ), o AS (SELECT * FROM l WHERE mine > 0 AND offered > have)
+    SELECT (SELECT count(*) FROM o)::int AS sizes, (SELECT count(DISTINCT item_id) FROM o)::int AS listings,
+           (coalesce((SELECT sum(offered - have) FROM o WHERE NOT duplicate), 0)
+             + coalesce((SELECT sum(x.d) FROM (SELECT max(offered - have) AS d FROM o WHERE duplicate GROUP BY sku) x), 0))::int AS pairs,
+           (SELECT count(*) FROM o WHERE NOT duplicate AND sku IS NOT NULL AND shopify_variant_id IS NOT NULL)::int AS stock,
+           (SELECT count(*) FROM o WHERE duplicate)::int AS duplicate,
+           (SELECT count(*) FROM o WHERE NOT duplicate AND sku IS NOT NULL AND shopify_variant_id IS NULL)::int AS no_shopify,
+           (SELECT count(*) FROM o WHERE NOT duplicate AND sku IS NULL)::int AS no_sku,
+           (SELECT count(*) FROM ebay_sync_links WHERE item_id <> '' AND sku IS NULL)::int AS no_sku_all`;
+  return r;
+}
 export async function ebaySyncSetLinkQty(linkKey, qty) {
   await db()`UPDATE ebay_sync_links SET ebay_qty = ${qty}, qty_drift_since = NULL, state = CASE WHEN state = 'qty_drift' THEN 'ok' ELSE state END WHERE link_key = ${linkKey}`;
 }
@@ -15358,11 +15382,14 @@ export async function ebaySyncLinkCount() {
 export async function ebaySyncListings({ filter = 'all', q = '', offset = 0, limit = 100 } = {}) {
   const term = `%${String(q).trim().replace(/[%_]/g, '\\$&')}%`;
   const rows = await db()`
-    SELECT item_id, title, view_url, sku, size, ebay_qty, shopify_qty, ebay_price, shopify_price, price_rule, state,
-           least(qty_drift_since, price_drift_since) AS drift_since, count(*) OVER()::int AS total
-      FROM ebay_sync_links
+    SELECT item_id, title, view_url, sku, size, ebay_qty, shopify_qty, ebay_price, shopify_price, price_rule, state, duplicate,
+           least(qty_drift_since, price_drift_since) AS drift_since, (mine > 0 AND offered > have) AS over, count(*) OVER()::int AS total
+      FROM (SELECT *, greatest(coalesce(ebay_qty, 0), 0) AS mine, greatest(coalesce(shopify_qty, 0), 0) AS have,
+                   CASE WHEN duplicate THEN sum(greatest(coalesce(ebay_qty, 0), 0)) OVER (PARTITION BY sku) ELSE greatest(coalesce(ebay_qty, 0), 0) END AS offered
+              FROM ebay_sync_links WHERE item_id <> '') l
      WHERE item_id <> ''
        AND (${filter} = 'all'
+         OR (${filter} = 'over' AND mine > 0 AND offered > have)
          OR (${filter} = 'qty_drift' AND state = 'qty_drift')
          OR (${filter} = 'price_drift' AND state = 'price_drift')
          OR (${filter} = 'price_kept' AND price_rule IN ('kept_lock', 'kept_repriced', 'kept_manual'))
@@ -15379,7 +15406,7 @@ export async function ebaySyncListingTabs() {
            count(*) FILTER (WHERE state = 'price_drift')::int AS price_drift,
            count(*) FILTER (WHERE state = 'no_shopify')::int AS no_shopify
       FROM ebay_sync_links WHERE item_id <> ''`;
-  return r;
+  return { ...r, over: (await ebaySyncOversell()).sizes };
 }
 export async function ebaySyncInventory({ q = '', offset = 0, limit = 100 } = {}) {
   const term = `%${String(q).trim().replace(/[%_]/g, '\\$&')}%`;

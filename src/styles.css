@@ -7412,6 +7412,14 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
 .esy-kill { border-color: rgba(224,106,106,0.6); }
 .esy-kill.on { background: rgba(224,106,106,0.1); }
 .btn.danger.esy-killbtn { background: #c0392b; border-color: #c0392b; color: #fff; font-weight: 700; padding: 12px 18px; }
+.esy-over.on { border-color: rgba(224,106,106,0.7); background: rgba(224,106,106,0.08); }
+.esy-over .esy-head { flex-wrap: wrap; row-gap: 6px; }
+.esy-over .esy-head .btn { white-space: nowrap; }
+.esy-over > p:last-child { margin-bottom: 0; }
+.esy-over-line { margin: 6px 0 4px; font-size: 15px; overflow-wrap: anywhere; }
+.esy-over.on .esy-over-line b { font-size: 20px; }
+.esy-over-why { margin: 0 0 6px; }
+.esy-over-tag { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 6px; font-size: 11px; font-weight: 600; white-space: nowrap; border: 1px solid rgba(224,106,106,0.7); background: rgba(224,106,106,0.14); }
 .esy-killbanner { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(224,106,106,0.7); background: rgba(224,106,106,0.14); font-weight: 600; margin-bottom: 10px; }
 @media (max-width: 767px) {
   .esy-search, .esy-select { flex: 1 1 100%; }

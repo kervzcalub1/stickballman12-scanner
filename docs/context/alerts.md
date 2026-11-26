@@ -77,6 +77,7 @@ connection brings it back as **Reconnect** with no "Not now". No migration.
 | `ph.waitlist_back` | PH (admins: shown, off) — one message per batch of returns | `waitlist-worker.js` (claimWaitlistReturns) | on |
 | `ph.waitlist_daily` | admins (PH: shown, off) — an **Excel file** (`sendAlertDocument`), `once` per EST day | `waitlist-worker.js`, 18:00 EST | on |
 | `inbound.issue_reported` | PH (admins: shown, off) — ONE message per receiving submit / report | `openCasesForIntake`, `inbound-issues/report` (inbound-issues.md) | on |
+| `ebay_sync` | PH + admins, `once` per ref: a stopped pass, a lost eBay connection, **a failed stock change, eBay still above Shopify past the settle time** | `api/_lib/ebay-sync.js` (`IO.alert`; ebay-sync.md "Oversell guard") | on |
 | `inbound.issue_assigned` | the person a case is handed to | `inbound-issues/action` assign | on |
 | `inbound.warehouse_task` | warehouse (admins: shown, off) | `inbound-issues/action` ask_warehouse | on |
 | `inbound.issue_resolved` | the person who reported it | `inbound-issues/action` resolve | on |

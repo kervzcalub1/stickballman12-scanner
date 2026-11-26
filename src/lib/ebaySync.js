@@ -100,6 +100,9 @@ export function buildLinks({ ebayRows = [], variants = [] }) {
       ebay_qty: r.qty_available == null ? null : Number(r.qty_available), shopify_qty: v ? v.qty : null,
       ebay_price: r.price == null ? null : Number(r.price), shopify_price: v?.price == null ? null : Number(v.price),
       duplicate, base: duplicate ? 'duplicate' : (v ? 'linked' : 'no_shopify'),
+      // 'ebay' = on two listings but ONE Shopify variant (its quantity is known, so the listings can share it);
+      // 'shopify' = two Shopify variants carry it (nobody can say whose stock it is). Not stored.
+      dup_kind: duplicate ? (dupShopify.has(sku) ? 'shopify' : 'ebay') : null, start_time: r.start_time || null,
     });
   }
   for (const [sku, list] of shopBySku) {
@@ -177,6 +180,100 @@ export function driftSince(prevSince, drifting, now = new Date()) {
   return prevSince ? new Date(prevSince) : new Date(now);
 }
 export const driftPersists = (since, now = new Date(), minMin = 10) => !!since && (new Date(now).getTime() - new Date(since).getTime()) >= minMin * 60_000;
+
+/* ------------------- one SKU on several listings + the oversell check ------------------- */
+
+// The same SKU on two or more live listings (and on ONE Shopify variant): together they may never offer more
+// pairs than Shopify holds. One listing KEEPS the quantity: the one with the most sizes, then the older one,
+// then the lower item number. The others are HELD at 0 for that size. A held listing that would be left with
+// nothing to sell (eBay ends a listing at 0; out-of-stock control is off) keeps ONE pair of its best-stocked
+// shared size while Shopify has 2 or more of it (`alive`); the keeper then shows one less.
+// -> { [sku]: { keep, alive: [itemId], items: [itemId] } }. A SKU twice on the SAME listing is left out (a person fixes it).
+const byNum = (a, b) => (a.length - b.length) || (a < b ? -1 : a > b ? 1 : 0);
+export function planDuplicates(links = []) {
+  const live = links.filter((l) => l.item_id);
+  const sizes = new Map(); const started = new Map();
+  for (const l of live) { sizes.set(l.item_id, (sizes.get(l.item_id) || 0) + 1); if (l.start_time) started.set(l.item_id, String(l.start_time)); }
+  const rank = (a, b) => (sizes.get(b) - sizes.get(a))
+    || (started.get(a) && started.get(b) && started.get(a) !== started.get(b) ? (started.get(a) < started.get(b) ? -1 : 1) : 0) || byNum(a, b);
+  const groups = new Map();
+  for (const l of live) if (l.duplicate && l.dup_kind === 'ebay' && l.sku && l.shopify_variant_id) groups.set(l.sku, [...(groups.get(l.sku) || []), l]);
+  const plan = {};
+  for (const [sku, list] of groups) {
+    const items = list.map((l) => l.item_id);
+    if (items.length < 2 || new Set(items).size !== items.length) continue;
+    items.sort(rank);
+    plan[sku] = { keep: items[0], alive: [], items };
+  }
+  // A held listing with nothing else to sell keeps one pair, where Shopify has pairs to spare.
+  const qtyOf = (l) => Math.max(0, Number(l.shopify_qty) || 0);
+  for (const itemId of [...new Set(Object.values(plan).flatMap((p) => p.items.slice(1)))].sort(rank)) {
+    const mine = live.filter((l) => l.item_id === itemId);
+    const held = mine.filter((l) => plan[l.sku] && plan[l.sku].keep !== itemId);
+    const sells = mine.some((l) => !held.includes(l) && (l.shopify_variant_id ? qtyOf(l) : Math.max(0, Number(l.ebay_qty) || 0)) > 0);
+    if (sells) continue;
+    const best = held.map((l) => ({ l, spare: qtyOf(l) - plan[l.sku].alive.length })).sort((a, b) => b.spare - a.spare || byNum(String(a.l.sku), String(b.l.sku)))[0];
+    if (best && best.spare >= 2) plan[best.l.sku].alive.push(itemId);
+  }
+  return plan;
+}
+// What each listing of one planned SKU shows for a Shopify quantity. The total is never above it.
+export function dupTargets(entry, qty) {
+  const q = Math.max(0, Math.round(Number(qty) || 0));
+  const out = new Map((entry?.items || []).map((id) => [String(id), 0]));
+  let left = q;
+  for (const id of entry?.alive || []) if (left >= 2 && out.has(String(id)) && String(id) !== String(entry.keep)) { out.set(String(id), 1); left--; }
+  if (entry?.keep != null) out.set(String(entry.keep), left);
+  return out;
+}
+// Decided links + the plan -> the planned duplicates get a stock decision (the state stays 'duplicate').
+export function applyDupPlan(links, plan) {
+  return links.map((l) => {
+    const entry = l.duplicate && l.item_id && l.sku ? plan?.[l.sku] : null;
+    if (!entry || l.shopify_qty == null) return l;
+    const target = dupTargets(entry, l.shopify_qty).get(String(l.item_id));
+    if (target == null) return l;
+    const role = String(entry.keep) === String(l.item_id) ? 'keeps' : entry.alive.map(String).includes(String(l.item_id)) ? 'alive' : 'held';
+    return { ...l, dup_role: role, stock: { action: l.ebay_qty === target ? 'none' : 'set', target, dup: true } };
+  });
+}
+
+// "eBay has more than Shopify": every live eBay size offering pairs Shopify does not hold. One rule, the same
+// one the Sync tab's SQL uses (ebaySyncOversell): what eBay offers for the SKU (summed over its listings when
+// the SKU is on several) against max(0, Shopify), where a SKU Shopify does not have, or a size with no Custom
+// label, counts as 0 in Shopify (a sale there deducts nothing).
+// -> { rows: [{ ...link, offered, have, why }], sizes, listings, pairs, by: { stock, duplicate, no_shopify, no_sku } }
+export function oversellOf(links = []) {
+  const live = links.filter((l) => l.item_id);
+  const dupOffered = new Map();
+  for (const l of live) if (l.duplicate) dupOffered.set(l.sku, (dupOffered.get(l.sku) || 0) + Math.max(0, Number(l.ebay_qty) || 0));
+  const rows = [];
+  for (const l of live) {
+    const mine = Math.max(0, Number(l.ebay_qty) || 0);
+    const offered = l.duplicate ? dupOffered.get(l.sku) : mine;
+    const have = Math.max(0, Number(l.shopify_qty) || 0);
+    if (!(mine > 0) || !(offered > have)) continue;
+    rows.push({ ...l, offered, have, why: l.duplicate ? 'duplicate' : !l.sku ? 'no_sku' : !l.shopify_variant_id ? 'no_shopify' : 'stock' });
+  }
+  return { rows, ...overSummary(rows) };
+}
+// The totals of any set of those rows (all of them, or only the ones that lasted): pairs once per duplicate SKU.
+export function overSummary(rows = []) {
+  const by = { stock: 0, duplicate: 0, no_shopify: 0, no_sku: 0 }; let pairs = 0; const seen = new Set();
+  for (const r of rows) {
+    by[r.why]++;
+    if (r.why !== 'duplicate') pairs += r.offered - r.have; else if (!seen.has(r.sku)) { seen.add(r.sku); pairs += r.offered - r.have; }
+  }
+  return { sizes: rows.length, listings: new Set(rows.map((r) => r.item_id)).size, pairs, by };
+}
+// The sentence the Sync tab and the alert both use. null = nothing over.
+export function oversellWords(o) {
+  if (!o || !(o.sizes > 0)) return null;
+  const n = (k, one, many) => (o.by?.[k] > 0 ? `${o.by[k]} ${o.by[k] === 1 ? one : many}` : null);
+  const parts = [n('stock', 'size where eBay is simply higher', 'sizes where eBay is simply higher'), n('duplicate', 'size on duplicate listings', 'sizes on duplicate listings'),
+    n('no_shopify', 'size whose SKU is not in Shopify', 'sizes whose SKU is not in Shopify'), n('no_sku', 'size with no Custom label', 'sizes with no Custom label')].filter(Boolean);
+  return `eBay offers ${o.pairs} pair${o.pairs === 1 ? '' : 's'} more than Shopify holds, on ${o.sizes} size${o.sizes === 1 ? '' : 's'} of ${o.listings} listing${o.listings === 1 ? '' : 's'}${parts.length ? `: ${parts.join(', ')}` : ''}.`;
+}
 
 /* ---------------------------- blast + read guards ---------------------------- */
 

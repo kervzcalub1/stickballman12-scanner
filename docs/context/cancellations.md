@@ -79,7 +79,7 @@ platform and by the EST day it was sent.
   [OK] #206557037 — Nike Free Run 5.0 'Phantom Sail' · CZ1884-010 · size 8.5
   [CHECK] #176889923 — no shoe details found (reads disagreed)
 
-  [MISSED] Photo 3: no order number found — re-snap it, or type it: /alias 123456789 (it fills that photo's row)
+  [MISSED] Photo 3: no order number found — reply with the number to the copy of this photo below, or re-snap it
   [MISSED] Photo 4: not saved (could not download the picture (HTTP 500)) — send it again.
   ↩️ #300000001 is already logged as #12 by Karon — not added again
 
@@ -122,6 +122,28 @@ platform and by the EST day it was sent.
   sweep. Only the last 6 hours. Worst case after a restart the batch is answered in a
   different grouping — never lost, never twice.
 - Each batch alerts **`cancel.logged`** once (PH + admin, opt-out in 🔔 Alerts).
+
+## A photo no number was read off is sent back (2026-11-26)
+"Type it: /sg 123456789" fills that person's OLDEST row without a number — right for one missed
+photo, a guess for seven (the Stadium Goods slips of 2026-11-25, every barcode missed). So
+after the summary, **each photo with a [MISSED] row is sent back on its own** (`sendMissedCopies`
+in `sendBatchReply`), as a reply to the photo it is a copy of, captioned
+`[MISSED] Photo 2: no order number read (Stadium Goods · DM4044-001 · size 12).` /
+`Reply to this message with the order number.`
+- The whole photo, not a crop, and every one, not the first few (owner's call). It is the same
+  Telegram file (`tg_file_id`; nothing is uploaded again); one that came "as a file" goes back
+  with `sendDocument`. A copy that can't be sent is logged, never fatal.
+- The copy's message id is kept in the photo's `result` JSON (`ask_message_id`) — **no new
+  column, no db:setup**.
+- **A text that replies to that copy** (`fileMissedReply`, checked first in `fileFromChat`) fills
+  THAT photo's row through `fileTypedCancellation({ fillRowId })`: the number as typed (never
+  corrected), the duplicate guard, our orders for the shoe, the row's own platform. Any account
+  that may file cancellations can answer (the page lets the same people edit a row). The
+  photo already has a number → said, nothing changed; no number in the reply → asked again.
+- In the group a reply is acted on ONLY when it replies to one of those copies; replies to
+  anything else stay chatter and are never answered (not even "connect this chat").
+- The typed way (`/sg 123456789` → the oldest open row) still works; the summary no longer
+  suggests it.
 
 ## The picker (photos with no platform) — what is in memory and what is not
 Deploys restart the server mid-shift, so **the state is in the database, not in buffers**:

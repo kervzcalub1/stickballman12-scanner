@@ -17,7 +17,7 @@ import {
   createCancellationPhoto, setCancellationPhotoRead, createCancellation, findLiveCancellation, listCancellationsForDay,
   knownOrdersFor, catalogueNamesBySku, getCancellation, getCancellationsByIds, updateCancellationFields, openUnreadCancellation,
   claimCancellationPhotoReplies, releaseCancellationPhotoReplies, cancellationPhotosForReply, strandedCancellationPhotos,
-  cancellationIdsForPhoto, heldCancellationPhotos, setCancellationPrompt, expireHeldCancellationPhotos, setCancellationReplyMessage,
+  cancellationIdsForPhoto, setCancellationAskMessage, cancellationPhotoByAskMessage, cancellationRowsOfPhoto, heldCancellationPhotos, setCancellationPrompt, expireHeldCancellationPhotos, setCancellationReplyMessage,
 } from './db.js';
 import { estToday } from '../../src/lib/format.js';
 import { notifyEnv } from './notify.js';
@@ -25,7 +25,7 @@ import { alertCancellationsLogged } from './alerts.js';
 import { readCancellationLocally, canOpenImage } from './cancelOcr.js';
 import { decodeSlipBarcode } from './cancelBarcode.js';
 import { shopifyIndexFresh } from './shopify-order-index.js';
-import { platformFromText, slipDetails } from '../../src/lib/cancellations.js';
+import { platformFromText, slipDetails, splitCommand } from '../../src/lib/cancellations.js';
 import { cancelMessage, cancelMessageAll, dayCounts, cancellationsCsv, batchReplyText, batchReplyNeedsLook, typedDetails, pickerKeyboard } from '../../src/lib/cancellations.js';
 import {
   PLATFORMS, cleanSku, cleanOrderNo, orderKey, flagsFor, platformFromNumber, platformLabel,
@@ -446,7 +446,9 @@ export async function fileCancellationPhoto(buf, { photoId = null, who, caption 
 }
 
 /** A number TYPED to the bot (the photo failed, or there was no photo). */
-export async function fileTypedCancellation(text, { who, platform: given = null, tgChatId = null, tgMessageId = null }) {
+// `fillRowId` = the row this number is FOR (a reply to the copy of a photo no number was read
+// off): it fills that row, whoever sent the photo and however many others are still open.
+export async function fileTypedCancellation(text, { who, platform: given = null, tgChatId = null, tgMessageId = null, fillRowId = null }) {
   // [platform] number [SKU] [size] [ - reason]. A space continues the number only before
   // another digit group ("1234 5678 9012"), so "12345678-12345678 - customer asked" keeps its reason apart.
   const m = /^\s*(?:([A-Za-z]+)\s+)?#?([A-Za-z0-9](?:[A-Za-z0-9-]|\s(?=\d)){4,40}[A-Za-z0-9])(?:\s*[-–:]\s*|\s+)?(.*?)\s*$/s.exec(String(text || ''));
@@ -472,7 +474,7 @@ export async function fileTypedCancellation(text, { who, platform: given = null,
   const f = { ...row, order_key: orderKey(o.order_number), flags: [...new Set([...flagsFor(row), ...(o.extra_flags || [])])],
     details_from: o.details_from, order_match: o.order_match || null };
   // "Photo 4: no order number found — type it": the number fills that photo's row.
-  const open = await openUnreadCancellation(who.id, platform);
+  const open = fillRowId ? { id: fillRowId } : await openUnreadCancellation(who.id, platform);
   if (open) {
     const cur = await getCancellation(open.id);
     const out = await updateCancellationFields(open.id, { ...f, platform: f.platform || cur.platform, reason: t.reason || cur.reason, note: cur.note,
@@ -598,11 +600,65 @@ export async function sendBatchReply(chatId, photoIds) {
     // Which photos this message answered — what a tap on "Void Batch" voids.
     await setCancellationReplyMessage(claimed, messageId).catch((e) => console.warn('[cancellations] reply message not noted:', e.message));
     if (recorded.length) alertCancellationsLogged(recorded, { id: photos[0].sent_by_user_id, name: photos[0].sent_by });
+    // Every photo no number was read off goes back, so its number can be replied onto IT.
+    await sendMissedCopies(chat, photos, items).catch((e) => console.warn('[cancellations] missed copies:', e.message));
     return true;
   } catch (e) {
     await releaseCancellationPhotoReplies(claimed).catch(() => {});
     throw e;
   }
+}
+
+// ── A photo no number was read off: sent back, and answered by a reply (2026-11-26) ──
+// "Type it: /sg 123456789" filled that person's OLDEST row without a number — fine for one
+// missed photo, a guess for seven (the Stadium Goods slips of 2026-11-25: every barcode missed).
+// So each such photo is sent back, on its own, right after the summary, and a reply TO THAT
+// COPY with the number fills that photo's row: which photo is never in doubt. The whole photo,
+// not a crop, and every one of them, not the first few (owner, 2026-11-26).
+// The copy is the same Telegram file (its file id — nothing is uploaded again); an image that
+// came "as a file" goes back as a file. A copy that can't be sent is logged, never fatal: the
+// row is on the page either way.
+const shoeOf = (r) => [platformLabel(r.platform), r.sku, r.size ? `size ${String(r.size).replace(/^US\s*/i, '')}` : null].filter(Boolean).join(' · ');
+export async function sendMissedCopies(chatId, photos, items) {
+  let sent = 0;
+  for (let i = 0; i < photos.length; i += 1) {
+    const p = photos[i]; const it = items[i];
+    const open = (it.rows || []).find((r) => !r.order_number);
+    if (!open || it.error || !p.tg_file_id) continue;
+    const what = shoeOf(open);
+    const caption = `${devTag()}[MISSED] ${it.n ? `Photo ${it.n}` : 'This photo'}: no order number read${what ? ` (${what})` : ''}.\nReply to this message with the order number.`;
+    const body = { chat_id: chatId, caption,
+      ...(p.tg_message_id ? { reply_parameters: { message_id: p.tg_message_id, allow_sending_without_reply: true } } : {}) };
+    try {
+      const m = await enqueue(() => (p.as_file ? tg('sendDocument', { ...body, document: p.tg_file_id }) : tg('sendPhoto', { ...body, photo: p.tg_file_id })));
+      const id = Number(m?.message_id) || null;
+      if (id) { await setCancellationAskMessage(p.id, id); sent += 1; }
+    } catch (e) {
+      console.warn(`[cancellations] photo ${p.id} could not be sent back:`, e.message);
+    }
+  }
+  return sent;
+}
+/**
+ * A text message that REPLIES to one of those copies → what to answer, or null when the
+ * message it replies to is not a copy (the caller carries on as before). The number is taken
+ * as typed — never corrected — checked for a duplicate, and matched against our orders for
+ * the shoe, like any typed number; it fills THAT photo's row.
+ */
+export async function fileMissedReply({ chatId, replyTo, text, who, tgMessageId = null }) {
+  const photo = await cancellationPhotoByAskMessage(chatId, replyTo);
+  if (!photo) return null;
+  const { open, filled } = await cancellationRowsOfPhoto(photo.id);
+  if (!open) {
+    return filled
+      ? `That photo already has its order number: #${filled.order_number} (row #${filled.id}). To change it, edit the row on the Cancellations page.`
+      : "That photo's row was removed. Send the photo again if the order still has to be cancelled.";
+  }
+  // "/sg AMA00386134" is taken too; the platform is the row's own unless it had none.
+  const words = splitCommand(text);
+  const out = await fileTypedCancellation(words.rest, { who, platform: open.platform || words.platform || null, fillRowId: open.id, tgChatId: chatId, tgMessageId });
+  if (!out) return "I couldn't find an order number in that. Reply to the photo with just the number.";
+  return typedReplyText(out);
 }
 
 /** Where the page is, for the summary's "check them" line (APP_BASE_URL; null = no link, just the words). */

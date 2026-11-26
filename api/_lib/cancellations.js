@@ -25,7 +25,7 @@ import { alertCancellationsLogged } from './alerts.js';
 import { readCancellationLocally, canOpenImage } from './cancelOcr.js';
 import { decodeSlipBarcode } from './cancelBarcode.js';
 import { shopifyIndexFresh } from './shopify-order-index.js';
-import { platformFromText, slipDetails, splitCommand } from '../../src/lib/cancellations.js';
+import { platformFromText, slipDetails, splitCommand, plainFromHtml } from '../../src/lib/cancellations.js';
 import { cancelMessage, cancelMessageAll, dayCounts, cancellationsCsv, batchReplyText, batchReplyNeedsLook, typedDetails, pickerKeyboard } from '../../src/lib/cancellations.js';
 import {
   PLATFORMS, cleanSku, cleanOrderNo, orderKey, flagsFor, platformFromNumber, platformLabel,
@@ -370,7 +370,7 @@ export async function fileCancellationPhoto(buf, { photoId = null, who, caption 
         read = { what: '', text: local?.text || '', by: 'barcode',
           orders: [{ platform: 'sg', order_number: code, ...slipDetails(local?.text || ''), confidence: 0.99, unclear: [], agreed: true, why: 'barcode' }] };
       } else {
-        hintLine = "a Stadium Goods order number is its barcode, and it can't be read at this size — send the photo as a FILE (not compressed), or take it closer";
+        hintLine = "The order number is the barcode, and it can't be read at this size. Send the photo as a File (not compressed), or closer";
       }
     }
     // No order number, but a tracking number one of OUR orders shipped under (an eBay FedEx
@@ -506,17 +506,33 @@ export async function downloadTelegramFile(fileId) {
   return Buffer.from(await r.arrayBuffer());
 }
 
-export const sayTo = (chatId, text, replyTo = null) => enqueue(() => tg('sendMessage', {
+// A summary is Telegram HTML. Should Telegram ever refuse it ("can't parse entities" — a tag
+// left open, a character not escaped), the SAME words go out as plain text: a summary with no
+// bold and no tap-to-copy is an inconvenience, a summary that never arrives is a batch nobody
+// knows was recorded.
+const parseRefused = (e) => /can't parse entities|unsupported start tag|unexpected end tag|can't find end/i.test(String(e?.message || ''));
+export async function tgHtml(method, params) {
+  try {
+    return await tg(method, { ...params, parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+  } catch (e) {
+    if (!parseRefused(e)) throw e;
+    console.error(`[cancellations] Telegram refused the HTML of a ${method} (${e.message}) — sent as plain text`);
+    return tg(method, { ...params, text: plainFromHtml(params.text), link_preview_options: { is_disabled: true } });
+  }
+}
+// `html` = the text is Telegram HTML (a batch summary, a typed number's answer): parsed, and
+// its link not previewed. Everything else stays plain text — it may carry what a person typed.
+export const sayTo = (chatId, text, replyTo = null, { html = false } = {}) => enqueue(() => (html ? tgHtml : tg)('sendMessage', {
   chat_id: chatId, text,
   ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}),
 }));
 const devTag = () => (notifyEnv() === 'dev' ? '[dev] ' : '');
 
-/** What the bot says back after a typed number. */
+/** What the bot says back after a typed number — Telegram HTML, like every summary. */
 export function typedReplyText(out) {
   const filled = out.rows.find((r) => r.filled);
   const text = batchReplyText([{ n: null, rows: out.rows, dupes: out.dupes }]);
-  return filled ? `${text}\n\n(Filled the photo row #${filled.id} that had no order number.)` : text;
+  return filled ? `${text}\n\nFilled the photo row #${filled.id} that had no order number.` : text;
 }
 
 // ── ONE reply per batch of photos (2026-11-12) ───────────────────────────────────────
@@ -584,6 +600,7 @@ export async function sendBatchReply(chatId, photoIds) {
       why: p.read_status === 'failed' ? p.read_error || null : p.result?.hint || null,
       rows: (p.result?.rows || []).map((r) => rows.get(r.id) && { ...rows.get(r.id), ...r }).filter(Boolean),
       dupes: p.result?.dupes || [],
+      sentBack: !!p.tg_file_id,
     }));
     const first = photos.find((p) => p.tg_message_id)?.tg_message_id || null;
     const chat = chatId ?? photos[0].tg_chat_id;
@@ -591,17 +608,17 @@ export async function sendBatchReply(chatId, photoIds) {
     const text = `${devTag()}${batchReplyText(items, { link: batchReplyNeedsLook(items) ? cancellationsLink() : null })}`;
     // "Void Batch" only when this batch put rows on the record — there is nothing to void otherwise.
     const markup = recorded.length ? { reply_markup: { inline_keyboard: [[{ text: 'Void Batch', callback_data: 'cxvoid' }]] } } : {};
-    const quiet = { link_preview_options: { is_disabled: true } };
+    const quiet = {};   // tgHtml sets the parse mode and switches the link preview off
     // Photos that waited for a platform: the "Which platform?" message BECOMES the summary.
     const promptId = photos.find((p) => p.prompt_message_id)?.prompt_message_id || null;
     let messageId = null;
     if (promptId) {
-      messageId = await enqueue(() => tg('editMessageText', { chat_id: chat, message_id: promptId, text, ...quiet,
+      messageId = await enqueue(() => tgHtml('editMessageText', { chat_id: chat, message_id: promptId, text, ...quiet,
         reply_markup: markup.reply_markup || { inline_keyboard: [] } }))
         .then(() => promptId, (e) => { console.warn('[cancellations] could not edit the picker into the summary:', e.message); return null; });
     }
     if (!messageId) {
-      const m = await enqueue(() => tg('sendMessage', { chat_id: chat, text, ...quiet, ...markup,
+      const m = await enqueue(() => tgHtml('sendMessage', { chat_id: chat, text, ...quiet, ...markup,
         ...(first ? { reply_parameters: { message_id: first, allow_sending_without_reply: true } } : {}) }));
       messageId = Number(m?.message_id) || null;
     }
@@ -668,7 +685,7 @@ export async function fileMissedReply({ chatId, replyTo, text, who, tgMessageId 
   const words = splitCommand(text);
   const out = await fileTypedCancellation(words.rest, { who, platform: open.platform || words.platform || null, fillRowId: open.id, tgChatId: chatId, tgMessageId });
   if (!out) return { filled: false, text: "I couldn't find an order number in that. Reply to the photo with just the number." };
-  return { filled: out.rows.some((r) => r.filled), text: typedReplyText(out) };
+  return { filled: out.rows.some((r) => r.filled), text: typedReplyText(out), html: true };
 }
 
 /** Where the page is, for the summary's "check them" line (APP_BASE_URL; null = no link, just the words). */

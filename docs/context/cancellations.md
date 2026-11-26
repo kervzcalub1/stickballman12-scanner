@@ -73,18 +73,44 @@ platform and by the EST day it was sent.
   batch's first photo. Why 4 s: album photos land within ~1 s and someone sending photos one
   by one is 2–3 s apart, while each read is 1–2.5 s — the window only covers the gap after
   the last read; longer only makes everyone wait for the answer.
-- The reply (`batchReplyText`, pure) — every line starts with what a person has to do (2026-11-20):
+- The reply (`batchReplyText`, pure). **Laid out 2026-11-26** (owner, after the first live
+  batch came back as a wall of text — the same two-line explanation on each of seven missed
+  photos, what needed a person at the bottom, no totals): the totals, then what needs someone,
+  then what is fine.
   ```
-  Alias · 2 orders recorded
-  [OK] #206557037 — Nike Free Run 5.0 'Phantom Sail' · CZ1884-010 · size 8.5
-  [CHECK] #176889923 — no shoe details found (reads disagreed)
+  16 photos · 7 recorded · 2 to check · 7 need a number
 
-  [MISSED] Photo 3: no order number found — reply with the number to the copy of this photo below, or re-snap it
-  [MISSED] Photo 4: not saved (could not download the picture (HTTP 500)) — send it again.
-  ↩️ #300000001 is already logged as #12 by Karon — not added again
+  ❌ No order number · Stadium Goods · 7 photos          ← ONE block per marketplace + reason
+  Photos 1, 2, 3, 4, 5, 7, 9
+  The order number is the barcode, and it can't be read at this size. Send the photo as a File (not compressed), or closer.
+  Each is sent back below: reply to it with the number.
 
-  Check them, or + Add by hand: https://…/cancellations
+  ❌ Not saved · Photo 16
+  Could not download the picture (HTTP 500). Send it again.
+
+  ⚠️ Check 2                                             ← across marketplaces, so each says whose
+  176889923 · Alias · DQ4071-001 · 9.5 · reads disagreed
+  GSU19K45B000Q2R · SHEIN · KJ7895 · 10.5 · adidas Adistar XLG 2.0 Grey… · read as GSUT9K45BO00O2R
+
+  ✅ Alias · 5                                           ← one block per marketplace
+  732100455 · HQ7901-602 · 9.5W · Nike V5 RNR Burgundy Crush…
+
+  ↩️ 300000001 already logged as #12 by Karon
+
+  Fix on the page: https://…/cancellations
   ```
+  - **It is Telegram HTML** (`parse_mode: 'HTML'` on every sender: the batch reply, the edit of
+    the picker into the summary, and `sayHtml` for a typed number's answer). The headings are
+    `<b>`, and **every order number is `<code>`: one tap copies it** — it is pasted into a
+    marketplace next. No `#` in front (it would be copied too). Whatever came off a label, a
+    name or a note goes through `esc`. Messages that carry what a person typed stay plain text.
+  - Order number first on every line, then SKU · size · the name cut to 28 characters
+    (`orderLine`): long names are what wrapped every line on a phone.
+  - The totals line only when there is more than one photo.
+  - Longer than Telegram's 4,096 characters: the ✅ rows are what is cut ("…and 65 more, on
+    the page") — never a ❌ or ⚠️ line.
+  - The tags below ([OK] / [CHECK] / [MISSED]) are still what `rowStatus` returns; the message
+    shows them as ✅ / ⚠️ / ❌ blocks.
   `rowStatus(row)` (pure, from the row's stored `flags` + `read_as`):
   - **[OK]** both reads agreed, or the number is one of OUR orders (a matched row carries no
     reader flags), or it was typed.

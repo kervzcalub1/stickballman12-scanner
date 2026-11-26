@@ -21,7 +21,7 @@ import { signToken, hashPassword } from '../api/_lib/util.js';
 import {
   ordersFromText, trackingFromText, labelProduct, confusableKeys, matchOurOrder, detailsFromOrder, typedDetails,
   batchReplyText, periodDays, cancellationsCsv, rowStatus, flagsFor, splitCommand, extractImageFile, pickerKeyboard,
-  platformFromText, slipDetails, platformFromNumber, canonKey,
+  platformFromText, slipDetails, platformFromNumber, canonKey, plainFromHtml,
 } from '../src/lib/cancellations.js';
 import { loadEnv, loginAs } from './helpers/auth.js';
 
@@ -240,16 +240,53 @@ test('the batch reply: one list per platform, then what needs a person', () => {
     { n: 4, rows: [], dupes: [{ order_number: '300000001', existing: { id: 12, sent_by: 'Karon' } }] },
     { n: 5, error: 'could not download the picture (HTTP 500)' },
   ], { link: 'https://app.example/cancellations' })).toBe([
-    'Alias · 2 orders recorded',
-    "[OK] #206557037 — Nike Free Run 5.0 'Phantom Sail' · CZ1884-010 · size 8.5",
-    '[CHECK] #176889923 — DQ4071-001 · size 9.5 (read as 176889923)',
+    '5 photos · 2 recorded · 1 to check · 1 needs a number · 1 not saved · 1 already logged',
     '',
-    '[MISSED] Photo 3: no order number found — reply with the number to the copy of this photo below, or re-snap it',
-    '[MISSED] Photo 5: not saved (could not download the picture (HTTP 500)) — send it again.',
-    '↩️ #300000001 is already logged as #12 by Karon — not added again',
+    '❌ <b>No order number · Alias · 1 photo</b>',
+    'Photo 3',
+    'Type the number on the Cancellations page, or send the photo again.',
     '',
-    'Check them, or + Add by hand: https://app.example/cancellations',
+    '❌ <b>Not saved · Photo 5</b>',
+    'Could not download the picture (HTTP 500). Send it again.',
+    '',
+    '⚠️ <b>Check 1</b>',
+    '<code>176889923</code> · Alias · DQ4071-001 · 9.5 · read as 176889923',
+    '',
+    '✅ <b>Alias · 1</b>',
+    "<code>206557037</code> · CZ1884-010 · 8.5 · Nike Free Run 5.0 'Phantom…",
+    '',
+    '↩️ <code>300000001</code> already logged as #12 by Karon',
+    '',
+    'Fix on the page: https://app.example/cancellations',
   ].join('\n'));
+  // Seven photos missed for one reason are ONE block listing them — the reason said once.
+  const why = "The order number is the barcode, and it can't be read at this size";
+  const seven = batchReplyText([1, 2, 3, 4, 5, 7, 9].map((k) => ({ n: k, rows: [{ platform: 'sg', order_number: null }], why, sentBack: true })));
+  expect(seven).toBe([
+    '7 photos · 0 recorded · 7 need a number',
+    '',
+    '❌ <b>No order number · Stadium Goods · 7 photos</b>',
+    'Photos 1, 2, 3, 4, 5, 7, 9',
+    `${why}.`,
+    'Each is sent back below: reply to it with the number.',
+    '',
+    'Fix on the Cancellations page.',
+  ].join('\n'));
+  // What came off a label is escaped (the message is Telegram HTML), and what is fine is what
+  // gets cut short when a batch is too long for one message — never what needs someone.
+  expect(batchReplyText([{ n: null, rows: [{ platform: 'alias', order_number: '206557037', product: 'A <b>&</b> B', flags: [] }] }]))
+    .toBe('✅ <b>Alias · 1</b>\n<code>206557037</code> · A &lt;b&gt;&amp;&lt;/b&gt; B');
+  const long = batchReplyText([...Array.from({ length: 120 }, (_, i) => ({ n: i + 1, rows: [{ platform: 'alias', order_number: String(700000000 + i), sku: 'DD1391-100', size: '10', product: 'Nike Dunk Low Retro Panda Black White', flags: [] }] })),
+    { n: 121, rows: [{ platform: 'alias', order_number: '176889923', flags: ['reads_disagree'] }] }]);
+  expect(long.length).toBeLessThan(4000);
+  expect(long).toContain('<code>176889923</code> · Alias · no shoe details · reads disagreed');
+  expect(long).toMatch(/…and \d+ more, on the page/);
+  // Too long even so (a hundred rows to check): cut at a line, so every tag sent is closed.
+  const huge = batchReplyText(Array.from({ length: 150 }, (_, i) => ({ n: i + 1, rows: [{ platform: 'alias', order_number: String(700000000 + i), sku: 'DD1391-100', flags: ['reads_disagree'] }] })));
+  expect(huge.length).toBeLessThan(4000);
+  expect((huge.match(/<(b|code)>/g) || []).length).toBe((huge.match(/<\/(b|code)>/g) || []).length);
+  // If Telegram ever refuses the HTML, the same words go out plain.
+  expect(plainFromHtml('✅ <b>Alias · 1</b>\n<code>1</code> · A &lt;b&gt;&amp; B')).toBe('✅ Alias · 1\n1 · A <b>& B');
   // [OK] = both reads agreed or it is one of our orders; [CHECK] = a person compares it with
   // the photo; nothing to look at → no link.
   expect(rowStatus({ order_number: '1', flags: [] })).toEqual({ tag: 'OK', why: null });
@@ -258,7 +295,7 @@ test('the batch reply: one list per platform, then what needs a person', () => {
   expect(rowStatus({ order_number: null })).toEqual({ tag: 'MISSED', why: null });
   expect(flagsFor({ order_number: '206557037', platform: 'alias' }, { confidence: 0.99, agreed: true, byThird: true })).toEqual(['tie_break']);
   expect(batchReplyText([{ n: null, rows: [{ platform: 'alias', order_number: '206557037', flags: [] }] }], { link: 'x' }))
-    .toBe('Alias · 1 order recorded\n[OK] #206557037 — no shoe details found');
+    .toBe('✅ <b>Alias · 1</b>\n<code>206557037</code> · no shoe details');
   // Commands: "/alias@Bot" in a group is "/alias"; what follows is the note.
   expect(splitCommand('/alias@StickballBot wrong size')).toEqual({ cmd: '/alias', platform: 'alias', rest: 'wrong size' });
   expect(splitCommand('/goat')).toEqual({ cmd: '/goat', platform: null, rest: '' });
@@ -297,14 +334,21 @@ test('separate photos sent together → ONE reply, under the first photo, listin
   expect(saidTo(TG_WH)).toHaveLength(1);
   expect(saidTo(TG_WH)[0].reply_parameters.message_id).toBe(first);
   // (The last line is where to check them: a link when APP_BASE_URL is set, the words otherwise.)
-  expect(said.split('\n').slice(0, 5).join('\n')).toBe([
-    '[dev] Alias · 2 orders recorded',
-    `[OK] #${a} — Nike Dunk Low 'Panda' · DD1391-100 · size 9.5`,
-    `[OK] #${b} — no shoe details found`,
+  // The totals, then what needs someone, then what is fine; every number tap-to-copy.
+  expect(said.split('\n').slice(0, 10).join('\n')).toBe([
+    '[dev] 3 photos · 2 recorded · 1 needs a number',
     '',
-    '[MISSED] Photo 3: no order number found (the reader did not answer (HTTP 500)) — reply with the number to the copy of this photo below, or re-snap it',
+    '❌ <b>No order number · Alias · 1 photo</b>',
+    'Photo 3',
+    'The reader did not answer (HTTP 500).',
+    'It is sent back below: reply to it with the number.',
+    '',
+    '✅ <b>Alias · 2</b>',
+    `<code>${a}</code> · DD1391-100 · 9.5 · Nike Dunk Low 'Panda'`,
+    `<code>${b}</code> · no shoe details`,
   ].join('\n'));
-  expect(said).toMatch(/\n\nCheck them, or \+ Add by hand/);
+  expect(said).toMatch(/\n\nFix on the (page: \S+|Cancellations page\.)$/);
+  expect(saidTo(TG_WH)[0].parse_mode).toBe('HTML');
   // The summary carries the way out for a batch sent on the wrong platform.
   expect(saidTo(TG_WH)[0].reply_markup.inline_keyboard.flat().map((x) => x.callback_data)).toEqual(['cxvoid']);
   const rows =(await list(request)).rows.filter((r) => r.sent_by === WH.name);
@@ -315,14 +359,14 @@ test('separate photos sent together → ONE reply, under the first photo, listin
   // "Type it": the number fills that photo's row — one row, photo and number together.
   const c = `9911${s}3`;
   await hook(request, { from: TG_WH, body: { text: `/alias ${c} DD1391-100 10` } });
-  expect(await lastSaid(TG_WH, 2)).toContain(`(Filled the photo row #${blank.id} that had no order number.)`);
+  expect(await lastSaid(TG_WH, 2)).toContain(`Filled the photo row #${blank.id} that had no order number.`);
   const filled = (await list(request)).rows.find((r) => r.id === blank.id);
   expect(filled).toMatchObject({ order_number: c, sku: 'DD1391-100', size: '10', photo_id: blank.photo_id });
 
   // The same order on a later photo: answered, not recorded again.
   const f4 = await picture(`cx-b4-${s}`, read({ order_number: a }));
   await hook(request, photo(TG_WH, f4));
-  expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`↩️ #${a} is already logged as #\\d+ by ${WH.name} — not added again`));
+  expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`↩️ <code>${a}</code> already logged as #\\d+ by ${WH.name}`));
   expect((await list(request)).rows.filter((r) => r.order_number === a)).toHaveLength(1);
 
   // Telegram re-sending the SAME update records nothing and says nothing more.
@@ -349,7 +393,7 @@ test('an album (caption on one photo) is one batch, one reply, on the caption\'s
   await new Promise((r) => setTimeout(r, 2500));
   expect(saidTo(TG_WH)).toHaveLength(1);
   expect(saidTo(TG_WH)[0].reply_parameters.message_id).toBe(first);
-  expect(said).toMatch(/^\[dev\] TikTok Shop · 2 orders recorded\n/);
+  expect(said).toMatch(/^\[dev\] 2 photos · 2 recorded\n\n✅ <b>TikTok Shop · 2<\/b>\n/);
   const rows = (await list(request)).rows.filter((r) => [`9911${s}5`, `9911${s}6`].includes(r.order_number));
   expect(rows.map((r) => r.platform)).toEqual(['tiktok', 'tiktok']);
 });
@@ -377,10 +421,10 @@ test('our own eBay / SHEIN / pre-sell orders give the shoe by number; one letter
   expect(await lastSaid(TG_WH)).toContain(`#${ebayNo} — Nike Dunk Low Retro 'Panda' · DD1391-100 · size 9.5`);
   const fS = await picture(`cx-s-${s}`, read({ order_number: `GS0N${s}K00E2E` }));
   await hook(request, photo(TG_WH, fS, '/shein'));
-  expect(await lastSaid(TG_WH, 2)).toContain(`#${shein} — SHEIN Jordan title (read as GS0N${s}K00E2E)`);
+  expect(await lastSaid(TG_WH, 2)).toContain(`<code>${shein}</code> · SHEIN · SHEIN Jordan title · read as GS0N${s}K00E2E`);
   const fT = await picture(`cx-t-${s}`, read({ order_number: `GS1N${s}K00E2E` }));
   await hook(request, photo(TG_WH, fT, '/shein'));
-  expect(await lastSaid(TG_WH, 3)).toContain(`#GS1N${s}K00E2E — no shoe details found`);
+  expect(await lastSaid(TG_WH, 3)).toContain(`<code>GS1N${s}K00E2E</code> · no shoe details`);
   const fP = await picture(`cx-p-${s}`, read({ order_number: pre }));
   await hook(request, photo(TG_WH, fP, '/alias'));
   expect(await lastSaid(TG_WH, 4)).toContain(`#${pre} — E2E Cx Presell Shoe · CX${s}-001 · size 10`);
@@ -416,7 +460,7 @@ test('an eBay label with no order number is matched by its tracking number — t
   pictures.set(fileId, await sharp(await page.screenshot()).jpeg({ quality: 85 }).toBuffer());
   nextRead = 'fail';
   await hook(request, photo(TG_WH, fileId, '/ebay'));
-  expect(await lastSaid(TG_WH)).toBe(`[dev] eBay · 1 order recorded\n[OK] #${ebayNo} — Air Jordan 4 'Bred Reimagined' · size 11 (found by its tracking number)`);
+  expect(await lastSaid(TG_WH)).toBe(`[dev] ✅ <b>eBay · 1</b>\n<code>${ebayNo}</code> · 11 · Air Jordan 4 'Bred Reimagin… · found by its tracking number`);
   expect(prompts).toHaveLength(0);
   expect((await list(request)).rows.find((r) => r.order_number === ebayNo)).toMatchObject({ order_match: 'ebay', platform: 'ebay' });
   await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
@@ -441,7 +485,7 @@ test('a printed Alias label is read on our own server — number, SKU, size and 
   await hook(request, photo(TG_WH, fileId, '/alias customer asked'));
   // [OK] when the first two reads agree; [CHECK] when a third read had to decide (it does on
   // some CI fonts) — the number, the shoe, the SKU and the size are the same either way.
-  expect(await lastSaid(TG_WH)).toMatch(new RegExp(`^\\[dev\\] Alias · 1 order recorded\\n\\[(OK|CHECK)\\] #${num} — Nike Air Max 90 'Anthracite Team Red' · DQ4071-001 · size 9\\.5`));
+  expect(await lastSaid(TG_WH)).toMatch(new RegExp(`^\\[dev\\] (✅ <b>Alias · 1</b>|⚠️ <b>Check 1</b>)\\n<code>${num}</code> · (Alias · )?DQ4071-001 · 9\\.5 · Nike Air Max 90 'Anthracite…`));
   const row = (await list(request)).rows.find((r) => r.order_number === num);
   expect(row).toMatchObject({ platform: 'alias', sku: 'DQ4071-001', size: 'US M 9.5', reason: 'customer asked', details_from: 'label' });
   expect(prompts).toHaveLength(0);
@@ -462,7 +506,7 @@ test('a style code with no name on the photo is named from our catalogue; a type
   await q(`INSERT INTO products (sku, size, name, source) VALUES ('ZX9911-001', '9', 'E2E Cx Catalogue Shoe', 'e2e-cx')`);
   const n = `9911${s}8`;
   await hook(request, { from: TG_WH, body: { text: `/alias ${n} ZX9911 001 9 - wrong size` } });
-  expect(await lastSaid(TG_WH)).toBe(`[dev] Alias · 1 order recorded\n[OK] #${n} — E2E Cx Catalogue Shoe · ZX9911-001 · size 9`);
+  expect(await lastSaid(TG_WH)).toBe(`[dev] ✅ <b>Alias · 1</b>\n<code>${n}</code> · ZX9911-001 · 9 · E2E Cx Catalogue Shoe`);
   expect((await list(request)).rows.find((r) => r.order_number === n)).toMatchObject({ source: 'typed', reason: 'wrong size', details_from: 'typed,catalogue' });
   await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
 });
@@ -472,7 +516,7 @@ test('two reads that disagree still record the number, with what the second read
   const a = `9911${String(Date.now()).slice(-6)}`; const b = `${a.slice(0, -1)}${(Number(a.at(-1)) + 1) % 10}`;
   const f = await picture(`cx-d-${a}`, [read({ platform: 'alias', order_number: a, confidence: 0.98 }), read({ platform: 'alias', order_number: b, confidence: 0.98 })]);
   await hook(request, photo(TG_WH, f, '/alias'));
-  expect(await lastSaid(TG_WH)).toContain(`[CHECK] #${a} — no shoe details found (reads disagreed)`);
+  expect(await lastSaid(TG_WH)).toContain(`<code>${a}</code> · Alias · no shoe details · reads disagreed`);
   const row = (await list(request)).rows.find((r) => r.order_number === a);
   expect(row.note).toBe(`Second read said ${b}`);
 });
@@ -481,7 +525,7 @@ test('an AI account with no credit left is said plainly, and the photo is still 
   sent.length = 0;
   const f = await picture(`cx-quota-${Date.now()}`, 'quota');
   await hook(request, photo(TG_WH, f, '/alias'));
-  expect(await lastSaid(TG_WH)).toMatch(/\[MISSED\] This photo: no order number found \(the AI reader is out of credit \(OpenAI billing\) — tell an admin\)/);
+  expect(await lastSaid(TG_WH)).toMatch(/❌ <b>No order number · Alias · 1 photo<\/b>\nThe AI reader is out of credit \(OpenAI billing\) — tell an admin\./);
 });
 
 test('a stranger is told to connect; a by-hand add refuses a duplicate; a removed number may come back', async ({ request }) => {
@@ -492,7 +536,7 @@ test('a stranger is told to connect; a by-hand add refuses a duplicate; a remove
   sent.length = 0;
   const n = `${String(Date.now()).slice(-8)}-${String(Date.now()).slice(-8)}`;
   await hook(request, { from: TG_WH, body: { text: `${n} - customer asked` } });
-  expect(await lastSaid(TG_WH)).toMatch(new RegExp(`StockX · 1 order recorded\\n\\[OK\\] #${n}`));
+  expect(await lastSaid(TG_WH)).toMatch(new RegExp(`✅ <b>StockX · 1</b>\\n<code>${n}</code>`));
   const row = (await list(request)).rows.find((r) => r.order_number === n);
   expect(row).toMatchObject({ platform: 'stockx', source: 'typed', reason: 'customer asked', photo_id: null });
 
@@ -518,7 +562,7 @@ test('/sg in the caption names the platform (over the reader\'s guess); /kc firs
   sent.length = 0; prompts.length = 0;
   const n = `9911${String(Date.now()).slice(-7)}`;
   await hook(request, photo(TG_WH, await picture(`cx-sg-${n}`, read({ platform: 'stockx', order_number: n })), '/sg box damaged'));
-  expect(await lastSaid(TG_WH)).toMatch(new RegExp(`Stadium Goods · 1 order recorded\\n\\[OK\\] #${n}`));
+  expect(await lastSaid(TG_WH)).toMatch(new RegExp(`✅ <b>Stadium Goods · 1</b>\\n<code>${n}</code>`));
   expect(prompts.some((p) => p.includes('The sender says these orders are from Stadium Goods'))).toBe(true);
   expect((await list(request)).rows.find((r) => r.order_number === n)).toMatchObject({ platform: 'sg', reason: 'box damaged' });
 
@@ -526,7 +570,7 @@ test('/sg in the caption names the platform (over the reader\'s guess); /kc firs
   expect(await lastSaid(TG_WH, 2)).toMatch(/Kicks Crew mode on for 90 s — send your photos/);
   const n1 = `9911${String(Date.now()).slice(-7)}1`;
   await hook(request, photo(TG_WH, await picture(`cx-kc-${n1}`, read({ order_number: n1 }))));
-  expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`Kicks Crew · 1 order recorded\\n\\[OK\\] #${n1}`));
+  expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`✅ <b>Kicks Crew · 1</b>\\n<code>${n1}</code>`));
 
   const before = (await list(request)).rows.length;
   await hook(request, photo(TG_WH, await picture(`cx-unk-${n1}`), '/goat'));
@@ -549,7 +593,7 @@ test('the cancellations group: photos and commands are recorded, chatter (even a
   await hook(request, { from: TG_WH, chat: GROUP, body: { text: '/alias@StickballBot' } });
   expect(await lastSaid(GROUP)).toMatch(/Alias mode on for 90 s — send your photos/);
   const pid = await hook(request, { from: TG_WH, chat: GROUP, body: { photo: [{ file_id: await picture(`cx-grp-${n}`, read({ order_number: n })) }] } });
-  expect(await lastSaid(GROUP, 2)).toMatch(new RegExp(`Alias · 1 order recorded\\n\\[OK\\] #${n}`));
+  expect(await lastSaid(GROUP, 2)).toMatch(new RegExp(`✅ <b>Alias · 1</b>\\n<code>${n}</code>`));
   expect(saidTo(GROUP).at(-1).reply_parameters.message_id).toBe(pid);
   expect((await list(request)).rows.find((r) => r.order_number === n)).toMatchObject({ platform: 'alias', sent_by: WH.name });
 
@@ -658,13 +702,13 @@ test('a photo with NO platform is read first: one of our Shopify orders (or a Te
     // No command, no caption, nothing on: the number IS our Alias order → recorded as Alias, the
     // shoe from the order, and nobody is asked.
     const first = await hook(request, photo(TG_WH, await picture(`cx-ix1-${s}`, read({ order_number: alias }))));
-    expect(await lastSaid(TG_WH)).toBe(`[dev] Alias · 1 order recorded\n[OK] #${alias} — Jordan 4 Retro OG Flight Club · IM4002-100 · size 11`);
+    expect(await lastSaid(TG_WH)).toBe(`[dev] ✅ <b>Alias · 1</b>\n<code>${alias}</code> · IM4002-100 · 11 · Jordan 4 Retro OG Flight Cl…`);
     expect(saidTo(TG_WH)[0].reply_parameters.message_id).toBe(first);
     expect(saidTo(TG_WH)[0].reply_markup.inline_keyboard.flat().map((x) => x.callback_data)).toEqual(['cxvoid']);   // no platform buttons
     expect((await list(request)).rows.find((r) => r.order_number === alias)).toMatchObject({ platform: 'alias', order_match: 'shopify', details_from: 'shopify', sku: 'IM4002-100', size: '11' });
     // A Temu purchase order names its platform by its shape.
     await hook(request, photo(TG_WH, await picture(`cx-ix2-${s}`, read({ order_number: temu }))));
-    expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`^\\[dev\\] Temu · 1 order recorded\\n\\[OK\\] #${temu}`));
+    expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`^\\[dev\\] ✅ <b>Temu · 1</b>\\n<code>${temu}</code>`));
 
     // The index is complete and current: a Temu number in none of our orders is most likely misread.
     // Not so an Alias one — some real Alias orders never reach Shopify (4 clean reads of 7, live
@@ -674,10 +718,10 @@ test('a photo with NO platform is read first: one of our Shopify orders (or a Te
     [JSON.stringify({ state: 'done', firstDone: true, lastAt: new Date().toISOString(), cursor: new Date().toISOString() })]);
     const strayTemu = `PO-211-9911${s}5555555`;
     await hook(request, photo(TG_WH, await picture(`cx-ix3-${s}`, read({ order_number: strayTemu })), '/temu'));
-    expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`\\[CHECK\\] #${strayTemu} — no shoe details found \\(not found in our orders\\)`));
+    expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`⚠️ <b>Check 1</b>\\n<code>${strayTemu}</code> · Temu · no shoe details · not found in our orders`));
     expect((await list(request)).rows.find((r) => r.order_number === strayTemu).flags).toContain('not_in_shopify');
     await hook(request, photo(TG_WH, await picture(`cx-ix4-${s}`, read({ order_number: stray })), '/alias'));
-    expect(await lastSaid(TG_WH, 4)).toMatch(new RegExp(`Alias · 1 order recorded\\n\\[OK\\] #${stray} — no shoe details found$`));
+    expect(await lastSaid(TG_WH, 4)).toMatch(new RegExp(`✅ <b>Alias · 1</b>\\n<code>${stray}</code> · no shoe details$`));
     expect((await list(request)).rows.find((r) => r.order_number === stray).flags).not.toContain('not_in_shopify');
   } finally {
     await q(`DELETE FROM app_settings WHERE key = 'shopify_order_index_sync' AND updated_by = 'e2e-cx'`);
@@ -698,8 +742,8 @@ test('a photo with no number read is sent back, and a reply to THAT copy with th
   const p1 = await hook(request, photo(TG_WH, f1, '/sg'));
   const p2 = await hook(request, photo(TG_WH, f2));                              // Stadium Goods is on
   const said = await lastSaid(TG_WH);
-  expect(said).toMatch(/\[MISSED\] Photo 1: no order number found[^\n]*— reply with the number to the copy of this photo below, or re-snap it/);
-  expect(said).toMatch(/\[MISSED\] Photo 2: no order number found/);
+  // ONE block for the two missed photos (same marketplace, same reason), not a line each.
+  expect(said).toMatch(/^\[dev\] 2 photos · 0 recorded · 2 need a number\n\n❌ <b>No order number · Stadium Goods · 2 photos<\/b>\nPhotos 1, 2\n[^\n]+\nEach is sent back below: reply to it with the number\./);
   // Both photos come back, each on its own, as a reply to the photo it is a copy of — the
   // same Telegram file, nothing uploaded again.
   await expect.poll(() => copies.length, { timeout: 20_000 }).toBe(2);
@@ -711,7 +755,7 @@ test('a photo with no number read is sent back, and a reply to THAT copy with th
 
   // The number, replied onto the SECOND copy: it is the second photo's — not the oldest open row's.
   const replyId = await hook(request, { from: TG_WH, body: { text: n2, reply_to_message: { message_id: copies[1].message_id } } });
-  expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`Stadium Goods · 1 order recorded\\n\\[OK\\] #${n2}[\\s\\S]*Filled the photo row #\\d+ that had no order number`));
+  expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`✅ <b>Stadium Goods · 1</b>\\n<code>${n2}</code>[\\s\\S]*Filled the photo row #\\d+ that had no order number\\.$`));
   expect(await rowOf(p2)).toMatchObject({ order_number: n2, platform: 'sg' });
   expect((await rowOf(p1)).order_number).toBe(null);
   // A 👍 on the reply (taken) and on the copy (that photo is done) — and on nothing else.
@@ -733,7 +777,7 @@ test('a photo with no number read is sent back, and a reply to THAT copy with th
   const first = await rowOf(p1);
   await q(`UPDATE cancellations SET sku = 'DM4044-001', size = '12', details_from = 'label' WHERE id = $1`, [first.id]);
   await hook(request, { from: TG_WH, body: { text: `9911${s}31`, reply_to_message: { message_id: copies[0].message_id } } });
-  expect(await lastSaid(TG_WH, 5)).toMatch(new RegExp(`\\[OK\\] #9911${s}31 — DM4044-001 · size 12`));
+  expect(await lastSaid(TG_WH, 5)).toMatch(new RegExp(`<code>9911${s}31</code> · DM4044-001 · 12$`, 'm'));
   expect((await list(request)).rows.find((r) => r.id === Number(first.id))).toMatchObject({ order_number: `9911${s}31`, sku: 'DM4044-001', size: '12', details_from: 'label' });
 
   // In the group, a reply to anything that is not one of those copies is chatter: nothing is said.
@@ -773,7 +817,7 @@ test('photos with no platform wait for a tap: ONE question, the pick files them 
   await tap(request, TG_WH, null, 'cxpick:alias', { message_id: ask.message_id });
   const summary = () => edits.filter((e) => e.message_id === ask.message_id).at(-1) || {};
   await expect.poll(() => summary().text || '', { timeout: 20_000 }).toBe(
-    `[dev] Alias · 2 orders recorded\n[OK] #${a} — no shoe details found\n[OK] #${b} — no shoe details found`);
+    `[dev] 2 photos · 2 recorded\n\n✅ <b>Alias · 2</b>\n<code>${a}</code> · no shoe details\n<code>${b}</code> · no shoe details`);
   expect(summary().reply_markup.inline_keyboard.flat().map((x) => x.callback_data)).toEqual(['cxvoid']);
   expect(saidTo(TG_WH)).toHaveLength(1);
   expect((await list(request)).rows.filter((r) => [a, b].includes(r.order_number)).map((r) => r.platform)).toEqual(['alias', 'alias']);
@@ -805,7 +849,7 @@ test('the note after a command rides on every photo; an image sent "as a file" i
   expect(await lastSaid(TG_WH)).toMatch(/TikTok Shop mode on for 90 s — send your photos[\s\S]*Note on each: "wrong size shipped"/);
   const fa = await picture(`cx-doc-${s}`, read({ order_number: a }));
   await hook(request, { from: TG_WH, body: { document: { file_id: fa, mime_type: 'image/jpeg', file_name: 'label.jpg' } } });
-  expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`TikTok Shop · 1 order recorded\\n\\[OK\\] #${a}`));
+  expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`✅ <b>TikTok Shop · 1</b>\\n<code>${a}</code>`));
   expect((await list(request)).rows.find((r) => r.order_number === a)).toMatchObject({ platform: 'tiktok', reason: 'wrong size shipped' });
   expect((await q('SELECT as_file FROM cancellation_photos WHERE tg_file_id = $1', [fa]))[0].as_file).toBe(true);
 
@@ -818,7 +862,7 @@ test('the note after a command rides on every photo; an image sent "as a file" i
   await hook(request, { from: TG_WH, body: { text: '/kc' } });
   expect(await lastSaid(TG_WH, 2)).toMatch(/Kicks Crew — reading the photo you already sent/);
   await expect.poll(() => edits.filter((e) => e.message_id === askId).at(-1)?.text || '', { timeout: 20_000 })
-    .toMatch(new RegExp(`Kicks Crew · 1 order recorded\\n\\[OK\\] #${b}`));
+    .toMatch(new RegExp(`✅ <b>Kicks Crew · 1</b>\\n<code>${b}</code>`));
   expect((await list(request)).rows.find((r) => r.order_number === b)).toMatchObject({ platform: 'kc' });
   await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
 });
@@ -835,7 +879,7 @@ test('a question nobody answers: the sweep files those photos with no platform, 
   expect((await q('SELECT held_at, read_status, reply_message_id FROM cancellation_photos WHERE id = $1', [id]))[0])
     .toMatchObject({ held_at: null, read_status: 'nothing', reply_message_id: '777001' });
   expect(edits.at(-1)).toMatchObject({ message_id: 777001 });
-  expect(edits.at(-1).text).toMatch(/\[MISSED\] This photo: no order number found/);
+  expect(edits.at(-1).text).toMatch(/❌ <b>No order number · 1 photo<\/b>/);
   expect(saidTo(TG_WH)).toHaveLength(0);
 });
 
@@ -870,7 +914,7 @@ test('a restart mid-batch: the sweep re-reads what never finished and answers on
   expect(out).toMatchObject({ reread: 1, answered: 1 });
   expect(saidTo(TG_WH)).toHaveLength(1);
   expect(saidTo(TG_WH)[0].reply_parameters.message_id).toBe(990000 + Number(s.slice(-3)));
-  expect(saidTo(TG_WH)[0].text).toMatch(new RegExp(`Alias · 1 order recorded\\n\\[OK\\] #9911${s}9[\\s\\S]*Photo 2: no order number found`));
+  expect(saidTo(TG_WH)[0].text).toMatch(new RegExp(`No order number · Alias · 1 photo</b>\\nPhoto 2[\\s\\S]*✅ <b>Alias · 1</b>\\n<code>9911${s}9</code>`));
   // A second sweep finds nothing to say.
   expect(await sweepCancellationPhotos()).toMatchObject({ reread: 0, answered: 0 });
   expect(saidTo(TG_WH)).toHaveLength(1);

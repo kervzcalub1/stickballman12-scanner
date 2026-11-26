@@ -8063,6 +8063,8 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
 .bl-form label { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .bl-form .bl-wide { grid-column: 1 / -1; }
 .bl-lines .input { width: 100%; min-width: 110px; }
+.bl-lines td:nth-child(2) { width: 38%; }
+.bl-lines td:nth-child(2) .input { min-width: 200px; }
 .bl-lines .input.bl-sm { min-width: 76px; width: 96px; text-align: right; }
 .bl-foot { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 .bl-danger { color: #e08f8f; }
@@ -8079,3 +8081,8 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
   .bl-table:not(.bl-lines) td::before { content: attr(data-label); color: var(--muted); text-align: left; flex: none; }
   .bl-table:not(.bl-lines) td:not([data-label])::before { content: none; }
 }
+.bl-scan { display: flex; gap: 6px; align-items: stretch; max-width: 560px; margin: 4px 0 6px; }
+.bl-scan input { flex: 1; min-width: 0; }
+.bl-scan-note { margin: 0 0 8px; }
+.bl-scan-note.ok { color: #7bc99a; }
+.bl-scan-note.bad { color: #e08f8f; }

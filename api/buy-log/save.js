@@ -24,7 +24,9 @@ export default async function handler(req, res) {
   if (b.id != null && b.id !== '' && !id) return send(res, 400, { ok: false, error: 'Which order?' });
   const orderedOn = b.ordered_on ? realDate(b.ordered_on) : null;
   if (b.ordered_on && !orderedOn) return send(res, 400, { ok: false, error: 'That order date is not a real date.' });
-  const tracking = [...new Set((Array.isArray(b.tracking_numbers) ? b.tracking_numbers : String(b.tracking_numbers || '').split(/[\s,;]+/))
+  // Not on the form any more (2026-11-26: tracking comes from the linked POs' labels); kept for
+  // an order that already has some, and left untouched when the field is not sent.
+  const tracking = b.tracking_numbers == null ? null : [...new Set((Array.isArray(b.tracking_numbers) ? b.tracking_numbers : String(b.tracking_numbers || '').split(/[\s,;]+/))
     .map((t) => String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '')).filter((t) => t.length >= 6 && t.length <= 40))].slice(0, 60);
 
   const raw = Array.isArray(b.lines) ? b.lines : [];

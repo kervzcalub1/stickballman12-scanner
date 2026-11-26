@@ -16656,7 +16656,8 @@ export async function listBuyLogs({ supplierUserId = null, id = null, q = '', fr
                        FROM buy_log_lines l WHERE l.buy_id = b.id), '[]'::json) AS lines,
            coalesce((SELECT json_agg(json_build_object('id', p.id, 'paid_on', to_char(p.paid_on, 'YYYY-MM-DD'), 'amount', p.amount, 'method', p.method, 'paid_by', p.paid_by, 'note', p.note, 'created_by', p.created_by, 'created_at', p.created_at) ORDER BY p.paid_on, p.id)
                        FROM buy_log_payments p WHERE p.buy_id = b.id), '[]'::json) AS payments,
-           coalesce((SELECT json_agg(json_build_object('po_id', o.id, 'po_code', o.po_code, 'status', o.status, 'tag_code', o.tag_code) ORDER BY o.id)
+           coalesce((SELECT json_agg(json_build_object('po_id', o.id, 'po_code', o.po_code, 'status', o.status, 'tag_code', o.tag_code,
+                                 'tracking', coalesce((SELECT json_agg(x2.tracking_number ORDER BY x2.box_number) FROM po_boxes x2 WHERE x2.po_id = o.id AND coalesce(x2.tracking_number, '') <> ''), '[]'::json)) ORDER BY o.id)
                        FROM buy_log_pos x JOIN purchase_orders o ON o.id = x.po_id WHERE x.buy_id = b.id), '[]'::json) AS pos,
            coalesce((SELECT json_agg(json_build_object('sku', s.sku, 'size', s.size, 'qty', s.qty, 'name', s.name))
                        FROM (SELECT l.sku, l.size, max(l.name) AS name, sum(coalesce(l.qty_expected, 0))::int AS qty
@@ -16675,6 +16676,7 @@ export async function listBuyLogs({ supplierUserId = null, id = null, q = '', fr
             OR upper(coalesce(b.order_number, '')) LIKE ${like} OR upper(coalesce(b.store, '')) LIKE ${like}
             OR upper(b.supplier_name) LIKE ${like} OR ('BL-' || b.id) = ${term.toUpperCase()}
             OR EXISTS (SELECT 1 FROM unnest(b.tracking_numbers) t WHERE upper(t) LIKE ${like})
+            OR EXISTS (SELECT 1 FROM buy_log_pos x JOIN po_boxes pb ON pb.po_id = x.po_id WHERE x.buy_id = b.id AND upper(coalesce(pb.tracking_number, '')) LIKE ${like})
             OR EXISTS (SELECT 1 FROM buy_log_lines l WHERE l.buy_id = b.id
                         AND (upper(coalesce(l.name, '')) LIKE ${like}
                              OR (${bare}::text <> '%%' AND upper(regexp_replace(l.sku, '[^A-Za-z0-9]', '', 'g')) LIKE ${bare}))))
@@ -16684,19 +16686,19 @@ export async function listBuyLogs({ supplierUserId = null, id = null, q = '', fr
 
 // Create or update the order and its lines. A line keeps WHO typed it unless its SKU, size,
 // pairs or cost changed — then it is the person who changed it.
-export async function saveBuyLog({ id = null, supplierUserId, supplierName, store, orderNumber, orderedOn, tracking = [], note, lines = [] }, actor) {
+export async function saveBuyLog({ id = null, supplierUserId, supplierName, store, orderNumber, orderedOn, tracking = null, note, lines = [] }, actor) {
   const sql = db();
   let buyId = id;
   if (!buyId) {
     const r = await sql`
       INSERT INTO buy_logs (supplier_user_id, supplier_name, store, order_number, ordered_on, tracking_numbers, note, created_by, updated_by)
-      VALUES (${supplierUserId}, ${supplierName}, ${store || null}, ${orderNumber || null}, ${orderedOn || null}::date, ${tracking}::text[], ${note || null}, ${actor}, ${actor})
+      VALUES (${supplierUserId}, ${supplierName}, ${store || null}, ${orderNumber || null}, ${orderedOn || null}::date, ${tracking || []}::text[], ${note || null}, ${actor}, ${actor})
       RETURNING id`;
     buyId = Number(r[0].id);
   } else {
     const r = await sql`
       UPDATE buy_logs SET store = ${store || null}, order_number = ${orderNumber || null}, ordered_on = ${orderedOn || null}::date,
-             tracking_numbers = ${tracking}::text[], note = ${note || null}, updated_by = ${actor}, updated_at = now()
+             tracking_numbers = coalesce(${tracking}::text[], tracking_numbers), note = ${note || null}, updated_by = ${actor}, updated_at = now()
        WHERE id = ${buyId} RETURNING id`;
     if (!r[0]) return null;
   }

@@ -65,6 +65,19 @@ is listed — one row per line (`BUY_COLS`). `?id=` is the open order, `?new=1` 
 Order: the declaration, then Payments, then Shipped and received (link POs, the comparison with
 "by size (ordered → received)"). Phone: the tables become cards under 768 px.
 
+## Scan, name autofill, no tracking field (2026-11-26, owner, same day)
+- **Scan or type a code** above the lines (`resolve` in `BuyOrder`): a box barcode (UPC) →
+  `api.searchUpc` → the SKU, the name **and the size**, **+1 pair per scan** on that SKU + size
+  line; a typed SKU → `api.searchSku` → its line with the name, pairs left blank. The camera button
+  opens `CameraScanner` (continuous, 2.5 s re-fire gap). Not found says so and adds nothing.
+- **A SKU typed straight into the table fills the shoe name when the field is left** (`nameFor`,
+  one lookup per SKU per open order, never over a name somebody typed). Both use the app's one
+  product lookup (`sku-search` / `upc-search`: Alias → StockX → Nike), already open to suppliers.
+- **The tracking-number field is gone** — "not relevant": the tracking numbers are the linked POs'
+  labels (`pos[].tracking`, from `po_boxes`), shown on the PO chip and in the download's Tracking #
+  column; the search matches them too. `buy_logs.tracking_numbers` stays (unused by the form; a
+  save that does not send it leaves it alone).
+
 ## Not built (said to the owner)
 - Proof photo on a payment.
 - Filling the cost of received pairs from the order's lines (Joey had 1,865 pairs with no cost on

@@ -199,14 +199,44 @@ test('the supplier’s portal: the card and the page only with the privilege, an
   await expect(joey.page.getByText('Payments are recorded by the Stickballman12 team.')).toBeVisible();
   await expect(joey.page.getByRole('button', { name: 'Record payment' })).toHaveCount(0);
   if (process.env.BL_SHOTS) { await joey.page.setViewportSize({ width: 1300, height: 1500 }); await joey.page.screenshot({ path: `${process.env.BL_SHOTS}/supplier-order.png`, fullPage: true }); }
-  // A new order: SKU, pairs and cost are enough.
+  // A new order. The product lookup is the app's own (sku-search / upc-search) — stubbed here,
+  // so no marketplace is called: a typed SKU brings its name, a scanned box barcode brings
+  // the SKU, the name AND the size, one pair a scan.
+  await joey.page.route('**/api/sku-search', async (route) => {
+    const sku = String(route.request().postDataJSON().sku || '').toUpperCase();
+    return sku.includes('NOPE') ? route.fulfill({ status: 404, json: { ok: false, error: 'No product found.' } })
+      : route.fulfill({ json: { ok: true, product: { sku, name: `E2E Shoe ${sku}` } } });
+  });
+  await joey.page.route('**/api/upc-search', (route) => route.fulfill({ json: { ok: true, product: { sku: `${SKU}-U`, name: 'E2E Scanned Shoe', scannedSize: '9.5' } } }));
   await joey.page.getByRole('button', { name: '← All orders' }).click();
-  if (process.env.BL_SHOTS) await joey.page.screenshot({ path: `${process.env.BL_SHOTS}/supplier-list.png`, fullPage: true });
   await joey.page.getByRole('button', { name: '＋ New order' }).click();
-  await joey.page.getByLabel('SKU, line 1').fill(`${SKU}-N`);
+  // There is no tracking field: the tracking numbers are the linked PO's labels.
+  await expect(joey.page.getByLabel('Tracking numbers')).toHaveCount(0);
+  const scan = joey.page.getByLabel('Scan or type a UPC or SKU');
+  await scan.fill(`${SKU}-n`); await scan.press('Enter');
+  await expect(joey.page.getByLabel('SKU, line 1')).toHaveValue(`${SKU}-N`);
+  await expect(joey.page.getByLabel('Shoe name, line 1')).toHaveValue(`E2E Shoe ${SKU}-N`);
+  await scan.fill('196149780863'); await scan.press('Enter');
+  await scan.fill('196149780863'); await scan.press('Enter');
+  await expect(joey.page.getByLabel('SKU, line 2')).toHaveValue(`${SKU}-U`);
+  await expect(joey.page.getByLabel('Size, line 2')).toHaveValue('9.5');
+  await expect(joey.page.getByLabel('Pairs, line 2')).toHaveValue('2');
+  await expect(joey.page.getByText('E2E Scanned Shoe · +1 pair')).toBeVisible();
+  // Not found says so, and adds nothing.
+  await scan.fill('NOPE-123'); await scan.press('Enter');
+  await expect(joey.page.getByText(/No shoe found for “NOPE-123”/)).toBeVisible();
+  await expect(joey.page.getByLabel('SKU, line 3')).toHaveCount(0);
+  // Typed straight into the table: leaving the SKU box fills the name.
+  await joey.page.getByRole('button', { name: '＋ Add a shoe' }).click();
+  await joey.page.getByLabel('SKU, line 3').fill(`${SKU}-T`);
+  await joey.page.getByLabel('Pairs, line 3').fill('1');
+  await expect(joey.page.getByLabel('Shoe name, line 3')).toHaveValue(`E2E Shoe ${SKU}-T`);
+  await joey.page.getByLabel('Cost per pair, line 3').fill('10');
+  await joey.page.getByLabel('Cost per pair, line 2').fill('20');
   await joey.page.getByLabel('Pairs, line 1').fill('6');
   await joey.page.getByLabel('Cost per pair, line 1').fill('55');
-  await expect(joey.page.getByText('$330.00').first()).toBeVisible();
+  await expect(joey.page.getByText('$380.00').first()).toBeVisible();
+  if (process.env.BL_SHOTS) { await joey.page.setViewportSize({ width: 1300, height: 1100 }); await joey.page.screenshot({ path: `${process.env.BL_SHOTS}/new-order.png`, fullPage: true }); }
   await joey.page.getByRole('button', { name: 'Save the order' }).click();
   await expect(joey.page.getByText('No payment recorded yet.')).toBeVisible();
   await expect(joey.page).toHaveURL(/id=\d+/);

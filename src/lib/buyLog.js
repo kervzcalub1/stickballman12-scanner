@@ -88,7 +88,7 @@ export function shapeBuy(b) {
   if (!b) return null;
   const lines = (b.lines || []).map((l) => ({ ...l, id: Number(l.id), qty: Number(l.qty), unit_cost: Number(l.unit_cost), size: l.size || '' }));
   const payments = (b.payments || []).map((p) => ({ ...p, id: Number(p.id), amount: Number(p.amount) }));
-  const pos = (b.pos || []).map((p) => ({ ...p, po_id: Number(p.po_id) }));
+  const pos = (b.pos || []).map((p) => ({ ...p, po_id: Number(p.po_id), tracking: p.tracking || [] }));
   const cmp = buyCompare(lines, b.shipped || [], b.received || [], { linked: pos.length > 0 });
   return {
     id: Number(b.id), code: buyCode(b.id), supplier_user_id: b.supplier_user_id == null ? null : Number(b.supplier_user_id),
@@ -119,7 +119,7 @@ export function buyRows(buys = []) {
         code: b.code, ordered_on: b.ordered_on, supplier: b.supplier_name, store: b.store, order_number: b.order_number,
         sku: l.sku, name: l.name || '', size: l.size || '', qty: l.qty, unit_cost: l.unit_cost, line_total: r2(l.qty * l.unit_cost),
         order_total: b.money.total, paid: b.money.paid, balance: b.money.balance, payment: PAY_LABEL[b.money.state],
-        tracking: (b.tracking_numbers || []).join(' '), pos: (b.pos || []).map((p) => p.po_code).join(' '),
+        tracking: [...new Set([...(b.pos || []).flatMap((p) => p.tracking || []), ...(b.tracking_numbers || [])])].join(' '), pos: (b.pos || []).map((p) => p.po_code).join(' '),
         sku_shipped: c ? c.shipped : 0, sku_received: c ? c.received : 0, receiving: RECV_LABEL[b.receiving], note: b.note || '',
       });
     }

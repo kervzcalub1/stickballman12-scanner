@@ -10,9 +10,11 @@
 //   · the purchase orders it ships on → ordered vs shipped vs received, per SKU
 // and the whole log downloads as Excel / CSV, one row per line.
 // `?id=` is the open order and `?new=1` the blank form, so a refresh stays where you were.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar } from '../components/common.jsx';
+import { Icon } from '../components/NavIcons.jsx';
+import { isUpcCode } from '../lib/codes.js';
 import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { estToday, PH_DATETIME } from '../lib/format.js';
@@ -27,6 +29,8 @@ const RECV_TONE = { no_po: 'muted', not_shipped: 'muted', shipped: 'info', part:
 const METHODS = ['Zelle', 'Cash', 'Wire', 'Cash App', 'Venmo', 'Card', 'Check', 'Other'];
 const when = (t) => (t ? `${PH_DATETIME.format(new Date(t))} EST` : '');
 const blankLine = () => ({ key: Math.random().toString(36).slice(2), sku: '', name: '', size: '', qty: '', unit_cost: '' });
+const CameraScanner = lazy(() => import('../components/CameraScanner.jsx'));
+const bareSku = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const Chip = ({ tone, children }) => <span className={`bl-chip ${tone}`}>{children}</span>;
 
 export function BuyLog({ user, onHome, onSignOut }) {
@@ -76,7 +80,7 @@ export function BuyLog({ user, onHome, onSignOut }) {
             arrived. {can.all ? 'A supplier enters their own orders; you can enter one for them, and you record the payments.' : 'Enter each order here as you place it. Sizes are optional — leave them blank when the store picks them.'}
           </p>
           <div className="bl-toolbar">
-            <input type="search" className="oo-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="SKU, order #, store or tracking…" aria-label="Search the buy log" />
+            <input type="search" className="oo-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="SKU, order # or store…" aria-label="Search the buy log" />
             <label><span className="muted xs">Ordered from</span><input className="input" type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} aria-label="From date" /></label>
             <label><span className="muted xs">to</span><input className="input" type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} aria-label="To date" /></label>
             {(q || from || to) && <button type="button" className="btn ghost sm" onClick={() => { setQ(''); setFrom(''); setTo(''); }}>Clear</button>}
@@ -130,7 +134,7 @@ function BuyOrder({ id, suppliers, canAll, onClose, onSaved, onSignOut }) {
   const [buy, setBuy] = useState(null);
   const [can, setCan] = useState({ edit: true, pay: false });
   const [pos, setPos] = useState([]);
-  const [form, setForm] = useState({ supplier_user_id: '', store: '', order_number: '', ordered_on: estToday(), tracking: '', note: '' });
+  const [form, setForm] = useState({ supplier_user_id: '', store: '', order_number: '', ordered_on: estToday(), note: '' });
   const [lines, setLines] = useState([blankLine()]);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -140,7 +144,7 @@ function BuyOrder({ id, suppliers, canAll, onClose, onSaved, onSignOut }) {
   const [poPick, setPoPick] = useState('');
 
   const fill = (b) => {
-    setForm({ supplier_user_id: b.supplier_user_id || '', store: b.store, order_number: b.order_number, ordered_on: b.ordered_on || '', tracking: (b.tracking_numbers || []).join('\n'), note: b.note });
+    setForm({ supplier_user_id: b.supplier_user_id || '', store: b.store, order_number: b.order_number, ordered_on: b.ordered_on || '', note: b.note });
     setLines(b.lines.map((l) => ({ key: `l${l.id}`, id: l.id, sku: l.sku, name: l.name || '', size: l.size || '', qty: String(l.qty), unit_cost: String(l.unit_cost), entered_by: l.entered_by })));
     setDirty(false);
   };
@@ -156,6 +160,54 @@ function BuyOrder({ id, suppliers, canAll, onClose, onSaved, onSignOut }) {
   // Someone else's payment or a new receive shows up by itself — never over what is being typed.
   useLive(['buy_logs', 'buy_log_lines', 'buy_log_payments', 'buy_log_pos', 'po_lines', 'batches'], () => load({ keepForm: dirty }), { mount: false });
 
+  // ── Scan or type a code (2026-11-26, owner) ────────────────────────────────────────────
+  // A box barcode (UPC) names the shoe AND its size → one more pair on that SKU + size line.
+  // A typed SKU names the shoe → its line, pairs left for the person. Both go through the
+  // app's one product lookup (sku-search / upc-search: Alias → StockX → Nike), which is also
+  // what fills a line's name when a SKU is typed straight into the table.
+  const [code, setCode] = useState('');
+  const [cam, setCam] = useState(false);
+  const [looking, setLooking] = useState(0);
+  const [scanNote, setScanNote] = useState(null);       // { tone, text }
+  const names = useRef(new Map());                      // bare SKU → name | '' (not found), so a SKU is asked once
+  const addProduct = (p, { size = '', scanned = false } = {}) => {
+    setLines((ls) => {
+      const at = ls.findIndex((l) => bareSku(l.sku) === bareSku(p.sku) && String(l.size || '').trim() === String(size || '').trim());
+      if (at >= 0) return ls.map((l, i) => (i === at ? { ...l, name: l.name || p.name || '', qty: scanned ? String((Number(l.qty) || 0) + 1) : l.qty } : l));
+      const line = { ...blankLine(), sku: p.sku, name: p.name || '', size: size || '', qty: scanned ? '1' : '' };
+      const empty = ls.findIndex((l) => !l.sku.trim() && !l.qty && !l.unit_cost);
+      return empty >= 0 ? ls.map((l, i) => (i === empty ? { ...line, key: l.key } : l)) : [...ls, line];
+    });
+    setDirty(true);
+  };
+  async function resolve(raw) {
+    const c = String(raw || '').trim().toUpperCase();
+    if (!c) return;
+    setCode(''); setLooking((n) => n + 1);
+    try {
+      const upc = isUpcCode(c);
+      const { product: p } = upc ? await api.searchUpc(c) : await api.searchSku(c);
+      if (!p?.sku) throw new Error('none');
+      names.current.set(bareSku(p.sku), p.name || '');
+      addProduct(p, { size: upc && p.scannedSize ? String(p.scannedSize) : '', scanned: upc });
+      setScanNote({ tone: 'ok', text: `${p.sku}${upc && p.scannedSize ? ` · size ${p.scannedSize}` : ''} — ${p.name || 'added'}${upc ? ' · +1 pair' : ' · now type the pairs and the cost'}` });
+    } catch (e) {
+      if (e.unauthorized) return onSignOut();
+      setScanNote({ tone: 'bad', text: isUpcCode(c) ? `No shoe found for barcode ${c}. Type the SKU instead.` : `No shoe found for “${c}”. Check the SKU, or type it in the table with the name by hand.` });
+    } finally { setLooking((n) => n - 1); }
+  }
+  // A SKU typed into a line: when the field is left, look the shoe up once and fill the name
+  // (never over a name somebody typed).
+  async function nameFor(key, skuRaw) {
+    const k = bareSku(skuRaw);
+    if (k.length < 6) return;
+    const put = (name) => name && setLines((ls) => ls.map((l) => (l.key === key && bareSku(l.sku) === k && !l.name.trim() ? { ...l, name, auto: true } : l)));
+    if (names.current.has(k)) return put(names.current.get(k));
+    names.current.set(k, '');
+    try { const { product: p } = await api.searchSku(skuRaw.trim()); names.current.set(k, p?.name || ''); put(p?.name || ''); }
+    catch (e) { if (e.unauthorized) onSignOut(); }
+  }
+
   const setF = (k, v) => { setForm((f) => ({ ...f, [k]: v })); setDirty(true); };
   const setL = (key, k, v) => { setLines((ls) => ls.map((l) => (l.key === key ? { ...l, [k]: v } : l))); setDirty(true); };
   const typed = lines.filter((l) => l.sku.trim() || l.qty || l.unit_cost);
@@ -167,7 +219,7 @@ function BuyOrder({ id, suppliers, canAll, onClose, onSaved, onSignOut }) {
     try {
       const r = await api.buyLogSave({
         id: id || undefined, supplier_user_id: form.supplier_user_id || undefined, store: form.store, order_number: form.order_number,
-        ordered_on: form.ordered_on, tracking_numbers: form.tracking.split(/[\s,;]+/).filter(Boolean), note: form.note,
+        ordered_on: form.ordered_on, note: form.note,
         lines: typed.map((l) => ({ id: l.id, sku: l.sku, name: l.name, size: l.size, qty: Number(l.qty), unit_cost: l.unit_cost === '' ? '' : Number(l.unit_cost) })),
       });
       setNotice('Saved.'); setDirty(false);
@@ -212,18 +264,32 @@ function BuyOrder({ id, suppliers, canAll, onClose, onSaved, onSignOut }) {
           <label><span className="muted xs">Store</span><input className="input" value={form.store} disabled={!editable} maxLength={120} placeholder="Nike Factory Store — Lancaster" onChange={(e) => setF('store', e.target.value)} aria-label="Store" /></label>
           <label><span className="muted xs">Order # (if any)</span><input className="input" value={form.order_number} disabled={!editable} maxLength={60} onChange={(e) => setF('order_number', e.target.value)} aria-label="Order number" /></label>
           <label><span className="muted xs">Order date (EST)</span><input className="input" type="date" value={form.ordered_on} disabled={!editable} onChange={(e) => setF('ordered_on', e.target.value)} aria-label="Order date" /></label>
-          <label className="bl-wide"><span className="muted xs">Tracking numbers (one per line, when it ships)</span><textarea className="input" rows={2} value={form.tracking} disabled={!editable} onChange={(e) => setF('tracking', e.target.value)} aria-label="Tracking numbers" /></label>
           <label className="bl-wide"><span className="muted xs">Note</span><input className="input" value={form.note} disabled={!editable} maxLength={600} onChange={(e) => setF('note', e.target.value)} aria-label="Note" /></label>
         </div>
 
         <h3 className="rows-title">Shoes <span className="muted sm">· SKU, pairs and cost are needed; the size only if you know it</span></h3>
+        {editable && (
+          <>
+            <form className="searchrow bl-scan" onSubmit={(e) => { e.preventDefault(); resolve(code); }}>
+              <input autoCapitalize="characters" autoCorrect="off" placeholder="Scan a box barcode, or type a SKU" value={code} onChange={(e) => setCode(e.target.value)} aria-label="Scan or type a UPC or SKU" />
+              <button className="btn primary" disabled={!code.trim()}>{looking ? 'Looking…' : 'Add'}</button>
+              <button type="button" className={`btn ${cam ? 'primary' : 'ghost'}`} onClick={() => setCam((v) => !v)} title="Scan with the camera" aria-label="Scan with the camera"><Icon name="camera" /></button>
+            </form>
+            {scanNote && <p className={`sm bl-scan-note ${scanNote.tone}`} role="status">{scanNote.text}</p>}
+            {cam && (
+              <Suspense fallback={<p className="muted">Loading camera…</p>}>
+                <CameraScanner continuous mode="product" refireAfterGapMs={2500} onDetected={(c) => resolve(c)} onClose={() => setCam(false)} />
+              </Suspense>
+            )}
+          </>
+        )}
         <div className="bl-scroll">
           <table className="bl-table bl-lines">
             <thead><tr><th>SKU</th><th>Shoe name (optional)</th><th>Size (optional)</th><th className="num">Pairs</th><th className="num">Cost per pair</th><th className="num">Line total</th><th /></tr></thead>
             <tbody>
               {lines.map((l, i) => (
                 <tr key={l.key}>
-                  <td><input className="input" value={l.sku} disabled={!editable} maxLength={40} placeholder="HF5441-112" onChange={(e) => setL(l.key, 'sku', e.target.value.toUpperCase())} aria-label={`SKU, line ${i + 1}`} /></td>
+                  <td><input className="input" value={l.sku} disabled={!editable} maxLength={40} placeholder="HF5441-112" onChange={(e) => setL(l.key, 'sku', e.target.value.toUpperCase())} onBlur={(e) => nameFor(l.key, e.target.value)} aria-label={`SKU, line ${i + 1}`} /></td>
                   <td><input className="input" value={l.name} disabled={!editable} maxLength={160} onChange={(e) => setL(l.key, 'name', e.target.value)} aria-label={`Shoe name, line ${i + 1}`} /></td>
                   <td><input className="input bl-sm" value={l.size} disabled={!editable} maxLength={12} placeholder="any" onChange={(e) => setL(l.key, 'size', e.target.value)} aria-label={`Size, line ${i + 1}`} /></td>
                   <td className="num"><input className="input bl-sm" type="number" min="1" step="1" inputMode="numeric" value={l.qty} disabled={!editable} onChange={(e) => setL(l.key, 'qty', e.target.value)} aria-label={`Pairs, line ${i + 1}`} /></td>
@@ -283,10 +349,10 @@ function BuyOrder({ id, suppliers, canAll, onClose, onSaved, onSignOut }) {
 
           <div className="card">
             <h3 className="rows-title">Shipped and received <span className="muted sm">· {buy.counts.received} of {buy.counts.ordered} pairs in</span></h3>
-            <p className="muted sm">Link the purchase order(s) this order ships on. “Shipped” is what those POs’ box lists say; “Received” is what the warehouse scanned in on them.</p>
+            <p className="muted sm">Link the purchase order(s) this order ships on — the tracking numbers come from their labels. “Shipped” is what those POs’ box lists say; “Received” is what the warehouse scanned in on them.</p>
             <div className="bl-pos">
               {buy.pos.map((o) => (
-                <span key={o.po_id} className="bl-po"><b>{o.po_code}</b> <span className="muted xs">{o.status}{o.tag_code ? ` · ${o.tag_code}` : ''}</span>
+                <span key={o.po_id} className="bl-po" title={(o.tracking || []).join('\n')}><b>{o.po_code}</b> <span className="muted xs">{o.status}{o.tag_code ? ` · ${o.tag_code}` : ''}{(o.tracking || []).length ? ` · ${o.tracking.length} label${o.tracking.length === 1 ? '' : 's'}` : ''}</span>
                   {editable && <button type="button" className="btn ghost sm" disabled={busy} aria-label={`Unlink ${o.po_code}`} onClick={() => act({ action: 'unlink', po_id: o.po_id })}>✕</button>}</span>
               ))}
               {editable && (linkable.length ? (

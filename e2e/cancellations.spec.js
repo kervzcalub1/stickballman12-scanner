@@ -41,6 +41,7 @@ const sent = [];          // sendMessage bodies
 const docs = [];          // sendDocument multipart bodies
 const edits = [];         // editMessageText bodies
 const copies = [];        // sendPhoto / sendDocument bodies that send a picture back by its file id
+const reactions = [];     // setMessageReaction bodies
 const answers = [];       // answerCallbackQuery bodies
 let botMsgId = 800_000;   // the fake's message ids
 let nextRead = null;      // what the fake reader answers when no per-picture answer is set
@@ -94,6 +95,7 @@ test.beforeAll(async () => {
       if (method === 'sendMessage') { body.message_id = ++botMsgId; sent.push(body); }
       if (method === 'editMessageText') edits.push(body);
       if (method === 'answerCallbackQuery') answers.push(body);
+      if (method === 'setMessageReaction') reactions.push(body);
       return res.end(JSON.stringify({ ok: true, result: { message_id: body.message_id || 1, chat: { id: body.chat_id } } }));
     });
   });
@@ -688,7 +690,7 @@ test('a photo with NO platform is read first: one of our Shopify orders (or a Te
 test('a photo with no number read is sent back, and a reply to THAT copy with the number fills that photo\'s row', async ({ request }) => {
   await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
   await q(`UPDATE cancellations SET status = 'rejected' WHERE sent_by = $1 AND order_key IS NULL AND status <> 'rejected'`, [WH.name]);
-  sent.length = 0; copies.length = 0;
+  sent.length = 0; copies.length = 0; reactions.length = 0;
   const s = String(Date.now()).slice(-6);
   const n2 = `9911${s}32`;
   const f1 = await picture(`cx-mr1-${s}`, 'fail');
@@ -708,10 +710,14 @@ test('a photo with no number read is sent back, and a reply to THAT copy with th
      WHERE p.tg_chat_id = $1 AND p.tg_message_id = $2 AND c.status <> 'rejected'`, [TG_WH, messageId]))[0];
 
   // The number, replied onto the SECOND copy: it is the second photo's — not the oldest open row's.
-  await hook(request, { from: TG_WH, body: { text: n2, reply_to_message: { message_id: copies[1].message_id } } });
+  const replyId = await hook(request, { from: TG_WH, body: { text: n2, reply_to_message: { message_id: copies[1].message_id } } });
   expect(await lastSaid(TG_WH, 2)).toMatch(new RegExp(`Stadium Goods · 1 order recorded\\n\\[OK\\] #${n2}[\\s\\S]*Filled the photo row #\\d+ that had no order number`));
   expect(await rowOf(p2)).toMatchObject({ order_number: n2, platform: 'sg' });
   expect((await rowOf(p1)).order_number).toBe(null);
+  // A 👍 on the reply (taken) and on the copy (that photo is done) — and on nothing else.
+  await expect.poll(() => reactions.length).toBe(2);
+  expect(reactions.map((r) => r.message_id).sort()).toEqual([replyId, copies[1].message_id].sort());
+  expect(reactions.every((r) => r.chat_id === TG_WH && r.reaction[0].emoji === '👍')).toBe(true);
 
   // A second reply to the same copy changes nothing and says so; words with no number are asked again.
   await hook(request, { from: TG_WH, body: { text: `9911${s}39`, reply_to_message: { message_id: copies[1].message_id } } });
@@ -719,6 +725,8 @@ test('a photo with no number read is sent back, and a reply to THAT copy with th
   expect((await rowOf(p2)).order_number).toBe(n2);
   await hook(request, { from: TG_WH, body: { text: 'not sure', reply_to_message: { message_id: copies[0].message_id } } });
   expect(await lastSaid(TG_WH, 4)).toMatch(/couldn't find an order number in that/);
+  await new Promise((r) => setTimeout(r, 500));
+  expect(reactions).toHaveLength(2);                                             // a refused reply gets no 👍
 
   // In the group, a reply to anything that is not one of those copies is chatter: nothing is said.
   const before = saidTo(GROUP).length;

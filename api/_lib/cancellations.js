@@ -644,21 +644,23 @@ export async function sendMissedCopies(chatId, photos, items) {
  * message it replies to is not a copy (the caller carries on as before). The number is taken
  * as typed — never corrected — checked for a duplicate, and matched against our orders for
  * the shoe, like any typed number; it fills THAT photo's row.
+ * → { text, filled }: `filled` = the number is on the row now (the caller marks the reply and
+ * the copy with a 👍, so a list of copies shows at a glance which are done).
  */
 export async function fileMissedReply({ chatId, replyTo, text, who, tgMessageId = null }) {
   const photo = await cancellationPhotoByAskMessage(chatId, replyTo);
   if (!photo) return null;
   const { open, filled } = await cancellationRowsOfPhoto(photo.id);
   if (!open) {
-    return filled
+    return { filled: false, text: filled
       ? `That photo already has its order number: #${filled.order_number} (row #${filled.id}). To change it, edit the row on the Cancellations page.`
-      : "That photo's row was removed. Send the photo again if the order still has to be cancelled.";
+      : "That photo's row was removed. Send the photo again if the order still has to be cancelled." };
   }
   // "/sg AMA00386134" is taken too; the platform is the row's own unless it had none.
   const words = splitCommand(text);
   const out = await fileTypedCancellation(words.rest, { who, platform: open.platform || words.platform || null, fillRowId: open.id, tgChatId: chatId, tgMessageId });
-  if (!out) return "I couldn't find an order number in that. Reply to the photo with just the number.";
-  return typedReplyText(out);
+  if (!out) return { filled: false, text: "I couldn't find an order number in that. Reply to the photo with just the number." };
+  return { filled: out.rows.some((r) => r.filled), text: typedReplyText(out) };
 }
 
 /** Where the page is, for the summary's "check them" line (APP_BASE_URL; null = no link, just the words). */

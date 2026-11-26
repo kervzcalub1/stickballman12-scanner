@@ -561,7 +561,19 @@ async function fileFromChat(msg, { group = false } = {}) {
   if (!CAN_FILE.includes(who.role)) return say("Your account can't log cancellations.", false);
   if (replyTo) {
     const answer = await fileMissedReply({ chatId, replyTo, text: msg.text, who: { id: who.id, name: who.name }, tgMessageId: msg.message_id });
-    if (answer) return say(answer);
+    if (answer) {
+      // The number is on the row: 👍 on the reply (it was taken) and on the copy (that photo is
+      // done — in a run of copies, the ones still bare are the ones still waiting). ✅ is not a
+      // reaction Telegram lets a bot set; 👍 is. Best-effort: a group with reactions switched
+      // off still gets the words below.
+      if (answer.filled) {
+        for (const id of [msg.message_id, replyTo]) {
+          enqueue(() => tg('setMessageReaction', { chat_id: chatId, message_id: id, reaction: [{ type: 'emoji', emoji: '👍' }] }))
+            .catch((e) => console.warn('[telegram/webhook] reaction on a filled photo:', e.message));
+        }
+      }
+      return say(answer.text);
+    }
   }
   if (words.cmd === '/help') return say(HOW_TO, false);
   // End of shift — the day's messages and report (EST). "/msg-all" can't be a Telegram

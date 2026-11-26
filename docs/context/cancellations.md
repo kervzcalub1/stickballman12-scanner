@@ -140,6 +140,11 @@ in `sendBatchReply`), as a reply to the photo it is a copy of, captioned
   corrected), the duplicate guard, our orders for the shoe, the row's own platform. Any account
   that may file cancellations can answer (the page lets the same people edit a row). The
   photo already has a number → said, nothing changed; no number in the reply → asked again.
+- **A reply that filled the row gets a 👍** (2026-11-26) — on the reply itself (it was taken)
+  and on the copy (that photo is done: in a run of copies the bare ones are still waiting).
+  👍 rather than a check mark because ✅ is not a reaction Telegram lets a bot set. A refused
+  reply (already has a number, no number in it, a duplicate) gets words and no 👍. Best-effort:
+  with reactions switched off in the group, the written confirmation still goes out.
 - In the group a reply is acted on ONLY when it replies to one of those copies; replies to
   anything else stay chatter and are never answered (not even "connect this chat").
 - The typed way (`/sg 123456789` → the oldest open row) still works; the summary no longer

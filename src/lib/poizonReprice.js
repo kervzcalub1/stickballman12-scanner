@@ -211,9 +211,10 @@ export function readTemplateFile(bytes) {
 // 14-digit number must never turn into 4.97E+13), the price as a number (what typing it in
 // Excel makes), "Manual update" in I. D–F and H (the other three prices, Inventory) stay
 // blank: POIZON's walkthrough fills only C and I, and a blank Inventory leaves stock alone.
-// G (Discount) is blank too unless `discountZero` — the template calls it Required, the
-// walkthrough leaves it empty; the switch is there in case an import is refused for it.
-export function fillTemplate(templateBytes, upload, { discountZero = false } = {}) {
+// G (Discount) is always 0: the template's Data Definition calls it Required ("0 when there
+// is no discount"), and POIZON refused a whole import with it blank — "Invalid discount" on
+// every row (2026-11-27).
+export function fillTemplate(templateBytes, upload) {
   const book = openWorkbook(templateBytes);
   const sheet = book.sheets.find((s) => s.name.trim().toLowerCase() === SHEET.toLowerCase());
   let xml = td.decode(book.files[sheet.path]);
@@ -222,7 +223,7 @@ export function fillTemplate(templateBytes, upload, { discountZero = false } = {
   const num = (ref, v) => `<c r="${ref}"><v>${escXml(v)}</v></c>`;
   const rowsXml = upload.map((u, i) => {
     const r = FIRST_ROW + i;
-    return `<row r="${r}">${text(`A${r}`, u.spu)}${text(`B${r}`, u.sku)}${num(`C${r}`, u.price)}${discountZero ? num(`G${r}`, '0') : ''}${text(`I${r}`, METHOD)}</row>`;
+    return `<row r="${r}">${text(`A${r}`, u.spu)}${text(`B${r}`, u.sku)}${num(`C${r}`, u.price)}${num(`G${r}`, '0')}${text(`I${r}`, METHOD)}</row>`;
   }).join('');
   xml = xml.replace(/<\/sheetData>/, `${rowsXml}</sheetData>`);
   xml = xml.replace(/<dimension ref="[^"]*"\s*\/>/, `<dimension ref="A1:I${FIRST_ROW - 1 + upload.length}"/>`);
@@ -231,7 +232,7 @@ export function fillTemplate(templateBytes, upload, { discountZero = false } = {
 
 // Read the built file back and check it is what we meant to send — the download stays
 // locked unless every check passes.
-export function verifyOutput(templateBytes, outBytes, upload, exportRows, { discountZero = false } = {}) {
+export function verifyOutput(templateBytes, outBytes, upload, exportRows) {
   const tpl = openWorkbook(templateBytes);
   const out = openWorkbook(outBytes);
   if (!out) return { ok: false, checks: [{ label: 'The file opens', ok: false, detail: 'not a valid .xlsx' }] };
@@ -256,7 +257,7 @@ export function verifyOutput(templateBytes, outBytes, upload, exportRows, { disc
     const src = bySku.get(v(1));
     const price = priceCents(v(2));
     const fine = src && !seen.has(v(1)) && src.spu === v(0) && price != null && price > 0 && price % 100 === 0 && price < src.priceCents
-      && !v(3) && !v(4) && !v(5) && v(6) === (discountZero ? '0' : '') && !v(7) && v(8) === METHOD && r.length <= 9;
+      && !v(3) && !v(4) && !v(5) && v(6) === '0' && !v(7) && v(8) === METHOD && r.length <= 9;
     seen.add(v(1));
     if (!fine) { bad++; if (badIds.length < 5) badIds.push(v(1) || '(blank)'); }
   }

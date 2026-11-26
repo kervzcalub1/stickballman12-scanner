@@ -57,15 +57,16 @@ tabs is `PoizonOrders` in `src/screens/PoizonOrders.jsx`; the home card is "POIZ
   A SPU ID · B SKU ID (text cells, as in the export — 14 digits must never become
   4.97E+13) · C Expected Price (Tax-Exclusive) (a number) · I `Manual update`. D–F and H
   (Inventory) stay **blank** — the walkthrough fills only C and I, and stock must not move.
-  G (Discount) is blank too; the template's Data Definition calls it Required, so More
-  options has **Put 0 in the Discount column** in case an import is refused for it.
+  G (Discount) is **always 0** (2026-11-27): the template's Data Definition calls it Required
+  (0 = no discount), and POIZON refused a 1,351-row import with it blank, "Invalid discount"
+  on every row. The old More-options switch is gone.
 - **`Manual update` is the point**: listings are normally `Update via API` (the Shopify
   app pushes prices). POIZON: "in this way the price will only follow the one you upload
   manually". So a listing we cut stops following the API price from then on.
 - Every other part of the zip (Data Definition tab, styles) is copied **byte for byte**.
 - **Verify gate** (download disabled unless all pass): other parts identical; rows 1–2
   identical; one row per cut; each row is a SPU + SKU pair from the export, once, with a
-  whole-dollar price below today's, D–F and H blank, G blank (or 0 with the switch),
+  whole-dollar price below today's, D–F and H blank, G = 0,
   I = `Manual update`.
 
 ## Not known yet (first real upload will tell)

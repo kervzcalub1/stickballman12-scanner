@@ -103,7 +103,7 @@ test.describe('POIZON reprice rules', () => {
     expect(sheet[1].slice(0, 9)).toEqual(['SPU ID', 'SKU ID', 'Expected Price (Tax-Exclusive)', 'Expected Price (Tax-Inclusive)', 'Retail Price (Tax-Exclusive)',
       'Retail Price (Tax-Inclusive)', 'Discount', 'Inventory', 'Price Update Method']);
     // A, B, C, G and I: the other prices and Inventory stay empty; Discount is always 0 (POIZON refuses a blank).
-    expect(sheet.slice(2).map((row) => Array.from({ length: 9 }, (_, i) => row[i] || ''))).toEqual(CUTS.map(([spu, sku, price]) => [spu, sku, price, '', '', '', '0', '', 'Manual update']));
+    expect(sheet.slice(2).map((row) => Array.from({ length: 9 }, (_, i) => row[i] || ''))).toEqual(CUTS.map(([spu, sku, price]) => [spu, sku, price, '', '', '', '0', '', 'Update Manually']));
     expect(readSheetRows(bytes, 'Data Definition')).toEqual(readSheetRows(TEMPLATE, 'Data Definition'));
     // Filling a filled file replaces its rows.
     const again = P.fillTemplate(bytes, r.upload.slice(0, 1));
@@ -163,7 +163,7 @@ test.describe('POIZON → Prices (the page)', () => {
     const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /^Download upload file/ }).click()]);
     expect(dl.suggestedFilename()).toBe('POIZON reprice (11.18.2026).xlsx');
     const sheet = readSheetRows(new Uint8Array(fs.readFileSync(await dl.path())), 'Template');
-    expect(sheet.slice(2).map((r) => [r[0], r[1], r[2], r[8]])).toEqual(CUTS.map((c) => [...c, 'Manual update']));
+    expect(sheet.slice(2).map((r) => [r[0], r[1], r[2], r[8]])).toEqual(CUTS.map((c) => [...c, 'Update Manually']));
 
     // The markup is the user's: at 0 % the $75 pair (market 70) is cut too.
     await page.getByLabel('Markup percent').fill('0');

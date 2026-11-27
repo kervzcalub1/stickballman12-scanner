@@ -177,6 +177,7 @@ export function Cancellations({ onHome, onSignOut }) {
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [adding, setAdding] = useState(false);
+  const [markingAll, setMarkingAll] = useState(false);
   const [big, setBig] = useState(null);
 
   // EST days, always — the PH team reads this from Manila, a day ahead.
@@ -211,6 +212,10 @@ export function Cancellations({ onHome, onSignOut }) {
   const rows = useMemo(() => searched.filter((r) => (!plat || (plat === 'none' ? !PLATFORMS.some((p) => p.key === r.platform) : r.platform === plat))
     && (!onlyMissing || !r.order_number)
     && (!sent || (sent === 'yes') === !!r.submitted_at)), [searched, plat, onlyMissing, sent]);
+
+  // "Mark everything shown": the rows on screen that have a number and no tick yet. For the end
+  // of a shift — pick the platform, paste its /msg list to the marketplace, mark what is shown.
+  const canMark = useMemo(() => rows.filter((r) => r.order_number && !r.submitted_at), [rows]);
 
   function downloadCsv() {
     const blob = new Blob([cancellationsCsv([...rows].reverse())], { type: 'text/csv;charset=utf-8' });
@@ -298,6 +303,11 @@ export function Cancellations({ onHome, onSignOut }) {
             onClick={() => setSent(sent === 'yes' ? '' : 'yes')}>
             ✓ Sent to platform ({counts.sentYes})
           </button>
+          <button type="button" className="btn sm" disabled={!canMark.length || canMark.length > 200}
+            title={canMark.length > 200 ? 'More than 200 shown — narrow it by platform or day first' : 'Our own record only — nothing is sent to the platform'}
+            onClick={() => { setNote(''); setMarkingAll(true); }}>
+            ✓ Mark all {canMark.length} shown as sent
+          </button>
         </div>
         {data?.capped && <div className="error mt">Showing the newest {all.length} only — pick a shorter period to see the rest.</div>}
         {error && <div className="error mt">{error}</div>}
@@ -318,6 +328,16 @@ export function Cancellations({ onHome, onSignOut }) {
             <img src={big} alt="The photo that was sent" />
           </div>
         </div>
+      )}
+      {markingAll && (
+        <FormModal title={`Mark ${canMark.length} as sent?`}
+          message={`Every order shown that has a number and isn't marked yet${plat && plat !== 'none' ? ` (${platformLabel(plat)})` : ''}: ${canMark.slice(0, 6).map((r) => `#${r.order_number}`).join(', ')}${canMark.length > 6 ? ` and ${canMark.length - 6} more` : ''}. Only once the platform has been asked to cancel them. Our own record — nothing is sent anywhere, and Undo sent takes one back.`}
+          submitLabel={`Mark ${canMark.length} as sent`}
+          onClose={() => setMarkingAll(false)}
+          onSubmit={async () => {
+            const out = await api.markCancellationsSent(canMark.map((r) => r.id));
+            setMarkingAll(false); setNote(`${out.changed.length} marked as sent.`); load();
+          }} />
       )}
       {adding && (
         <FormModal title="Add an order to cancel"

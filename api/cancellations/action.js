@@ -1,6 +1,9 @@
 // POST /api/cancellations/action  { id, action: 'remove', reason } | { id, action: 'submit' | 'unsubmit' } -> { ok, row }
 // 'submit' = the INTERNAL "sent to the platform for cancellation" tick (who + when on the row;
 // nothing is sent anywhere); 'unsubmit' takes it back. Anyone who sees the page.
+// MANY AT ONCE: { ids:[…] (at most 200), action: 'submit' | 'unsubmit' } -> { ok, changed:[ids], skipped }
+// — the page's "mark everything shown", for the end of a shift. A row that can't change (no
+// order number yet, removed, already as asked) is counted in `skipped`, never an error for the rest.
 // There is no review step any more (2026-11-12): the one action left is REMOVE — a photo
 // that wasn't an order to cancel, sent by mistake. The row is kept (status 'rejected' in the
 // database, with who and why in cancellation_events) but never listed or put in a message,
@@ -8,6 +11,8 @@
 import { send, applySecurity, rateLimit, requireRole, getJsonBody } from '../_lib/util.js';
 import { dbConfigured, getCancellation, removeCancellation, markCancellationSubmitted } from '../_lib/db.js';
 import { VIEW_ROLES, canRemove, actorOf, idOf, text } from './_shared.js';
+
+const MAX_IDS = 200;
 
 export default async function handler(req, res) {
   applySecurity(req, res);
@@ -17,6 +22,24 @@ export default async function handler(req, res) {
   if (!rateLimit(req, { windowMs: 60_000, max: 120 })) return send(res, 429, { ok: false, error: 'Rate limit exceeded.' });
   if (!dbConfigured()) return send(res, 500, { ok: false, error: 'Database is not configured.' });
   const b = await getJsonBody(req);
+  if (Array.isArray(b.ids) && (b.action === 'submit' || b.action === 'unsubmit')) {
+    const ids = [...new Set(b.ids.map(idOf).filter(Boolean))];
+    if (!ids.length) return send(res, 400, { ok: false, error: 'Which cancellations?' });
+    if (ids.length > MAX_IDS) return send(res, 400, { ok: false, error: `At most ${MAX_IDS} at a time.` });
+    try {
+      const on = b.action === 'submit';
+      const changed = [];
+      for (const one of ids) {
+        const cur = await getCancellation(one);
+        if (!cur || cur.status === 'rejected' || (on && !cur.order_number)) continue;
+        if (await markCancellationSubmitted(one, { actor: actorOf(user), on })) changed.push(one);
+      }
+      return send(res, 200, { ok: true, changed, skipped: ids.length - changed.length });
+    } catch (e) {
+      console.error('[cancellations/action]', e.message);
+      return send(res, 500, { ok: false, error: 'Could not save that.' });
+    }
+  }
   const id = idOf(b.id);
   if (!id) return send(res, 400, { ok: false, error: 'Which cancellation?' });
   if (!['remove', 'submit', 'unsubmit'].includes(b.action)) return send(res, 400, { ok: false, error: 'Unknown action.' });

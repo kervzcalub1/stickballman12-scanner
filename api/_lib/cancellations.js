@@ -17,7 +17,7 @@ import {
   createCancellationPhoto, setCancellationPhotoRead, createCancellation, findLiveCancellation, listCancellationsForDay,
   knownOrdersFor, catalogueNamesBySku, getCancellation, getCancellationsByIds, updateCancellationFields, openUnreadCancellation,
   claimCancellationPhotoReplies, releaseCancellationPhotoReplies, cancellationPhotosForReply, strandedCancellationPhotos,
-  cancellationIdsForPhoto, setCancellationAskMessage, cancellationPhotoByAskMessage, cancellationRowsOfPhoto, heldCancellationPhotos, setCancellationPrompt, expireHeldCancellationPhotos, setCancellationReplyMessage,
+  cancellationIdsForPhoto, setCancellationAskMessage, cancellationPhotoByAskMessage, cancellationRowsOfPhoto, heldCancellationPhotos, setCancellationPrompt, expireHeldCancellationPhotos, setCancellationReplyMessage, sgSlipIndex,
 } from './db.js';
 import { estToday } from '../../src/lib/format.js';
 import { notifyEnv } from './notify.js';
@@ -338,6 +338,17 @@ export async function fillDetails(orders, named, { text = '', typed = false, gue
 // be one of our Shopify orders, or its shape or the slip's own words may say whose it is. Only
 // when none of those names a platform does this return { needsPlatform: true } WITHOUT
 // recording anything, and the caller asks with the buttons.
+/** A Stadium Goods slip number printed in this text that IS one of our orders' — the one, or null. */
+export async function sgSlipNumberOnFile(text, io = {}) {
+  const seen = [...new Set(String(text || '').toUpperCase().match(/\b[A-Z]{3}\d{8}\b/g) || [])];
+  if (!seen.length) return null;
+  try {
+    const onFile = new Set((await (io.index || sgSlipIndex)()).map((s) => s.number));
+    const hits = seen.filter((n) => onFile.has(n));
+    return hits.length === 1 ? hits[0] : null;
+  } catch { return null; }   // the slip columns aren't there yet (before db:setup): no match
+}
+
 export async function fileCancellationPhoto(buf, { photoId = null, who, caption = null, platform = null, resolvePlatform = null, tgChatId = null, tgMessageId = null, requirePlatform = false }) {
   const reason = caption ? String(caption).trim().slice(0, 300) || null : null;
   if (photoId == null) {
@@ -369,9 +380,16 @@ export async function fileCancellationPhoto(buf, { photoId = null, who, caption 
     // print under it, which doesn't read reliably). Exact or nothing.
     if (!read && (hint || worded) === 'sg') {
       const code = await decodeSlipBarcode(buf);
+      let code2 = null;
       if (code) {
         read = { what: '', text: local?.text || '', by: 'barcode',
           orders: [{ platform: 'sg', order_number: code, ...slipDetails(local?.text || ''), confidence: 0.99, unclear: [], agreed: true, why: 'barcode' }] };
+      } else if ((code2 = await sgSlipNumberOnFile(local?.text || ''))) {
+        // The small print under the barcode, read letter for letter, AND that exact number is
+        // one of our Stadium Goods orders' slips. Exact only: slip numbers run in sequence, so
+        // "one character off" names a neighbour's order as often as this one (measured 2026-11-28).
+        read = { what: '', text: local.text, by: 'ocr',
+          orders: [{ platform: 'sg', order_number: code2, ...slipDetails(local.text), confidence: 0.95, unclear: [], agreed: true, why: 'slip number on file' }] };
       } else {
         hintLine = "The order number is the barcode, and it can't be read at this size. Send the photo as a File (not compressed), or closer";
       }

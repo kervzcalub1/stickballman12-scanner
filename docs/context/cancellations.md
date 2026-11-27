@@ -339,6 +339,16 @@ A row recorded BEFORE its order's slip was read is filled in by the same pass
 (`fillSgCancellationRefs`), which is also how the rows typed in before this existed get theirs.
 Editing the number on the page drops the Shopify order that went with the old one.
 
+**A photo's small print counts only when it is exact** (`sgSlipNumberOnFile`): when the barcode
+can't be decoded but the text read off the photo holds a slip number that IS on file (and only
+one such), that is the order. **"Nearest number" matching was measured and left out**
+(2026-11-28, 218 orders of 20–26 Nov: 216 slips read, 2 × 404, no slow-down at 1 request / 1.1 s;
+one number per slip, none shared). Slip numbers run in sequence, so the next-nearest number on
+file is usually only 1–2 characters further: under a safe rule (≤ 2 off and clearly nearer than
+any other) 0 of the 7 misread photos matched; the plain nearest was right in 6 of 7 and wrong in
+1. A wrong order cancelled costs more than a number typed in a reply, so a misread is still sent
+back to be typed. Prefixes seen: FAR ↔ CK…, ETH ↔ SH…, AMA ↔ Amazon-style, WAL ↔ the rest.
+
 ### Stadium Goods: the order number is the BARCODE (owner, 2026-11-21)
 The slip prints no order number in words — "the number below the barcode is the order number"
 (`AMA00386134`, `ETH00380838`: three letters, eight digits). It is in Shopify nowhere, so there

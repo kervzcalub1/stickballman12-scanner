@@ -784,6 +784,15 @@ test('Stadium Goods: the slip number is read from the order\'s own packing slip,
   expect(saved).toEqual([['1', 'read'], ['2', 'gone']]);
   expect(pass).toEqual({ read: 1, failed: 1, filled: 2, throttled: true, more: false });
 
+  // The small print read off a photo counts only when it IS a slip number on file, exactly:
+  // one character off is a neighbour's order as often as this one, so it is left to a person.
+  const { sgSlipNumberOnFile } = await import('../api/_lib/cancellations.js');
+  const index = async () => [{ number: 'FAR02077816' }, { number: 'FAR02077817' }];
+  expect(await sgSlipNumberOnFile('STADIUM GOODS\nfar02077816\nSKU KZ9011', { index })).toBe('FAR02077816');
+  expect(await sgSlipNumberOnFile('STADIUM GOODS\nFAR02077818', { index })).toBe(null);
+  expect(await sgSlipNumberOnFile('FAR02077816 FAR02077817', { index })).toBe(null);
+  expect(await sgSlipNumberOnFile('FAR02077816', { index: async () => { throw new Error('column "slip_numbers" does not exist'); } })).toBe(null);
+
   // How it is told to the platform: our Shopify order and the slip's number, as one.
   const sg = { platform: 'sg', order_number: 'FAR02077816', platform_ref: refText('#34788', 'CK5191830247'), sku: 'KZ9011', size: '8', flags: [] };
   expect(refParts(sg.platform_ref)).toEqual({ shop: '#34788', ref: 'CK5191830247' });

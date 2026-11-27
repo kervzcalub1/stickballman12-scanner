@@ -9,11 +9,6 @@
 //
 // A row whose photo gave no order number stands out (a person still has to type it off the
 // photo) — a marker and a filter, not a status. Anyone who sees the page can fix a row.
-//
-// "Reported to <platform>" (2026-11-27) is the one thing a person ticks: the marketplace has
-// been told to cancel this order. A tick box on each row (who and when beside it), a filter
-// (to report / reported), and "mark everything shown" for the end of a shift — after /msg's
-// list was pasted to the platform. It records what a person did; nothing is sent anywhere.
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, FormModal } from '../components/common.jsx';
@@ -21,7 +16,7 @@ import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { estDate, estTime, estToday } from '../lib/format.js';
 import {
-  PLATFORMS, platformLabel, cancellationsCsv, CX_PERIODS, periodDays, detailsFromLabel, orderKey,
+  PLATFORMS, platformLabel, cancellationsCsv, CX_PERIODS, periodDays, addDaysYmd, detailsFromLabel, orderKey,
 } from '../lib/cancellations.js';
 
 const SOURCE = { telegram: 'photo on Telegram', typed: 'typed to the bot', app: 'added in the app' };
@@ -65,24 +60,7 @@ function Row({ row, me, onChanged, onOpenPhoto, onError, setNote }) {
   const [draft, setDraft] = useState(null);
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [ticking, setTicking] = useState(false);
   const missing = !row.order_number;
-  // The box answers the tap AT ONCE (`want`), then the server's answer replaces it: a tick box
-  // that sits unchanged for a second while the save and the re-read run reads as broken, and
-  // gets tapped again.
-  const [want, setWant] = useState(null);
-  const reported = want ?? !!row.reported_at;
-  const where = platformLabel(row.platform) || 'the platform';
-  async function tick() {
-    const next = !reported;
-    setWant(next); setTicking(true); onError('');
-    try {
-      await api.reportCancellations([row.id], next);
-      setNote(next ? `#${row.id} marked as reported to ${where}.` : `#${row.id}: the reported mark is off.`);
-      await onChanged();
-    } catch (e) { onError(e.message); }
-    setWant(null); setTicking(false);
-  }
   const canRemove = me?.canRemoveAny || (me?.uid != null && Number(me.uid) === Number(row.sent_by_user_id));
   const set = (k) => (e) => setDraft((d) => ({ ...d, [k]: e.target.value }));
   const open = () => { setDraft(Object.fromEntries(FIELDS.map((k) => [k, row[k] ?? '']))); setEditing(true); };
@@ -96,8 +74,19 @@ function Row({ row, me, onChanged, onOpenPhoto, onError, setNote }) {
     setBusy(false);
   }
 
+  // The internal tick: "this order was sent to the platform to cancel". Nothing is sent anywhere.
+  const plat = platformLabel(row.platform);
+  async function markSent(on) {
+    setBusy(true); onError('');
+    try {
+      await api.markCancellationSent(row.id, on);
+      setNote(on ? `#${row.id} marked as sent to ${plat || 'the platform'}.` : `#${row.id} is back to not sent.`); onChanged();
+    } catch (e) { onError(e.message); }
+    setBusy(false);
+  }
+
   return (
-    <div className={`cx-row${missing ? ' cx-missing' : ''}${reported ? ' cx-reported' : ''}`} data-id={row.id}>
+    <div className={`cx-row${missing ? ' cx-missing' : ''}${row.submitted_at ? ' cx-sent' : ''}`} data-id={row.id}>
       <Photo photoId={row.photo_id} onOpen={onOpenPhoto} />
       <div className="cx-body">
         <div className="cx-head">
@@ -142,22 +131,25 @@ function Row({ row, me, onChanged, onOpenPhoto, onError, setNote }) {
             {row.note && <div className="cx-line muted xs">{row.note}</div>}
           </div>
         )}
-        {!missing && (
-          <label className={`cx-tick${reported ? ' on' : ''}`}>
-            <input type="checkbox" checked={reported} disabled={ticking} onChange={tick} />
-            <span>Reported to {where}</span>
-            {reported && row.reported_at && <span className="muted xs">· {row.reported_by || 'someone'} · {when(row.reported_at)}</span>}
-          </label>
-        )}
         <div className="muted xs cx-trail">
           #{row.id} · sent by {row.sent_by || '—'} · {when(row.created_at)} · {SOURCE[row.source] || row.source}
           {row.details_from ? <> · shoe from {detailsFromLabel(row.details_from)}</> : null}
         </div>
+        {row.submitted_at && (
+          <div className="cx-sentline">
+            <span className="inbound-chip sm ok">✓ Sent to {plat || 'the platform'} to cancel</span>
+            <span className="muted xs">by {row.submitted_by || '—'} · {when(row.submitted_at)}</span>
+          </div>
+        )}
         <div className="cx-actions">
           {editing ? <>
             <button type="button" className="btn sm primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
             <button type="button" className="btn sm ghost" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
           </> : <>
+            {row.submitted_at
+              ? <button type="button" className="btn sm ghost" disabled={busy} onClick={() => markSent(false)} title="Marked by mistake — put it back to not sent">Undo sent</button>
+              : <button type="button" className="btn sm primary" disabled={busy || missing} onClick={() => markSent(true)}
+                  title={missing ? 'Type the order number first' : 'Our own record only — nothing is sent to the platform'}>✓ Mark sent to {plat || 'platform'}</button>}
             <button type="button" className="btn sm" onClick={open}>✎ {missing ? 'Type the order #' : 'Edit'}</button>
             {canRemove && <button type="button" className="btn sm ghost" onClick={() => setRemoving(true)}>Remove</button>}
           </>}
@@ -179,8 +171,7 @@ export function Cancellations({ onHome, onSignOut }) {
   const [dayB, setDayB] = useQueryParam('to', '');
   const [plat, setPlat] = useQueryParam('platform', '');
   const [onlyMissing, setOnlyMissing] = useQueryParam('missing', '');
-  const [rep, setRep] = useQueryParam('reported', '');           // '' all · 'no' still to report · 'yes' reported
-  const [marking, setMarking] = useState(false);
+  const [sent, setSent] = useQueryParam('sent', '');   // '' all · 'no' not sent yet · 'yes' sent
   const [q, setQ] = useQueryParam('q', '');
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -208,20 +199,18 @@ export function Cancellations({ onHome, onSignOut }) {
       || (tk && orderKey(r.sku || '')?.includes(tk)));
   }, [all, q]);
   const counts = useMemo(() => {
-    const c = { '': searched.length, none: 0, missing: 0, toReport: 0, reported: 0 };
+    const c = { '': searched.length, none: 0, missing: 0, sentNo: 0, sentYes: 0 };
     for (const r of searched) {
-      if (r.reported_at) c.reported += 1; else if (r.order_number) c.toReport += 1;
       if (r.platform && PLATFORMS.some((p) => p.key === r.platform)) c[r.platform] = (c[r.platform] || 0) + 1;
       else c.none += 1;
       if (!r.order_number) c.missing += 1;
+      if (r.submitted_at) c.sentYes += 1; else c.sentNo += 1;
     }
     return c;
   }, [searched]);
   const rows = useMemo(() => searched.filter((r) => (!plat || (plat === 'none' ? !PLATFORMS.some((p) => p.key === r.platform) : r.platform === plat))
     && (!onlyMissing || !r.order_number)
-    && (!rep || (rep === 'yes' ? !!r.reported_at : !r.reported_at && !!r.order_number))), [searched, plat, onlyMissing, rep]);
-  // What "mark everything shown" would tick: the rows on screen with a number and no tick yet.
-  const canMark = useMemo(() => rows.filter((r) => r.order_number && !r.reported_at), [rows]);
+    && (!sent || (sent === 'yes') === !!r.submitted_at)), [searched, plat, onlyMissing, sent]);
 
   function downloadCsv() {
     const blob = new Blob([cancellationsCsv([...rows].reverse())], { type: 'text/csv;charset=utf-8' });
@@ -235,6 +224,26 @@ export function Cancellations({ onHome, onSignOut }) {
     setPeriod(v);
     if (v === 'day' && !dayA) setDayA(estToday());
     if (v === 'range' && !dayA) { setDayA(periodDays('7', estToday()).from); setDayB(estToday()); }
+  };
+  // The calendar. One day is the usual question ("what was sent on the 21st?"); "to" widens it.
+  const isSpan = range.from !== range.to;
+  const oneDay = (isSpan ? range.to : range.from) || estToday();
+  const pickFrom = (v) => {
+    if (!v) return setPeriod('today');
+    setDayA(v);
+    if (period === 'range') return;
+    setDayB(''); setPeriod('day');
+  };
+  const pickTo = (v) => {
+    const a = range.from || v || estToday();
+    setDayA(a);
+    if (!v) { setDayB(''); return setPeriod('day'); }
+    setDayB(v); setPeriod('range');
+  };
+  const stepDay = (n) => {
+    const d = addDaysYmd(oneDay, n);
+    if (d > estToday()) return;
+    setDayA(d); setDayB(''); setPeriod('day');
   };
   const chips = [['', 'All'], ...PLATFORMS.map((p) => [p.key, p.label]), ['none', 'No platform']]
     .filter(([k]) => k === '' || counts[k] || plat === k);
@@ -254,14 +263,14 @@ export function Cancellations({ onHome, onSignOut }) {
           <select className="input" value={period} onChange={(e) => choosePeriod(e.target.value)} aria-label="Period">
             {CX_PERIODS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </select>
-          {period === 'day' && (
-            <input type="date" className="input" value={dayA || estToday()} max={estToday()} onChange={(e) => setDayA(e.target.value)} aria-label="Day (EST)" />
-          )}
-          {period === 'range' && <>
-            <input type="date" className="input" value={dayA} max={estToday()} onChange={(e) => setDayA(e.target.value)} aria-label="From (EST)" />
+          {/* The calendar is always there: pick a day; a second day ("to") is optional. */}
+          <div className="cx-days">
+            <button type="button" className="btn sm ghost" onClick={() => stepDay(-1)} aria-label="Previous day" title="Previous day">‹</button>
+            <input type="date" className="input" value={range.from || ''} max={estToday()} onChange={(e) => pickFrom(e.target.value)} aria-label="Day (EST)" title="Pick a day (EST)" />
+            <button type="button" className="btn sm ghost" onClick={() => stepDay(1)} disabled={oneDay >= estToday()} aria-label="Next day" title="Next day">›</button>
             <span className="muted xs">to</span>
-            <input type="date" className="input" value={dayB} max={estToday()} onChange={(e) => setDayB(e.target.value)} aria-label="To (EST)" />
-          </>}
+            <input type="date" className={`input ${isSpan ? '' : 'cx-day-off'}`} value={isSpan ? range.to || '' : ''} max={estToday()} onChange={(e) => pickTo(e.target.value)} aria-label="To (EST), optional" title="Optional — a last day, to see a range" />
+          </div>
           <span className="muted xs cx-span">
             {range.from && range.to ? (range.from === range.to ? range.from : `${range.from} → ${range.to}`) : range.from ? `from ${range.from}` : range.to ? `to ${range.to}` : 'all time'} (EST)
           </span>
@@ -281,15 +290,13 @@ export function Cancellations({ onHome, onSignOut }) {
             onClick={() => setOnlyMissing(onlyMissing ? '' : '1')} disabled={!counts.missing && !onlyMissing}>
             No order # read ({counts.missing})
           </button>
-        </div>
-        <div className="cx-filters mt">
-          {/* Two toggles like "No order # read" above (press again to clear) — not a third "All" tab. */}
-          {[['no', `To report (${counts.toReport})`, counts.toReport], ['yes', `Reported (${counts.reported})`, counts.reported]].map(([k, l, n]) => (
-            <button key={k} type="button" aria-pressed={rep === k} className={`btn sm ${rep === k ? 'primary' : 'ghost'}`}
-              onClick={() => setRep(rep === k ? '' : k)} disabled={!n && rep !== k}>{l}</button>
-          ))}
-          <button type="button" className="btn sm" disabled={!canMark.length} onClick={() => { setNote(''); setMarking(true); }}>
-            ✓ Mark the {canMark.length} shown as reported
+          <button type="button" aria-pressed={sent === 'no'} className={`btn sm ${sent === 'no' ? 'primary' : 'ghost'}`}
+            onClick={() => setSent(sent === 'no' ? '' : 'no')}>
+            Not sent yet ({counts.sentNo})
+          </button>
+          <button type="button" aria-pressed={sent === 'yes'} className={`btn sm ${sent === 'yes' ? 'primary' : 'ghost'}`}
+            onClick={() => setSent(sent === 'yes' ? '' : 'yes')}>
+            ✓ Sent to platform ({counts.sentYes})
           </button>
         </div>
         {data?.capped && <div className="error mt">Showing the newest {all.length} only — pick a shorter period to see the rest.</div>}
@@ -311,16 +318,6 @@ export function Cancellations({ onHome, onSignOut }) {
             <img src={big} alt="The photo that was sent" />
           </div>
         </div>
-      )}
-      {marking && (
-        <FormModal title={`Mark ${canMark.length} as reported?`}
-          message={`Every order shown that has a number and no tick yet${plat && plat !== 'none' ? ` (${platformLabel(plat)})` : ''}: ${canMark.slice(0, 6).map((r) => `#${r.order_number}`).join(', ')}${canMark.length > 6 ? ` and ${canMark.length - 6} more` : ''}. Only do this once the platform has been told. A tick can be taken off again on its row.`}
-          submitLabel={`Mark ${canMark.length} as reported`}
-          onClose={() => setMarking(false)}
-          onSubmit={async () => {
-            const out = await api.reportCancellations(canMark.map((r) => r.id), true);
-            setMarking(false); setNote(`${out.changed.length} marked as reported.`); load();
-          }} />
       )}
       {adding && (
         <FormModal title="Add an order to cancel"

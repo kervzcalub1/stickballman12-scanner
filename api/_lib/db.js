@@ -14280,7 +14280,7 @@ export async function createCancellation(f) {
   }
 }
 
-const CX_COLS = 'c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason, c.note, c.flags, c.ai_confidence::float AS ai_confidence, c.source, c.photo_id, c.sent_by_user_id, c.sent_by, c.details_from, c.order_match, c.rejected_reason, c.created_at, c.updated_at, c.submitted_at AS reported_at, c.submitted_by AS reported_by';
+const CX_COLS = 'c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason, c.note, c.flags, c.ai_confidence::float AS ai_confidence, c.source, c.photo_id, c.sent_by_user_id, c.sent_by, c.details_from, c.order_match, c.rejected_reason, c.submitted_by, c.submitted_at, c.created_at, c.updated_at';
 const cxRow = (r) => ({ ...r, id: Number(r.id), photo_id: r.photo_id == null ? null : Number(r.photo_id), sent_by_user_id: r.sent_by_user_id == null ? null : Number(r.sent_by_user_id) });
 
 export async function getCancellation(id) {
@@ -14328,38 +14328,28 @@ export async function updateCancellationFields(id, f, actor) {
   return { row: await getCancellation(id) };
 }
 
-/**
- * "Reported to the platform" (2026-11-27): someone has told the marketplace to cancel this
- * order. Kept in submitted_at / submitted_by — the columns the old review flow had for
- * "cancelled on the platform", empty on every row since (so no new column, no db:setup).
- * Only a row WITH an order number can be reported (there is nothing to report otherwise),
- * and never a removed one. Compare-and-set, so two people ticking at once log it once.
- * → the ids this call changed.
- */
-export async function setCancellationsReported(ids, on, actor) {
-  const list = [...new Set((ids || []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))];
-  if (!list.length) return [];
-  let rows;
-  if (on) {
-    rows = await db()`UPDATE cancellations SET submitted_at = now(), submitted_by = ${actor ?? null}, updated_at = now()
-                       WHERE id = ANY(${list}::bigint[]) AND status <> 'rejected' AND order_key IS NOT NULL AND submitted_at IS NULL
-                   RETURNING id`;
-  } else {
-    rows = await db()`UPDATE cancellations SET submitted_at = NULL, submitted_by = NULL, updated_at = now()
-                       WHERE id = ANY(${list}::bigint[]) AND status <> 'rejected' AND submitted_at IS NOT NULL
-                   RETURNING id`;
-  }
-  const changed = rows.map((r) => Number(r.id));
-  for (const id of changed) await logCancellationEvent(id, on ? 'reported' : 'unreported', actor, on ? 'marked as reported to the platform' : 'mark taken off');
-  return changed;
-}
-
 /** Remove a row that isn't an order to cancel (a wrong photo). Kept, never listed; its number may be logged again. */
 export async function removeCancellation(id, { actor, reason }) {
   const rows = await db()`UPDATE cancellations SET status = 'rejected', rejected_reason = ${reason}, updated_at = now()
                             WHERE id = ${id} AND status <> 'rejected' RETURNING id`;
   if (!rows.length) return null;
   await logCancellationEvent(id, 'removed', actor, reason);
+  return getCancellation(id);
+}
+
+/**
+ * "Sent to the platform" — an INTERNAL tick, nothing is sent anywhere: someone asked the
+ * platform to cancel this order, and the row says who and when. on=false takes it back.
+ * Returns null when the row is already in that state (or removed).
+ */
+export async function markCancellationSubmitted(id, { actor, on = true }) {
+  const rows = on
+    ? await db()`UPDATE cancellations SET submitted_by = ${actor ?? null}, submitted_at = now(), updated_at = now()
+                  WHERE id = ${id} AND status <> 'rejected' AND submitted_at IS NULL RETURNING id`
+    : await db()`UPDATE cancellations SET submitted_by = NULL, submitted_at = NULL, updated_at = now()
+                  WHERE id = ${id} AND status <> 'rejected' AND submitted_at IS NOT NULL RETURNING id`;
+  if (!rows.length) return null;
+  await logCancellationEvent(id, on ? 'submitted' : 'unsubmitted', actor);
   return getCancellation(id);
 }
 

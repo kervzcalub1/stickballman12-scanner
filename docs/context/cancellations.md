@@ -390,41 +390,28 @@ cropped; tap to enlarge).
   Date range · All time — **EST days, by the day it was sent** (server:
   `(created_at AT TIME ZONE 'America/New_York')::date`; the page: `estToday()`), checked from a
   Manila browser in the e2e suite.
+  **The calendar is always on the page** next to the period list: `‹ [day] ›` picks one day
+  (the usual question: "what was sent on the 21st?") and sets `period=day`; the second box,
+  **to**, is optional and turns it into `period=range`. Clearing "to" goes back to one day.
 - **Platform** chips with counts (within the period + search), "No platform" when any;
   **No order # read (n)** filter; search by order # / SKU (also name / sender). URL keeps
-  `?period=&from=&to=&platform=&missing=&q=`.
+  `?period=&from=&to=&platform=&missing=&sent=&q=`.
 - **CSV** of what's shown (Sent EST, Platform, Order number, Shoe, SKU, Size, Sent by, Reason,
   Details from, Note, ID).
 - **✎ Edit / Type the order #** — anyone who sees the page (warehouse, PH, admin). Blank
   shoe fields are filled from our order with that number / the catalogue on save
   (`api/cancellations/save.js` runs `fillDetails`). Duplicate number → 409 "already logged as #N".
+- **✓ Mark sent to {platform}** — an INTERNAL tick, nothing goes to any platform: "someone
+  asked the platform to cancel this order". Anyone who sees the page; needs an order number.
+  The row turns green-edged with **✓ Sent to Alias to cancel · by · date/time EST**, and
+  **Undo sent** takes it back. Stored in `submitted_by` / `submitted_at` (columns that were
+  already in the table — no migration), events `submitted` / `unsubmitted`
+  (`markCancellationSubmitted`, `POST action { action: 'submit' | 'unsubmit' }`; a second
+  tick keeps the first name and time). Filters **Not sent yet (n)** / **✓ Sent to platform
+  (n)** (`?sent=no|yes`); two CSV columns. `status` is still not used for this.
 - **Remove** — only for a photo that isn't an order (PH / admin, or whoever sent it): kept in
   the database (`status = 'rejected'`, reason in `cancellation_events`), never listed or put
   in a message; the number may be recorded again.
-
-## Reported to the platform (2026-11-27)
-The one thing a person ticks: **the marketplace has been told to cancel this order.** It
-records what someone did — nothing is sent to a platform, and `/msg` / `/msgall` / `/report`
-still list every row of the day, ticked or not.
-- **On each row**: a tick box "Reported to Alias" (the row's platform). Ticked, it shows who
-  and when (EST) beside it, and the row reads as done (green edge, quieter) — still listed.
-  Untick to take it back. A row with **no order number has no tick box**: there is nothing
-  to report until the number is typed.
-- **Filters**: `To report (n)` (has a number, not ticked) and `Reported (n)` — toggles like
-  "No order # read", press again to clear; `?reported=no|yes` in the URL.
-- **✓ Mark the N shown as reported**: every row on screen that has a number and no tick,
-  after a confirmation that lists the first few. For the end of a shift: pick the platform,
-  paste its `/msg` list to the marketplace, mark what is shown.
-- **Who**: anyone who sees the page (warehouse, PH, admin) — the same people who can edit a row.
-- **Where it lives**: `cancellations.submitted_at` / `submitted_by`, read back as
-  `reported_at` / `reported_by` (`CX_COLS`). They are the columns the pre-2026-11-12 review
-  flow had for "cancelled on the platform", empty on every row since — **no new column, no
-  db:setup**. `status` is NOT touched (the old-enum warning below still stands).
-  `setCancellationsReported(ids, on, actor)` is compare-and-set (two people ticking at once
-  log it once) and writes a `reported` / `unreported` event per row.
-- **API**: `POST /api/cancellations/action { id | ids:[…] (≤ 500), action: 'reported' | 'unreported' }`
-  → `{ ok, changed:[ids], skipped }`. One row with no number → 400; in a list it is `skipped`.
-- **CSV**: two more columns, "Reported to platform (EST)" and "Reported by".
 
 ## Old rows / the status column
 `status` no longer drives anything. New rows are inserted as `'to_review'` — deliberately not
@@ -433,8 +420,9 @@ know would make that script die re-adding its constraint on a rollback or the sh
 (the "old-enum time bomb"). Rows reviewed before 2026-11-12 (`verified`, `submitted`) are
 ordinary records now. **`rejected` = removed**: rows a reviewer rejected before stay hidden —
 they were judged "not an order to cancel", and bringing them back as live records would
-re-list orders someone decided not to cancel. verified_by / submitted_by / platform_ref stay
-in the table, unused.
+re-list orders someone decided not to cancel. verified_by / platform_ref stay in the table,
+unused; `submitted_by` / `submitted_at` are the "sent to the platform" tick (so rows marked
+Cancelled before 2026-11-12 show as sent, which is what they were).
 
 ## End of shift: `/msg`, `/msgall`, `/report`
 All by ONE EST day (the day the rows were SENT, `listCancellationsForDay`); default today, or

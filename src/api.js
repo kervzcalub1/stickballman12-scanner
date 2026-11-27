@@ -241,9 +241,8 @@ export const api = {
   cancellations: ({ from = null, to = null } = {}) => get(`/api/cancellations/list?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) })}`),
   cancellation: (id) => get(`/api/cancellations/get?id=${encodeURIComponent(id)}`),
   saveCancellation: (row) => post('/api/cancellations/save', row),
+  markCancellationSent: (id, on = true) => post('/api/cancellations/action', { id, action: on ? 'submit' : 'unsubmit' }),
   removeCancellation: (id, reason) => post('/api/cancellations/action', { id, action: 'remove', reason }),
-  // "Reported to the platform": one row or many (ids); on = false takes the tick off.
-  reportCancellations: (ids, on = true) => post('/api/cancellations/action', { ids, action: on ? 'reported' : 'unreported' }),
   // Inbound issues (docs/context/inbound-issues.md)
   inboundIssues: (view = 'open', days = '30') => get(`/api/inbound-issues/list?view=${encodeURIComponent(view)}&days=${encodeURIComponent(days)}`),
   inboundIssue: (id) => get(`/api/inbound-issues/get?id=${encodeURIComponent(id)}`),

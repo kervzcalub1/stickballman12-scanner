@@ -409,6 +409,11 @@ cropped; tap to enlarge).
   (`markCancellationSubmitted`, `POST action { action: 'submit' | 'unsubmit' }`; a second
   tick keeps the first name and time). Filters **Not sent yet (n)** / **✓ Sent to platform
   (n)** (`?sent=no|yes`); two CSV columns. `status` is still not used for this.
+  **✓ Mark all N shown as sent** (2026-11-28) does the same for every row on screen that has
+  a number and isn't marked, after a confirmation that lists the first few — for the end of a
+  shift: pick the platform, paste its `/msg` list to the marketplace, mark what is shown.
+  `POST action { ids:[…] (≤ 200), action: 'submit' | 'unsubmit' }` → `{ changed, skipped }`; a
+  row that can't change (no number, removed, already marked) is skipped, not an error.
 - **Remove** — only for a photo that isn't an order (PH / admin, or whoever sent it): kept in
   the database (`status = 'rejected'`, reason in `cancellation_events`), never listed or put
   in a message; the number may be recorded again.

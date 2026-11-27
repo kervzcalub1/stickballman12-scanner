@@ -242,6 +242,8 @@ export const api = {
   cancellation: (id) => get(`/api/cancellations/get?id=${encodeURIComponent(id)}`),
   saveCancellation: (row) => post('/api/cancellations/save', row),
   markCancellationSent: (id, on = true) => post('/api/cancellations/action', { id, action: on ? 'submit' : 'unsubmit' }),
+  // Many at once — "mark everything shown as sent".
+  markCancellationsSent: (ids) => post('/api/cancellations/action', { ids, action: 'submit' }),
   removeCancellation: (id, reason) => post('/api/cancellations/action', { id, action: 'remove', reason }),
   // Inbound issues (docs/context/inbound-issues.md)
   inboundIssues: (view = 'open', days = '30') => get(`/api/inbound-issues/list?view=${encodeURIComponent(view)}&days=${encodeURIComponent(days)}`),

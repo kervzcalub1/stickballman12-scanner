@@ -561,6 +561,15 @@ test('a stranger is told to connect; a by-hand add refuses a duplicate; a remove
   expect(m2.events.filter((e) => e.action === 'submitted')).toHaveLength(1);
   expect((await list(request)).rows.find((r) => r.id === row.id).submitted_at).toBeTruthy();
   expect((await (await mark('warehouse', 'unsubmit')).json()).row.submitted_at).toBeNull();
+  // Many at once ("mark everything shown"): what can't change is counted, never an error for the rest.
+  const [{ id: blankId }] = await q(`INSERT INTO cancellations (status, platform, sent_by, source) VALUES ('to_review', 'alias', 'E2E Cx blank', 'app') RETURNING id`);
+  const many = (data) => request.post('/api/cancellations/action', { headers: auth('warehouse'), data });
+  expect(await (await many({ ids: [row.id, Number(blankId)], action: 'submit' })).json()).toMatchObject({ ok: true, changed: [row.id], skipped: 1 });   // no number: skipped
+  expect((await list(request)).rows.find((r) => r.id === row.id).submitted_at).toBeTruthy();
+  expect(await (await many({ ids: [row.id], action: 'submit' })).json()).toMatchObject({ ok: true, changed: [], skipped: 1 });                          // already marked
+  expect(await (await many({ ids: [row.id, Number(blankId)], action: 'unsubmit' })).json()).toMatchObject({ ok: true, changed: [row.id], skipped: 1 });
+  expect((await many({ ids: [], action: 'submit' })).status()).toBe(400);
+  await q('DELETE FROM cancellations WHERE id = $1', [blankId]);
   expect((await request.post('/api/cancellations/action', { headers: auth('warehouse'), data: { id: row.id, action: 'remove', reason: 'x' } })).status()).toBe(403);
   const rm = await request.post('/api/cancellations/action', { headers: auth('ph_team'), data: { id: row.id, action: 'remove', reason: 'sent twice' } });
   expect(rm.ok()).toBeTruthy();
@@ -1039,6 +1048,17 @@ test.describe('the page, seen from PH time', () => {
     await expect(a).toHaveCount(0);
     await page.getByRole('button', { name: /^✓ Sent to platform \(\d+\)$/ }).click();
     await expect(a.getByRole('button', { name: '✓ Mark sent to Alias' })).toBeVisible();
+    // "Mark all shown": only what this search shows that has a number — after a confirmation.
+    await page.getByLabel('Search').fill(`e2ecx${s}`);
+    await page.getByRole('button', { name: '✓ Mark all 2 shown as sent' }).click();       // …A and …S; the blank row has no number
+    await page.getByRole('button', { name: 'Mark 2 as sent', exact: true }).click();
+    await expect(page.getByRole('status')).toContainText('2 marked as sent');
+    await expect(page.locator('.cx-row.cx-sent')).toHaveCount(2);
+    await expect(page.getByRole('button', { name: '✓ Mark all 0 shown as sent' })).toBeDisabled();
+    await row(`E2ECX${s}S`).getByRole('button', { name: 'Undo sent' }).click();
+    await a.getByRole('button', { name: 'Undo sent' }).click();
+    await expect(page.locator('.cx-row.cx-sent')).toHaveCount(0);
+    await page.getByLabel('Search').fill('');
 
     // The row with no order number stands out, has its own filter, and a person types it in.
     await page.getByRole('button', { name: /No order # read \(\d+\)/ }).click();

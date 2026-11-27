@@ -24,6 +24,10 @@ import { shopifyConfigured, shopifyOrdersIndexPage, styleFromTitle } from './sho
 import { canonKey } from '../../src/lib/cancellations.js';
 
 const SYNC_KEY = 'shopify_order_index_sync';
+// Bumped when a row gains something every order must be read again for (2: slip_url, the
+// Stadium Goods packing-slip link). A run that finds an older version in its saved state
+// forgets its cursor ONCE and reads the last 30 days again; the rows are simply re-upserted.
+const SYNC_VERSION = 2;
 const STALE_MS = 10 * 60 * 1000;
 const FIRST_DAYS = 30;
 const OVERLAP_MS = 2 * 60 * 1000;   // Shopify's search index lags a moment behind the order
@@ -33,6 +37,7 @@ const KEEP_DAYS = 75;
 export const FRESH_MS = 30 * 60 * 1000;
 
 export const numberKey = (v) => String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const isSgSlipLink = (u) => { try { const x = new URL(String(u || '')); return x.protocol === 'https:' && /(^|\.)stadiumgoods\.com$/i.test(x.hostname); } catch { return false; } };
 const attr = (list, key) => (list || []).find((a) => String(a?.key || '').toLowerCase() === key.toLowerCase())?.value || null;
 
 /** Which of OUR platform keys (src/lib/cancellations.js PLATFORMS) a Shopify order belongs to. */
@@ -97,6 +102,9 @@ export function orderIndexRow(node) {
     shopify_order_id: String(node.id || '').split('/').pop(),
     name, channel: node.app?.name || node.channelInformation?.channelDefinition?.channelName || null, platform,
     numbers, number_texts: texts, numbers_canon: numbers.map((k) => canonKey(k)), trackings, lines,
+    // Stadium Goods: where its packing slip is — the one place the number under the slip's
+    // barcode can be read (api/_lib/sg-slips.js). Only a link on Stadium Goods' own site.
+    slip_url: platform === 'sg' && isSgSlipLink(attr(a, 'Packing Slip')) ? String(attr(a, 'Packing Slip')).trim() : null,
     ordered_at: node.createdAt || null, cancelled_at: node.cancelledAt || null, shopify_updated_at: node.updatedAt || null,
   };
 }
@@ -127,7 +135,8 @@ async function sync({ by, io }) {
   const key = io.key || SYNC_KEY;
   const prev = (await readIndexSync(key)) || {};
   const startedAt = new Date().toISOString();
-  const keep = { cursor: prev.cursor || null, lastAt: prev.lastAt || null, firstDone: !!prev.firstDone };
+  const current = Number(prev.v) === SYNC_VERSION;
+  const keep = { cursor: current ? prev.cursor || null : null, lastAt: prev.lastAt || null, firstDone: !!prev.firstDone, v: SYNC_VERSION };
   const put = (o) => setSetting(key, JSON.stringify({ ...keep, by, startedAt, ...o }), by).catch(() => {});
   if (!io.configured()) { await put({ state: 'error', error: 'Shopify isn’t set up on this server.' }); return { error: 'not configured' }; }
   await put({ state: 'running', read: 0, kept: 0 });

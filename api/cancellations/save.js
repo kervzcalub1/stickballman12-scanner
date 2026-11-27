@@ -42,11 +42,14 @@ export default async function handler(req, res) {
     const typedDetail = DETAIL.some((k) => String(f[k] ?? '') !== String(cur?.[k] ?? ''));
     f.details_from = cur ? (typedDetail ? 'edited' : cur.details_from) : (DETAIL.some((k) => f[k]) ? 'typed' : null);
     f.order_match = cur && !numberChanged ? cur.order_match : null;
+    // The Shopify order behind the number ("#34788|CK…", Stadium Goods): it goes with the number.
+    if (numberChanged) f.platform_ref = null;
     // Blank details + a number → our orders, then the catalogue (the bot's own lookup).
     if (f.order_key && (numberChanged || DETAIL.some((k) => !f[k]))) {
       const [o] = await fillDetails([{ order_number: f.order_number, platform: f.platform, sku: f.sku, size: f.size, product: f.product }], f.platform, { typed: true });
       for (const k of DETAIL) if (!f[k] && o[k]) f[k] = o[k];
       if (o.order_match) { f.order_match = o.order_match; f.platform = f.platform || o.platform; }
+      if (o.platform_ref) f.platform_ref = o.platform_ref;
       const from = String(o.details_from || '').split(',').filter((x) => x && x !== 'typed');
       if (from.length) f.details_from = [...new Set([...(f.details_from ? f.details_from.split(',') : []), ...from])].join(',');
     }

@@ -17,7 +17,7 @@ import {
   createCancellationPhoto, setCancellationPhotoRead, createCancellation, findLiveCancellation, listCancellationsForDay,
   knownOrdersFor, catalogueNamesBySku, getCancellation, getCancellationsByIds, updateCancellationFields, openUnreadCancellation,
   claimCancellationPhotoReplies, releaseCancellationPhotoReplies, cancellationPhotosForReply, strandedCancellationPhotos,
-  cancellationIdsForPhoto, setCancellationAskMessage, cancellationPhotoByAskMessage, cancellationRowsOfPhoto, heldCancellationPhotos, setCancellationPrompt, expireHeldCancellationPhotos, setCancellationReplyMessage,
+  cancellationIdsForPhoto, setCancellationAskMessage, cancellationPhotoByAskMessage, cancellationRowsOfPhoto, heldCancellationPhotos, setCancellationPrompt, expireHeldCancellationPhotos, setCancellationReplyMessage, sgSlipIndex,
 } from './db.js';
 import { estToday } from '../../src/lib/format.js';
 import { notifyEnv } from './notify.js';
@@ -25,7 +25,7 @@ import { alertCancellationsLogged } from './alerts.js';
 import { readCancellationLocally, canOpenImage } from './cancelOcr.js';
 import { decodeSlipBarcode } from './cancelBarcode.js';
 import { shopifyIndexFresh } from './shopify-order-index.js';
-import { platformFromText, slipDetails, splitCommand, plainFromHtml } from '../../src/lib/cancellations.js';
+import { platformFromText, slipDetails, splitCommand, plainFromHtml, refText } from '../../src/lib/cancellations.js';
 import { cancelMessage, cancelMessageAll, dayCounts, cancellationsCsv, batchReplyText, batchReplyNeedsLook, typedDetails, pickerKeyboard } from '../../src/lib/cancellations.js';
 import {
   PLATFORMS, cleanSku, cleanOrderNo, orderKey, flagsFor, platformFromNumber, platformLabel,
@@ -292,6 +292,9 @@ export async function fillDetails(orders, named, { text = '', typed = false, gue
       }
       f.order_number = cleanOrderNo(m.order.order_id);
       f.order_match = m.order.source;
+      // The Shopify order's own name, and the marketplace's other number where the row's number
+      // is the slip's (Stadium Goods: "#34788|CK5191830247" beside FAR02077816).
+      if (m.order.shop || m.order.ref) f.platform_ref = refText(m.order.shop, m.order.ref);
       if (d.product || d.sku || d.size) f.from.push(m.order.source);
       f.product = d.product || o.product || null;
       f.sku = d.sku || cleanSku(o.sku) || null;
@@ -335,6 +338,17 @@ export async function fillDetails(orders, named, { text = '', typed = false, gue
 // be one of our Shopify orders, or its shape or the slip's own words may say whose it is. Only
 // when none of those names a platform does this return { needsPlatform: true } WITHOUT
 // recording anything, and the caller asks with the buttons.
+/** A Stadium Goods slip number printed in this text that IS one of our orders' — the one, or null. */
+export async function sgSlipNumberOnFile(text, io = {}) {
+  const seen = [...new Set(String(text || '').toUpperCase().match(/\b[A-Z]{3}\d{8}\b/g) || [])];
+  if (!seen.length) return null;
+  try {
+    const onFile = new Set((await (io.index || sgSlipIndex)()).map((s) => s.number));
+    const hits = seen.filter((n) => onFile.has(n));
+    return hits.length === 1 ? hits[0] : null;
+  } catch { return null; }   // the slip columns aren't there yet (before db:setup): no match
+}
+
 export async function fileCancellationPhoto(buf, { photoId = null, who, caption = null, platform = null, resolvePlatform = null, tgChatId = null, tgMessageId = null, requirePlatform = false }) {
   const reason = caption ? String(caption).trim().slice(0, 300) || null : null;
   if (photoId == null) {
@@ -366,9 +380,16 @@ export async function fileCancellationPhoto(buf, { photoId = null, who, caption 
     // print under it, which doesn't read reliably). Exact or nothing.
     if (!read && (hint || worded) === 'sg') {
       const code = await decodeSlipBarcode(buf);
+      let code2 = null;
       if (code) {
         read = { what: '', text: local?.text || '', by: 'barcode',
           orders: [{ platform: 'sg', order_number: code, ...slipDetails(local?.text || ''), confidence: 0.99, unclear: [], agreed: true, why: 'barcode' }] };
+      } else if ((code2 = await sgSlipNumberOnFile(local?.text || ''))) {
+        // The small print under the barcode, read letter for letter, AND that exact number is
+        // one of our Stadium Goods orders' slips. Exact only: slip numbers run in sequence, so
+        // "one character off" names a neighbour's order as often as this one (measured 2026-11-28).
+        read = { what: '', text: local.text, by: 'ocr',
+          orders: [{ platform: 'sg', order_number: code2, ...slipDetails(local.text), confidence: 0.95, unclear: [], agreed: true, why: 'slip number on file' }] };
       } else {
         hintLine = "The order number is the barcode, and it can't be read at this size. Send the photo as a File (not compressed), or closer";
       }
@@ -438,7 +459,7 @@ export async function fileCancellationPhoto(buf, { photoId = null, who, caption 
     // What read it, and (no AI) the text it read — so a miss can be turned into a new rule.
     const raw = { ...ai, by: read.by, ...(read.text ? { text: read.text } : {}) };
     const out = await createCancellation({ ...base, ...row, order_key: key, flags, note, ai_confidence: ai.confidence ?? null, ai_raw: raw,
-      details_from: o.details_from, order_match: o.order_match || null });
+      details_from: o.details_from, order_match: o.order_match || null, platform_ref: o.platform_ref || null });
     if (out.duplicate) dupes.push({ order_number: o.order_number, existing: out.duplicate });
     else rows.push({ ...out.row, read_as: o.read_as || null, by_tracking: !!o.by_tracking });
   }
@@ -472,7 +493,7 @@ export async function fileTypedCancellation(text, { who, platform: given = null,
   const [o] = await fillDetails([{ order_number, platform, sku: t.sku, size: t.size, product: null }], platform, { typed: true });
   const row = { platform: o.platform, order_number: o.order_number, sku: o.sku, size: o.size, product: o.product };
   const f = { ...row, order_key: orderKey(o.order_number), flags: [...new Set([...flagsFor(row), ...(o.extra_flags || [])])],
-    details_from: o.details_from, order_match: o.order_match || null };
+    details_from: o.details_from, order_match: o.order_match || null, platform_ref: o.platform_ref || null };
   // "Photo 4: no order number found — type it": the number fills that photo's row.
   const open = fillRowId ? { id: fillRowId } : await openUnreadCancellation(who.id, platform);
   if (open) {

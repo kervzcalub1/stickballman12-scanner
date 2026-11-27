@@ -67,16 +67,21 @@ function Row({ row, me, onChanged, onOpenPhoto, onError, setNote }) {
   const [removing, setRemoving] = useState(false);
   const [ticking, setTicking] = useState(false);
   const missing = !row.order_number;
-  const reported = !!row.reported_at;
+  // The box answers the tap AT ONCE (`want`), then the server's answer replaces it: a tick box
+  // that sits unchanged for a second while the save and the re-read run reads as broken, and
+  // gets tapped again.
+  const [want, setWant] = useState(null);
+  const reported = want ?? !!row.reported_at;
   const where = platformLabel(row.platform) || 'the platform';
   async function tick() {
-    setTicking(true); onError('');
+    const next = !reported;
+    setWant(next); setTicking(true); onError('');
     try {
-      await api.reportCancellations([row.id], !reported);
-      setNote(reported ? `#${row.id}: the reported mark is off.` : `#${row.id} marked as reported to ${where}.`);
-      onChanged();
+      await api.reportCancellations([row.id], next);
+      setNote(next ? `#${row.id} marked as reported to ${where}.` : `#${row.id}: the reported mark is off.`);
+      await onChanged();
     } catch (e) { onError(e.message); }
-    setTicking(false);
+    setWant(null); setTicking(false);
   }
   const canRemove = me?.canRemoveAny || (me?.uid != null && Number(me.uid) === Number(row.sent_by_user_id));
   const set = (k) => (e) => setDraft((d) => ({ ...d, [k]: e.target.value }));
@@ -141,7 +146,7 @@ function Row({ row, me, onChanged, onOpenPhoto, onError, setNote }) {
           <label className={`cx-tick${reported ? ' on' : ''}`}>
             <input type="checkbox" checked={reported} disabled={ticking} onChange={tick} />
             <span>Reported to {where}</span>
-            {reported && <span className="muted xs">· {row.reported_by || 'someone'} · {when(row.reported_at)}</span>}
+            {reported && row.reported_at && <span className="muted xs">· {row.reported_by || 'someone'} · {when(row.reported_at)}</span>}
           </label>
         )}
         <div className="muted xs cx-trail">

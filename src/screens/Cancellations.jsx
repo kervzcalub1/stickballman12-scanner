@@ -16,7 +16,7 @@ import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { estDate, estTime, estToday } from '../lib/format.js';
 import {
-  PLATFORMS, platformLabel, cancellationsCsv, CX_PERIODS, periodDays, detailsFromLabel, orderKey,
+  PLATFORMS, platformLabel, cancellationsCsv, CX_PERIODS, periodDays, addDaysYmd, detailsFromLabel, orderKey,
 } from '../lib/cancellations.js';
 
 const SOURCE = { telegram: 'photo on Telegram', typed: 'typed to the bot', app: 'added in the app' };
@@ -74,8 +74,19 @@ function Row({ row, me, onChanged, onOpenPhoto, onError, setNote }) {
     setBusy(false);
   }
 
+  // The internal tick: "this order was sent to the platform to cancel". Nothing is sent anywhere.
+  const plat = platformLabel(row.platform);
+  async function markSent(on) {
+    setBusy(true); onError('');
+    try {
+      await api.markCancellationSent(row.id, on);
+      setNote(on ? `#${row.id} marked as sent to ${plat || 'the platform'}.` : `#${row.id} is back to not sent.`); onChanged();
+    } catch (e) { onError(e.message); }
+    setBusy(false);
+  }
+
   return (
-    <div className={`cx-row${missing ? ' cx-missing' : ''}`} data-id={row.id}>
+    <div className={`cx-row${missing ? ' cx-missing' : ''}${row.submitted_at ? ' cx-sent' : ''}`} data-id={row.id}>
       <Photo photoId={row.photo_id} onOpen={onOpenPhoto} />
       <div className="cx-body">
         <div className="cx-head">
@@ -124,11 +135,21 @@ function Row({ row, me, onChanged, onOpenPhoto, onError, setNote }) {
           #{row.id} · sent by {row.sent_by || '—'} · {when(row.created_at)} · {SOURCE[row.source] || row.source}
           {row.details_from ? <> · shoe from {detailsFromLabel(row.details_from)}</> : null}
         </div>
+        {row.submitted_at && (
+          <div className="cx-sentline">
+            <span className="inbound-chip sm ok">✓ Sent to {plat || 'the platform'} to cancel</span>
+            <span className="muted xs">by {row.submitted_by || '—'} · {when(row.submitted_at)}</span>
+          </div>
+        )}
         <div className="cx-actions">
           {editing ? <>
             <button type="button" className="btn sm primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
             <button type="button" className="btn sm ghost" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
           </> : <>
+            {row.submitted_at
+              ? <button type="button" className="btn sm ghost" disabled={busy} onClick={() => markSent(false)} title="Marked by mistake — put it back to not sent">Undo sent</button>
+              : <button type="button" className="btn sm primary" disabled={busy || missing} onClick={() => markSent(true)}
+                  title={missing ? 'Type the order number first' : 'Our own record only — nothing is sent to the platform'}>✓ Mark sent to {plat || 'platform'}</button>}
             <button type="button" className="btn sm" onClick={open}>✎ {missing ? 'Type the order #' : 'Edit'}</button>
             {canRemove && <button type="button" className="btn sm ghost" onClick={() => setRemoving(true)}>Remove</button>}
           </>}
@@ -150,6 +171,7 @@ export function Cancellations({ onHome, onSignOut }) {
   const [dayB, setDayB] = useQueryParam('to', '');
   const [plat, setPlat] = useQueryParam('platform', '');
   const [onlyMissing, setOnlyMissing] = useQueryParam('missing', '');
+  const [sent, setSent] = useQueryParam('sent', '');   // '' all · 'no' not sent yet · 'yes' sent
   const [q, setQ] = useQueryParam('q', '');
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -177,16 +199,18 @@ export function Cancellations({ onHome, onSignOut }) {
       || (tk && orderKey(r.sku || '')?.includes(tk)));
   }, [all, q]);
   const counts = useMemo(() => {
-    const c = { '': searched.length, none: 0, missing: 0 };
+    const c = { '': searched.length, none: 0, missing: 0, sentNo: 0, sentYes: 0 };
     for (const r of searched) {
       if (r.platform && PLATFORMS.some((p) => p.key === r.platform)) c[r.platform] = (c[r.platform] || 0) + 1;
       else c.none += 1;
       if (!r.order_number) c.missing += 1;
+      if (r.submitted_at) c.sentYes += 1; else c.sentNo += 1;
     }
     return c;
   }, [searched]);
   const rows = useMemo(() => searched.filter((r) => (!plat || (plat === 'none' ? !PLATFORMS.some((p) => p.key === r.platform) : r.platform === plat))
-    && (!onlyMissing || !r.order_number)), [searched, plat, onlyMissing]);
+    && (!onlyMissing || !r.order_number)
+    && (!sent || (sent === 'yes') === !!r.submitted_at)), [searched, plat, onlyMissing, sent]);
 
   function downloadCsv() {
     const blob = new Blob([cancellationsCsv([...rows].reverse())], { type: 'text/csv;charset=utf-8' });
@@ -200,6 +224,26 @@ export function Cancellations({ onHome, onSignOut }) {
     setPeriod(v);
     if (v === 'day' && !dayA) setDayA(estToday());
     if (v === 'range' && !dayA) { setDayA(periodDays('7', estToday()).from); setDayB(estToday()); }
+  };
+  // The calendar. One day is the usual question ("what was sent on the 21st?"); "to" widens it.
+  const isSpan = range.from !== range.to;
+  const oneDay = (isSpan ? range.to : range.from) || estToday();
+  const pickFrom = (v) => {
+    if (!v) return setPeriod('today');
+    setDayA(v);
+    if (period === 'range') return;
+    setDayB(''); setPeriod('day');
+  };
+  const pickTo = (v) => {
+    const a = range.from || v || estToday();
+    setDayA(a);
+    if (!v) { setDayB(''); return setPeriod('day'); }
+    setDayB(v); setPeriod('range');
+  };
+  const stepDay = (n) => {
+    const d = addDaysYmd(oneDay, n);
+    if (d > estToday()) return;
+    setDayA(d); setDayB(''); setPeriod('day');
   };
   const chips = [['', 'All'], ...PLATFORMS.map((p) => [p.key, p.label]), ['none', 'No platform']]
     .filter(([k]) => k === '' || counts[k] || plat === k);
@@ -219,14 +263,14 @@ export function Cancellations({ onHome, onSignOut }) {
           <select className="input" value={period} onChange={(e) => choosePeriod(e.target.value)} aria-label="Period">
             {CX_PERIODS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </select>
-          {period === 'day' && (
-            <input type="date" className="input" value={dayA || estToday()} max={estToday()} onChange={(e) => setDayA(e.target.value)} aria-label="Day (EST)" />
-          )}
-          {period === 'range' && <>
-            <input type="date" className="input" value={dayA} max={estToday()} onChange={(e) => setDayA(e.target.value)} aria-label="From (EST)" />
+          {/* The calendar is always there: pick a day; a second day ("to") is optional. */}
+          <div className="cx-days">
+            <button type="button" className="btn sm ghost" onClick={() => stepDay(-1)} aria-label="Previous day" title="Previous day">‹</button>
+            <input type="date" className="input" value={range.from || ''} max={estToday()} onChange={(e) => pickFrom(e.target.value)} aria-label="Day (EST)" title="Pick a day (EST)" />
+            <button type="button" className="btn sm ghost" onClick={() => stepDay(1)} disabled={oneDay >= estToday()} aria-label="Next day" title="Next day">›</button>
             <span className="muted xs">to</span>
-            <input type="date" className="input" value={dayB} max={estToday()} onChange={(e) => setDayB(e.target.value)} aria-label="To (EST)" />
-          </>}
+            <input type="date" className={`input ${isSpan ? '' : 'cx-day-off'}`} value={isSpan ? range.to || '' : ''} max={estToday()} onChange={(e) => pickTo(e.target.value)} aria-label="To (EST), optional" title="Optional — a last day, to see a range" />
+          </div>
           <span className="muted xs cx-span">
             {range.from && range.to ? (range.from === range.to ? range.from : `${range.from} → ${range.to}`) : range.from ? `from ${range.from}` : range.to ? `to ${range.to}` : 'all time'} (EST)
           </span>
@@ -245,6 +289,14 @@ export function Cancellations({ onHome, onSignOut }) {
           <button type="button" aria-pressed={!!onlyMissing} className={`btn sm ${onlyMissing ? 'primary' : 'ghost'}`}
             onClick={() => setOnlyMissing(onlyMissing ? '' : '1')} disabled={!counts.missing && !onlyMissing}>
             No order # read ({counts.missing})
+          </button>
+          <button type="button" aria-pressed={sent === 'no'} className={`btn sm ${sent === 'no' ? 'primary' : 'ghost'}`}
+            onClick={() => setSent(sent === 'no' ? '' : 'no')}>
+            Not sent yet ({counts.sentNo})
+          </button>
+          <button type="button" aria-pressed={sent === 'yes'} className={`btn sm ${sent === 'yes' ? 'primary' : 'ghost'}`}
+            onClick={() => setSent(sent === 'yes' ? '' : 'yes')}>
+            ✓ Sent to platform ({counts.sentYes})
           </button>
         </div>
         {data?.capped && <div className="error mt">Showing the newest {all.length} only — pick a shorter period to see the rest.</div>}

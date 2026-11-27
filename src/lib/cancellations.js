@@ -625,7 +625,7 @@ export function batchReplyText(photos, { link = null } = {}) {
 }
 
 // ── The page: EST days ───────────────────────────────────────────────────────────────
-const addDaysYmd = (d, n) => { const x = new Date(`${d}T12:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+export const addDaysYmd = (d, n) => { const x = new Date(`${d}T12:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 export const CX_PERIODS = [['today', 'Today'], ['yesterday', 'Yesterday'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['day', 'Pick a day'], ['range', 'Date range'], ['all', 'All time']];
 const isYmd = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 /** A period on the page → the EST days it covers, { from, to } (null = open). `today` = estToday(). */
@@ -645,11 +645,12 @@ export function periodDays(period, today, a = '', b = '') {
 const when = (t) => (t ? `${estDate(t)} ${estTime(t)}` : '');
 const CSV_COLS = [
   ['sent', 'Sent (EST)'], ['platform', 'Platform'], ['order_number', 'Order number'], ['product', 'Shoe'], ['sku', 'SKU'],
-  ['size', 'Size'], ['sent_by', 'Sent by'], ['reason', 'Reason'], ['details', 'Details from'], ['note', 'Note'], ['id', 'ID'],
+  ['size', 'Size'], ['sent_by', 'Sent by'], ['reason', 'Reason'], ['details', 'Details from'], ['note', 'Note'],
+  ['submitted', 'Sent to platform (EST)'], ['submitted_by', 'Sent to platform by'], ['id', 'ID'],
 ];
 export function cancellationsCsv(rows) {
   return toCsv(CSV_COLS, (rows || []).map((r) => ({
-    ...r, platform: platformLabel(r.platform), sent: when(r.created_at), details: detailsFromLabel(r.details_from),
+    ...r, platform: platformLabel(r.platform), sent: when(r.created_at), submitted: when(r.submitted_at), details: detailsFromLabel(r.details_from),
   })));
 }
 

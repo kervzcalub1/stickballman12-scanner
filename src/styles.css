@@ -6584,6 +6584,10 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
 .cx-line { overflow-wrap: anywhere; }
 .cx-span { white-space: nowrap; }
 .cx-filters input[type="date"].input { width: auto; flex: 0 1 auto; }
+.cx-days { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.cx-days input[type="date"].input { min-width: 0; }
+.cx-days .btn { padding-left: 9px; padding-right: 9px; }
+.cx-days .cx-day-off { opacity: .6; }
 /* The photo is what the reviewer checks the row against — shown WHOLE (contain, never
    cropped: a crop hid the order number), big enough to read. */
 .cx-photo { flex: 0 0 240px; width: 240px; height: 260px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border);
@@ -6603,6 +6607,8 @@ button.ff-step.on { box-shadow: inset 0 0 0 1px currentColor; }
 .cx-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .cx-trail { margin-top: 6px; }
 .cx-trail:empty { display: none; }
+.cx-sentline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.cx-row.cx-sent { box-shadow: inset 3px 0 0 #6bbf8a; padding-left: 10px; }
 .cx-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .cx-big { max-width: min(96vw, 900px); max-height: 92vh; overflow: auto; border-radius: 12px; background: #000; }
 .cx-big img { display: block; max-width: 100%; height: auto; }

@@ -551,6 +551,16 @@ test('a stranger is told to connect; a by-hand add refuses a duplicate; a remove
   // The warehouse can fix a row (no review step) but not remove someone else's.
   const fix = await request.post('/api/cancellations/save', { headers: auth('warehouse'), data: { id: row.id, platform: 'stockx', order_number: n, size: '10' } });
   expect((await fix.json()).row).toMatchObject({ size: '10', details_from: 'edited' });
+  // "Sent to the platform" is our own tick: who + when, the first one stands, and it can be undone.
+  const mark = (role, action) => request.post('/api/cancellations/action', { headers: auth(role), data: { id: row.id, action } });
+  const m1 = (await (await mark('ph_team', 'submit')).json()).row;
+  expect(m1.submitted_at).toBeTruthy();
+  expect(m1.submitted_by).toBeTruthy();
+  const m2 = (await (await mark('warehouse', 'submit')).json()).row;
+  expect(m2).toMatchObject({ submitted_at: m1.submitted_at, submitted_by: m1.submitted_by });
+  expect(m2.events.filter((e) => e.action === 'submitted')).toHaveLength(1);
+  expect((await list(request)).rows.find((r) => r.id === row.id).submitted_at).toBeTruthy();
+  expect((await (await mark('warehouse', 'unsubmit')).json()).row.submitted_at).toBeNull();
   expect((await request.post('/api/cancellations/action', { headers: auth('warehouse'), data: { id: row.id, action: 'remove', reason: 'x' } })).status()).toBe(403);
   const rm = await request.post('/api/cancellations/action', { headers: auth('ph_team'), data: { id: row.id, action: 'remove', reason: 'sent twice' } });
   expect(rm.ok()).toBeTruthy();
@@ -1001,6 +1011,34 @@ test.describe('the page, seen from PH time', () => {
     await expect(row(`E2ECX${s}Y`)).toHaveCount(1);
     await expect(row(`E2ECX${s}A`)).toHaveCount(0);
     await page.getByLabel('Period').selectOption('today');
+
+    // The calendar is always on the page: one day back = yesterday (EST), and "to" widens it.
+    await page.getByRole('button', { name: 'Previous day' }).click();
+    await expect(page.getByLabel('Period')).toHaveValue('day');
+    await expect(row(`E2ECX${s}Y`)).toHaveCount(1);
+    await expect(row(`E2ECX${s}A`)).toHaveCount(0);
+    await page.getByLabel('To (EST), optional').fill(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()));
+    await expect(page.getByLabel('Period')).toHaveValue('range');
+    await expect(row(`E2ECX${s}Y`)).toHaveCount(1);
+    await expect(row(`E2ECX${s}A`)).toHaveCount(1);
+    await page.getByLabel('Period').selectOption('today');
+
+    // The internal "sent to the platform" tick: mark, filter, undo. A row with no number can't be marked.
+    const a = row(`E2ECX${s}A`);
+    await a.getByRole('button', { name: '✓ Mark sent to Alias' }).click();
+    await expect(a).toContainText('✓ Sent to Alias to cancel');
+    await expect(a).toHaveClass(/cx-sent/);
+    await page.getByRole('button', { name: /^Not sent yet \(\d+\)$/ }).click();
+    await expect(a).toHaveCount(0);
+    await expect(row(`E2ECX${s}S`)).toHaveCount(1);
+    await expect(page.locator(`.cx-row[data-id="${missingId}"]`).getByRole('button', { name: /Mark sent to/ })).toBeDisabled();
+    await page.getByRole('button', { name: /^✓ Sent to platform \(\d+\)$/ }).click();
+    await expect(a).toHaveCount(1);
+    await expect(row(`E2ECX${s}S`)).toHaveCount(0);
+    await a.getByRole('button', { name: 'Undo sent' }).click();
+    await expect(a).toHaveCount(0);
+    await page.getByRole('button', { name: /^✓ Sent to platform \(\d+\)$/ }).click();
+    await expect(a.getByRole('button', { name: '✓ Mark sent to Alias' })).toBeVisible();
 
     // The row with no order number stands out, has its own filter, and a person types it in.
     await page.getByRole('button', { name: /No order # read \(\d+\)/ }).click();

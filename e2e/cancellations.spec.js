@@ -21,7 +21,7 @@ import { signToken, hashPassword } from '../api/_lib/util.js';
 import {
   ordersFromText, trackingFromText, labelProduct, confusableKeys, matchOurOrder, detailsFromOrder, typedDetails,
   batchReplyText, periodDays, cancellationsCsv, rowStatus, flagsFor, splitCommand, extractImageFile, pickerKeyboard,
-  platformFromText, slipDetails, platformFromNumber, canonKey, plainFromHtml,
+  platformFromText, slipDetails, platformFromNumber, canonKey, plainFromHtml, numberShown, refParts, refText, cancelMessage,
 } from '../src/lib/cancellations.js';
 import { loadEnv, loginAs } from './helpers/auth.js';
 
@@ -696,7 +696,12 @@ test('the slips of each marketplace: Temu and StockX by their number, Stadium Go
   expect(row({ name: '#33938', app: { name: 'My Store: GOAT' }, customAttributes: [{ key: 'g_order_number', value: '637973365' }, { key: 'g_platform', value: 'flight_club' }], lineItems: { edges: [line('Nike Air Max 97 Black White Anthracite (921826-015)', '12')] } }))
     .toMatchObject({ platform: 'alias', numbers: ['637973365'], lines: [{ style: '921826-015', size: '12', name: 'Nike Air Max 97 Black White Anthracite' }] });   // never our own "#33938"
   expect(row({ name: '#33943', app: { name: 'My Store: SGAPP' }, note: 'CK5191645963', customAttributes: [{ key: 'Order Number', value: 'CK5191645963' }, { key: 'Tracking Number', value: '3638579394' }] }))
-    .toMatchObject({ platform: 'sg', numbers: ['CK5191645963'], trackings: ['3638579394'] });
+    .toMatchObject({ platform: 'sg', numbers: ['CK5191645963'], trackings: ['3638579394'], slip_url: null });
+  // Stadium Goods: where its packing slip is — kept only when it is a link on Stadium Goods' own site.
+  const slip = 'https://ether-api-public.stadiumgoods.com/polar/fulfillments/24805119/shipment_documents/1.pdf';
+  expect(row({ name: '#34788', app: { name: 'My Store: SGAPP' }, customAttributes: [{ key: 'Order Number', value: 'CK5191830247' }, { key: 'Packing Slip', value: slip }] }).slip_url).toBe(slip);
+  expect(row({ name: '#34788', app: { name: 'My Store: SGAPP' }, customAttributes: [{ key: 'Order Number', value: 'CK5191830247' }, { key: 'Packing Slip', value: 'https://evil.example/stadiumgoods.com/x.pdf' }] }).slip_url).toBe(null);
+  expect(row({ name: '06-B1P9GP5N4H', app: { name: 'StockX' }, customAttributes: [{ key: 'Packing Slip', value: slip }] }).slip_url).toBe(null);   // only Stadium Goods
   expect(row({ name: '#33921', app: { name: 'Temu' }, sourceName: 'TEMU', sourceIdentifier: 'PO-211-15609528842871006',
     lineItems: { edges: [line('Nike Air Max Plus Golf NRG Eastside Golf (HV4363-400)', '13', [{ key: 'ORDER_SN', value: '211-15609680886391006' }])] }, fulfillments: [{ trackingInfo: [{ number: '1Z2K1W600399808439' }] }] }))
     .toMatchObject({ platform: 'temu', numbers: ['PO21115609528842871006', '21115609680886391006'], trackings: ['1Z2K1W600399808439'] });
@@ -744,6 +749,87 @@ test('a photo with NO platform is read first: one of our Shopify orders (or a Te
     expect((await list(request)).rows.find((r) => r.order_number === stray).flags).not.toContain('not_in_shopify');
   } finally {
     await q(`DELETE FROM app_settings WHERE key = 'shopify_order_index_sync' AND updated_by = 'e2e-cx'`);
+    await q(`DELETE FROM shopify_order_index WHERE channel = 'e2e-cx'`);
+    await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
+  }
+});
+
+// ── Stadium Goods: both numbers — "#34788 | FAR02077816" (2026-11-28) ──────────────────
+test('Stadium Goods: the slip number is read from the order\'s own packing slip, and shown with its Shopify order (pure)', async () => {
+  const { slipNumbersFromText, isSgSlipUrl, readSgSlip, readSgSlipsOnce } = await import('../api/_lib/sg-slips.js');
+  // The slip's text, as pdf.js gives it: the number under the barcode — never the fulfilment number.
+  expect(slipNumbersFromText('STADIUM GOODS\nOrder Date: 11/25/2026\nFulfillment Number\nSONDSS_CKRS00003620\nFAR02077816\nLABEL NUMBER\nSKU\nSIZE')).toEqual(['FAR02077816']);
+  expect(slipNumbersFromText('Fulfillment Number SONDSS_CKRS00003620')).toEqual([]);
+  // Only Stadium Goods' own site is ever fetched.
+  expect(isSgSlipUrl('https://ether-api-public.stadiumgoods.com/polar/fulfillments/1/x')).toBe(true);
+  expect(isSgSlipUrl('http://ether-api-public.stadiumgoods.com/x')).toBe(false);
+  expect(isSgSlipUrl('https://stadiumgoods.com.evil.example/x')).toBe(false);
+  expect(isSgSlipUrl('https://evil.example/?u=stadiumgoods.com')).toBe(false);
+  const pdf = Buffer.from('%PDF-1.4 fake');
+  const res = (o) => ({ ok: true, status: 200, url: 'https://ether-api-public.stadiumgoods.com/a', arrayBuffer: async () => pdf, ...o });
+  const io = (o = {}) => ({ fetch: async () => res(o), pdfText: async () => 'Fulfillment Number\nSONDSS_CKRS00003620\nFAR02077816' });
+  const url = 'https://ether-api-public.stadiumgoods.com/a';
+  expect(await readSgSlip(url, io())).toEqual({ numbers: ['FAR02077816'] });
+  expect(await readSgSlip('https://evil.example/a', io())).toEqual({ error: 'not a Stadium Goods link' });
+  expect(await readSgSlip(url, io({ url: 'https://evil.example/elsewhere' }))).toEqual({ error: 'the link led away from Stadium Goods' });
+  expect(await readSgSlip(url, io({ ok: false, status: 404 }))).toMatchObject({ error: 'HTTP 404', gone: true });
+  expect(await readSgSlip(url, io({ ok: false, status: 429 }))).toMatchObject({ throttled: true });
+  expect(await readSgSlip(url, { ...io(), fetch: async () => res({ arrayBuffer: async () => Buffer.from('<html>login</html>') }) })).toEqual({ error: 'not a PDF' });
+  // A pass: each order's slip read once; told to slow down → it stops there, nothing counted against that order.
+  const saved = [];
+  const answers = [res(), res({ ok: false, status: 404 }), res({ ok: false, status: 429 }), res()];
+  const pass = await readSgSlipsOnce({ limit: 4, io: { gapMs: 1, todo: async () => [1, 2, 3, 4].map((n) => ({ shopify_order_id: String(n), slip_url: url })),
+    save: async (id, out) => saved.push([id, out.numbers ? 'read' : out.gone ? 'gone' : 'failed']), fill: async () => 2,
+    fetch: async () => answers.shift(), pdfText: async () => 'FAR02077816' } });
+  expect(saved).toEqual([['1', 'read'], ['2', 'gone']]);
+  expect(pass).toEqual({ read: 1, failed: 1, filled: 2, throttled: true, more: false });
+
+  // How it is told to the platform: our Shopify order and the slip's number, as one.
+  const sg = { platform: 'sg', order_number: 'FAR02077816', platform_ref: refText('#34788', 'CK5191830247'), sku: 'KZ9011', size: '8', flags: [] };
+  expect(refParts(sg.platform_ref)).toEqual({ shop: '#34788', ref: 'CK5191830247' });
+  expect(numberShown(sg)).toBe('#34788 | FAR02077816');
+  expect(numberShown({ ...sg, platform_ref: null })).toBe('FAR02077816');                                   // its order not known yet
+  expect(numberShown({ platform: 'alias', order_number: '206557037', platform_ref: '#33938|' })).toBe('206557037');   // only Stadium Goods
+  expect(batchReplyText([{ n: null, rows: [sg] }])).toBe('✅ <b>Stadium Goods · 1</b>\n<code>#34788 | FAR02077816</code> · KZ9011 · 8');
+  expect(cancelMessage('sg', [sg, { platform: 'sg', order_number: 'AMA00389524', sku: 'CN0149-001' }]))
+    .toBe('Stadium Goods\nPlease cancel the following order(s):\n#34788 | FAR02077816 - KZ9011 size 8\n#AMA00389524 - CN0149-001');
+  expect(cancellationsCsv([{ ...sg, id: 54, created_at: '2026-11-25T23:16:00Z' }])).toMatch(/Shopify order,Platform order number,ID\n.*,#34788,CK5191830247,54$/);
+});
+
+test('Stadium Goods: a slip number on file gives the row its Shopify order and shoe; rows recorded before it was read are filled in', async ({ request }) => {
+  await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
+  sent.length = 0;
+  const s = String(Date.now()).slice(-6);
+  const slipA = `FAR99${s}`; const slipB = `AMA99${s}`;
+  const idx = (id, name, ck, slip, line) => q(`INSERT INTO shopify_order_index (shopify_order_id, name, channel, platform, numbers, number_texts, numbers_canon, slip_numbers, slip_read_at, lines, ordered_at)
+    VALUES ($1, $2, 'e2e-cx', 'sg', $3::text[], $3::text[], $3::text[], $4::text[], now(), $5::jsonb, now())`, [id, name, [ck], slip ? [slip] : [], JSON.stringify([line])]);
+  try {
+    // A slip whose number is on file: typed to the bot (what a reply to a sent-back photo does).
+    await idx(`e2e-cx-sgA-${s}`, '#34788', `CK51${s}01`, slipA, { style: 'KZ9011', size: '8', name: 'adidas Adistar XLG 2.0 Black Grey Four' });
+    await hook(request, { from: TG_WH, body: { text: `/sg ${slipA}` } });
+    expect(await lastSaid(TG_WH)).toBe(`[dev] ✅ <b>Stadium Goods · 1</b>\n<code>#34788 | ${slipA}</code> · KZ9011 · 8 · adidas Adistar XLG 2.0 Blac…`);
+    const a = (await list(request)).rows.find((r) => r.order_number === slipA);
+    expect(a).toMatchObject({ platform: 'sg', order_match: 'shopify', sku: 'KZ9011', size: '8', platform_ref: `#34788|CK51${s}01` });
+
+    // A row recorded BEFORE its order's slip was read: no Shopify order on it yet …
+    await hook(request, { from: TG_WH, body: { text: `/sg ${slipB}` } });
+    await lastSaid(TG_WH, 2);
+    expect((await list(request)).rows.find((r) => r.order_number === slipB)).toMatchObject({ platform: 'sg', platform_ref: null, sku: null });
+    // … then the slip is read, and the pass that reads slips fills the row in.
+    await idx(`e2e-cx-sgB-${s}`, '#34790', `113-99${s}0-0000001`, slipB, { style: 'CN0149-001', size: '10', name: 'Nike Air Max Plus' });
+    const { fillSgCancellationRefs } = await import('../api/_lib/db.js');
+    expect(await fillSgCancellationRefs()).toBeGreaterThanOrEqual(1);
+    expect((await list(request)).rows.find((r) => r.order_number === slipB)).toMatchObject({ platform_ref: `#34790|113-99${s}0-0000001`, sku: 'CN0149-001', size: '10', order_match: 'shopify' });
+    expect(await fillSgCancellationRefs()).toBe(0);                                             // once
+
+    // The end-of-shift list tells Stadium Goods both numbers.
+    await hook(request, { from: TG_WH, body: { text: '/msgall' } });
+    expect(await lastSaid(TG_WH, 3)).toContain(`#34790 | ${slipB} - CN0149-001 size 10`);
+    // Editing the number on the page drops the Shopify order that went with the old one.
+    const fix = await request.post('/api/cancellations/save', { headers: auth('ph_team'), data: { id: a.id, platform: 'sg', order_number: `FAR98${s}`, sku: a.sku, size: a.size, product: a.product } });
+    expect((await fix.json()).row).toMatchObject({ order_number: `FAR98${s}`, platform_ref: null });
+  } finally {
+    await q(`DELETE FROM cancellations WHERE order_number IN ($1, $2, $3)`, [slipA, slipB, `FAR98${s}`]);
     await q(`DELETE FROM shopify_order_index WHERE channel = 'e2e-cx'`);
     await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
   }

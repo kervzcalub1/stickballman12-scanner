@@ -4207,6 +4207,19 @@ await sql(`CREATE INDEX IF NOT EXISTS shopify_order_index_trackings ON shopify_o
 // at once (a SHEIN "GS…") still finds its order.
 await sql(`CREATE INDEX IF NOT EXISTS shopify_order_index_canon ON shopify_order_index USING GIN (numbers_canon)`);
 await sql(`CREATE INDEX IF NOT EXISTS shopify_order_index_ordered ON shopify_order_index (ordered_at)`);
+// Stadium Goods (2026-11-28): the number under the barcode on its packing slip is in Shopify
+// nowhere, but every Stadium Goods order carries a link to its own slip (slip_url) and that
+// PDF has the number in its text. api/_lib/sg-slips.js reads it once per order into
+// slip_numbers — which is what ties a photographed slip to its Shopify order ("#34788 |
+// FAR02077816"). slip_read_at / slip_tries / slip_error = how the reading went.
+await sql(`ALTER TABLE shopify_order_index ADD COLUMN IF NOT EXISTS slip_url TEXT`);
+await sql(`ALTER TABLE shopify_order_index ADD COLUMN IF NOT EXISTS slip_numbers TEXT[] NOT NULL DEFAULT '{}'`);
+await sql(`ALTER TABLE shopify_order_index ADD COLUMN IF NOT EXISTS slip_read_at TIMESTAMPTZ`);
+await sql(`ALTER TABLE shopify_order_index ADD COLUMN IF NOT EXISTS slip_tries INT NOT NULL DEFAULT 0`);
+await sql(`ALTER TABLE shopify_order_index ADD COLUMN IF NOT EXISTS slip_error TEXT`);
+await sql(`CREATE INDEX IF NOT EXISTS shopify_order_index_slips ON shopify_order_index USING GIN (slip_numbers)`);
+await sql(`CREATE INDEX IF NOT EXISTS shopify_order_index_slip_todo ON shopify_order_index (ordered_at DESC)
+             WHERE slip_url IS NOT NULL AND slip_read_at IS NULL`);
 
 // Costs from the stores' emails (docs/context/costs.md → "Fill from emails", 2026-11-25).
 // A run looks every parcel's tracking number up in the order mailbox, reads what each pair

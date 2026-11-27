@@ -14162,15 +14162,24 @@ export async function knownOrdersFor({ keys = [], tracks = [], canon = [] } = {}
   // matched, so the caller's key is the number the label printed. Last, so an order we hold
   // first-hand (eBay, SHEIN, pre-sell) is the one a number matches. A database that has not
   // run db:setup yet has no such table: that is "no Shopify match", not a failure.
+  // slip_numbers = the number under a Stadium Goods slip's barcode (read from the order's own
+  // packing slip, api/_lib/sg-slips.js). A database that has the table but not those columns
+  // yet (db:setup not run since) is asked the old way: no slip match, nothing else lost.
   let idx = [];
   try {
     idx = await db()`
-      SELECT platform, name, numbers, number_texts, numbers_canon, trackings, lines
+      SELECT platform, name, numbers, number_texts, numbers_canon, trackings, lines, slip_numbers
         FROM shopify_order_index
-       WHERE numbers && ${K}::text[] OR trackings && ${T}::text[] OR numbers_canon && ${C}::text[]
+       WHERE numbers && ${K}::text[] OR trackings && ${T}::text[] OR numbers_canon && ${C}::text[] OR slip_numbers && ${K}::text[]
        ORDER BY ordered_at DESC NULLS LAST LIMIT 50`;
   } catch (e) {
-    if (e.code !== '42P01') throw e;
+    if (e.code === '42703') {
+      idx = await db()`
+        SELECT platform, name, numbers, number_texts, numbers_canon, trackings, lines
+          FROM shopify_order_index
+         WHERE numbers && ${K}::text[] OR trackings && ${T}::text[] OR numbers_canon && ${C}::text[]
+         ORDER BY ordered_at DESC NULLS LAST LIMIT 50`;
+    } else if (e.code !== '42P01') throw e;
   }
   for (const o of idx) {
     const lines = (Array.isArray(o.lines) ? o.lines : []).map((l) => ({ style: l.style || null, size: l.size || null, name: l.name || null, title: l.title || null }));
@@ -14178,9 +14187,17 @@ export async function knownOrdersFor({ keys = [], tracks = [], canon = [] } = {}
     const byTrack = (o.trackings || []).find((t) => T.includes(t)) || null;
     const canons = o.numbers_canon || [];
     const hits = nums.map((k, i) => ({ k, text: texts[i] || k, c: canons[i] })).filter((n) => K.includes(n.k) || (n.c && C.includes(n.c)));
+    // A Stadium Goods SLIP number: the order answers to it (it is what the slip prints, and what
+    // the row keeps as its order number); its Shopify-side number rides along as `ref`.
+    for (const sn of (o.slip_numbers || []).filter((n) => K.includes(n))) hits.push({ k: sn, text: sn, slip: true });
     // Found by its tracking number alone: it answers to its first (its main) number.
     if (!hits.length && byTrack && nums.length) hits.push({ k: nums[0], text: texts[0] || nums[0] });
-    for (const h of hits) out.push({ source: 'shopify', platform: o.platform, order_id: h.text, tracking: byTrack, lines });
+    // shop = the Shopify order's own name ("#34788"); ref = the marketplace's number Shopify holds
+    // when the row's number is another one (Stadium Goods: "CK5191830247" beside the slip's).
+    for (const h of hits) {
+      out.push({ source: 'shopify', platform: o.platform, order_id: h.text, tracking: byTrack, lines,
+        shop: o.name || null, ref: h.slip ? texts[0] || null : null });
+    }
   }
   // Shopify SKU → style code / size / product title, for the eBay + SHEIN lines.
   const skus = [...new Set(out.filter((o) => o.source !== 'presell' && o.source !== 'shopify').flatMap((o) => o.lines.map((l) => l.sku)).filter(Boolean))];
@@ -14222,10 +14239,12 @@ export async function upsertShopifyOrderIndex(rows) {
   for (const r of rows || []) {
     const out = await db()`
       INSERT INTO shopify_order_index (shopify_order_id, name, channel, platform, numbers, number_texts, numbers_canon, trackings, lines,
-                                       ordered_at, cancelled_at, shopify_updated_at)
+                                       ordered_at, cancelled_at, shopify_updated_at, slip_url)
       VALUES (${r.shopify_order_id}, ${r.name}, ${r.channel}, ${r.platform}, ${r.numbers || []}::text[], ${r.number_texts || []}::text[],
-              ${r.numbers_canon || []}::text[], ${r.trackings || []}::text[], ${JSON.stringify(r.lines || [])}::jsonb, ${r.ordered_at}, ${r.cancelled_at}, ${r.shopify_updated_at})
+              ${r.numbers_canon || []}::text[], ${r.trackings || []}::text[], ${JSON.stringify(r.lines || [])}::jsonb, ${r.ordered_at}, ${r.cancelled_at}, ${r.shopify_updated_at},
+              ${r.slip_url ?? null})
       ON CONFLICT (shopify_order_id) DO UPDATE SET
+        slip_url = EXCLUDED.slip_url,
         name = EXCLUDED.name, channel = EXCLUDED.channel, platform = EXCLUDED.platform, numbers = EXCLUDED.numbers,
         number_texts = EXCLUDED.number_texts, numbers_canon = EXCLUDED.numbers_canon, trackings = EXCLUDED.trackings, lines = EXCLUDED.lines,
         ordered_at = EXCLUDED.ordered_at, cancelled_at = EXCLUDED.cancelled_at,
@@ -14233,11 +14252,62 @@ export async function upsertShopifyOrderIndex(rows) {
       WHERE shopify_order_index.shopify_updated_at IS DISTINCT FROM EXCLUDED.shopify_updated_at
          OR shopify_order_index.numbers IS DISTINCT FROM EXCLUDED.numbers
          OR shopify_order_index.trackings IS DISTINCT FROM EXCLUDED.trackings
+         OR shopify_order_index.slip_url IS DISTINCT FROM EXCLUDED.slip_url
       RETURNING shopify_order_id`;
     changed += out.length;
   }
   return changed;
 }
+// ── Stadium Goods slip numbers (api/_lib/sg-slips.js) ──
+/** Orders whose packing slip hasn't given its number yet — newest first, a few tries each. */
+export async function sgSlipsToRead(limit = 60) {
+  const rows = await db()`SELECT shopify_order_id, slip_url FROM shopify_order_index
+                            WHERE slip_url IS NOT NULL AND slip_read_at IS NULL AND slip_tries < 5
+                            ORDER BY ordered_at DESC NULLS LAST LIMIT ${limit}`;
+  return rows;
+}
+/** What reading one slip gave: its numbers (done), or an error (tried again later, up to 5 times). */
+export async function setSgSlipRead(shopifyOrderId, { numbers = null, error = null, gone = false } = {}) {
+  if (numbers?.length) {
+    await db()`UPDATE shopify_order_index SET slip_numbers = ${numbers}::text[], slip_read_at = now(), slip_error = NULL, slip_tries = slip_tries + 1
+                WHERE shopify_order_id = ${shopifyOrderId}`;
+  } else {
+    // gone (404): the slip no longer exists — not asked for again.
+    await db()`UPDATE shopify_order_index SET slip_error = ${String(error || 'unreadable').slice(0, 200)},
+                      slip_tries = CASE WHEN ${!!gone}::boolean THEN 5 ELSE slip_tries + 1 END
+                WHERE shopify_order_id = ${shopifyOrderId}`;
+  }
+}
+/**
+ * Stadium Goods cancellation rows whose number is a slip number we now know, and which don't
+ * say their Shopify order yet → given it ("#34788|CK5191830247" in platform_ref), and the shoe
+ * where the row has none. Rows recorded before the slip was read (or before this existed).
+ */
+export async function fillSgCancellationRefs() {
+  const rows = await db()`
+    UPDATE cancellations c
+       SET platform_ref = i.name || '|' || coalesce(i.number_texts[1], ''),
+           sku = coalesce(nullif(c.sku, ''), i.lines->0->>'style'),
+           size = coalesce(nullif(c.size, ''), i.lines->0->>'size'),
+           product = coalesce(nullif(c.product, ''), i.lines->0->>'name'),
+           order_match = coalesce(c.order_match, 'shopify'),
+           updated_at = now()
+      FROM shopify_order_index i
+     WHERE c.platform = 'sg' AND c.status <> 'rejected' AND c.order_key IS NOT NULL
+       AND coalesce(c.platform_ref, '') = ''
+       AND i.platform = 'sg' AND i.slip_numbers @> ARRAY[c.order_key]
+     RETURNING c.id`;
+  return rows.length;
+}
+/** Every Stadium Goods slip number on file with its order and shoe — for the nearest-number match. */
+export async function sgSlipIndex(days = 45) {
+  const rows = await db()`SELECT name, number_texts, slip_numbers, lines FROM shopify_order_index
+                            WHERE platform = 'sg' AND cardinality(slip_numbers) > 0
+                              AND ordered_at > now() - make_interval(days => ${days}::int)`;
+  return rows.flatMap((r) => (r.slip_numbers || []).map((n) => ({ number: n, shop: r.name, ref: (r.number_texts || [])[0] || null,
+    lines: Array.isArray(r.lines) ? r.lines : [] })));
+}
+
 /** Orders older than this are past any cancellation: out of the index. */
 export async function pruneShopifyOrderIndex(days = 75) {
   await db()`DELETE FROM shopify_order_index WHERE ordered_at < now() - make_interval(days => ${days}::int)`;
@@ -14264,12 +14334,12 @@ export async function createCancellation(f) {
   try {
     const rows = await db()`
       INSERT INTO cancellations (status, platform, order_number, order_key, sku, size, product, reason, note, flags,
-        ai_confidence, ai_raw, source, photo_id, sent_by_user_id, sent_by, tg_chat_id, tg_message_id, details_from, order_match)
+        ai_confidence, ai_raw, source, photo_id, sent_by_user_id, sent_by, tg_chat_id, tg_message_id, details_from, order_match, platform_ref)
       VALUES ('to_review', ${f.platform ?? null}, ${f.order_number ?? null}, ${f.order_key ?? null}, ${f.sku ?? null},
         ${f.size ?? null}, ${f.product ?? null}, ${f.reason ?? null}, ${f.note ?? null}, ${f.flags || []}::text[],
         ${f.ai_confidence ?? null}, ${f.ai_raw ? JSON.stringify(f.ai_raw) : null}::jsonb, ${f.source || 'telegram'},
         ${f.photo_id ?? null}, ${f.sent_by_user_id ?? null}, ${f.sent_by ?? null}, ${f.tg_chat_id ?? null}, ${f.tg_message_id ?? null},
-        ${f.details_from ?? null}, ${f.order_match ?? null})
+        ${f.details_from ?? null}, ${f.order_match ?? null}, ${f.platform_ref ?? null})
       RETURNING id`;
     const id = Number(rows[0].id);
     await logCancellationEvent(id, 'created', f.sent_by, f.source === 'telegram' ? 'sent on Telegram' : f.source === 'typed' ? 'number typed to the bot' : 'added in the app');
@@ -14280,7 +14350,7 @@ export async function createCancellation(f) {
   }
 }
 
-const CX_COLS = 'c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason, c.note, c.flags, c.ai_confidence::float AS ai_confidence, c.source, c.photo_id, c.sent_by_user_id, c.sent_by, c.details_from, c.order_match, c.rejected_reason, c.submitted_by, c.submitted_at, c.created_at, c.updated_at';
+const CX_COLS = 'c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason, c.note, c.flags, c.ai_confidence::float AS ai_confidence, c.source, c.photo_id, c.sent_by_user_id, c.sent_by, c.details_from, c.order_match, c.rejected_reason, c.submitted_by, c.submitted_at, c.platform_ref, c.created_at, c.updated_at';
 const cxRow = (r) => ({ ...r, id: Number(r.id), photo_id: r.photo_id == null ? null : Number(r.photo_id), sent_by_user_id: r.sent_by_user_id == null ? null : Number(r.sent_by_user_id) });
 
 export async function getCancellation(id) {
@@ -14318,6 +14388,7 @@ export async function updateCancellationFields(id, f, actor) {
              order_key = ${f.order_key ?? null}, sku = ${f.sku ?? null}, size = ${f.size ?? null},
              product = ${f.product ?? null}, reason = ${f.reason ?? null}, note = ${f.note ?? null},
              flags = ${f.flags || []}::text[], details_from = ${f.details_from ?? null}, order_match = ${f.order_match ?? null},
+             platform_ref = CASE WHEN ${f.platform_ref !== undefined}::boolean THEN ${f.platform_ref ?? null} ELSE platform_ref END,
              updated_at = now()
        WHERE id = ${id} AND status <> 'rejected'`;
   } catch (e) {
@@ -14393,7 +14464,7 @@ export async function useCancellationCtx(key, seconds = 90) {
 export async function listCancellationsForDay(ymd) {
   const rows = await db()`
     SELECT c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason, c.note,
-           c.flags, c.source, c.sent_by, c.details_from, c.created_at
+           c.flags, c.source, c.sent_by, c.details_from, c.created_at, c.platform_ref
       FROM cancellations c
      WHERE (c.created_at AT TIME ZONE 'America/New_York')::date = ${ymd}::date
        AND c.status <> 'rejected'

@@ -528,6 +528,23 @@ export function rowStatus(r) {
 }
 /** The same message with its tags taken out — what is sent if Telegram ever refuses the HTML. */
 export const plainFromHtml = (html) => String(html ?? '').replace(/<\/?(?:b|code)>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+// ── A Stadium Goods order has three numbers (2026-11-28) ─────────────────────────────
+// The slip prints one (FAR02077816 — the row's order number); Shopify has the other two: its
+// own order name (#34788) and Stadium Goods' order number (CK5191830247). Stadium Goods tracks
+// a cancellation by the Shopify name and the slip number together, so that pair is what is
+// shown, copied and sent: "#34788 | FAR02077816". The two Shopify-side numbers are kept on
+// the row in `platform_ref` as "shop|ref" (the column the old review flow left unused).
+export const refText = (shop, ref) => (shop || ref ? `${shop || ''}|${ref || ''}` : null);
+export function refParts(v) {
+  const [shop, ref] = String(v || '').split('|');
+  return { shop: shop ? (shop.startsWith('#') ? shop : `#${shop}`) : null, ref: ref || null };
+}
+/** The number as it is told to the platform. Stadium Goods with its Shopify order known: both. */
+export function numberShown(r) {
+  const n = String(r?.order_number ?? '').replace(/^#+/, '');
+  const { shop } = refParts(r?.platform_ref);
+  return r?.platform === 'sg' && shop && n ? `${shop} | ${n}` : n;
+}
 /** Text off a label, a name, a note → safe inside Telegram HTML. */
 export const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const NAME_MAX = 28;
@@ -537,7 +554,7 @@ export function orderLine(r, { platform = false } = {}) {
   const s = rowStatus(r);
   const shoe = [r.sku, r.size ? shortSize(r.size) : null, r.product ? shortName(r.product) : null].filter(Boolean);
   const bits = [
-    `<code>${esc(String(r.order_number).replace(/^#+/, ''))}</code>`,
+    `<code>${esc(numberShown(r))}</code>`,
     platform ? (platformLabel(r.platform) || 'No platform') : null,
     ...(shoe.length ? shoe : ['no shoe details']),
     r.by_tracking ? 'found by its tracking number' : null,
@@ -646,11 +663,13 @@ const when = (t) => (t ? `${estDate(t)} ${estTime(t)}` : '');
 const CSV_COLS = [
   ['sent', 'Sent (EST)'], ['platform', 'Platform'], ['order_number', 'Order number'], ['product', 'Shoe'], ['sku', 'SKU'],
   ['size', 'Size'], ['sent_by', 'Sent by'], ['reason', 'Reason'], ['details', 'Details from'], ['note', 'Note'],
-  ['submitted', 'Sent to platform (EST)'], ['submitted_by', 'Sent to platform by'], ['id', 'ID'],
+  ['submitted', 'Sent to platform (EST)'], ['submitted_by', 'Sent to platform by'],
+  ['shop_order', 'Shopify order'], ['platform_order', 'Platform order number'], ['id', 'ID'],
 ];
 export function cancellationsCsv(rows) {
   return toCsv(CSV_COLS, (rows || []).map((r) => ({
     ...r, platform: platformLabel(r.platform), sent: when(r.created_at), submitted: when(r.submitted_at), details: detailsFromLabel(r.details_from),
+    shop_order: refParts(r.platform_ref).shop || '', platform_order: refParts(r.platform_ref).ref || '',
   })));
 }
 
@@ -663,7 +682,8 @@ export function cancellationsCsv(rows) {
 const shortSize = (v) => String(v ?? '').trim().replace(/^US\s*/i, '').replace(/^M\s+/i, '').trim();
 export function cancelLine(r) {
   const what = [r.sku, r.size ? `size ${shortSize(r.size)}` : ''].filter(Boolean).join(' ');
-  return `#${String(r.order_number).replace(/^#+/, '')}${what ? ` - ${what}` : ''}`;
+  const n = numberShown(r);
+  return `${n.startsWith('#') ? '' : '#'}${n}${what ? ` - ${what}` : ''}`;
 }
 export function cancelMessage(platform, rows) {
   const mine = (rows || []).filter((r) => r.platform === platform && r.order_number);

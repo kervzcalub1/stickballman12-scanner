@@ -297,6 +297,48 @@ dropped. **Production only** by default (`SHOPIFY_ORDER_INDEX=on|off`); state in
 so an order we hold first-hand (eBay, SHEIN, pre-sell) is the one a number matches; a database
 without the table yet answers "no match", not an error.
 
+### Stadium Goods: both numbers — "#34788 | FAR02077816" (owner, 2026-11-28)
+A Stadium Goods order has THREE numbers, and no one system has all of them:
+
+| Number | Example | Where it is |
+|---|---|---|
+| our Shopify order name | `#34788` | Shopify |
+| Stadium Goods' order number | `CK5191830247` (also `SH…`, `113-…`) | Shopify (attribute `Order Number`) |
+| the number under the slip's barcode | `FAR02077816` (also `AMA…`, `ETH…`) | the packing slip the floor photographs — **in Shopify nowhere** |
+
+Stadium Goods tracks a cancellation by the Shopify name and the slip number, so that pair is
+what a row shows, copies and sends: **`#34788 | FAR02077816`** (`numberShown`, pure) — on the
+page (the Copy button copies the pair; "Stadium Goods order CK…" beside it), in the bot's
+summary (`<code>#34788 | FAR02077816</code>`, one tap), in `/msg` / `/msgall`
+(`#34788 | FAR02077816 - KZ9011 size 8`) and in the CSV (two columns: Shopify order, Platform
+order number). Other marketplaces are unchanged.
+
+**What ties them together is the slip itself.** Every Stadium Goods order in Shopify carries a
+link to its own packing slip (attribute `Packing Slip`, a one-page PDF on Stadium Goods'
+server), and that PDF has the barcode number as text (measured on #34788).
+`api/_lib/sg-slips.js` reads it **once per order**:
+- the index sync keeps the link (`shopify_order_index.slip_url`, `orderIndexRow`; only an
+  https link on `*.stadiumgoods.com` is kept — a re-read of the last 30 days is forced once
+  by `SYNC_VERSION = 2`, so orders already indexed get theirs);
+- the worker (every 3 min, **production only**, `SG_SLIPS=on|off`) fetches it, takes the
+  number (`slipNumbersFromText`: three letters + eight digits, never the "SONDSS_CKRS…"
+  fulfilment number) into `slip_numbers`, and drops the PDF — **only the number is kept**
+  (the document has the customer's address);
+- one request a second (`SG_SLIP_GAP_MS`), 60 a pass (`SG_SLIP_BATCH`). **Stadium Goods
+  rate-limits**: four at a time drew HTTP 429 within a minute. A 429 stops the pass and counts
+  nothing against that order; a 404 (the slip is gone) is not asked for again; anything else
+  is retried, five times at most (`slip_tries`, `slip_error`).
+`knownOrdersFor` matches a number against `slip_numbers` too, so a slip number — typed in a
+reply to a sent-back photo, or decoded from the barcode — finds its order: the row gets the
+shoe from it, `order_match = shopify`, and the two Shopify-side numbers in
+**`cancellations.platform_ref` as `"#34788|CK5191830247"`** (`refText` / `refParts`). That is
+the column the old review flow left unused: **the cancellations table needs no migration**,
+so a deploy ahead of `db:setup` cannot break the bot (the index lookup falls back to the old
+query when the new columns aren't there yet — 42703).
+A row recorded BEFORE its order's slip was read is filled in by the same pass
+(`fillSgCancellationRefs`), which is also how the rows typed in before this existed get theirs.
+Editing the number on the page drops the Shopify order that went with the old one.
+
 ### Stadium Goods: the order number is the BARCODE (owner, 2026-11-21)
 The slip prints no order number in words — "the number below the barcode is the order number"
 (`AMA00386134`, `ETH00380838`: three letters, eight digits). It is in Shopify nowhere, so there
@@ -461,6 +503,9 @@ carry customer addresses, never public) · `POST …/save` (no id = add by hand;
 `as_file`, `held_at`, `prompt_message_id`, `reply_message_id`, `voided_at` (2026-11-20).
 **Prod needs `db:setup` BEFORE this code is deployed** — the webhook writes `as_file` /
 `held_at` on every photo, so without the columns every photo answers "That wasn't logged".
+`shopify_order_index` + `slip_url`, `slip_numbers`, `slip_read_at`, `slip_tries`, `slip_error`
+(2026-11-28, Stadium Goods; **needs `db:setup`** — until then no slip is read and the index
+sync logs an error on each run, but the bot and the page are unaffected).
 `shopify_order_index` (2026-11-21; not in LIVE_TABLES — no screen reads it) also needs
 `db:setup`; until it runs the lookup just finds nothing there (a missing table is caught) and
 the index worker logs an error every 5 minutes.

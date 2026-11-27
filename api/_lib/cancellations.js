@@ -25,7 +25,7 @@ import { alertCancellationsLogged } from './alerts.js';
 import { readCancellationLocally, canOpenImage } from './cancelOcr.js';
 import { decodeSlipBarcode } from './cancelBarcode.js';
 import { shopifyIndexFresh } from './shopify-order-index.js';
-import { platformFromText, slipDetails, splitCommand, plainFromHtml } from '../../src/lib/cancellations.js';
+import { platformFromText, slipDetails, splitCommand, plainFromHtml, refText } from '../../src/lib/cancellations.js';
 import { cancelMessage, cancelMessageAll, dayCounts, cancellationsCsv, batchReplyText, batchReplyNeedsLook, typedDetails, pickerKeyboard } from '../../src/lib/cancellations.js';
 import {
   PLATFORMS, cleanSku, cleanOrderNo, orderKey, flagsFor, platformFromNumber, platformLabel,
@@ -292,6 +292,9 @@ export async function fillDetails(orders, named, { text = '', typed = false, gue
       }
       f.order_number = cleanOrderNo(m.order.order_id);
       f.order_match = m.order.source;
+      // The Shopify order's own name, and the marketplace's other number where the row's number
+      // is the slip's (Stadium Goods: "#34788|CK5191830247" beside FAR02077816).
+      if (m.order.shop || m.order.ref) f.platform_ref = refText(m.order.shop, m.order.ref);
       if (d.product || d.sku || d.size) f.from.push(m.order.source);
       f.product = d.product || o.product || null;
       f.sku = d.sku || cleanSku(o.sku) || null;
@@ -438,7 +441,7 @@ export async function fileCancellationPhoto(buf, { photoId = null, who, caption 
     // What read it, and (no AI) the text it read — so a miss can be turned into a new rule.
     const raw = { ...ai, by: read.by, ...(read.text ? { text: read.text } : {}) };
     const out = await createCancellation({ ...base, ...row, order_key: key, flags, note, ai_confidence: ai.confidence ?? null, ai_raw: raw,
-      details_from: o.details_from, order_match: o.order_match || null });
+      details_from: o.details_from, order_match: o.order_match || null, platform_ref: o.platform_ref || null });
     if (out.duplicate) dupes.push({ order_number: o.order_number, existing: out.duplicate });
     else rows.push({ ...out.row, read_as: o.read_as || null, by_tracking: !!o.by_tracking });
   }
@@ -472,7 +475,7 @@ export async function fileTypedCancellation(text, { who, platform: given = null,
   const [o] = await fillDetails([{ order_number, platform, sku: t.sku, size: t.size, product: null }], platform, { typed: true });
   const row = { platform: o.platform, order_number: o.order_number, sku: o.sku, size: o.size, product: o.product };
   const f = { ...row, order_key: orderKey(o.order_number), flags: [...new Set([...flagsFor(row), ...(o.extra_flags || [])])],
-    details_from: o.details_from, order_match: o.order_match || null };
+    details_from: o.details_from, order_match: o.order_match || null, platform_ref: o.platform_ref || null };
   // "Photo 4: no order number found — type it": the number fills that photo's row.
   const open = fillRowId ? { id: fillRowId } : await openUnreadCancellation(who.id, platform);
   if (open) {

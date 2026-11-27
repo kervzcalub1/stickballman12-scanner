@@ -225,6 +225,9 @@ import('./api/_lib/inbound-issues-worker.js')
 // (docs/context/cancellations.md). Read-only on Shopify. Production only by default.
 import('./api/_lib/shopify-order-index.js')
   .then((m) => m.startShopifyOrderIndexWorker())
+  // …and, for Stadium Goods, the number under each order's packing-slip barcode, read from the
+  // slip itself — what ties a photographed slip to its Shopify order (api/_lib/sg-slips.js).
+  .then(() => import('./api/_lib/sg-slips.js')).then((m) => m.startSgSlipsWorker())
   .catch((e) => console.error('[shopify-order-index] failed to start:', e.message));
 
 // Order cancellations — answers a batch of photos a restart cut off (docs/context/cancellations.md).

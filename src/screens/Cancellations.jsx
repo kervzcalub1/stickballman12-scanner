@@ -16,7 +16,7 @@ import { useLive } from '../hooks.js';
 import { useQueryParam } from '../lib/urlstate.js';
 import { estDate, estTime, estToday } from '../lib/format.js';
 import {
-  PLATFORMS, platformLabel, cancellationsCsv, CX_PERIODS, periodDays, addDaysYmd, detailsFromLabel, orderKey,
+  PLATFORMS, platformLabel, cancellationsCsv, CX_PERIODS, periodDays, addDaysYmd, detailsFromLabel, orderKey, numberShown, refParts,
 } from '../lib/cancellations.js';
 
 const SOURCE = { telegram: 'photo on Telegram', typed: 'typed to the bot', app: 'added in the app' };
@@ -61,6 +61,8 @@ function Row({ row, me, onChanged, onOpenPhoto, onError, setNote }) {
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
   const missing = !row.order_number;
+  const shown = numberShown(row);                  // Stadium Goods: "#34788 | FAR02077816"
+  const sgRef = row.platform === 'sg' ? refParts(row.platform_ref).ref : null;
   const canRemove = me?.canRemoveAny || (me?.uid != null && Number(me.uid) === Number(row.sent_by_user_id));
   const set = (k) => (e) => setDraft((d) => ({ ...d, [k]: e.target.value }));
   const open = () => { setDraft(Object.fromEntries(FIELDS.map((k) => [k, row[k] ?? '']))); setEditing(true); };
@@ -95,10 +97,13 @@ function Row({ row, me, onChanged, onOpenPhoto, onError, setNote }) {
             ? <span className="inbound-chip sm bad">No order # read — type it from the photo</span>
             : (
               <span className="cx-numwrap">
-                <code className="cx-num">#{row.order_number}</code>
-                <button type="button" className="btn xs ghost" onClick={() => { copy(row.order_number); setNote(`Copied ${row.order_number}.`); }}>Copy</button>
+                {/* Stadium Goods tracks a cancellation by our Shopify order AND the slip's number:
+                    both are shown, and copied, as one — "#34788 | FAR02077816". */}
+                <code className="cx-num">{shown.startsWith('#') ? '' : '#'}{shown}</code>
+                <button type="button" className="btn xs ghost" onClick={() => { copy(shown); setNote(`Copied ${shown}.`); }}>Copy</button>
               </span>
             )}
+          {sgRef && <span className="muted xs" title="Stadium Goods' own order number, from Shopify">Stadium Goods order {sgRef}</span>}
           {row.order_match && <span className="inbound-chip sm ok" title="This number is one of our own orders">✓ our {platformLabel(row.platform) || row.order_match} order</span>}
         </div>
         {editing ? (

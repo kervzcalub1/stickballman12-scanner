@@ -14280,7 +14280,7 @@ export async function createCancellation(f) {
   }
 }
 
-const CX_COLS = 'c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason, c.note, c.flags, c.ai_confidence::float AS ai_confidence, c.source, c.photo_id, c.sent_by_user_id, c.sent_by, c.details_from, c.order_match, c.rejected_reason, c.created_at, c.updated_at';
+const CX_COLS = 'c.id, c.status, c.platform, c.order_number, c.order_key, c.sku, c.size, c.product, c.reason, c.note, c.flags, c.ai_confidence::float AS ai_confidence, c.source, c.photo_id, c.sent_by_user_id, c.sent_by, c.details_from, c.order_match, c.rejected_reason, c.submitted_by, c.submitted_at, c.created_at, c.updated_at';
 const cxRow = (r) => ({ ...r, id: Number(r.id), photo_id: r.photo_id == null ? null : Number(r.photo_id), sent_by_user_id: r.sent_by_user_id == null ? null : Number(r.sent_by_user_id) });
 
 export async function getCancellation(id) {
@@ -14334,6 +14334,22 @@ export async function removeCancellation(id, { actor, reason }) {
                             WHERE id = ${id} AND status <> 'rejected' RETURNING id`;
   if (!rows.length) return null;
   await logCancellationEvent(id, 'removed', actor, reason);
+  return getCancellation(id);
+}
+
+/**
+ * "Sent to the platform" — an INTERNAL tick, nothing is sent anywhere: someone asked the
+ * platform to cancel this order, and the row says who and when. on=false takes it back.
+ * Returns null when the row is already in that state (or removed).
+ */
+export async function markCancellationSubmitted(id, { actor, on = true }) {
+  const rows = on
+    ? await db()`UPDATE cancellations SET submitted_by = ${actor ?? null}, submitted_at = now(), updated_at = now()
+                  WHERE id = ${id} AND status <> 'rejected' AND submitted_at IS NULL RETURNING id`
+    : await db()`UPDATE cancellations SET submitted_by = NULL, submitted_at = NULL, updated_at = now()
+                  WHERE id = ${id} AND status <> 'rejected' AND submitted_at IS NOT NULL RETURNING id`;
+  if (!rows.length) return null;
+  await logCancellationEvent(id, on ? 'submitted' : 'unsubmitted', actor);
   return getCancellation(id);
 }
 

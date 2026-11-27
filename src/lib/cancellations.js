@@ -646,10 +646,12 @@ const when = (t) => (t ? `${estDate(t)} ${estTime(t)}` : '');
 const CSV_COLS = [
   ['sent', 'Sent (EST)'], ['platform', 'Platform'], ['order_number', 'Order number'], ['product', 'Shoe'], ['sku', 'SKU'],
   ['size', 'Size'], ['sent_by', 'Sent by'], ['reason', 'Reason'], ['details', 'Details from'], ['note', 'Note'], ['id', 'ID'],
+  ['reported', 'Reported to platform (EST)'], ['reported_by', 'Reported by'],
 ];
 export function cancellationsCsv(rows) {
   return toCsv(CSV_COLS, (rows || []).map((r) => ({
     ...r, platform: platformLabel(r.platform), sent: when(r.created_at), details: detailsFromLabel(r.details_from),
+    reported: when(r.reported_at), reported_by: r.reported_at ? r.reported_by || '' : '',
   })));
 }
 

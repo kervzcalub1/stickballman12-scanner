@@ -551,6 +551,25 @@ test('a stranger is told to connect; a by-hand add refuses a duplicate; a remove
   // The warehouse can fix a row (no review step) but not remove someone else's.
   const fix = await request.post('/api/cancellations/save', { headers: auth('warehouse'), data: { id: row.id, platform: 'stockx', order_number: n, size: '10' } });
   expect((await fix.json()).row).toMatchObject({ size: '10', details_from: 'edited' });
+  // "Reported to the platform" (2026-11-27): anyone who sees the page ticks it — who and when
+  // are kept — and takes it off. A row with no order number can't be reported.
+  const act = (role, data) => request.post('/api/cancellations/action', { headers: auth(role), data });
+  expect(await (await act('warehouse', { id: row.id, action: 'reported' })).json()).toMatchObject({ ok: true, changed: [row.id] });
+  const ticked = (await list(request)).rows.find((r) => r.id === row.id);
+  expect(ticked).toMatchObject({ reported_by: 'E2E Cx warehouse' });
+  expect(ticked.reported_at).toBeTruthy();
+  expect(await (await act('ph_team', { id: row.id, action: 'reported' })).json()).toMatchObject({ ok: true, changed: [] });   // already ticked: nothing to do
+  expect((await list(request)).rows.find((r) => r.id === row.id).reported_by).toBe('E2E Cx warehouse');                      // …and still the first person's
+  const [{ id: blankId }] = await q(`INSERT INTO cancellations (status, platform, sent_by, source) VALUES ('to_review', 'alias', 'E2E Cx blank', 'app') RETURNING id`);
+  const noNumber = await act('warehouse', { id: Number(blankId), action: 'reported' });
+  expect(noNumber.status()).toBe(400);
+  expect((await noNumber.json()).error).toMatch(/no order number yet/);
+  // Many at once: what can't change is counted, never an error for the rest.
+  expect(await (await act('ph_team', { ids: [row.id, Number(blankId)], action: 'unreported' })).json()).toMatchObject({ ok: true, changed: [row.id], skipped: 1 });
+  expect((await list(request)).rows.find((r) => r.id === row.id)).toMatchObject({ reported_at: null, reported_by: null });
+  expect((await act('warehouse', { ids: [], action: 'reported' })).status()).toBe(400);
+  await q('DELETE FROM cancellations WHERE id = $1', [blankId]);
+
   expect((await request.post('/api/cancellations/action', { headers: auth('warehouse'), data: { id: row.id, action: 'remove', reason: 'x' } })).status()).toBe(403);
   const rm = await request.post('/api/cancellations/action', { headers: auth('ph_team'), data: { id: row.id, action: 'remove', reason: 'sent twice' } });
   expect(rm.ok()).toBeTruthy();
@@ -1014,6 +1033,37 @@ test.describe('the page, seen from PH time', () => {
     await page.getByRole('button', { name: /No order # read/ }).click();
     await expect(row(`E2ECX${s}M`)).toHaveCount(1);
     await expect(row(`E2ECX${s}M`)).not.toHaveClass(/cx-missing/);
+
+    // "Reported to <platform>": the tick on a row — who and when beside it, the row marked done.
+    const a = row(`E2ECX${s}A`);
+    await expect(a.getByLabel('Reported to Alias')).not.toBeChecked();
+    await a.getByLabel('Reported to Alias').check();
+    await expect(page.getByRole('status')).toContainText('marked as reported to Alias');
+    await expect(a).toHaveClass(/cx-reported/);
+    await expect(a.locator('.cx-tick')).toContainText(/· \S.* · .* EST/);       // who · when (EST)
+    // The two filters: what is still to report, and what has been.
+    await page.getByRole('button', { name: /^Reported \(\d+\)$/ }).click();
+    await expect(row(`E2ECX${s}A`)).toHaveCount(1);
+    await expect(row(`E2ECX${s}S`)).toHaveCount(0);
+    await page.getByRole('button', { name: /^To report \(\d+\)$/ }).click();
+    await expect(row(`E2ECX${s}A`)).toHaveCount(0);
+    await expect(row(`E2ECX${s}S`)).toHaveCount(1);
+    // "Mark the N shown": only this search's rows, after a confirmation.
+    await page.getByLabel('Search').fill(`e2ecx${s}`);
+    await expect(page.getByRole('button', { name: '✓ Mark the 2 shown as reported' })).toBeEnabled();   // …S and …M (A is ticked; yesterday's isn't shown)
+    await page.getByRole('button', { name: '✓ Mark the 2 shown as reported' }).click();
+    await page.getByRole('button', { name: 'Mark 2 as reported' }).click();
+    await expect(page.getByRole('status')).toContainText('2 marked as reported');
+    await expect(page.locator('.cx-row')).toHaveCount(0);       // nothing of this search left to report
+    await page.getByRole('button', { name: /^To report \(\d+\)$/ }).click();
+    await expect(page.locator('.cx-row.cx-reported')).toHaveCount(3);
+    // …and a tick comes off again.
+    await row(`E2ECX${s}S`).getByLabel('Reported to StockX').uncheck();
+    await expect(row(`E2ECX${s}S`)).not.toHaveClass(/cx-reported/);
+    const trail = await q(`SELECT e.action, e.actor FROM cancellation_events e JOIN cancellations c ON c.id = e.cancellation_id
+                            WHERE c.order_number = $1 AND e.action IN ('reported', 'unreported') ORDER BY e.id`, [`E2ECX${s}S`]);
+    expect(trail.map((e) => e.action)).toEqual(['reported', 'unreported']);      // who did each is kept
+    expect(trail.every((e) => e.actor)).toBe(true);
 
     // Search by order #.
     await page.getByLabel('Search').fill(`e2ecx${s}s`);

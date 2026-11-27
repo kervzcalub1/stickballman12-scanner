@@ -9,6 +9,11 @@
 //
 // A row whose photo gave no order number stands out (a person still has to type it off the
 // photo) — a marker and a filter, not a status. Anyone who sees the page can fix a row.
+//
+// "Reported to <platform>" (2026-11-27) is the one thing a person ticks: the marketplace has
+// been told to cancel this order. A tick box on each row (who and when beside it), a filter
+// (to report / reported), and "mark everything shown" for the end of a shift — after /msg's
+// list was pasted to the platform. It records what a person did; nothing is sent anywhere.
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { TopBar, FormModal } from '../components/common.jsx';
@@ -60,7 +65,19 @@ function Row({ row, me, onChanged, onOpenPhoto, onError, setNote }) {
   const [draft, setDraft] = useState(null);
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [ticking, setTicking] = useState(false);
   const missing = !row.order_number;
+  const reported = !!row.reported_at;
+  const where = platformLabel(row.platform) || 'the platform';
+  async function tick() {
+    setTicking(true); onError('');
+    try {
+      await api.reportCancellations([row.id], !reported);
+      setNote(reported ? `#${row.id}: the reported mark is off.` : `#${row.id} marked as reported to ${where}.`);
+      onChanged();
+    } catch (e) { onError(e.message); }
+    setTicking(false);
+  }
   const canRemove = me?.canRemoveAny || (me?.uid != null && Number(me.uid) === Number(row.sent_by_user_id));
   const set = (k) => (e) => setDraft((d) => ({ ...d, [k]: e.target.value }));
   const open = () => { setDraft(Object.fromEntries(FIELDS.map((k) => [k, row[k] ?? '']))); setEditing(true); };
@@ -75,7 +92,7 @@ function Row({ row, me, onChanged, onOpenPhoto, onError, setNote }) {
   }
 
   return (
-    <div className={`cx-row${missing ? ' cx-missing' : ''}`} data-id={row.id}>
+    <div className={`cx-row${missing ? ' cx-missing' : ''}${reported ? ' cx-reported' : ''}`} data-id={row.id}>
       <Photo photoId={row.photo_id} onOpen={onOpenPhoto} />
       <div className="cx-body">
         <div className="cx-head">
@@ -120,6 +137,13 @@ function Row({ row, me, onChanged, onOpenPhoto, onError, setNote }) {
             {row.note && <div className="cx-line muted xs">{row.note}</div>}
           </div>
         )}
+        {!missing && (
+          <label className={`cx-tick${reported ? ' on' : ''}`}>
+            <input type="checkbox" checked={reported} disabled={ticking} onChange={tick} />
+            <span>Reported to {where}</span>
+            {reported && <span className="muted xs">· {row.reported_by || 'someone'} · {when(row.reported_at)}</span>}
+          </label>
+        )}
         <div className="muted xs cx-trail">
           #{row.id} · sent by {row.sent_by || '—'} · {when(row.created_at)} · {SOURCE[row.source] || row.source}
           {row.details_from ? <> · shoe from {detailsFromLabel(row.details_from)}</> : null}
@@ -150,6 +174,8 @@ export function Cancellations({ onHome, onSignOut }) {
   const [dayB, setDayB] = useQueryParam('to', '');
   const [plat, setPlat] = useQueryParam('platform', '');
   const [onlyMissing, setOnlyMissing] = useQueryParam('missing', '');
+  const [rep, setRep] = useQueryParam('reported', '');           // '' all · 'no' still to report · 'yes' reported
+  const [marking, setMarking] = useState(false);
   const [q, setQ] = useQueryParam('q', '');
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -177,8 +203,9 @@ export function Cancellations({ onHome, onSignOut }) {
       || (tk && orderKey(r.sku || '')?.includes(tk)));
   }, [all, q]);
   const counts = useMemo(() => {
-    const c = { '': searched.length, none: 0, missing: 0 };
+    const c = { '': searched.length, none: 0, missing: 0, toReport: 0, reported: 0 };
     for (const r of searched) {
+      if (r.reported_at) c.reported += 1; else if (r.order_number) c.toReport += 1;
       if (r.platform && PLATFORMS.some((p) => p.key === r.platform)) c[r.platform] = (c[r.platform] || 0) + 1;
       else c.none += 1;
       if (!r.order_number) c.missing += 1;
@@ -186,7 +213,10 @@ export function Cancellations({ onHome, onSignOut }) {
     return c;
   }, [searched]);
   const rows = useMemo(() => searched.filter((r) => (!plat || (plat === 'none' ? !PLATFORMS.some((p) => p.key === r.platform) : r.platform === plat))
-    && (!onlyMissing || !r.order_number)), [searched, plat, onlyMissing]);
+    && (!onlyMissing || !r.order_number)
+    && (!rep || (rep === 'yes' ? !!r.reported_at : !r.reported_at && !!r.order_number))), [searched, plat, onlyMissing, rep]);
+  // What "mark everything shown" would tick: the rows on screen with a number and no tick yet.
+  const canMark = useMemo(() => rows.filter((r) => r.order_number && !r.reported_at), [rows]);
 
   function downloadCsv() {
     const blob = new Blob([cancellationsCsv([...rows].reverse())], { type: 'text/csv;charset=utf-8' });
@@ -247,6 +277,16 @@ export function Cancellations({ onHome, onSignOut }) {
             No order # read ({counts.missing})
           </button>
         </div>
+        <div className="cx-filters mt">
+          {/* Two toggles like "No order # read" above (press again to clear) — not a third "All" tab. */}
+          {[['no', `To report (${counts.toReport})`, counts.toReport], ['yes', `Reported (${counts.reported})`, counts.reported]].map(([k, l, n]) => (
+            <button key={k} type="button" aria-pressed={rep === k} className={`btn sm ${rep === k ? 'primary' : 'ghost'}`}
+              onClick={() => setRep(rep === k ? '' : k)} disabled={!n && rep !== k}>{l}</button>
+          ))}
+          <button type="button" className="btn sm" disabled={!canMark.length} onClick={() => { setNote(''); setMarking(true); }}>
+            ✓ Mark the {canMark.length} shown as reported
+          </button>
+        </div>
         {data?.capped && <div className="error mt">Showing the newest {all.length} only — pick a shorter period to see the rest.</div>}
         {error && <div className="error mt">{error}</div>}
         {note && <div className="ok mt" role="status">{note}</div>}
@@ -266,6 +306,16 @@ export function Cancellations({ onHome, onSignOut }) {
             <img src={big} alt="The photo that was sent" />
           </div>
         </div>
+      )}
+      {marking && (
+        <FormModal title={`Mark ${canMark.length} as reported?`}
+          message={`Every order shown that has a number and no tick yet${plat && plat !== 'none' ? ` (${platformLabel(plat)})` : ''}: ${canMark.slice(0, 6).map((r) => `#${r.order_number}`).join(', ')}${canMark.length > 6 ? ` and ${canMark.length - 6} more` : ''}. Only do this once the platform has been told. A tick can be taken off again on its row.`}
+          submitLabel={`Mark ${canMark.length} as reported`}
+          onClose={() => setMarking(false)}
+          onSubmit={async () => {
+            const out = await api.reportCancellations(canMark.map((r) => r.id), true);
+            setMarking(false); setNote(`${out.changed.length} marked as reported.`); load();
+          }} />
       )}
       {adding && (
         <FormModal title="Add an order to cancel"

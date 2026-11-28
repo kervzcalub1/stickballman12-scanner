@@ -28,7 +28,9 @@ export const PLATFORMS = [
   { key: 'tiktok', label: 'TikTok Shop', cmd: 'tiktok' },
   { key: 'shein', label: 'SHEIN', cmd: 'shein' },
   { key: 'sg', label: 'Stadium Goods', cmd: 'sg' },
-  { key: 'kc', label: 'Kicks Crew', cmd: 'kc' },
+  // Kicks Crew's slip prints "KS ID: KS2713444" — that IS the order number (owner, 2026-11-29),
+  // and the Shopify order's name. All 74 on file: KS + seven digits.
+  { key: 'kc', label: 'Kicks Crew', cmd: 'kc', pattern: /^KS\d{7}$/, shape: 'KS2713444' },
 ];
 /** "/alias", "/SG@StickballBot" → its platform key; anything else → null. */
 export function platformFromCommand(word) {
@@ -180,7 +182,10 @@ const STYLE_CODE = /\b([A-Z]{1,3}\d{3,5})[\s-]?(\d{3})\b/;
 // 2026-11-25: two slips were recorded with their own order number as the shoe's SKU. So a
 // style code is one found in the text with that run taken out first.
 const SG_ORDER_RUN = /\b[A-Z]{3}\d{8}\b/g;
-const styleCodeIn = (upper) => STYLE_CODE.exec(String(upper || '').replace(SG_ORDER_RUN, ' '));
+// Same trap, Kicks Crew (live 2026-11-29): "KS2713444" was recorded as the SKU "KS2713-444"
+// on three photos, and no order number at all. The S may read as a 5.
+const KC_NO = /\bK[S5]\s?(\d{7})\b/g;
+const styleCodeIn = (upper) => STYLE_CODE.exec(String(upper || '').replace(SG_ORDER_RUN, ' ').replace(KC_NO, ' '));
 const SIZE_RE = /\bUS\s*([MW])?\s*(\d{1,3}(?:[.,]5)?)\s*([MWY])?\b/i;
 // OCR drops the point in "9.5" often; no shoe is a size 95, so 95 → 9.5 and 105 → 10.5.
 const fixSize = (v) => {
@@ -208,7 +213,7 @@ const PLATFORM_WORDS = [
   ['sg', /stadium\s*goods|\bSONDSS|\bfu[a-z]{2,7}ment\s+number\b/i],
   ['stockx', /\bstock\s?x\b/i],
   ['ebay', /\bebay\b/i],
-  ['kc', /kicks\s*crew/i],
+  ['kc', /kicks\s*crew|\bKS\s*ID\b/i],
   ['temu', /\btemu\b/i],
   ['tiktok', /\btik\s?tok\b/i],
   ['shein', /\bshein\b/i],
@@ -222,14 +227,18 @@ export function platformFromText(text) {
 // "SKU: 151186 003" / "SKU: DH3162-100" and "SIZE: 13C" / "SIZE: 9W" — the big lines a Stadium
 // Goods or Temu slip prints. A labelled value beats a style code spotted elsewhere on the page.
 const SKU_LINE = /\bSKU\s*[:;.]\s*([A-Z0-9]{5,7})[\s-]{1,2}([A-Z0-9]{3})\b/;
+const SKU_ONE = /\bSKU\s*[:;.]\s*([A-Z]{1,3}\d{4,5})\s*(?:\n|$)/;
 const SIZE_LINE = /\bSIZE\s*[:;.]?\s*(\d{1,2}(?:[.,]5)?)\s?([CYWM]|GS|PS|TD)?(?![A-Z0-9])/;
 /** The shoe as the slip prints it → { sku, size, product } (each null when not read). */
 export function slipDetails(text) {
   const lines = String(text || '').split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
   const all = lines.join('\n'); const up = all.toUpperCase();
   const labelled = SKU_LINE.exec(up);
-  const s = labelled || styleCodeIn(up);
-  const sku = s ? cleanSku(`${s[1]}-${s[2]}`) : null;
+  // An adidas code has no colour part: "SKU: IF6562" on a line of its own (Kicks Crew). A
+  // labelled value beats a style code spotted elsewhere (the slip's Stock ID "S001213…" is one).
+  const one = labelled ? null : SKU_ONE.exec(up);
+  const s = labelled || (one ? null : styleCodeIn(up));
+  const sku = s ? cleanSku(`${s[1]}-${s[2]}`) : one ? cleanSku(one[1]) : null;
   const z = SIZE_RE.exec(all);
   const zl = z ? null : SIZE_LINE.exec(up);
   const size = z ? `US ${z[1] ? `${z[1].toUpperCase()} ` : ''}${fixSize(z[2])}${z[3] ? z[3].toUpperCase() : ''}`
@@ -308,6 +317,11 @@ export function ordersFromText(text, hint = null) {
       const digits = fixDigits(m[2].replace(/\s/g, '').replace(/[^0-9]+$/, '')).replace(/\D/g, '');
       if (digits.length >= 15 && digits.length <= 19) add(`PO-${m[1]}-${digits}`, 'temu', 'shape');
     }
+  }
+  // Kicks Crew: "KS ID: KS2713444" (and again in "Trx Ref No.: S001213951 / KS2713444").
+  for (const line of lines) {
+    if (TRACKING_LINE.test(line)) continue;
+    for (const m of line.toUpperCase().matchAll(KC_NO)) add(`KS${m[1]}`, 'kc', 'shape');
   }
   for (const p of PLATFORMS.filter((x) => x.pattern)) {
     // A dash on the label may have a space either side — but not the dash inside "[A-Z0-9]".

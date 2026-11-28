@@ -754,6 +754,22 @@ test('a photo with NO platform is read first: one of our Shopify orders (or a Te
   }
 });
 
+// ── Kicks Crew: the KS ID is the order number, never the SKU (owner, 2026-11-29) ───────
+test('Kicks Crew: "KS ID: KS2713444" is the order number, and the SKU is the labelled one (pure)', async () => {
+  const { ordersFromText, slipDetails, platformFromText, platformFromNumber } = await import('../src/lib/cancellations.js');
+  // The lines the reader really got off the owner's photo (three rows were recorded with
+  // SKU "KS2713-444" and no order number).
+  const slip = ['Irx Ref No,: S001” 13951 / K52 713441 =', 'Trx Ref No.:1 x IF6 562 75\\Y 1"', 'KS ID: KS2713444', 'BRAND: ADIDAS',
+    'Size US 7.5 / UK 6 / EU 39.33', 'Sale ID 91194559', 'KSID K52713444', 's001213', 'Stock | S001213251', 'Sale Date 2026-11-26 19:42:57', 'SKU: IF6562', 'SIZE: US 7.5'].join('\n');
+  for (const hint of [null, 'kc']) {
+    expect(ordersFromText(slip, hint).map((o) => [o.order_number, o.platform, o.sku, o.size])).toEqual([['KS2713444', 'kc', 'IF6562', 'US 7.5']]);
+  }
+  expect(platformFromText(slip)).toBe('kc');            // "KS ID" names the marketplace
+  expect(platformFromNumber('KS2713444')).toBe('kc');
+  expect(slipDetails('KS ID: KS2713444\nBRAND: ADIDAS').sku).toBe(null);   // never "KS2713-444"
+  expect(slipDetails('SKU: DH3162-100\nSIZE: 9W').sku).toBe('DH3162-100');  // two-part codes as before
+});
+
 // ── Stadium Goods: both numbers — "#34788 | FAR02077816" (2026-11-28) ──────────────────
 test('Stadium Goods: the slip number is read from the order\'s own packing slip, and shown with its Shopify order (pure)', async () => {
   const { slipNumbersFromText, isSgSlipUrl, readSgSlip, readSgSlipsOnce } = await import('../api/_lib/sg-slips.js');

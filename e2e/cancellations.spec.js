@@ -587,7 +587,7 @@ test('/sg in the caption names the platform (over the reader\'s guess); /kc firs
 
   await hook(request, { from: TG_WH, body: { text: '/kc' } });
   expect(await lastSaid(TG_WH, 2)).toMatch(/Kicks Crew mode on for 90 s — send your photos/);
-  const n1 = `9911${String(Date.now()).slice(-7)}1`;
+  const n1 = `KS${String(Date.now()).slice(-7)}`;   // a Kicks Crew number is KS + seven digits
   await hook(request, photo(TG_WH, await picture(`cx-kc-${n1}`, read({ order_number: n1 }))));
   expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`✅ <b>Kicks Crew · 1</b>\\n<code>${n1}</code>`));
 
@@ -752,6 +752,22 @@ test('a photo with NO platform is read first: one of our Shopify orders (or a Te
     await q(`DELETE FROM shopify_order_index WHERE channel = 'e2e-cx'`);
     await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
   }
+});
+
+// ── Kicks Crew: the KS ID is the order number, never the SKU (owner, 2026-11-29) ───────
+test('Kicks Crew: "KS ID: KS2713444" is the order number, and the SKU is the labelled one (pure)', async () => {
+  const { ordersFromText, slipDetails, platformFromText, platformFromNumber } = await import('../src/lib/cancellations.js');
+  // The lines the reader really got off the owner's photo (three rows were recorded with
+  // SKU "KS2713-444" and no order number).
+  const slip = ['Irx Ref No,: S001” 13951 / K52 713441 =', 'Trx Ref No.:1 x IF6 562 75\\Y 1"', 'KS ID: KS2713444', 'BRAND: ADIDAS',
+    'Size US 7.5 / UK 6 / EU 39.33', 'Sale ID 91194559', 'KSID K52713444', 's001213', 'Stock | S001213251', 'Sale Date 2026-11-26 19:42:57', 'SKU: IF6562', 'SIZE: US 7.5'].join('\n');
+  for (const hint of [null, 'kc']) {
+    expect(ordersFromText(slip, hint).map((o) => [o.order_number, o.platform, o.sku, o.size])).toEqual([['KS2713444', 'kc', 'IF6562', 'US 7.5']]);
+  }
+  expect(platformFromText(slip)).toBe('kc');            // "KS ID" names the marketplace
+  expect(platformFromNumber('KS2713444')).toBe('kc');
+  expect(slipDetails('KS ID: KS2713444\nBRAND: ADIDAS').sku).toBe(null);   // never "KS2713-444"
+  expect(slipDetails('SKU: DH3162-100\nSIZE: 9W').sku).toBe('DH3162-100');  // two-part codes as before
 });
 
 // ── Stadium Goods: both numbers — "#34788 | FAR02077816" (2026-11-28) ──────────────────
@@ -973,11 +989,11 @@ test('the note after a command rides on every photo; an image sent "as a file" i
   await hook(request, photo(TG_WH, await picture(`cx-late-${s}`, read({ order_number: b }))));
   await lastSaid(TG_WH);
   const askId = saidTo(TG_WH)[0].message_id;
-  await hook(request, { from: TG_WH, body: { text: '/kc' } });
-  expect(await lastSaid(TG_WH, 2)).toMatch(/Kicks Crew — reading the photo you already sent/);
+  await hook(request, { from: TG_WH, body: { text: '/tiktok' } });
+  expect(await lastSaid(TG_WH, 2)).toMatch(/TikTok Shop — reading the photo you already sent/);
   await expect.poll(() => edits.filter((e) => e.message_id === askId).at(-1)?.text || '', { timeout: 20_000 })
-    .toMatch(new RegExp(`✅ <b>Kicks Crew · 1</b>\\n<code>${b}</code>`));
-  expect((await list(request)).rows.find((r) => r.order_number === b)).toMatchObject({ platform: 'kc' });
+    .toMatch(new RegExp(`✅ <b>TikTok Shop · 1</b>\\n<code>${b}</code>`));
+  expect((await list(request)).rows.find((r) => r.order_number === b)).toMatchObject({ platform: 'tiktok' });
   await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
 });
 

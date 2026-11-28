@@ -297,6 +297,20 @@ dropped. **Production only** by default (`SHOPIFY_ORDER_INDEX=on|off`); state in
 so an order we hold first-hand (eBay, SHEIN, pre-sell) is the one a number matches; a database
 without the table yet answers "no match", not an error.
 
+### Kicks Crew: the KS ID is the order number (owner, 2026-11-29)
+A Kicks Crew slip prints **"KS ID: KS2713444"** — that is the order number, and the name of the
+Shopify order (all 74 on file: `KS` + seven digits). Live, three photos of one slip were
+recorded with **no order number and the SKU "KS2713-444"**: nothing read a KS number, and the
+style-code rule (letters + digits + three digits) took it for a shoe. Now (`src/lib/cancellations.js`):
+- `KC_NO` reads `KS` + 7 digits as a Kicks Crew order (the S may read as a 5, a space may follow it);
+  the platform entry has `pattern: /^KS\d{7}$/`, so `platformFromNumber` knows it and a typed
+  `/kc` number of another shape is flagged "format";
+- a KS number is taken out before a style code is looked for (same as the Stadium Goods run);
+- "KS ID" on the slip names the platform (`PLATFORM_WORDS`), so no `/kc` is needed;
+- the SKU is the labelled line: **"SKU: IF6562"** (`SKU_ONE` — an adidas code has no colour part),
+  which beats a style code spotted elsewhere (the slip's Stock ID "S001213…" reads as one).
+The Sale ID / Stock ID are not order numbers and are not recorded.
+
 ### Stadium Goods: both numbers — "#34788 | FAR02077816" (owner, 2026-11-28)
 A Stadium Goods order has THREE numbers, and no one system has all of them:
 

@@ -587,7 +587,7 @@ test('/sg in the caption names the platform (over the reader\'s guess); /kc firs
 
   await hook(request, { from: TG_WH, body: { text: '/kc' } });
   expect(await lastSaid(TG_WH, 2)).toMatch(/Kicks Crew mode on for 90 s — send your photos/);
-  const n1 = `9911${String(Date.now()).slice(-7)}1`;
+  const n1 = `KS${String(Date.now()).slice(-7)}`;   // a Kicks Crew number is KS + seven digits
   await hook(request, photo(TG_WH, await picture(`cx-kc-${n1}`, read({ order_number: n1 }))));
   expect(await lastSaid(TG_WH, 3)).toMatch(new RegExp(`✅ <b>Kicks Crew · 1</b>\\n<code>${n1}</code>`));
 
@@ -989,11 +989,11 @@ test('the note after a command rides on every photo; an image sent "as a file" i
   await hook(request, photo(TG_WH, await picture(`cx-late-${s}`, read({ order_number: b }))));
   await lastSaid(TG_WH);
   const askId = saidTo(TG_WH)[0].message_id;
-  await hook(request, { from: TG_WH, body: { text: '/kc' } });
-  expect(await lastSaid(TG_WH, 2)).toMatch(/Kicks Crew — reading the photo you already sent/);
+  await hook(request, { from: TG_WH, body: { text: '/tiktok' } });
+  expect(await lastSaid(TG_WH, 2)).toMatch(/TikTok Shop — reading the photo you already sent/);
   await expect.poll(() => edits.filter((e) => e.message_id === askId).at(-1)?.text || '', { timeout: 20_000 })
-    .toMatch(new RegExp(`✅ <b>Kicks Crew · 1</b>\\n<code>${b}</code>`));
-  expect((await list(request)).rows.find((r) => r.order_number === b)).toMatchObject({ platform: 'kc' });
+    .toMatch(new RegExp(`✅ <b>TikTok Shop · 1</b>\\n<code>${b}</code>`));
+  expect((await list(request)).rows.find((r) => r.order_number === b)).toMatchObject({ platform: 'tiktok' });
   await q(`DELETE FROM cancellation_tg_ctx WHERE key LIKE 'chat:%7710001'`);
 });
 
